@@ -3,3 +3,6 @@ dist/
 out/
 .env
 *.log
+resources/
+coverage/
+*.tsbuildinfo

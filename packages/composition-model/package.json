@@ -1,0 +1,10 @@
+{
+  "name": "@expertmotion/composition-model",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": { "source": "./src/index.ts", "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": { "@expertmotion/shared": "0.0.0", "@expertmotion/catalogue": "0.0.0", "zod": "4.5.4" }
+}

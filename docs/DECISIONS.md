@@ -170,3 +170,10 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Alternatives**: (A) bundle a GPL-configured full FFmpeg with libx264 and accept GPL obligations for that binary (source offer, notices); (B) decode with the LGPL full build to a raw pipe and encode with the compositor FFmpeg that Remotion already uses for H.264 output; (C) use OpenH264/`h264_mf` (Media Foundation) encoders in the LGPL build on Windows.
 - **Selected (provisional)**: (B) as default, (C) as the measured alternative in POC-003; (A) only if both fail quality or speed targets, after legal review (BRD §6).
 - **Consequences**: `resources/engine/compositor/` (slim, output) and `resources/bin/ffmpeg-full/` (LGPL, ingestion) in the installer; ASSET_INGESTION §3/§4 command lines are updated once POC-003 picks the encoder; Third-Party Notices list both builds.
+
+## ADR-020 Operation vocabulary additions found during implementation
+
+- **Status**: accepted (2026-10-24, Stage 2 implementation)
+- **Problem**: writing `packages/catalogue` Compile rules showed that the P0 preset `preset:audio.fade-in-out` had no operation in AI_WORKFLOW.md §5 that could apply it (only `op:clip.setVolume` carries fades, and only for Clips).
+- **Selected**: add `op:audio.setFades {fadeInMs?, fadeOutMs?}` (target `audio`, scalar per field, propertyKeys `audio:<id>.fadeInMs` / `audio:<id>.fadeOutMs`). The P2 preset `preset:audio.visualizer-bars` gets no Compile rule until its P2 operation is designed (no mapping onto `op:shape.add`, which only accepts shape presets).
+- **Consequences**: AI_WORKFLOW.md §5 row added; `packages/composition-model` implements it with tests; the closed vocabulary now has 41 operations.

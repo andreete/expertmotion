@@ -175,6 +175,7 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:audio.addBed` | project | `{assetId, volume, loop, duckingPresetId?}` | list | background music |
 | `op:audio.addLayer` | absolute | `{assetId, atMs, volume, fadeInMs?, fadeOutMs?}` | list | voice, sfx |
 | `op:audio.setDucking` | audio | `{presetId, params?}` | exclusive-group | |
+| `op:audio.setFades` | audio | `{fadeInMs?, fadeOutMs?}` (integers, ms, ≤ half the layer duration each) | scalar per field | applies `preset:audio.fade-in-out`; added 2026-10-24 (ADR-020) |
 | `op:audio.remove` | audio | `{}` | — | |
 | `op:theme.set` | project | `{paletteId?, fontPairId?, defaultEasingId?}` | scalar per field | |
 | `op:theme.setTextDefaults` | project | `{fontFamily?, fontSize?, weight?, colour?, align?, opacity?}` | scalar per field | Theme defaults for new Text Layers; propertyKey `theme.textDefaults.<field>` |
