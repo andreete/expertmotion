@@ -52,12 +52,14 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 | Ratio × resolution pixels, Performance Profiles, hardware tiers | `docs/PERFORMANCE.md` |
 | Error codes | `docs/ERROR_CATALOGUE.md` |
 | Risks | `docs/RISKS_AND_ASSUMPTIONS.md` |
+| Runtime prompts (versioned) | `SYSTEM_PROMPT.md` (v1.0.1) |
+| Consistency checks | `bash tools/docs-check.sh` (greps only; must pass before every commit) |
 
 ## 5. Important discoveries (verified 2026-10-24; URLs in `docs/ASSESSMENT.md`)
 
 - Remotion: `@remotion/media` `<Video>/<Audio>` is the recommended tag; `trimBefore` + `durationInFrames`; 19 built-in transitions (+ `none`; `cube` is paid); `@remotion/effects` has 81 effects (WebGL; cylinder/sphere/pageTurn need WebGPU); Chrome Headless Shell and FFmpeg are distributed by Remotion packages; `renderMedia` supports `hardwareAcceleration` (NVENC on Windows), `concurrency`, `licenseKey`; Remotion's MCP is deprecated; Elements are 40+ source components (incl. 5 caption styles).
 - Remotion licence: free for individuals and companies ≤ 3 people; Company License for 4+ (Automators $0.01/render, $100/month minimum); end-user-PC metering undefined; v5 makes telemetry mandatory. Launch blocker: confirm in writing.
-- Packaging: Remotion has an official Electron template; bytenode breaks `Function.toString` and crashes on Electron ≥ 42 (never on the renderer path); V8 bytecode and obfuscation are reversible; Windows EV certificates no longer bypass SmartScreen; Azure Artifact Signing is country-restricted (Indonesia not listed) → OV certificate from a CA.
+- Packaging: Remotion has an official Electron template; the Local Service runs as an Electron `utilityProcess` (RunAsNode fuse off) with the bootstrap `{token, port, dataDir, dbKey}` over `parentPort`; FFmpeg for output ships in `@remotion/compositor-win32-x64-msvc` (slim), ingestion needs a separate full FFmpeg build; bytenode breaks `Function.toString` and crashes on Electron ≥ 42 (never on the renderer path); V8 bytecode and obfuscation are reversible; Windows EV certificates no longer bypass SmartScreen; Azure Artifact Signing is country-restricted (Indonesia not listed) → OV certificate from a CA.
 - Storage: keytar is archived; Electron `safeStorage` uses DPAPI on Windows; `better-sqlite3-multiple-ciphers` ships Electron prebuilds.
 - Local models: whisper.cpp large-v3 Indonesian WER ≈ 7%; Piper `id_ID-news_tts-medium` is the only offline Indonesian TTS found (engine piper1-gpl is GPL-3); Kokoro has no Indonesian; F5-TTS, XTTS-v2, Fish Speech, MusicGen are non-commercial; ACE-Step and FLUX.1-schnell are Apache-2.0; Stable Audio Open is under the Stability Community License; `@remotion/install-whisper-cpp` compiles from source on macOS/Linux and only has Windows prebuilts ≤ 1.6.0 → ship own binaries.
 - Providers: OpenRouter returns `usage.cost`; OpenAI recommends the Responses API; Gemini has an OpenAI-compatible endpoint (beta); Anthropic Messages API with SSE.
@@ -68,7 +70,8 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 - Indonesian TTS quality from open models is "news reader", not expressive.
 - Local music generation needs Python + ≥ 4 GB VRAM for usable speed; fallback is a royalty-free loop library.
 - JavaScript shipped to the Creator can be extracted by a determined attacker; encryption at rest does not protect against the device owner.
-- Open: Remotion licence for end-user renders (ADR-017); ADR-008/009/016 await Operator confirmation; whether 2:3 / 3:2 ratios ("4:6 / 6:4") are added after demand review.
+- Open (Operator): Remotion licence for end-user renders (ADR-017, BRD-010); ADR-008/009/016 await confirmation; product price and trial reminder policy (BRD); whether 2:3 / 3:2 ratios ("4:6 / 6:4") are added after demand review; the Piper `id_ID-news_tts-medium` voice card cites a dataset of unclear licence (RISK-002); whether Septianus Angga (author of the reference book) is a channel partner (ASM-016).
+- Haiku dry-run 2026-10-24: the Editor Agent prompt works on a Haiku-class model for title/transition/locked-key cases; partial-plan rule added after it blocked a whole plan on one missing asset.
 - The shared development server (1.9 GB RAM, Linux, no display) cannot build or run Electron; packaging and Windows QA happen on the Operator's PC or CI. Headless parts must run under the memory cap described in `CLAUDE.md`.
 
 ## 7. Stable conventions
@@ -77,3 +80,4 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 - Every doc starts with the header table (Status, Owner, Last updated, Depends on, Used by).
 - Times in the Composition Model are milliseconds; frames are derived at render.
 - Commit after every batch of documents; `process.md` entry after every meaningful work unit.
+- Documentation phase rule (Operator, 2026-10-24): no application code is written or executed until the Operator starts Stage 2; another model will implement from these documents.
