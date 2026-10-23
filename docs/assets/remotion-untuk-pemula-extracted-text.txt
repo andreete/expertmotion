@@ -1,0 +1,2829 @@
+
+
+===== PAGE 1 =====
+PAN DUAN  BERGAM BAR · A4
+R e m o t i o n
+u n t u k  P e m u l a
+M em buat video dengan kode, dari nol. Bahasa sehari
+hari, banyak gam bar, tanpa perlu latar belakang teknis.
+S eptianus A ngga
+Experthinker · septianusangga.id
+E disi 1
+Remotion 4.0.537 · Oktober 2026
+
+===== PAGE 2 =====
+2
+Remotion untuk Pemula
+T e n t a n g  b u k u  in i
+Remotion untuk Pemula: Membuat Video dengan Kode, dari Nol. Edisi 1, Oktober 2026.
+Buku ini disusun dari dokumentasi resmi Remotion (remotion.dev/docs) dan dari percobaan langsung memakai
+Remotion versi 4.0.537. Semua gambar efek, transisi, grafik, dan tangkapan layar Studio dibuat dengan
+Remotion itu sendiri. Beberapa bagian dokumentasi mendahului versi yang dirilis, dan bagian seperti itu ditandai
+di dalam teks. Daftar apa yang sudah dicoba dan apa yang hanya dibaca dari dokumentasi ada di bagian
+Sumber dan catatan kejujuran, di halaman akhir.
+Remotion adalah produk pihak lain. Buku ini bukan produk resmi Remotion dan tidak berafiliasi dengan
+perusahaannya. Nama dan merek tetap milik pemiliknya. Informasi lisensi dan harga bisa berubah, jadi baca
+halaman lisensi resmi sebelum memakai Remotion untuk keperluan usaha.
+Ukuran halaman A4 tegak, cocok dibaca di layar maupun dicetak.
+
+===== PAGE 3 =====
+3
+Remotion untuk Pemula
+D a f t a r  is i
+Sebelum mulai5
+Bab 1Rem otion itu apa?8
+1.1Video itu sebenarnya apa9
+1.2Cara biasa dan cara Remotion10
+1.3Ide inti: video adalah hitungan dari nomor frame10
+1.4Dari kode menjadi video10
+1.5Kenapa orang memilih kode11
+1.6Kapan Remotion cocok, kapan tidak12
+1.7Siapa yang memakai Remotion12
+Bab 2M enyiapkan alat14
+2.1Apa saja yang kamu butuhkan15
+2.2Membuka terminal15
+2.3Membuat proyek pertama15
+2.4Isi folder proyek16
+2.5Berkenalan dengan Studio17
+2.6Jalan pintas: minta asisten AI19
+2.7Kalau macet20
+Bab 3Video pertam am u21
+3.1Tiga hal tentang React yang cukup kamu tahu22
+3.2Composition: kartu identitas sebuah video23
+3.3Memilih ukuran video24
+3.4Frame, fps, dan durasi24
+3.5Membaca nomor frame25
+3.6Dari angka frame menjadi gerak26
+3.7Fps, lebar, dan tinggi dari satu tempat27
+3.8Video pertamamu, lengkap27
+3.9Satu frame saja: Still29
+Bab 4M endesain tam pilan30
+4.1Tampilan di Remotion adalah halaman web31
+4.2Posisi: mulai dari pojok kiri atas31
+4.3Lapisan: yang ditulis belakangan tampil di atas33
+4.4Warna34
+4.5Huruf35
+4.6Latar belakang37
+4.7Gambar dan bentuk39
+4.8Menandai teks seperti dengan stabilo40
+4.9Mengatur kapan sesuatu muncul: Sequence41
+4.10Latihan: kartu judul tiga babak42
+Bab 5M em buat gerak45
+5.1Prinsip gerak: nilai yang berubah menurut frame46
+5.2interpolate(): penerjemah angka46
+5.3Lima perubahan dasar48
+5.4Easing: bentuk kecepatan49
+
+===== PAGE 4 =====
+4
+Remotion untuk Pemula
+5.5spring(): gerak seperti pegas50
+5.6Warna yang berubah52
+5.7Aturan penting: jangan memakai angka acak biasa53
+5.8Transisi antar adegan54
+5.9Efek visual56
+5.10Alat gerak lain yang perlu kamu ketahui57
+Bab 6M em asukkan video, gam bar, dan suara59
+6.1Tempat menyimpan bahan: folder public60
+6.2Gambar60
+6.3Video61
+6.4Suara63
+6.5Apakah Remotion bisa membuat suara sendiri64
+6.6Membuat visual yang mengikuti suara65
+6.7Kalau video atau suara bermasalah65
+Bab 7Video yang bisa diubah dan caption67
+7.1Props: satu cetakan, banyak video68
+7.2Mengganti isi dari Studio70
+7.3Durasi yang mengikuti data70
+7.4Mengambil data dari internet71
+7.5Seratus video dari satu daftar71
+7.6Tiga cetakan siap pakai72
+7.7Caption: teks yang mengikuti suara73
+Bab 8Dari kode jadi file video77
+8.1Apa itu render?78
+8.2Cara termudah: tombol Render di Studio78
+8.3Cara kedua: perintah di terminal79
+8.4Memilih kodek dan kualitas80
+8.5GIF, video transparan, dan audio saja82
+8.6Kenapa render lambat, dan cara mempercepatnya83
+8.7Merender lewat skrip84
+8.8Merender di tempat lain84
+8.9Player: memutar tanpa render85
+8.10Apakah perlu bayar lisensi?86
+8.11Kalau ada yang error87
+8.12Setelah buku ini88
+Lampiran A. Galeri 81 efek90
+Lampiran B. Galeri 19 transisi98
+Lampiran C. Contekan satu halaman100
+Kamus istilah103
+Sumber dan catatan kejujuran106
+
+===== PAGE 5 =====
+5
+Remotion untuk Pemula
+S e b e l u m  mu l a i
+Lim a m enit di halam an ini akan m enghem at banyak w aktu di bab berikutnya.
+B u k u  in i u n tu k  s ia p a
+Untuk kamu yang belum pernah menulis kode sama sekali, tetapi penasaran bagaimana video bisa
+dibuat dari kode. Kamu tidak perlu paham pemrograman. Kamu cukup bisa memakai komputer,
+mengetik, dan sabar membaca pelan.
+Kalau kamu sudah biasa mengedit video di aplikasi seperti CapCut atau Premiere, itu bonus. Banyak
+istilahnya sama: garis waktu, lapisan, transisi, caption. Bedanya, di Remotion semua itu kamu tulis,
+bukan kamu geser dengan mouse.
+S e te la h  s e le s a i k a m u  b is a  a p a
+Di akhir bab 8, kamu bisa membuat video pendek lengkap dengan judul bergerak, gambar, suara,
+dan caption yang mengikuti ucapan. Hasil akhirnya file M P4 biasa yang bisa kamu unggah ke
+Instagram, TikTok, atau YouTube.
+Kamu juga bisa membaca kode yang ditulis AI seperti Claude, lalu mengarahkannya. Ini kemampuan
+yang sering diremehkan. Orang yang paham cara kerja Remotion tahu apa yang harus diminta, dan
+tahu apa yang salah ketika hasilnya meleset.
+C a ra  m e m b a c a  b u k u  in i
+Baca berurutan. Setiap bab memakai hal yang dijelaskan di bab sebelumnya. Satu bab cukup untuk
+satu sampai dua sesi duduk.
+Kode di buku ini sengaja dibuat pendek. Kamu tidak perlu menghafal apa pun. Yang penting kamu
+paham apa yang dilakukan setiap baris, dan kamu bisa menyalinnya lalu mengubah angkanya untuk
+melihat apa yang berubah. Kebanyakan orang belajar kode dengan cara itu.
+Di sepanjang buku ada lima jenis kotak:
+COBA SENDIRI
+Latihan kecil. Sebaiknya sungguh dicoba, karena memahami dengan tangan jauh lebih kuat
+daripada hanya membaca.
+
+===== PAGE 6 =====
+6
+Remotion untuk Pemula
+ISTILAH
+Penjelasan sebuah kata teknis dengan bahasa biasa. Semua istilah juga terkumpul di Kamus istilah
+pada halaman akhir.
+PERLU TAHU
+Hal yang membantu kamu mengambil keputusan, atau fakta yang sering membuat orang bingung.
+AW AS
+Kesalahan yang paling sering terjadi, dan cara menghindarinya.
+RINGKASAN BAB
+Di ujung setiap bab, kotak seperti ini merangkum inti bab dalam beberapa kalimat.
+P e ta  d e la p a n  b a b
+Buku ini disusun dari nol sampai terbiasa. Dua bab pertama menyiapkan pemahaman dan alat. Bab 3
+sampai 5 mengajarkan cara menggambar dan menggerakkan sesuatu. Bab 6 dan 7 menambah
+media dan data. Bab 8 mengubah semuanya menjadi file yang bisa dibagikan.
+BabPertanyaan yang dijawabHasil yang kamu punya
+1Remotion itu apa dan untuk apa?Paham ide dasarnya
+2Apa yang harus dipasang?Proyek pertama yang berjalan
+3Bagaimana video didefinisikan?Video pertamamu
+4Bagaimana mengatur tampilan?Layout, warna, huruf, urutan tampil
+5Bagaimana membuatnya bergerak?Animasi, efek, transisi
+6Bagaimana memasukkan video dan suara?Video bersuara dengan potongan
+7Bagaimana satu desain jadi banyak video?Props, data, dan caption
+8Bagaimana menjadi file video?Render, kualitas, lisensi
+
+===== PAGE 7 =====
+7
+Remotion untuk Pemula
+T e n ta n g  v e rs i d a n  k e ju ju ra n
+Buku ini memakai Remotion versi 4.0.537, versi terbaru yang bisa dipasang saat buku ditulis.
+Dokumentasi resminya kadang sudah menulis fitur yang belum dirilis. Bagian seperti itu akan diberi
+tahu di tempatnya.
+Remotion punya lebih dari seribu halaman dokumentasi. Buku ini tidak menyalin semuanya. Buku ini
+memilih apa yang paling berguna untuk pemula, dan semua yang dipilih sudah dicocokkan dengan
+dokumentasi. Daftar apa yang sudah dicoba langsung dan apa yang hanya dibaca ada di bagian
+Sumber dan catatan kejujuran, di halaman paling akhir.
+
+===== PAGE 8 =====
+BAB 1 DARI 8
+R e m o t i o n  i t u  a p a ?
+V ideo ternyata hanya tum pukan gam bar yang diganti sangat cepat.
+Begitu kam u m elihatnya seperti itu, ide di balik Rem otion terasa
+m asuk akal.
+DI BAB INI KAM U AKAN
+M enjelaskan apa itu fram e dan fps dengan kata sendiri
+M em aham i ide inti Rem otion dalam  satu kalim at
+Tahu kapan Rem otion cocok dipakai dan kapan tidak
+
+===== PAGE 9 =====
+9
+Remotion untuk Pemula
+1 .1V id e o  itu  s e b e n a rn y a  a p a
+Bayangkan buku catatan kecil. Di halaman pertama kamu menggambar bola di pojok kiri bawah. Di
+halaman kedua bolanya kamu geser sedikit ke kanan dan ke atas. Halaman ketiga, geser lagi.
+Setelah dua puluh halaman, balik halamannya cepat dengan jempol. Bolanya seperti melompat
+sendiri.
+Itu video. Tidak lebih rumit dari itu.
+Setiap halaman di buku catatan tadi disebut fram e. Berapa banyak frame yang ditampilkan dalam
+satu detik disebut fps, singkatan dari frames per second. Video di ponselmu biasanya 30 fps.
+Artinya, setiap detik ada 30 gambar yang diganti. Pada kecepatan itu mata kita tidak lagi melihat
+gambar yang terpisah. Kita melihat gerakan.
+Gambar 1.1Delapan frame pertama dari bola yang bergerak. Setiap kotak adalah satu gambar diam. Kalau 30 frame
+diputar dalam satu detik, kita melihat bola itu bergerak.
+ISTILAH
+Frame adalah satu gambar diam di dalam video.
+fps adalah jumlah frame yang tampil dalam satu detik. Semakin besar angkanya, semakin halus
+gerakannya, dan semakin banyak gambar yang harus dibuat.
+
+===== PAGE 10 =====
+10
+Remotion untuk Pemula
+1 .2C a ra  b ia s a  d a n  c a ra  R e m o tio n
+Di aplikasi edit video biasa, kamu menarik klip ke garis waktu, menggeser potongan, menambah
+teks, lalu menekan tombol ekspor. Aplikasinya menyimpan semua keputusanmu di dalam file proyek
+yang hanya bisa dibuka lewat aplikasi itu.
+Remotion memakai cara lain. Kamu m enjelaskan videom u dengan kode. Kamu tidak menggeser
+teks sampai tampak pas. Kamu menulis bahwa teks itu berada di tengah, berukuran 80, dan
+memudar masuk selama satu detik. Kodenya kamu simpan sebagai file biasa. Remotion membaca
+file itu lalu membuat videonya.
+Kedengarannya lebih repot, dan untuk satu video pendek kadang memang begitu. Keuntungannya
+baru terasa ketika kamu mulai memakai ulang, mengubah, dan mengulang.
+1 .3Id e  in ti: v id e o  a d a la h  h itu n g a n  d a ri n o m o r
+fra m e
+Ini kalimat terpenting di seluruh buku:
+IDE INTI REMOTION
+Tampilan sebuah frame adalah hasil hitungan dari nomor frame itu.
+Kamu menulis satu aturan yang menjawab pertanyaan: pada frame nomor sekian, apa yang tampil
+di layar? Contohnya seperti ini:
+frame 0  : teks "Halo" tidak terlihat (transparan 0 persen)
+frame 15 : teks "Halo" setengah terlihat
+frame 30 : teks "Halo" terlihat penuh
+Remotion memanggil aturanmu untuk setiap frame. Video lima detik pada 30 fps berarti aturan itu
+dipanggil 150 kali, setiap kali dengan nomor frame yang berbeda. Hasil setiap panggilan adalah satu
+gambar. Semua gambar itu disusun berurutan, dan jadilah video.
+Karena itu, di Remotion tidak ada hal yang bergerak secara ajaib. Gerak hanya muncul karena
+nomor frame berubah, dan hasil hitungan ikut berubah. Kalau kamu paham ini, sisa buku ini tinggal
+mempelajari cara menulis aturannya.
+1 .4D a ri k o d e  m e n ja d i v id e o
+Alurnya ada tiga langkah, dan hanya langkah pertama yang kamu kerjakan sendiri.
+
+===== PAGE 11 =====
+11
+Remotion untuk Pemula
+Gambar 1.2Tiga langkah dari kode sampai file video. Kamu menulis kode. Remotion menggambar dan memotret setiap
+frame. Hasilnya disusun menjadi file MP4.
+Pada langkah kedua, Remotion membuka browser Chrome tanpa jendela, menampilkan halamanmu
+pada frame 0, memotretnya, lalu pindah ke frame 1, dan seterusnya. Karena yang dipotret adalah
+halaman web, semua yang sudah ada di web otomatis tersedia untukmu: warna, jenis huruf, posisi,
+bayangan, gradasi, bentuk, bahkan grafik 3D. Dokumentasi Remotion menyebut web sebagai mesin
+grafis paling populer di dunia, dan itu bukan sekadar promosi. Semua orang sudah memilikinya.
+Pada langkah ketiga, potret itu disusun menjadi satu file video. Pekerjaan ini dikerjakan oleh
+FFmpeg, program penyusun video yang sudah lama dipakai di banyak aplikasi.
+1 .5K e n a p a  o ra n g  m e m ilih  k o d e
+Halaman “W hy Remotion?” di dokumentasi resminya memberi beberapa alasan. Ini versi yang lebih
+sederhana.
+Bisa dipakai ulang. Kamu membuat satu cetakan video, lalu memakainya untuk seratus video
+dengan isi berbeda. M isalnya video ucapan ulang tahun dengan seratus nama. Di aplikasi biasa,
+kamu mengetik nama itu seratus kali. Di Remotion, kamu menyiapkan daftar nama, dan semuanya
+dibuat sendiri.
+Tersam bung ke data. Angka harga, nama pelanggan, atau skor pertandingan bisa diambil dari
+sumber lain lalu langsung tampil di video. Videonya ikut berubah ketika datanya berubah.
+Bisa diotom atisasi. Video bisa dibuat tanpa ada orang yang menekan tombol. Cukup satu perintah,
+atau satu jadwal.
+Perubahannya terekam . Karena videomu adalah kumpulan file teks, kamu bisa melihat siapa
+mengubah apa dan kapan, lalu kembali ke versi kemarin kalau perlu. Aplikasi edit biasa sulit
+melakukan ini.
+
+===== PAGE 12 =====
+12
+Remotion untuk Pemula
+Bisa ditulis oleh AI. Kode adalah bahasa yang dipahami asisten AI seperti Claude. Kamu cukup
+menjelaskan videonya dengan kata biasa, dan AI menuliskan kodenya. Kamu yang menentukan
+arah, mengecek hasil, dan memperbaiki bagian yang meleset.
+1 .6K a p a n  R e m o tio n  c o c o k , k a p a n  tid a k
+Remotion bukan pengganti semua aplikasi edit video. Tabel ini membantumu memilih.
+Cocok memakai RemotionLebih nyaman di aplikasi edit biasa
+Video yang diulang dengan isi berbedaMemotong rekaman wawancara yang panjang
+Animasi teks, angka, dan grafik dataKoreksi warna rumit pada rekaman kamera
+Caption otomatis yang mengikuti suaraVideo sekali pakai dengan banyak potongan spontan
+Video di dalam aplikasi web yang berubah
+mengikuti pengguna
+Pekerjaan yang dikerjakan bersama editor yang tidak
+mau menyentuh kode
+Alur kerja yang ingin diotomatisasi atau
+dikerjakan AI
+Banyak orang akhirnya memakai keduanya. Rekaman mentah dirapikan di aplikasi biasa,
+sedangkan judul, grafik, dan caption dibuat di Remotion.
+1 .7S ia p a  y a n g  m e m a k a i R e m o tio n
+Dokumentasi Remotion menulis bahwa pondasi ini dipakai lebih dari 2.000 situs web (angka itu
+berasal dari data W appalyzer yang dikutip dokumentasinya). Pemakainya beragam: pembuat
+konten yang ingin video bergaya konsisten, perusahaan yang membuat video personal untuk
+pelanggan, sampai pengembang yang menaruh pemutar video langsung di dalam aplikasi mereka.
+Soal biaya, Remotion gratis untuk individu dan untuk tim kecil. Perusahaan dengan empat orang
+atau lebih perlu lisensi berbayar. Rinciannya dibahas di Bab 8.
+LATIHAN DI KERTAS, TANPA KOMPUTER
+Ambil secarik kertas kecil dan jepit sepuluh lembar jadi satu. Di pojok setiap lembar, gambar
+sebuah lingkaran yang posisinya bergeser sedikit demi sedikit. Balik lembarnya cepat.
+Sekarang jawab dua pertanyaan. Berapa frame videomu? Kalau kamu membalik semuanya dalam
+dua detik, berapa fps videomu? Jawabannya: sepuluh frame, dan lima fps. Bandingkan dengan
+ponselmu yang 30 fps, dan kamu akan paham kenapa gerakan di kertas terasa tersendat.
+
+===== PAGE 13 =====
+13
+Remotion untuk Pemula
+RINGKASAN BAB
+Video adalah tumpukan gambar diam (frame) yang diganti cepat. Kecepatannya disebut fps.
+Ide inti Remotion: tampilan sebuah frame adalah hasil hitungan dari nomor frame itu.
+Kamu menulis aturan dalam kode. Remotion memotret setiap frame dari halaman web lalu
+menyusunnya menjadi video.
+Kode membuat video bisa dipakai ulang, tersambung ke data, diotomatisasi, dan bisa ditulis AI.
+Remotion bukan pengganti semua aplikasi edit video. Ia unggul untuk video yang berulang dan
+berbasis data.
+
+===== PAGE 14 =====
+BAB 2 DARI 8
+M e n y i a p k a n  a l a t
+D i bab ini kam u m em asang sem ua yang dibutuhkan dan m em buka
+Rem otion Studio, ruang kerja tem pat kam u m elihat videom u bergerak.
+Tidak ada kode yang perlu kam u tulis dulu.
+DI BAB INI KAM U AKAN
+M em asang Node.js dan m em buka term inal tanpa takut
+M em buat proyek Rem otion pertam a dengan satu perintah
+M engenali setiap bagian jendela Studio
+Tahu jalan pintas lewat asisten AI
+
+===== PAGE 15 =====
+15
+Remotion untuk Pemula
+2 .1A p a  s a ja  y a n g  k a m u  b u tu h k a n
+Ada empat hal, dan tiga di antaranya gratis.
+Kom puter. Remotion berjalan di macOS, W indows, dan Linux. Dokumentasinya menyebut macOS
+harus versi 15 (Sequoia) atau lebih baru. Untuk Linux, versi libc minimal 2.35, dan ada beberapa
+paket tambahan yang perlu dipasang. Alpine Linux dan nixOS tidak didukung.
+Node.js. Ini program yang menjalankan kode JavaScript di komputermu, di luar browser. Remotion
+dibangun di atasnya. Pakai versi LTS (versi yang paling stabil) dari nodejs.org. Template proyek
+yang dipakai untuk menulis buku ini meminta Node.js 20.19 ke atas, 22.13 ke atas, atau 24 ke atas,
+jadi versi terbaru yang stabil hampir pasti aman.
+Editor teks. Tempat kamu membaca dan menulis kode. VS Code gratis dan paling banyak dipakai.
+Aplikasi apa pun yang bisa membuka file teks sebenarnya cukup.
+Browser Chrom e. Remotion mengunduh sendiri versi Chrome khusus yang dibutuhkannya saat
+pertama dijalankan, jadi kamu tidak perlu memasang apa pun. Yang perlu kamu pastikan hanya
+koneksi internet saat pertama kali.
+ISTILAH
+Terminal adalah jendela tempat kamu mengetik perintah, bukan mengklik tombol. Di W indows
+namanya Terminal atau PowerShell. Di Mac namanya Terminal. Kelihatannya menyeramkan, tetapi
+di buku ini kamu hanya akan mengetik beberapa perintah pendek, dan setiap perintah akan
+dijelaskan.
+2 .2M e m b u k a  te rm in a l
+Di M ac, tekan Command dan Spasi, ketik Terminal, lalu Enter. Di W indows, tekan tombol W indows,
+ketik Terminal, lalu Enter. Jendela hitam atau putih dengan kursor berkedip akan muncul. Itu tempat
+kamu bekerja.
+Untuk memastikan Node.js sudah terpasang, ketik perintah ini lalu tekan Enter:
+node --version
+Kalau yang muncul nomor versi seperti v22.13.0, kamu siap. Kalau muncul pesan bahwa perintah
+tidak dikenal, pasang Node.js dulu dari nodejs.org, tutup terminalnya, lalu buka lagi.
+2 .3M e m b u a t p ro y e k  p e rta m a
+Satu perintah cukup untuk membuat seluruh proyek. Ketik ini di terminal:
+
+===== PAGE 16 =====
+16
+Remotion untuk Pemula
+npx create-video@latest
+Terminal akan bertanya beberapa hal. Jawablah seperti ini:
+1. Nama proyek: ketik nama bebas tanpa spasi, misalnya video-pertama.
+2. Pengelola paket, kalau ditanya: pilih npm. Itu yang dipakai di seluruh buku ini.
+3. Template: pilih Hello W orld. Dokumentasi Remotion menyarankan template ini untuk proyek
+pertama karena sudah berisi contoh yang berjalan.
+4. Kalau ditanya soal menambahkan skills untuk asisten AI, boleh dijawab ya. Penjelasannya ada di
+akhir bab ini.
+Kalau kamu ingin proyek kosong tanpa pertanyaan, dokumentasi memberi versi cepat:
+npx create-video@latest --yes --blank my-video
+Setelah selesai, masuk ke folder proyek dan jalankan Studio:
+cd video-pertama
+npm run dev
+AW AS
+Nama folder harus sama dengan yang kamu ketik tadi. Kalau kamu menamai proyek
+video-pertama, perintah masuknya cd video-pertama. Kalau muncul pesan bahwa folder tidak
+ditemukan, hampir selalu karena namanya berbeda atau terminalmu masih berada di folder yang
+lain.
+2 .4Is i fo ld e r p ro y e k
+Folder yang baru dibuat berisi beberapa file. Kamu tidak perlu menyentuh hampir semuanya. Yang
+paling penting hanya empat.
+
+===== PAGE 17 =====
+17
+Remotion untuk Pemula
+Gambar 2.1Isi folder sebuah proyek Remotion. Template lain bisa sedikit berbeda, tetapi pola dasarnya sama.
+src/Root.tsx adalah daftar semua video di proyekmu. Di sini setiap video didaftarkan lengkap
+dengan ukuran dan durasinya. src/ juga berisi file untuk setiap video, tempat kode tampilan dan
+geraknya. public/ adalah laci untuk gambar, suara, dan font milikmu. out/ adalah tempat hasil
+video muncul setelah dirender.
+Ekstensi .tsx artinya file TypeScript yang boleh berisi tampilan (JSX). Kamu akan terbiasa dengan
+itu di Bab 3.
+2 .5B e rk e n a la n  d e n g a n  S tu d io
+npm run dev membuka Rem otion Studio di browser. Alamatnya tertulis di terminal, biasanya
+localhost:3000. Alamat itu hanya bisa dibuka dari komputermu sendiri.
+Studio adalah jendela tempat kamu melihat video bergerak sebelum menjadikannya file. Setiap kali
+kamu menyimpan perubahan di editor teks, tampilan di Studio ikut berubah tanpa perlu memuat
+ulang halaman. Itu yang membuat belajar Remotion terasa cepat.
+
+===== PAGE 18 =====
+18
+Remotion untuk Pemula
+Gambar 2.2Tangkapan layar Remotion Studio dengan enam bagian utama. Gambar ini diambil dari Remotion 4.0.537
+yang berjalan di komputer penulis.
+Enam bagian yang perlu kamu kenali:
+1. Daftar video di sisi kiri. Setiap video yang didaftarkan di Root.tsx muncul di sini.
+2. Layar pratinjau di tengah. Di sinilah videomu tampil.
+3. Isi dan pengaturan di sisi kanan. Kamu bisa mengubah data video langsung di sini.
+4. Garis waktu di bawah. Setiap lapisan dan potongan terlihat sebagai batang, mirip aplikasi edit
+video biasa.
+5. Tom bol putar dan penunjuk frame. Tekan spasi untuk memutar dan menjeda.
+6. Tom bol Render untuk mengubah video menjadi file. Ini dibahas di Bab 8.
+JELAJAHI DULU, BELUM PERLU MENGUBAH APA PUN
+Buka Studio lalu coba tiga hal. Tekan spasi untuk memutar. Tekan panah kanan beberapa kali dan
+lihat nomor frame berubah satu per satu. Tekan tombol  bersama panah kanan untuk
+lompat satu detik.
+Perhatikan bahwa setiap tekanan panah kanan memajukan tepat satu frame, sama seperti
+membalik satu halaman buku catatan di Bab 1.
+
+===== PAGE 19 =====
+19
+Remotion untuk Pemula
+2 .6J a la n  p in ta s : m in ta  a s is te n  A I
+Kamu tidak harus menulis semua kode sendiri. Dokumentasi Remotion sekarang menyarankan
+pemula memulai lewat agent skills, yaitu kumpulan petunjuk yang diajarkan kepada asisten AI
+seperti Claude supaya ia menulis kode Remotion dengan benar.
+Gambar 2.3Membuat video dengan Claude dan plugin Remotion. Kamu menjelaskan videonya dengan kata biasa,
+Claude menulis kodenya, lalu kamu menonton hasilnya di Studio.
+Contoh kalimat yang bisa kamu ketik ke asisten AI di proyekmu:
+/remotion-create Buat video 9:16 berdurasi 30 detik tentang harga cabai.
+Judul besar di awal, lalu tiga angka muncul satu per satu.
+Di Claude, nama perintahnya biasanya diawali nama plugin, yaitu /remotion:remotion-create.
+Isinya sama. Skills lain yang tersedia antara lain untuk caption, peta, render, dan memperbarui versi
+Remotion. Daftarnya ada di halaman Agent Skills di dokumentasi.
+Dua catatan jujur soal cara ini. Pertama, AI kadang menulis kode yang tampak benar tetapi hasilnya
+meleset: posisi salah, geraknya terlalu cepat, atau teksnya terpotong. Karena itu bab berikutnya
+penting. Kamu butuh cukup paham untuk melihat apa yang salah dan meminta perbaikan yang
+tepat. Kedua, hasil dari AI tetap harus kamu tonton sendiri di Studio sebelum dirender.
+
+===== PAGE 20 =====
+20
+Remotion untuk Pemula
+DUA JALAN, SATU TUJUAN
+Menulis sendiri membuatmu paham. Meminta AI membuatmu cepat. Cara belajar yang paling
+efektif adalah mencampur keduanya: minta AI menulis, lalu baca kodenya baris demi baris dan
+ubah angkanya.
+2 .7K a la u  m a c e t
+Term inal bilang npx tidak dikenal. Node.js belum terpasang atau terminalmu belum dibuka ulang
+setelah memasangnya.
+Studio tidak m au terbuka. Lihat pesan di terminal. Kalau ada tulisan bahwa alamat atau port sudah
+dipakai, kemungkinan ada Studio lain yang masih berjalan. Tutup yang lama dengan menekan
+ dan  di terminalnya.
+Unduhan pertam a lam a. Remotion mengunduh Chrome khusus saat pertama dipakai. Biarkan
+sampai selesai.
+Bagian layar pratinjau kosong atau hitam . Biasanya karena ada kesalahan di kode. Baca pesan
+kesalahan yang tampil di layar Studio atau di terminal.
+RINGKASAN BAB
+Kamu butuh komputer, Node.js, editor teks, dan internet untuk pemasangan pertama.
+npx create-video@latest membuat proyek, dan npm run dev membuka Studio.
+Isi proyek yang penting: Root.tsx (daftar video), file di src/ (isi video), public/ (aset),
+out/ (hasil).
+Studio memperlihatkan videomu secara langsung dan ikut berubah saat kode disimpan.
+Asisten AI bisa menulis kode Remotion, tetapi kamu tetap yang menonton, menilai, dan
+mengarahkan.
+
+===== PAGE 21 =====
+BAB 3 DARI 8
+V i d e o  p e r t a m a m u
+Sekarang kam u m em buat video sungguhan. K am u belajar apa itu
+com position, bagaim ana fram e dan durasi dihitung, dan bagaim ana
+satu baris kode bisa m em buat teks bergerak.
+DI BAB INI KAM U AKAN
+M em aham i tiga hal tentang React yang cukup untuk m em ulai
+M endaftarkan video lewat com position dengan ukuran dan durasi yang tepat
+M enghitung durasi dari fram e dan fps
+M em baca nom or fram e dan m em akainya untuk m enggerakkan sesuatu
+
+===== PAGE 22 =====
+22
+Remotion untuk Pemula
+3 .1T ig a  h a l te n ta n g  R e a c t y a n g  c u k u p  k a m u
+ta h u
+Remotion dibangun di atas React, alat untuk menyusun tampilan dari potongan kecil yang disebut
+komponen. Kamu tidak perlu menguasai React. Tiga hal ini sudah cukup untuk seluruh buku.
+Satu: kom ponen adalah fungsi yang m enghasilkan tam pilan. Anggap seperti stempel. Setiap kali
+dipanggil, ia menghasilkan gambar.
+export const Halo = () => {
+  return <div>Halo!</div>;
+};
+Baris pertama memberi nama stempelnya, yaitu Halo. Baris kedua berkata: hasilnya adalah sebuah
+kotak (div) berisi tulisan Halo!.
+Dua: JSX, yaitu m enulis tam pilan seperti m enulis HTM L di dalam  kode. Kamu bisa menyisipkan
+hasil hitungan ke dalam tampilan dengan kurung kurawal.
+<div>{2 + 3}</div>
+Kode di atas menampilkan angka 5. Segala yang berada di dalam { } dihitung dulu, baru hasilnya
+ditampilkan.
+Tiga: gaya tam pilan ditulis dalam  dua lapis kurung kurawal.
+<div style={{ fontSize: 80, color: "red" }}>Halo!</div>
+Kurung kurawal luar artinya “sisipkan hasil hitungan”. Kurung kurawal dalam adalah daftar
+pengaturan: ukuran huruf 80, warna merah. Hampir semua pengaturan di buku ini ditulis seperti itu,
+dengan nama pengaturan, titik dua, lalu nilainya, dipisahkan koma.
+AW AS
+Nama pengaturan ditulis dengan huruf besar di tengah kata, misalnya fontSize dan
+backgroundColor. Bukan font-size. Kalau salah ketik satu huruf, pengaturannya diabaikan
+begitu saja tanpa pesan kesalahan, jadi kalau ada yang tidak berubah, cek ejaannya dulu.
+
+===== PAGE 23 =====
+23
+Remotion untuk Pemula
+3 .2C o m p o s itio n : k a rtu  id e n tita s  s e b u a h
+v id e o
+Komponen 
+Halo
+ tadi baru berupa tampilan. Remotion belum tahu itu sebuah video. Untuk memberi
+tahu, kamu mendaftarkannya lewat <Composition> di file src/Root.tsx. Satu composition berarti
+satu video yang bisa kamu pilih di Studio.
+Gambar 3.1Composition adalah kartu identitas video: nama, komponen yang ditampilkan, ukuran gambar, fps, dan
+jumlah frame.
+src/Root.tsx
+import { Composition } from "remotion";
+import { Halo } from "./Halo";
+export const RemotionRoot = () => {
+  return (
+    <Composition
+      id="Halo"
+      component={Halo}
+      width={1080}
+      height={1920}
+      fps={30}
+      durationInFrames={150}
+    />
+  );
+};
+
+===== PAGE 24 =====
+24
+Remotion untuk Pemula
+Arti setiap baris isian:
+IsianArtinya
+idNama videonya. Muncul di daftar Studio dan dipakai saat render. Pakai huruf, angka,
+dan tanda hubung saja.
+componentKomponen yang menggambar videonya. Di sini Halo.
+width dan
+height
+Lebar dan tinggi gambar dalam piksel.
+fpsJumlah frame per detik.
+durationInFramesJumlah frame seluruh video. Ini panjang video, tetapi dihitung dalam frame, bukan
+detik.
+defaultPropsData bawaan untuk komponennya. Dibahas di Bab 7. Boleh dikosongkan dulu.
+3 .3M e m ilih  u k u ra n  v id e o
+Ukuran ditentukan oleh tempat video akan ditayangkan. Ini ukuran yang paling sering dipakai.
+TujuanLebar × tinggiBentuk
+YouTube, presentasi1920 × 1080Mendatar (16:9)
+Reels, TikTok, Shorts1080 × 1920Berdiri (9:16)
+Feed Instagram persegi1080 × 1080Persegi (1:1)
+Feed Instagram potret1080 × 1350Sedikit berdiri (4:5)
+Kalau ragu, pakai 1080 × 1920 untuk video pendek di ponsel dan 1920 × 1080 untuk yang lain.
+Kamu juga bisa mengubah ukuran saat render tanpa mengubah kode, tetapi rancangan yang dibuat
+untuk satu ukuran biasanya tidak otomatis pas di ukuran lain.
+3 .4F ra m e , fp s , d a n  d u ra s i
+Remotion mengukur panjang video dalam fram e, bukan detik. Untuk mengubahnya ke detik, bagi
+dengan fps.
+
+===== PAGE 25 =====
+25
+Remotion untuk Pemula
+Gambar 3.2Video 90 frame pada 30 fps berdurasi 3 detik.
+RUMUS YANG PERLU DIHAFAL
+Durasi dalam detik = jumlah frame ÷ fps.
+Sebaliknya, jumlah frame = detik × fps.
+Durasi yang diinginkanfpsdurationInFrames
+3 detik3090
+5 detik30150
+10 detik30300
+30 detik30900
+5 detik60300
+Satu hal yang sering membingungkan pemula: nom or fram e dim ulai dari 0. Video 90 frame punya
+frame bernomor 0 sampai 89. Frame terakhir adalah jumlah frame dikurangi satu. M irip lantai
+gedung di beberapa negara, lantai dasar dihitung 0.
+3 .5M e m b a c a  n o m o r fra m e
+Sekarang bagian yang membuat video bergerak. Remotion menyediakan 
+useCurrentFrame()
+,
+sebuah fungsi yang memberi tahu komponenmu: “kamu sedang digambar sebagai frame nomor
+berapa”.
+
+===== PAGE 26 =====
+26
+Remotion untuk Pemula
+src/Halo.tsx
+import { AbsoluteFill, useCurrentFrame } from "remotion";
+export const Halo = () => {
+  const frame = useCurrentFrame();
+  return (
+    <AbsoluteFill
+      style={{ backgroundColor: "white", justifyContent: "center", alignItems: "center" 
+}}
+    >
+      <div style={{ fontSize: 120, fontWeight: 800 }}>Frame ke {frame}</div>
+    </AbsoluteFill>
+  );
+};
+Simpan file itu, lalu lihat Studio. Angka di layar berubah setiap kali kamu menggeser penunjuk
+waktu. Ketika video diputar, angkanya berhitung sendiri dari 0 sampai 149. Kamu baru saja
+membuat sesuatu yang bergerak dengan memakai nomor frame.
+<AbsoluteFill> adalah kotak yang memenuhi seluruh layar. Di dalamnya dua pengaturan,
+justifyContent dan alignItems, menaruh isinya tepat di tengah. Detailnya ada di Bab 4.
+Gambar 3.3Contoh lain dari ide yang sama: kotak yang bergeser dan berputar pada frame 0, 15,
+30, dan 45. Setiap gambar adalah hasil kode yang sama dengan nomor frame berbeda. Teknik
+geraknya dibahas di Bab 5.
+3 .6D a ri a n g k a  fra m e  m e n ja d i g e ra k
+Teks yang memudar masuk butuh nilai opacity (tingkat keterlihatan) yang naik dari 0 sampai 1.
+Kamu bisa membuatnya dengan satu hitungan sederhana.
+
+===== PAGE 27 =====
+27
+Remotion untuk Pemula
+const opacity = Math.min(1, frame / 30);
+Baca dari dalam. frame / 30 memberi 0 di frame 0, 0,5 di frame 15, dan 1 di frame 30. Tanpa batas,
+angkanya terus naik: 2 di frame 60, 5 di frame 150. Karena itu Math.min(1, ...) memotongnya.
+Kalau hasilnya lebih dari 1, pakai 1.
+Bab 5 memperkenalkan alat yang lebih rapi untuk pekerjaan ini, yaitu interpolate(). Tetapi ide di
+baliknya sama persis dengan baris di atas.
+3 .7F p s , le b a r, d a n  tin g g i d a ri s a tu  te m p a t
+Kamu bisa menulis angka 30 di kodenya, tetapi kalau suatu hari fps video diganti ke 60, kecepatan
+animasimu ikut berubah. Cara yang lebih aman adalah menanyakan fps ke Remotion lewat
+useVideoConfig().
+import { useCurrentFrame, useVideoConfig } from "remotion";
+const frame = useCurrentFrame();
+const { fps, width, height, durationInFrames } = useVideoConfig();
+const detik = frame / fps;                       // sudah berapa detik berjalan
+const opacity = Math.min(1, frame / (1 * fps));  // memudar selama 1 detik
+Sekarang pernyataannya terbaca langsung: “memudar selama 1 detik”. Baik videonya 30 fps
+maupun 60 fps, durasi memudarnya tetap satu detik.
+useVideoConfig() memberi empat nilai yang sama dengan isian di <Composition>: width, height,
+fps, dan durationInFrames.
+3 .8V id e o  p e rta m a m u , le n g k a p
+Gabungkan semuanya. File src/Halo.tsx ini membuat judul yang memudar masuk selama satu
+detik dan naik sedikit.
+
+===== PAGE 28 =====
+28
+Remotion untuk Pemula
+src/Halo.tsx
+import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
+export const Halo = () => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const opacity = Math.min(1, frame / fps);          // 0 sampai 1 dalam 1 detik
+  const naik = 40 * (1 - Math.min(1, frame / fps));  // 40 piksel menuju 0
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: "#111",
+        justifyContent: "center",
+        alignItems: "center",
+      }}
+    >
+      <div
+        style={{
+          color: "white",
+          fontSize: 110,
+          fontWeight: 800,
+          opacity: opacity,
+          transform: `translateY(${naik}px)`,
+        }}
+      >
+        Halo, Remotion!
+      </div>
+    </AbsoluteFill>
+  );
+};
+Penjelasannya, baris demi baris:
+BarisArtinya
+const frame = useCurrentFrame()Tanya: sekarang frame berapa?
+const { fps } = useVideoConfig()
+Tanya: video ini berapa frame per detik?
+opacity = Math.min(1, frame / fps)Naik dari 0 ke 1 selama satu detik, lalu tetap 1.
+naik = 40 * (1 - ...)Mulai dari 40 piksel di bawah, lalu menuju 0 selama satu detik.
+opacity: opacityPakai hitungan tadi sebagai tingkat keterlihatan teks.
+translateY(${naik}px)Geser teks ke bawah sejauh naik piksel.
+
+===== PAGE 29 =====
+29
+Remotion untuk Pemula
+UBAH SATU ANGKA, LIHAT AKIBATNYA
+Ganti frame / fps menjadi frame / (2 * fps) di kedua tempat. Teks sekarang memudar dua
+kali lebih lambat. Lalu ganti 40 menjadi 200. Teks mulai dari jauh di bawah.
+Bermain dengan angka seperti ini adalah cara belajar tercepat. Kalau layar jadi kosong atau
+muncul pesan merah, kembalikan angkanya, lalu coba lagi dengan perubahan yang lebih kecil.
+3 .9S a tu  fra m e  s a ja : S till
+Kadang kamu hanya butuh satu gambar diam, misalnya gambar sampul untuk video. Untuk itu ada
+<Still>. Pendaftarannya sama seperti <Composition>, tetapi tanpa fps dan durationInFrames,
+karena gambar diam tidak punya waktu.
+import { Still } from "remotion";
+<Still id="Sampul" component={Sampul} width={1080} height={1920} />
+Kamu akan merendernya menjadi file gambar di Bab 8. Kalau proyekmu berisi banyak video,
+<Folder>
+ membantu mengelompokkannya di daftar Studio, mirip folder di komputer.
+RINGKASAN BAB
+Remotion memakai React. Cukup tahu: komponen adalah fungsi penghasil tampilan, { }
+menyisipkan hitungan, dan gaya ditulis dalam dua lapis kurung kurawal.
+<Composition> mendaftarkan sebuah video: id, component, width, height, fps, dan
+durationInFrames.
+Durasi detik = frame ÷ fps. Nomor frame dimulai dari 0.
+useCurrentFrame()
+ memberi nomor frame. Dari angka itu kamu menghitung opacity, posisi,
+ukuran, atau apa saja.
+useVideoConfig() memberi fps, lebar, tinggi, dan jumlah frame, supaya kodemu tidak
+bergantung pada angka yang ditulis manual.
+
+===== PAGE 30 =====
+BAB 4 DARI 8
+M e n d e s a i n  t a m p i l a n
+V ideo yang enak ditonton tidak hanya bergerak. Ia tertata: ada posisi
+yang jelas, w arna yang nyam an, huruf yang terbaca, dan urutan
+kem unculan yang m asuk akal. Bab ini m engajarkan sem uanya.
+DI BAB INI KAM U AKAN
+M enem patkan elem en di posisi yang tepat dan m enum puknya sebagai lapisan
+M em ilih warna dan huruf yang terbaca di layar ponsel
+M em buat latar belakang, bentuk, dan sorotan teks tanpa aplikasi desain
+M engatur kapan setiap bagian m uncul dengan Sequence
+
+===== PAGE 31 =====
+31
+Remotion untuk Pemula
+4 .1T a m p ila n  d i R e m o tio n  a d a la h  h a la m a n
+w e b
+Di Bab 1 kamu sudah tahu bahwa Remotion memotret halaman web. Artinya, semua yang kamu
+pakai untuk mengatur tampilan di web berlaku di sini, dengan tiga aturan sederhana.
+Pertama, ukuran ditulis dalam piksel dan boleh berupa angka biasa. M enulis fontSize: 80 artinya
+huruf setinggi 80 piksel. Kedua, warna ditulis sebagai teks, misalnya "#E8913A" atau "red". Ketiga,
+setiap elemen punya style berisi pengaturan seperti yang kamu lihat di Bab 3.
+Pengaturan yang paling sering kamu pakai:
+PengaturanFungsinyaContoh
+fontSizeUkuran huruffontSize: 96
+fontWeightKetebalan huruffontWeight: 800
+colorWarna tekscolor: "#fff"
+backgroundColorWarna latarbackgroundColor: "#111"
+paddingJarak dari tepi ke isipadding: 60
+borderRadiusSudut membulatborderRadius: 24
+opacityKeterlihatan, 0 sampai 1opacity: 0.5
+lineHeightJarak antar barislineHeight: 1.2
+4 .2P o s is i: m u la i d a ri p o jo k  k iri a ta s
+Setiap benda di layar punya posisi yang diukur dari pojok kiri atas. Dua aturan ini sering membuat
+pemula tersandung.
+
+===== PAGE 32 =====
+32
+Remotion untuk Pemula
+Gambar 4.1Sumbu x bertambah ke kanan. Sumbu y bertambah ke bawah, bukan ke atas seperti di pelajaran matematika.
+Untuk menaruh sesuatu di posisi tertentu, pakai position: "absolute" lalu tentukan jaraknya dari
+kiri dan atas:
+<div
+  style={{
+    position: "absolute",
+    left: 70,
+    top: 150,
+    width: 200,
+    height: 200,
+    backgroundColor: "orange",
+  }}
+/>
+Kotak itu berada 70 piksel dari tepi kiri dan 150 piksel dari tepi atas. Di video, ukuran layarnya tetap
+(misalnya 1080 × 1920), jadi cara ini aman dipakai. Kamu tidak perlu khawatir layarnya berubah
+ukuran seperti di situs web.
+Kalau yang kamu mau sekadar menaruh sesuatu di tengah, ada jalan pintas yang sudah kamu
+kenal dari Bab 3:
+
+===== PAGE 33 =====
+33
+Remotion untuk Pemula
+<AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+  <h1>Di tengah</h1>
+</AbsoluteFill>
+4 .3L a p is a n : y a n g  d itu lis  b e la k a n g a n  ta m p il d i
+a ta s
+Bayangkan menumpuk kertas transparan. Kertas yang terakhir diletakkan terlihat paling atas.
+Remotion bekerja sama: elemen yang ditulis lebih akhir di kode tampil di atas elemen sebelumnya.
+Gambar 4.2Tiga lapisan: latar di paling bawah, gambar di tengah, teks di paling atas. Penonton hanya melihat hasil
+tumpukannya.
+<AbsoluteFill> cocok untuk ini, karena setiap AbsoluteFill memenuhi layar dan menumpuk di
+atas yang sebelumnya.
+<AbsoluteFill>
+  <AbsoluteFill style={{ backgroundColor: "#111" }} />     {/* lapisan 1: latar */}
+  <AbsoluteFill>
+    <Img src={staticFile("foto.png")} />                    {/* lapisan 2: gambar */}
+  </AbsoluteFill>
+  <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+    <h1 style={{ color: "white" }}>Halo!</h1>               {/* lapisan 3: teks */}
+  </AbsoluteFill>
+</AbsoluteFill>
+Kalau suatu elemen harus berada di atas yang lain padahal ditulis lebih awal, pakai pengaturan
+zIndex. Angka yang lebih besar berada lebih di atas.
+
+===== PAGE 34 =====
+34
+Remotion untuk Pemula
+4 .4W a rn a
+Ada tiga cara menulis warna, dan ketiganya boleh dicampur:
+CaraContohCatatan
+Nama"red", "white"Mudah dibaca, pilihannya terbatas
+Kode hex"#E8913A"Paling umum. Enam karakter: merah, hijau, biru
+rgb dan rgba"rgba(0, 0, 0, 0.5)"Angka terakhir adalah tingkat transparan
+M emilih warna yang cocok adalah pekerjaan desainer, tetapi kamu bisa memakai jalan pintas: pakai
+satu palet dari awal sampai akhir video, yang terdiri dari empat warna. Satu warna latar, satu warna
+teks, dan dua warna aksen untuk menonjolkan.
+Gambar 4.3Enam palet siap pakai. Angka di bawah tiap kartu adalah rasio kontras: semakin tinggi semakin mudah
+dibaca. Tanda centang berarti lolos pedoman 4,5 banding 1 untuk teks biasa.
+
+===== PAGE 35 =====
+35
+Remotion untuk Pemula
+PaletCocok untukLatarTeksAksen 1Aksen 2
+Editorial gelapanalisis, ekonomi, energi#14120F#F4EFE6#E8913A#4FD1A5
+Kertas terangkutipan, artikel#F6F1E7#1B1B1B#C8372D#1F5F8B
+Neon teknologiAI, gadget, coding#0B1020#E8F1FF#00E5FF#FF3DB8
+Pastel ramahtips, gaya hidup#FFF4EA#3A3350#E5546F#2E9C86
+Kontras tinggihook, video pendek#000000#FFFFFF#FFE600#FF3B30
+Korporat birubisnis, keuangan#0D2A4A#F2F7FC#4DA3FF#FFB020
+SOAL KONTRAS
+Rasio kontras dihitung dengan rumus dari pedoman aksesibilitas web (W CAG). Pedoman
+umumnya: 4,5 banding 1 untuk teks biasa dan 3 banding 1 untuk teks besar. Beberapa warna
+aksen di palet pastel tidak lolos untuk teks kecil, jadi pakai warna itu untuk garis, bentuk, atau teks
+yang sangat besar saja.
+W arna juga bisa berubah mengikuti frame. Itu dibahas di Bab 5.
+4 .5H u ru f
+Jenis huruf menentukan suasana. Huruf tebal dan tegas cocok untuk judul. Huruf netral cocok
+untuk keterangan. Aturan praktis yang membantu: pakai paling banyak dua jenis huruf dalam satu
+video.
+
+===== PAGE 36 =====
+36
+Remotion untuk Pemula
+Gambar 4.4Tujuh jenis huruf dengan teks yang sama. Perhatikan bagaimana suasananya
+berubah.
+Untuk video vertikal 1080 × 1920 yang ditonton di ponsel, ukuran berikut biasanya nyaman. Ini
+saran dari pengalaman, bukan aturan resmi:
+Jenis teksUkuran (piksel)
+Judul besar90 sampai 140
+Judul biasa64 sampai 90
+Isi dan keterangan44 sampai 56
+Sumber atau catatan keciltidak kurang dari 34
+Cara m em asang huruf
+Ada dua cara yang direkomendasikan dokumentasi.
+Cara satu: Google Fonts. Gampang, tinggal satu baris, tetapi komputermu harus terhubung
+internet saat memutar dan merender.
+
+===== PAGE 37 =====
+37
+Remotion untuk Pemula
+import { loadFont } from "@remotion/google-fonts/Poppins";
+const { fontFamily } = loadFont("normal", {
+  weights: ["400", "800"],
+  subsets: ["latin"],
+});
+// lalu pakai di elemen:
+<div style={{ fontFamily }}>Halo</div>
+Cara dua: file huruf m ilikm u sendiri. Taruh file .woff2 di folder public/, lalu muat dengan
+@remotion/fonts. Cara ini tidak bergantung pada internet, jadi lebih andal.
+src/muat-huruf.ts
+import { loadFont } from "@remotion/fonts";
+import { staticFile } from "remotion";
+loadFont({
+  family: "Inter",
+  url: staticFile("Inter-Regular.woff2"),
+  weight: "500",
+});
+AW AS
+Kalau hurufmu tampak berubah menjadi huruf standar, hampir selalu karena file huruf belum
+selesai dimuat, atau nama family yang kamu pakai di fontFamily berbeda dengan yang kamu
+tulis saat memuat. Samakan penulisannya persis, termasuk huruf besar kecil.
+Untuk memasang paket seperti @remotion/google-fonts atau @remotion/fonts, pakai perintah ini
+supaya versinya cocok dengan versi Remotion yang kamu pakai:
+npx remotion add @remotion/google-fonts @remotion/fonts
+4 .6L a ta r b e la k a n g
+Latar polos itu aman, tetapi sedikit sentuhan membuat video terasa dirancang. Kabar baiknya,
+semua latar di bawah ini hanya satu baris pengaturan.
+
+===== PAGE 38 =====
+38
+Remotion untuk Pemula
+Gambar 4.5Sembilan jenis latar. Semuanya dibuat dengan kode, tanpa gambar.
+// 2. Gradasi dua warna
+style={{ background: "linear-gradient(160deg, #14120F 0%, #3b2a17 55%, #E8913A 130%)" }}
+// 3. Cahaya dari atas
+style={{ background: "radial-gradient(circle at 50% 18%, #6b4520 0%, #14120F 62%)" }}
+// 5. Garis kisi
+style={{ background:
+  "linear-gradient(#ffffff14 2px, transparent 2px) 0 0/50px 50px, " +
+  "linear-gradient(90deg, #ffffff14 2px, transparent 2px) 0 0/50px 50px, #14120F" }}
+// 6. Titik
+style={{ background: "radial-gradient(#ffffff30 3px, transparent 3.5px) 0 0/34px 34px, 
+#14120F" }}
+
+===== PAGE 39 =====
+39
+Remotion untuk Pemula
+Nomor 8 pada gambar, gradasi yang bergerak, dibuat dengan cara yang sama tetapi sudutnya
+dihitung dari nomor frame (Bab 5). Nomor 9 menaruh video di bawah lapisan gelap supaya tulisan di
+atasnya tetap terbaca, trik yang sangat berguna dan dibahas di Bab 6.
+4 .7G a m b a r d a n  b e n tu k
+Untuk menampilkan gambar, taruh filenya di public/, lalu pakai <Img> dan staticFile():
+import { Img, staticFile } from "remotion";
+<Img src={staticFile("foto.png")} style={{ width: 600 }} />
+Pakai <Img> dari Remotion, bukan <img> biasa. Remotion menunggu sampai gambarnya selesai
+dimuat sebelum memotret frame, jadi tidak ada frame yang gambarnya belum muncul. Bab 6
+membahas aset dengan lebih lengkap.
+Untuk bentuk sederhana seperti lingkaran, kotak, bintang, dan panah, ada paket
+@remotion/shapes. Satu baris kode menghasilkan satu bentuk, dan warnanya diatur lewat fill.
+Gambar 4.6Bentuk siap pakai dari @remotion/shapes. Warna isi lewat fill, garis tepi lewat stroke dan strokeWidth.
+
+===== PAGE 40 =====
+40
+Remotion untuk Pemula
+import { Circle, Star } from "@remotion/shapes";
+<Circle radius={70} fill="#E8913A" />
+<Star points={5} outerRadius={80} innerRadius={35} fill="#FFC93C" stroke="#1F1B16" 
+strokeWidth={6} />
+4 .8M e n a n d a i te k s  s e p e rti d e n g a n  s ta b ilo
+Untuk menyorot kata penting, paket @remotion/rough-notation memberi coretan yang tampak
+digambar tangan: stabilo, lingkaran, garis bawah, coretan, kotak, dan kurung. Gerakannya ikut
+tergambar, mulai dari kosong sampai penuh.
+Gambar 4.7Tujuh gaya penanda teks. Dalam video, setiap coretan tergambar perlahan dari
+kosong sampai penuh.
+import { Highlight } from "@remotion/rough-notation";
+<div style={{ fontSize: 80, fontWeight: 800 }}>
+  Ini <Highlight color="rgba(232,145,58,0.7)" progress={1}>penting</Highlight> sekali
+</div>
+Isian progress mengatur seberapa jauh coretannya tergambar: 0 berarti belum ada, 1 berarti
+penuh. Kalau kamu mengisinya dengan angka yang naik mengikuti frame (Bab 5), coretannya
+tergambar sendiri.
+
+===== PAGE 41 =====
+41
+Remotion untuk Pemula
+4 .9M e n g a tu r k a p a n  s e s u a tu  m u n c u l:
+S e q u e n c e
+Sekarang bagian yang paling penting di bab ini. Sampai di sini semua elemenmu tampil dari frame 0
+sampai akhir. Padahal biasanya judul muncul dulu, lalu gambar, lalu keterangan. Untuk mengatur itu,
+bungkus bagian bagiannya dengan <Sequence>.
+Gambar 4.8Setiap Sequence punya awal (from) dan lama tampil (durationInFrames). Di frame 90, Judul sudah berjalan
+90 frame, Gambar 60 frame, dan Teks 30 frame.
+import { Sequence } from "remotion";
+<>
+  <Sequence from={0} durationInFrames={150}>
+    <Judul />
+  </Sequence>
+  <Sequence from={30} durationInFrames={90}>
+    <Gambar />
+  </Sequence>
+  <Sequence from={60} durationInFrames={60}>
+    <Teks />
+  </Sequence>
+</>
+from adalah frame saat bagian itu mulai tampil. durationInFrames adalah berapa frame ia tampil.
+Di luar rentang itu, bagiannya tidak ada di layar sama sekali.
+
+===== PAGE 42 =====
+42
+Remotion untuk Pemula
+Ada satu hal yang istimewa, dan ini membuat <Sequence> sangat nyaman: di dalam  sebuah
+Sequence, nom or fram e dihitung ulang dari 0. Kalau 
+<Teks />
+ baru muncul di frame 60, maka di
+dalam Teks, useCurrentFrame() mengembalikan 0 pada saat itu. Kamu menulis animasi muncul
+sekali, dan ia bisa dipasang di waktu mana pun tanpa mengubah kodenya.
+ISTILAH
+Cascading (bertingkat): Sequence boleh berada di dalam Sequence lain. Kalau yang luar mulai di
+frame 30 dan yang dalam mulai di frame 60 menurut dirinya sendiri, maka isi yang dalam muncul
+di frame 90 pada waktu video.
+Adegan berurutan: Series
+Kalau adegan harus berjalan satu demi satu, menghitung from setiap adegan itu merepotkan.
+<Series> menyusunnya otomatis.
+import { Series } from "remotion";
+<Series>
+  <Series.Sequence durationInFrames={60}><Adegan1 /></Series.Sequence>
+  <Series.Sequence durationInFrames={60}><Adegan2 /></Series.Sequence>
+  <Series.Sequence durationInFrames={60}><Adegan3 /></Series.Sequence>
+</Series>
+Total videonya 180 frame, dan tiap adegan mulai tepat ketika yang sebelumnya selesai. Isian
+offset memberi jeda (angka positif) atau membuat adegan tumpang tindih dengan yang
+sebelumnya (angka negatif). Untuk peralihan yang halus antar adegan, ada <TransitionSeries> di
+Bab 5.
+4 .1 0L a tih a n : k a rtu  ju d u l tig a  b a b a k
+Gabungkan semua yang sudah dipelajari. Kartu ini punya latar gradasi, judul yang muncul di frame
+0, garis di frame 20, dan keterangan di frame 40. Animasi geraknya sengaja belum ada. Itu bagian
+Bab 5.
+
+===== PAGE 43 =====
+43
+Remotion untuk Pemula
+src/Kartu.tsx
+import { AbsoluteFill, Sequence } from "remotion";
+const teks = { position: "absolute", width: "100%", textAlign: "center", color: 
+"#F4EFE6" } as const;
+const Judul = () => (
+  <div style={{ ...teks, top: 760, fontSize: 120, fontWeight: 800 }}>Harga cabai</div>
+);
+const Garis = () => (
+  <div style={{ position: "absolute", top: 930, left: 410, width: 260, height: 10, 
+backgroundColor: "#E8913A" }} />
+);
+const Keterangan = () => (
+  <div style={{ ...teks, top: 990, fontSize: 52 }}>Naik terus selama tiga minggu</div>
+);
+export const Kartu = () => (
+  <AbsoluteFill style={{ background: "radial-gradient(circle at 50% 18%, #6b4520 0%, 
+#14120F 62%)" }}>
+    <Sequence from={0}><Judul /></Sequence>
+    <Sequence from={20}><Garis /></Sequence>
+    <Sequence from={40}><Keterangan /></Sequence>
+  </AbsoluteFill>
+);
+Daftarkan Kartu di Root.tsx dengan ukuran 1080 × 1920, lalu geser penunjuk waktu di Studio.
+Judul sudah ada di frame 0, garis muncul di frame 20, dan keterangan di frame 40.
+KENAPA SETIAP BAGIAN DITULIS DENGAN POSISI ABSOLUT
+Secara bawaan, <Sequence> membungkus isinya dalam <AbsoluteFill>, jadi setiap Sequence
+memenuhi layar sendiri dan tidak saling mendorong. Karena itu posisi tiap bagian diatur satu per
+satu dengan position: "absolute" dan top. Kalau kamu lebih suka tata letak yang mengalir dari
+atas ke bawah, tambahkan layout="none" pada Sequence, dan isinya ditata oleh pembungkus di
+luarnya.
+
+===== PAGE 44 =====
+44
+Remotion untuk Pemula
+RINGKASAN BAB
+Tampilan di Remotion adalah halaman web, dengan ukuran dalam piksel dan gaya lewat
+style.
+Posisi diukur dari pojok kiri atas. Sumbu y bertambah ke bawah.
+Elemen yang ditulis belakangan tampil di atas. <AbsoluteFill> menumpuk lapisan, zIndex
+mengubah urutan.
+Pakai satu palet empat warna dan paling banyak dua jenis huruf. Cek kontras supaya terbaca di
+ponsel.
+Latar belakang, bentuk, dan sorotan teks bisa dibuat murni dengan kode.
+<Sequence from durationInFrames> mengatur kapan sesuatu tampil, dan di dalamnya frame
+dihitung ulang dari 0. <Series> menyusun adegan berurutan.
+
+===== PAGE 45 =====
+BAB 5 DARI 8
+M e m b u a t  g e r a k
+Ini bab yang paling m enyenangkan. K am u m engubah nilai tetap
+m enjadi nilai yang berubah m engikuti w aktu, lalu m enam bahkan
+pegas, efek visual, dan transisi antar adegan.
+DI BAB INI KAM U AKAN
+M em akai interpolate() untuk m engubah nom or fram e m enjadi nilai apa pun
+M em ilih antara easing dan spring untuk gerak yang terasa alam i
+M engubah warna, ukuran, posisi, dan putaran m engikuti waktu
+M enam bah efek visual dan transisi antar adegan
+
+===== PAGE 46 =====
+46
+Remotion untuk Pemula
+5 .1P rin s ip  g e ra k : n ila i y a n g  b e ru b a h  m e n u ru t
+fra m e
+Di Bab 3 kamu sudah menulis 
+Math.min(1, frame / fps)
+ untuk membuat teks memudar. Itu gerak
+paling sederhana. Setiap animasi di Remotion adalah variasi dari pola yang sama:
+1. Baca nomor frame.
+2. Ubah nomor itu menjadi sebuah nilai: opacity, posisi, ukuran, warna, atau apa saja.
+3. Pasang nilai itu di style.
+Hampir seluruh bab ini membahas langkah dua: cara terbaik mengubah nomor frame menjadi nilai.
+5 .2in te rp o la te (): p e n e rje m a h  a n g k a
+Tulis Math.min dan pembagian untuk setiap gerakan itu cepat membosankan. interpolate()
+melakukan pekerjaan yang sama dengan cara yang rapi. Kamu cukup menjawab empat hal: nilai
+apa yang diubah, rentang asalnya, rentang hasilnya, dan aturan di luar rentang.
+Gambar 5.1interpolate() menghubungkan rentang frame (sumbu bawah) dengan rentang nilai (sumbu samping). Di luar
+rentang, kamu memilih: terus berlanjut (extend) atau berhenti (clamp).
+
+===== PAGE 47 =====
+47
+Remotion untuk Pemula
+import { interpolate, useCurrentFrame } from "remotion";
+const frame = useCurrentFrame();
+const opacity = interpolate(
+  frame,         // nilai yang diterjemahkan
+  [0, 60],       // rentang asal: frame 0 sampai 60
+  [0, 1],        // rentang hasil: opacity 0 sampai 1
+  { extrapolateRight: "clamp" }   // setelah frame 60, tetap 1
+);
+Cara bacanya: “ketika frame bernilai 0, hasilnya 0. Ketika frame bernilai 60, hasilnya 1. Di
+antaranya, hitung secara merata.” Frame 30 menghasilkan 0,5.
+extrapolate adalah aturan untuk nomor di luar rentang asal. Ada empat pilihan:
+PilihanArtinyaContoh interpolate(1.5, [0, 1], [0, 2])
+"extend" (bawaan)Teruskan pola yang sama3
+"clamp"Berhenti di batas2
+"identity"Kembalikan nilai asli1,5
+"wrap"
+Ulang dari awal1
+Hampir selalu kamu butuh "clamp". Kalau lupa, nilainya terus bertambah setelah rentang berakhir,
+dan itulah penyebab teks yang mendadak membesar tanpa henti atau opacity yang melebihi 1.
+Rentang tidak harus dua titik. Kamu boleh memakai banyak titik untuk gerak yang berubah arah.
+M isalnya naik lalu turun:
+const y = interpolate(frame, [0, 30, 60], [0, -200, 0]);  // naik 200, lalu kembali
+Contoh lengkap: teks “Halo!” yang memudar masuk sambil naik pelan. Ini kode di balik gambar di
+bawah.
+const { fps } = useVideoConfig();
+const opacity = interpolate(frame, [0, 2 * fps], [0, 1], {
+  extrapolateLeft: "clamp",
+  extrapolateRight: "clamp",
+});
+const naik = interpolate(frame, [0, 2 * fps], [120, 0], {
+  easing: Easing.bezier(0.42, 0, 0.58, 1),
+  extrapolateLeft: "clamp",
+  extrapolateRight: "clamp",
+});
+<div style={{ opacity, transform: `translateY(${naik}px)` }}>Halo!</div>
+
+===== PAGE 48 =====
+48
+Remotion untuk Pemula
+Gambar 5.2Hasil kode di atas pada frame 0, 15, 30, 45, dan 60. Teks memudar masuk dan naik selama dua detik. Angka
+opacity di bawah tiap gambar dihitung langsung oleh kodenya.
+5 .3L im a  p e ru b a h a n  d a s a r
+Hampir semua gerak yang kamu lihat di video terdiri dari kombinasi lima perubahan ini.
+Gambar 5.3Lima perubahan dasar pada sebuah kotak. Garis terputus adalah posisi awal.
+PerubahanPropertiContoh
+Gesertranslatetranslate: "70px 26px"
+Besar atau kecilscalescale: 1.5
+Putarrotaterotate: "20deg"
+Miringtransform (skew)transform: "skewX(20deg)"
+Memudar
+opacityopacity: 0.35
+
+===== PAGE 49 =====
+49
+Remotion untuk Pemula
+Tips dari dokumentasi: tulis tiap perubahan dengan properti CSS yang terpisah (translate, scale,
+rotate
+), jangan digabung dalam satu teks 
+transform
+. Dengan begitu Studio mengenali tiap
+properti dan bisa mengeditnya langsung dengan tombol di jendelanya. Untuk miring, tidak ada
+properti terpisah, jadi pakai transform.
+<div style={{ opacity, scale: 1.2, rotate: "10deg", translate: `0px ${naik}px` 
+}}>Halo</div>
+5 .4E a s in g : b e n tu k  k e c e p a ta n
+Gerak yang kecepatannya tetap terasa seperti robot. Gerak di dunia nyata mulai pelan, makin
+cepat, lalu melambat. Pengaturan kecepatan inilah yang disebut easing.
+Gambar 5.4Enam bentuk easing. Garis pada tiap kotak adalah posisi terhadap waktu. Deretan titik di bawahnya adalah
+posisi benda pada selang waktu yang sama: titik rapat berarti lambat, titik renggang berarti cepat.
+Cara memakainya, tambahkan easing pada interpolate():
+
+===== PAGE 50 =====
+50
+Remotion untuk Pemula
+import { Easing } from "remotion";
+const x = interpolate(frame, [0, 30], [0, 500], {
+  easing: Easing.out(Easing.quad),
+  extrapolateRight: "clamp",
+});
+Panduan memilih, dari pengalaman:
+Kesan yang kamu mauPilih
+Benda masuk ke layar, melambat sampai
+berhenti
+Easing.out(Easing.quad) atau
+Easing.out(Easing.cubic)
+Benda keluar dari layar, makin cepatEasing.in(Easing.quad)
+Gerakan lembut dari titik ke titikEasing.inOut(Easing.cubic)
+Melewati tujuan sedikit lalu kembaliEasing.out(Easing.back(2))
+Memantul seperti bolaEasing.bounce
+Aturan yang paling mudah diingat: m asuk gunakan out, keluar gunakan in. Benda yang baru
+muncul sebaiknya melambat di akhir. Benda yang pergi sebaiknya mempercepat.
+5 .5s p rin g (): g e ra k  s e p e rti p e g a s
+spring() membuat gerak yang meniru pegas: bergerak cepat ke tujuan, melewatinya sedikit,
+bergoyang, lalu tenang. Hasilnya terasa hidup, dan inilah alasan banyak video bergerak modern
+terasa “berisi”.
+
+===== PAGE 51 =====
+51
+Remotion untuk Pemula
+Gambar 5.5Empat pegas dengan peredam (damping) berbeda. Semakin besar damping, semakin sedikit memantul.
+Nilai pada gambar dihitung oleh fungsi spring asli Remotion.
+spring() tidak memakai rentang. Ia selalu bergerak dari 0 menuju 1, dan kamu mengalikannya
+sesuka hati.
+import { spring, useCurrentFrame, useVideoConfig } from "remotion";
+const frame = useCurrentFrame();
+const { fps } = useVideoConfig();
+const s = spring({ frame, fps, config: { damping: 12 } });
+<div style={{ scale: s }}>Muncul membesar</div>
+Tiga pengaturan yang perlu kamu tahu di dalam config:
+PengaturanPengaruhnya
+damping (peredam)Semakin besar, semakin sedikit memantul. Bawaannya 10. Angka 200 hampir tanpa
+pantulan.
+stiffness
+(kekakuan)
+Semakin besar, semakin tegang dan cepat. Bawaannya 100.
+mass (massa)Semakin kecil, semakin cepat geraknya.
+Dua isian di luar config sangat berguna: delay menunda mulainya pegas sekian frame, dan
+durationInFrames memaksa pegas selesai dalam jumlah frame tertentu.
+Pegas yang sama bisa dipakai untuk nilai apa saja lewat interpolate(). M isalnya menggeser teks
+dari 200 piksel di bawah ke posisi aslinya:
+
+===== PAGE 52 =====
+52
+Remotion untuk Pemula
+const s = spring({ frame, fps, delay: 10, config: { damping: 14 } });
+const naik = interpolate(s, [0, 1], [200, 0]);
+Dan untuk beberapa elemen yang muncul bergantian, cukup beri 
+delay
+ yang bertambah:
+{["Satu", "Dua", "Tiga"].map((teks, i) => {
+  const s = spring({ frame, fps, delay: i * 8, config: { damping: 14 } });
+  return <div key={teks} style={{ opacity: s, translate: `0px ${(1 - s) * 60}px` }}>
+{teks}</div>;
+})}
+EASING ATAU SPRING?
+Pakai easing kalau kamu butuh kontrol waktu yang tepat, misalnya “selesai persis di frame 30”.
+Pakai spring kalau kamu ingin kesan alami dan tidak peduli kapan persisnya selesai (pegas
+berhenti secara bertahap). Banyak animator memakai spring untuk elemen yang masuk dan
+easing untuk gerak yang harus selesai tepat waktu.
+5 .6W a rn a  y a n g  b e ru b a h
+W arna juga bisa dianimasikan. interpolateColors() bekerja seperti interpolate(), tetapi hasilnya
+warna.
+Gambar 5.6Warna berubah halus dari biru ke oranye ke hijau. Frame di antara titik kunci dihitung otomatis.
+
+===== PAGE 53 =====
+53
+Remotion untuk Pemula
+import { interpolateColors } from "remotion";
+const warna = interpolateColors(frame, [0, 30, 60], ["#1D4FB8", "#E8913A", "#12A585"]);
+<div style={{ backgroundColor: warna }} />
+W arna boleh ditulis sebagai nama ("red"), kode hex ("#E8913A"), atau rgb(...). Remotion
+menghitung campurannya untuk setiap frame.
+5 .7A tu ra n  p e n tin g : ja n g a n  m e m a k a i a n g k a
+a c a k  b ia s a
+Kamu mungkin tergoda memakai Math.random() untuk menyebar banyak titik atau membuat gerak
+yang acak. Jangan. Remotion merender beberapa frame sekaligus dengan membuka beberapa tab
+browser, supaya lebih cepat. Setiap tab memanggil Math.random() sendiri, jadi frame yang sama
+bisa mendapat angka berbeda, dan hasil videomu melompat serta berubah setiap kali dirender.
+Gambar 5.7Kenapa gerakan harus dihitung dari nomor frame. Dengan Math.random(), dua tab menghasilkan posisi
+berbeda untuk frame yang sama. Dengan random() berbenih, hasilnya selalu sama.
+Gantinya adalah random() dari Remotion. Ia memberi angka acak yang selalu sam a untuk kata
+kunci (disebut seed) yang sama.
+
+===== PAGE 54 =====
+54
+Remotion untuk Pemula
+import { random } from "remotion";
+const x = random("titik-1") * 1080;   // selalu sama untuk "titik-1"
+const y = random("titik-1b") * 1920;
+Kalau butuh seratus titik, pakai kata kunci yang berbeda untuk setiap titik, misalnya
+random("titik-" + i).
+AW AS
+Aturan yang sama berlaku untuk apa pun yang berubah sendiri tanpa kamu kendalikan:
+Date.now(), animasi CSS yang berjalan sendiri, dan setTimeout. Semuanya tidak aman di
+Remotion, karena Remotion tidak menunggu waktu nyata. Semua gerak harus dihitung dari nomor
+frame.
+5 .8T ra n s is i a n ta r a d e g a n
+Kalau video punya beberapa adegan, perpindahan antar adegan bisa dipoles dengan transisi. Di Bab
+4 kamu memakai <Series>, yang menyambung adegan dengan potongan langsung.
+<TransitionSeries> melakukan hal yang sama tetapi memungkinkan peralihan yang halus.
+
+===== PAGE 55 =====
+55
+Remotion untuk Pemula
+Gambar 5.8Atas: Series menyambung adegan rapat. Bawah: TransitionSeries membuat adegan saling menimpa selama
+transisi, jadi video total lebih pendek.
+import { linearTiming, TransitionSeries } from "@remotion/transitions";
+import { fade } from "@remotion/transitions/fade";
+<TransitionSeries>
+  <TransitionSeries.Sequence durationInFrames={60}>
+    <AdeganSatu />
+  </TransitionSeries.Sequence>
+  <TransitionSeries.Transition
+    presentation={fade()}
+    timing={linearTiming({ durationInFrames: 15 })}
+  />
+  <TransitionSeries.Sequence durationInFrames={60}>
+    <AdeganDua />
+  </TransitionSeries.Sequence>
+</TransitionSeries>
+Sebuah transisi terdiri dari dua bagian. Presentation menentukan bentuk peralihannya: memudar,
+menggeser, membalik, dan seterusnya. Tim ing menentukan kecepatannya: linearTiming konstan,
+springTiming seperti pegas.
+
+===== PAGE 56 =====
+56
+Remotion untuk Pemula
+AW AS
+Transisi memakai waktu dari kedua adegan sekaligus. Dua adegan 60 frame dengan satu transisi
+15 frame menghasilkan video 105 frame, bukan 120. Kalau durasi total videomu harus tepat, hitung
+dulu: jumlah semua adegan dikurangi jumlah semua transisi. Kesalahan ini sering membuat bagian
+akhir video terpotong atau kosong.
+Remotion 4.0.537 membawa 19 presentation, mulai dari fade dan slide sampai book-flip, iris,
+dan swap. Semuanya dilengkapi gambar di Lam piran B. Selain <TransitionSeries.Transition>,
+ada juga <TransitionSeries.Overlay> yang menaruh sesuatu, misalnya kilatan cahaya, di atas titik
+potong tanpa memendekkan video.
+5 .9E fe k  v is u a l
+Efek mengubah piksel gambar secara langsung: mengaburkan, mengubah warna, melengkungkan,
+menambah tekstur. Semuanya ada di paket @remotion/effects, yang diperkenalkan di Remotion
+4.0.464. Versi 4.0.537 memuat 81 efek. Gambar dari semuanya ada di Lam piran A.
+Delapan contoh dari galeri itu, semuanya dari satu foto yang sama:
+
+Mengaburkan gambar.
+
+Cahaya lembut di bagian
+terang.
+
+Seperti cetakan koran.
+
+Seperti kamera panas.
+
+Tepi benda berpendar warna.
+
+Pinggiran menggelap.
+
+Gambar bergelombang.
+
+Menjadi blok piksel.
+Efek dipasang lewat isian 
+effects
+ pada komponen yang mendukungnya: 
+<Solid>
+,
+<CanvasImage>, <Img>, <Video>, dan <HtmlInCanvas>, serta bentuk dari @remotion/shapes.
+Contohnya:
+
+===== PAGE 57 =====
+57
+Remotion untuk Pemula
+import { CanvasImage, staticFile } from "remotion";
+import { blur } from "@remotion/effects/blur";
+import { vignette } from "@remotion/effects/vignette";
+<CanvasImage
+  src={staticFile("foto.png")}
+  width={1280}
+  height={720}
+  fit="cover"
+  effects={[blur({ radius: 8 }), vignette({ })]}
+/>
+Efek boleh ditumpuk dalam satu daftar dan diterapkan berurutan. Sama seperti gerak lainnya, isian
+efek bisa diubah mengikuti nomor frame. M isalnya
+blur({ radius: interpolate(frame, [0, 30], [40, 0]) }) membuat gambar yang awalnya kabur
+lalu menjadi tajam.
+Di Studio, kamu juga bisa menyeret efek dari daftar ke elemen tanpa menulis kode. Hasilnya
+tersimpan sebagai kode.
+PERLU W EBGL, DAN TIGA EFEK PERLU W EBGPU
+Efek bekerja lewat kartu grafis (WebGL), bukan lewat kode biasa. Di laptop dengan kartu grafis,
+biasanya langsung jalan. Di server tanpa kartu grafis, render perlu opsi --gl. Dokumentasi untuk
+Remotion 4.0 menyarankan --gl=angle agar WebGL dan WebGPU aktif. Buku ini dibuat di
+komputer tanpa kartu grafis dengan swangle, yaitu WebGL yang dijalankan lewat CPU, dan semua
+efek di Lampiran A bisa dirender dengan cara itu. Pengecualiannya tiga efek tiga dimensi,
+cylinder, sphere, dan pageTurn. Dokumentasi menyebut ketiganya butuh WebGPU, yang tidak
+ada di komputer pembuat buku ini. Ketiganya tidak dicoba.
+5 .1 0A la t g e ra k  la in  y a n g  p e rlu  k a m u  k e ta h u i
+Remotion punya banyak paket tambahan. Beberapa yang paling sering dipakai untuk gerak dan
+visual:
+
+===== PAGE 58 =====
+58
+Remotion untuk Pemula
+PaketGunanya
+@remotion/shapesLingkaran, kotak, bintang, panah, dan bentuk lain
+@remotion/pathsMenggambar dan menganimasikan garis dan kurva
+@remotion/noiseGerak acak yang halus seperti awan dan asap
+@remotion/motion-blurKabur gerak agar benda yang cepat tampak natural
+@remotion/lottieMemutar animasi Lottie dari file JSON
+@remotion/threeGrafik tiga dimensi dengan Three.js
+@remotion/layout-utilsMengukur teks supaya pas di kotak
+@remotion/light-leaksKilatan cahaya sinematik di titik potong
+JUJUR SOAL INI
+Dari tabel di atas, yang sudah dicoba langsung untuk buku ini hanya @remotion/shapes.
+Selebihnya baru dibaca dari dokumentasi. Pasang dengan npx remotion add nama-paket dan
+baca halaman dokumentasinya sebelum memakai.
+ANIMASIKAN KARTU JUDUL DARI BAB 4
+Buka Kartu.tsx. Beri tiap bagian satu gerakan: judul memudar masuk dengan interpolate,
+garis memanjang dari lebar 0 sampai 260 dengan spring, dan keterangan naik dari bawah
+dengan Easing.out(Easing.cubic). Ingat bahwa di dalam <Sequence>, useCurrentFrame()
+dimulai dari 0 untuk bagian itu. Kamu tidak perlu menghitung frame awalnya lagi.
+RINGKASAN BAB
+Semua animasi adalah pola yang sama: baca nomor frame, ubah jadi nilai, pasang di style.
+interpolate(frame, [awal, akhir], [dari, ke]) adalah alat utama. Hampir selalu
+tambahkan "clamp".
+Easing mengatur bentuk kecepatan. Masuk pakai out, keluar pakai in. spring() memberi
+gerak seperti pegas, diatur dengan damping, stiffness, mass, dan delay.
+interpolateColors() menganimasikan warna. Jangan pakai Math.random(), pakai
+random("kata kunci").
+<TransitionSeries> memberi peralihan halus, tetapi transisi memendekkan total durasi.
+@remotion/effects punya 81 efek yang dipasang lewat isian effects. Tiga di antaranya
+butuh WebGPU.
+
+===== PAGE 59 =====
+BAB 6 DARI 8
+M e m a s u k k a n  v i d e o ,
+g a m b a r ,  d a n  s u a r a
+Sejauh ini sem ua yang tam pil dibuat dari kode. Sekarang kam u
+m em asukkan bahan dari luar: foto, rekam an video, m usik, dan suara
+ucapan, lalu m em otong dan m em adukannya di garis w aktu.
+DI BAB INI KAM U AKAN
+M enyim pan aset di folder public dan m em anggilnya dengan staticFile
+M em asukkan gam bar, video, dan audio ke dalam  video
+M em otong, m em percepat, m engulang, dan m engatur volum e
+M enaruh video di bawah lapisan gelap supaya teks tetap terbaca
+
+===== PAGE 60 =====
+60
+Remotion untuk Pemula
+6 .1T e m p a t m e n y im p a n  b a h a n : fo ld e r p u b lic
+Semua bahan dari luar disimpan di folder public/ di proyekmu. Anggap folder itu sebagai laci aset:
+foto, rekaman, musik, file huruf. Untuk memanggilnya dari kode, pakai fungsi staticFile() dengan
+nama file.
+import { staticFile } from "remotion";
+staticFile("foto.png");        // file public/foto.png
+staticFile("musik/lagu.mp3");  // file public/musik/lagu.mp3
+Kamu juga bisa memakai alamat internet langsung, misalnya src="https://contoh.com/foto.png".
+Tetapi file milik sendiri yang disimpan di public/ lebih andal. Alamat internet bisa berubah, mati,
+atau memblokir akses dari luar (masalah yang disebut CORS).
+AW AS
+Jangan menulis alamat file dari komputermu seperti C:\Users\...\foto.png. Itu hanya berlaku di
+komputermu dan akan gagal di tempat lain. Selalu taruh di 
+public/
+ dan panggil dengan
+staticFile().
+6 .2G a m b a r
+Kamu sudah mengenal <Img> dari Bab 4:
+import { Img, staticFile } from "remotion";
+<Img src={staticFile("foto.png")} style={{ width: 800, borderRadius: 24 }} />
+Pakai <Img> dari Remotion, bukan <img> biasa. Remotion menunggu gambar selesai dimuat
+sebelum memotret frame. Dengan <img> biasa, pada render yang cepat bisa ada frame yang
+gambarnya belum muncul sehingga video berkedip.
+Beberapa kebiasaan baik untuk gambar:
+Pakai gambar yang ukurannya cukup. Foto 4000 piksel untuk ditampilkan 600 piksel boros
+waktu render.
+Untuk gambar yang butuh efek seperti kabur atau warna, <Img effects={[...]}> ikut
+mendukung efek dari Bab 5.
+Untuk gambar bergerak, ada <AnimatedImage> untuk format seperti GIF dan W ebP animasi.
+
+===== PAGE 61 =====
+61
+Remotion untuk Pemula
+6 .3V id e o
+Untuk memasukkan rekaman video, pakai <Video> dari paket @remotion/media. Dokumentasi
+menyebut ini komponen yang direkomendasikan untuk kode baru. Saat render, ia mengambil frame
+yang tepat dari file video, jadi videonya sinkron dengan garis waktu Remotion.
+npx remotion add @remotion/media
+import { Video } from "@remotion/media";
+import { staticFile } from "remotion";
+<Video src={staticFile("klip.mp4")} />
+Isian yang paling sering dipakai:
+IsianFungsinyaContoh
+trimBeforeLewati sekian frame pertama dari file
+asli
+trimBefore={60} (lewati 2 detik pada 30
+fps)
+playbackRateKecepatan putarplaybackRate={2} (dua kali lebih cepat)
+volumeVolume suara, 0 sampai 1volume={0.5}
+mutedMatikan suaramuted
+loopUlangi terusloop
+objectFit
+Cara mengisi kotak
+objectFit="cover"
+styleUkuran dan posisi, seperti elemen lainstyle={{ width: 1080 }}
+BEBERAPA JENIS KOMPONEN VIDEO
+Remotion punya tiga komponen video: <Video> dari @remotion/media (yang direkomendasikan),
+<OffthreadVideo>, dan <Html5Video>. Dokumentasi menjelaskan perbedaannya dalam sebuah
+tabel perbandingan. Kalau kamu menemukan kode lama yang memakai <OffthreadVideo>, itu
+masih jalan. Untuk kode baru, pakai <Video>.
+M em otong video
+Rekaman biasanya lebih panjang dari yang kamu butuhkan. Ada dua jenis potongan, dan keduanya
+perlu kamu pahami.
+
+===== PAGE 62 =====
+62
+Remotion untuk Pemula
+Gambar 6.1Potongan dan penempatan di garis waktu. Atas: trimBefore melewati bagian awal file asli. Bawah: from
+menentukan kapan klip mulai tampil di videomu. Suara memakai volume yang naik pelan (fade in).
+M em otong bagian dalam  file dengan trimBefore. Ini menjawab pertanyaan “file aslinya mulai
+dipakai dari mana?”. Dengan trimBefore={60}, dua detik pertama dari file (pada 30 fps) dilewati,
+dan videomu mulai dari detik kedua file itu.
+M enaruh klip di waktu tertentu dengan <Sequence from>. Ini menjawab pertanyaan “klip muncul
+kapan di videoku?”.
+<Sequence from={30}>
+  <Video src={staticFile("klip.mp4")} trimBefore={60} />
+</Sequence>
+Artinya: klip tampil mulai frame 30 di videomu, dan yang diputar dimulai dari detik kedua file aslinya.
+Kalau kamu ingin klipnya berakhir lebih cepat, tambahkan durationInFrames pada <Sequence>,
+atau pada <Video> itu sendiri.
+Video sebagai latar, dengan lapisan gelap
+Teks di atas video yang ramai sering sulit dibaca. Triknya: taruh lapisan hitam transparan di antara
+video dan teks.
+
+===== PAGE 63 =====
+63
+Remotion untuk Pemula
+<AbsoluteFill>
+  <Video src={staticFile("latar.mp4")} muted style={{ width: "100%", height: "100%", 
+objectFit: "cover" }} />
+  <AbsoluteFill style={{ background: "linear-gradient(0deg, rgba(0,0,0,0.78) 0%, 
+rgba(0,0,0,0.15) 70%)" }} />
+  <AbsoluteFill style={{ justifyContent: "flex-end", padding: 80 }}>
+    <h1 style={{ color: "white", fontSize: 100 }}>Judul yang selalu terbaca</h1>
+  </AbsoluteFill>
+</AbsoluteFill>
+Lapisan gelap itu memakai gradasi: hampir hitam di bawah tempat teks berada, dan hampir bening
+di atas, supaya video tetap terlihat. Ini mirip lapisan nomor 9 pada gambar latar di Bab 4.
+Greenscreen
+Kalau videomu direkam di depan latar hijau, kamu bisa membuat warna hijau itu transparan dengan
+efek colorKey(). Dokumentasi memberi contoh yang memakai isian similarity untuk mengatur
+seberapa mirip suatu piksel dengan warna kunci sebelum dihilangkan.
+import { colorKey } from "@remotion/effects/color-key";
+<Video src={staticFile("orang.mp4")} effects={[colorKey({ similarity: 0.45 })]} />
+6 .4S u a ra
+Untuk suara, pakai <Audio> dari paket yang sama.
+import { Audio } from "@remotion/media";
+import { staticFile } from "remotion";
+<Audio src={staticFile("musik.mp3")} />
+<Audio> punya isian yang sama seperti <Video>: volume, trimBefore, playbackRate, loop, dan
+from untuk waktu mulai. Contoh musik latar yang pelan, dimulai dari awal, dan berulang:
+<Audio src={staticFile("musik.mp3")} volume={0.25} loop />
+Volum e yang berubah
+Volume juga bisa berubah mengikuti frame, dengan interpolate() yang sudah kamu kenal.
+Contoh suara yang menguat pelan dalam satu detik pertama (fade in):
+
+===== PAGE 64 =====
+64
+Remotion untuk Pemula
+const frame = useCurrentFrame();
+const { fps } = useVideoConfig();
+const volume = interpolate(frame, [0, fps], [0, 1], { extrapolateRight: "clamp" });
+<Audio src={staticFile("musik.mp3")} volume={volume} />
+Untuk meredam musik ketika orang bicara, turunkan volumenya di rentang itu. Contoh:
+const volume = interpolate(frame, [60, 75, 180, 195], [0.5, 0.15, 0.15, 0.5]);
+Volume turun dari 0,5 ke 0,15 antara frame 60 dan 75, tetap rendah sampai frame 180, lalu naik lagi
+sampai frame 195.
+Beberapa suara sekaligus
+Kamu boleh memasang banyak <Audio> di dalam video yang sama. Remotion mencampurnya.
+Biasanya ada musik latar yang pelan, suara ucapan yang jelas, dan efek suara singkat di momen
+tertentu yang dipasang dengan <Sequence>.
+<>
+  <Audio src={staticFile("musik.mp3")} volume={0.2} loop />
+  <Sequence from={0}><Audio src={staticFile("suara.mp3")} /></Sequence>
+  <Sequence from={90}><Audio src={staticFile("klik.mp3")} /></Sequence>
+</>
+6 .5A p a k a h  R e m o tio n  b is a  m e m b u a t s u a ra
+s e n d iri
+Tidak. Remotion adalah pemutar dan perekam, bukan pembuat suara. Ia tidak mengubah teks
+menjadi ucapan. Yang bisa dilakukannya adalah memutar dan mencampur file suara yang sudah
+ada.
+Kalau kamu butuh suara ucapan, buat dulu dengan layanan lain, misalnya perekam suara, atau
+layanan teks ke suara, lalu simpan filenya di public/ dan pasang dengan <Audio>. Dokumentasi
+Remotion mencantumkan dua contoh proyek pihak ketiga yang menggabungkan Remotion dengan
+teks ke suara dari Azure dan Google. Buku ini tidak mencoba keduanya, jadi cek sendiri sebelum
+memakainya.
+Satu lagi arah sebaliknya sudah ada di Remotion: suara m enjadi teks, yaitu caption. Itu topik Bab 7.
+
+===== PAGE 65 =====
+65
+Remotion untuk Pemula
+6 .6M e m b u a t v is u a l y a n g  m e n g ik u ti s u a ra
+Kamu bisa membuat batang yang bergerak mengikuti musik. Paket @remotion/media-utils
+menyediakan visualizeAudio(), yang mengubah audio menjadi sederet angka (spektrum) untuk
+setiap frame. Angka itu kamu pakai sebagai tinggi batang.
+import { useAudioData, visualizeAudio } from "@remotion/media-utils";
+const audioData = useAudioData(staticFile("musik.mp3"));
+if (!audioData) return null;      // data belum selesai dimuat
+const spektrum = visualizeAudio({ audioData, frame, fps, numberOfSamples: 32 });
+// spektrum adalah daftar 32 angka antara 0 dan 1, satu per batang
+JUJUR SOAL INI
+Bagian visualisasi suara ditulis dari dokumentasi Remotion dan belum dicoba langsung untuk buku
+ini. Parameter 
+numberOfSamples
+ harus kelipatan dua (32, 64, 128, dan seterusnya).
+6 .7K a la u  v id e o  a ta u  s u a ra  b e rm a s a la h
+Video tersendat di Studio tetapi m ulus di hasil akhir. Itu bisa terjadi pada file yang besar. Studio
+memutar dalam waktu nyata, sedangkan render memproses frame satu per satu tanpa harus
+mengejar waktu nyata.
+Video atau suara tidak terbaca. Format tertentu tidak didukung. Konversi dulu ke M P4 (video
+H.264, suara AAC), format yang paling aman.
+Suara tidak sinkron. Periksa apakah 
+from
+ dan 
+trimBefore
+ sudah benar. Kesalahan yang paling
+umum adalah lupa bahwa di dalam <Sequence> waktu dihitung ulang dari 0.
+PASANG REKAMAN SENDIRI
+Taruh video pendek atau musik apa pun ke folder public/. Pasang dengan <Video> atau
+<Audio> di dalam <Sequence from={30}>. Coba tiga hal: ubah trimBefore, ubah volume, lalu
+coba playbackRate={0.5} dan dengarkan perbedaannya.
+
+===== PAGE 66 =====
+66
+Remotion untuk Pemula
+RINGKASAN BAB
+Aset disimpan di public/ dan dipanggil dengan staticFile("nama").
+Pakai <Img>, <Video>, dan <Audio> dari Remotion, bukan tag HTML biasa. Video dan audio
+datang dari @remotion/media.
+trimBefore memotong bagian awal file asli. <Sequence from> menentukan kapan klip
+muncul di videomu.
+Volume bisa berubah mengikuti frame lewat interpolate(). Banyak suara boleh dipasang
+sekaligus.
+Remotion tidak menghasilkan suara ucapan. Buat dulu di luar, lalu pasang filenya.
+Lapisan gelap di atas video menjaga teks tetap terbaca. colorKey() menghapus latar hijau.
+
+===== PAGE 67 =====
+BAB 7 DARI 8
+V i d e o  y a n g  b i s a  d i u b a h
+d a n  c a p t i o n
+D i sinilah Rem otion sungguh berbeda dari aplikasi edit biasa. Satu
+desain bisa m enjadi seratus video, dan teks bisa m uncul tepat saat
+kata diucapkan.
+DI BAB INI KAM U AKAN
+M em buat satu cetakan video yang isinya diatur lewat props
+M engganti isi video dari Studio, term inal, atau sebuah daftar data
+M em buat durasi video m engikuti data
+M em buat caption yang m enyorot kata sesuai ucapan
+
+===== PAGE 68 =====
+68
+Remotion untuk Pemula
+7 .1P ro p s : s a tu  c e ta k a n , b a n y a k  v id e o
+Bayangkan stempel dengan tinta yang bisa diganti. Bentuknya sama, isinya berbeda. Itulah props.
+Sampai sekarang, teks seperti “Harga cabai” kamu tulis langsung di kode. Kalau mau video lain,
+kamu menyalin file dan mengubah tulisannya. Cara yang lebih baik: tulis cetakan sekali, lalu isi
+tulisannya dari luar.
+Gambar 7.1Satu cetakan, tiga video. Cetakan sama, props berbeda. Angka dan keterangan pada gambar hanyalah
+contoh.
+Tiga langkah kecil.
+Langkah 1. Beri komponenmu props, yaitu daftar isian yang dibutuhkannya:
+
+===== PAGE 69 =====
+69
+Remotion untuk Pemula
+src/KartuAngka.tsx
+import { AbsoluteFill } from "remotion";
+type Props = {
+  judul: string;
+  angka: string;
+  keterangan: string;
+};
+export const KartuAngka = ({ judul, angka, keterangan }: Props) => (
+  <AbsoluteFill style={{ backgroundColor: "#14120F", color: "#F4EFE6", padding: 90, 
+justifyContent: "center" }}>
+    <div style={{ fontSize: 56, opacity: 0.7 }}>{judul}</div>
+    <div style={{ fontSize: 280, fontWeight: 900, color: "#E8913A" }}>{angka}</div>
+    <div style={{ fontSize: 52 }}>{keterangan}</div>
+  </AbsoluteFill>
+);
+Bagian type Props = {...} memberi tahu bahwa komponen ini menerima tiga teks. Di dalam tanda
+kurung fungsi, { judul, angka, keterangan } mengambil ketiganya.
+Langkah 2. Daftarkan dengan defaultProps, isi bawaan yang dipakai kalau tidak ada data lain:
+src/Root.tsx
+<Composition
+  id="KartuAngka"
+  component={KartuAngka}
+  width={1080}
+  height={1920}
+  fps={30}
+  durationInFrames={150}
+  defaultProps={{
+    judul: "Porsi batubara",
+    angka: "66,8%",
+    keterangan: "dari listrik Indonesia",
+  }}
+/>
+Langkah 3. Ganti isinya saat render, tanpa menyentuh kode:
+npx remotion render KartuAngka out/cabai.mp4 --props='{"judul":"Harga cabai","angka":"Rp 
+62 ribu","keterangan":"per kilogram"}'
+Props yang kamu kirim lewat terminal disebut input props. M ereka menimpa isi bawaan. Kalau
+tidak dikirim apa pun, yang dipakai adalah defaultProps.
+
+===== PAGE 70 =====
+70
+Remotion untuk Pemula
+AW AS
+Props harus bisa diubah menjadi JSON, yaitu teks, angka, daftar, dan objek. Kamu tidak bisa
+mengirim fungsi atau gambar langsung sebagai props. Untuk gambar, kirim alamat atau nama
+filenya.
+Di W indows, penulisan JSON langsung di terminal sering gagal karena tanda kutipnya hilang.
+Dokumentasi menyarankan menyimpannya di file, misalnya data.json, lalu menulis
+--props=./data.json.
+7 .2M e n g g a n ti is i d a ri S tu d io
+Kamu tidak harus selalu memakai terminal. Di Studio, bagian sisi kanan menampilkan props videomu
+sebagai kolom isian. Ketik teks baru, dan layar pratinjau langsung berubah. Sejak Remotion 4.0.516,
+isian dasar seperti ini dibuat otomatis dari nilai di defaultProps.
+Kalau kamu ingin kontrol yang lebih kaya, misalnya pemilih warna atau geseran angka, kamu bisa
+mendefinisikan schem a memakai paket Zod. Itu opsional. M ulailah tanpa schema, dan tambahkan
+kalau memang perlu.
+npx remotion add zod
+7 .3D u ra s i y a n g  m e n g ik u ti d a ta
+Kadang panjang video ditentukan oleh data. M isalnya video yang menampilkan lima poin, tiap poin
+tiga detik. Jumlah poinnya bisa berubah. Untuk itu ada calculateMetadata, yaitu fungsi yang
+dijalankan sebelum render dan boleh mengubah durasi, ukuran, fps, atau props.
+src/Root.tsx
+<Composition
+  id="Daftar"
+  component={Daftar}
+  width={1080}
+  height={1920}
+  fps={30}
+  durationInFrames={150}               // nilai sementara, akan dihitung ulang
+  defaultProps={{ poin: ["Satu", "Dua", "Tiga"] }}
+  calculateMetadata={({ props }) => {
+    return { durationInFrames: props.poin.length * 3 * 30 };
+  }}
+/>
+Tiga poin berarti 270 frame (9 detik). Lima poin berarti 450 frame (15 detik). Kamu mengubah
+daftarnya, dan durasinya menyesuaikan.
+
+===== PAGE 71 =====
+71
+Remotion untuk Pemula
+7 .4M e n g a m b il d a ta  d a ri in te rn e t
+calculateMetadata juga bisa mengambil data dari alamat internet sebelum render dimulai, lalu
+menyerahkannya ke komponen sebagai props.
+calculateMetadata={async ({ props }) => {
+  const respon = await fetch(`https://contoh.com/api/${props.id}`);
+  const data = await respon.json();
+  return { props: { ...props, data } };
+}}
+Dokumentasi mencatat dua syarat. Data yang diambil dengan cara ini harus bisa diubah menjadi
+JSON, jadi cocok untuk jawaban dari sebuah API tetapi bukan untuk file besar seperti gambar. Dan
+jenis (type) props sebelum dan sesudah diubah harus sama, sehingga cara yang rapi adalah
+memberi props 
+data
+ nilai awal 
+null
+.
+CARA LAIN
+Kamu juga bisa mengambil data di dalam komponen sendiri, tetapi Remotion harus diminta
+menunggu sampai data selesai tiba. Fungsinya delayRender() dan continueRender(). Kalau
+datanya tidak datang dalam waktu 30 detik, render dihentikan dengan pesan kesalahan. Untuk
+pemula, calculateMetadata lebih sederhana dan lebih aman.
+7 .5S e ra tu s  v id e o  d a ri s a tu  d a fta r
+Bayangkan daftar seratus nama dalam sebuah file data.json. Dokumentasi Remotion punya
+tutorial lengkap untuk membuat satu video untuk setiap baris data. Ide dasarnya begini: tulis sebuah
+skrip kecil yang mengulang untuk setiap baris, dan setiap kali memanggil render dengan props yang
+berbeda.
+
+===== PAGE 72 =====
+72
+Remotion untuk Pemula
+render-semua.mjs
+import { bundle } from "@remotion/bundler";
+import { renderMedia, selectComposition } from "@remotion/renderer";
+import data from "./data.json" with { type: "json" };
+const serveUrl = await bundle({ entryPoint: "./src/index.ts" });
+for (const baris of data) {
+  const inputProps = baris;   // misalnya { judul: "...", angka: "...", keterangan: 
+"..." }
+  const composition = await selectComposition({ serveUrl, id: "KartuAngka", inputProps 
+});
+  await renderMedia({
+    composition,
+    serveUrl,
+    codec: "h264",
+    outputLocation: `out/${baris.judul}.mp4`,
+    inputProps,
+  });
+}
+Perhatikan bahwa inputProps dikirim ke dua tempat, selectComposition dan renderMedia.
+Dokumentasi menekankan hal itu. Seratus video tidak lagi berarti seratus kali kerja manual. Cukup
+satu kali menjalankan skrip.
+JUJUR SOAL INI
+Skrip di atas dicoba dengan data dua baris dan menghasilkan dua file MP4. Meski begitu, skrip ini
+bergantung pada isi proyekmu, jadi coba dulu dengan dua atau tiga baris data sebelum
+menjalankan seluruhnya.
+7 .6T ig a  c e ta k a n  s ia p  p a k a i
+Setelah paham props, kamu bisa membuat beberapa cetakan dan memakainya terus. Gambar ini
+menunjukkan tiga cetakan video pendek yang dibuat untuk buku ini, dengan gaya palet yang
+berbeda dari Bab 4 untuk tiap cetakan.
+
+===== PAGE 73 =====
+73
+Remotion untuk Pemula
+Gambar 7.2Tiga cetakan video pendek. Isi tiap cetakan dikendalikan oleh props, jadi untuk membuat video baru kamu
+cukup mengganti teksnya.
+7 .7C a p tio n : te k s  y a n g  m e n g ik u ti s u a ra
+Caption adalah teks yang tampil sesuai ucapan, seperti yang kamu lihat di banyak video pendek.
+M embuatnya terdiri dari empat langkah.
+Gambar 7.3Dari suara menjadi teks yang menari. Setiap kata punya waktu mulai dan waktu selesai. Remotion membantu
+mengelompokkan kata menjadi halaman lewat createTikTokStyleCaptions().
+
+===== PAGE 74 =====
+74
+Remotion untuk Pemula
+Langkah 1 dan 2: suara m enjadi teks bertanda w aktu
+Kamu butuh file suara (atau video yang berisi suara), lalu program pengenal suara yang
+mengubahnya menjadi teks lengkap dengan waktu setiap kata. Remotion menyediakan beberapa
+pilihan, semuanya menghasilkan format yang sama:
+PilihanBerjalan di manaBiaya
+@remotion/install-whisper-cppKomputermu sendiri (server Node.js)Gratis
+@remotion/whisper-web
+Di browser, lewat WebAssemblyGratis, lebih lambat
+@remotion/whisper-webgpuDi browser, lewat WebGPUGratis
+@remotion/openai-whisperLayanan awan OpenAIBerbayar sesuai pemakaian
+@remotion/elevenlabsLayanan awan ElevenLabsBerbayar sesuai pemakaian
+Pilihan pertama paling cocok untuk pemula yang punya komputer sendiri: gratis, tidak butuh
+internet setelah terpasang, dan data suaramu tidak keluar dari komputer. Kamu juga bisa melewati
+langkah ini kalau sudah punya file teks bertanda waktu dalam format SRT atau VTT. Remotion
+punya parseSrt() dan parseVtt() untuk membacanya.
+Semua pilihan itu menghasilkan daftar objek Caption dengan bentuk seperti ini:
+{ "text": " Batubara", "startMs": 480, "endMs": 900, "timestampMs": 690, "confidence": 
+null }
+text adalah satu kata, startMs dan endMs adalah waktu mulai dan selesai dalam milidetik
+(seperseribu detik). Perhatikan spasi di depan kata. Spasi itu penting, karena Remotion memakainya
+sebagai penanda antar kata.
+Langkah 3: m engelom pokkan kata m enjadi halam an
+Satu kata per layar terasa terlalu cepat, dan sepuluh kata sekaligus terlalu penuh.
+createTikTokStyleCaptions() mengelompokkan kata menjadi halam an yang pendek.
+import { createTikTokStyleCaptions } from "@remotion/captions";
+const { pages } = createTikTokStyleCaptions({
+  captions,
+  combineTokensWithinMilliseconds: 1200,
+});
+Angka 1200 mengatur seberapa banyak kata berada dalam satu halaman. Semakin besar
+angkanya, semakin banyak kata per halaman. Angka kecil membuat kata muncul satu per satu.
+
+===== PAGE 75 =====
+75
+Remotion untuk Pemula
+Langkah 4: m enam pilkan tiap halam an pada w aktunya
+Setiap halaman dibungkus dalam <Sequence>, dengan from yang dihitung dari waktu mulai
+halaman itu. Di dalamnya, kata yang sedang diucapkan diberi warna lain.
+import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig } from "remotion";
+import type { TikTokPage } from "@remotion/captions";
+const Halaman = ({ page }: { page: TikTokPage }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const sekarangMs = page.startMs + (frame / fps) * 1000;
+  return (
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+      <div style={{ fontSize: 80, fontWeight: 800, textAlign: "center", whiteSpace: 
+"pre" }}>
+        {page.tokens.map((kata, i) => {
+          const aktif = kata.fromMs <= sekarangMs && kata.toMs > sekarangMs;
+          return <span key={i} style={{ color: aktif ? "#E8913A" : "white" }}>
+{kata.text}</span>;
+        })}
+      </div>
+    </AbsoluteFill>
+  );
+};
+Lalu di komponen utama, pasang satu <Sequence> untuk setiap halaman:
+{pages.map((page, i) => (
+  <Sequence key={i} from={(page.startMs / 1000) * fps} durationInFrames={Math.max(1, 
+(page.durationMs / 1000) * fps)}>
+    <Halaman page={page} />
+  </Sequence>
+))}
+AW AS
+Isian whiteSpace: "pre" wajib ada. Tanpa itu, spasi di depan setiap kata hilang dan semua kata
+menempel menjadi satu.
+Gaya caption
+Sekali polanya jadi, mengganti gaya hanya soal mengubah tampilan Halaman.
+
+===== PAGE 76 =====
+76
+Remotion untuk Pemula
+Gambar 7.4Empat gaya caption untuk video vertikal: editorial, karaoke, kotak, dan pop. Semuanya memakai data kata
+yang sama. Hanya tampilannya yang berbeda.
+JUJUR SOAL INI
+Empat gaya di atas dibuat dari data kata yang ditulis manual dan dirender dengan Remotion.
+Langkah transkripsi otomatis dengan W hisper atau layanan lain tidak dijalankan untuk buku ini.
+Bagian itu bersumber dari dokumentasi.
+CAPTION MINI
+Buat daftar Caption sendiri dengan tiga kata: " Halo", " dunia", " Remotion", dengan durasi
+sekitar setengah detik untuk tiap kata. Pasang kode halaman di atas, lalu lihat kata yang menyala
+berpindah. Setelah berhasil, baru coba transkripsi otomatis dengan suaramu sendiri.
+RINGKASAN BAB
+Props adalah isian cetakan video. Daftarkan bawaannya di defaultProps, ganti lewat Studio,
+terminal (--props), atau skrip.
+calculateMetadata mengubah durasi, ukuran, atau props sebelum render, dan bisa
+mengambil data dari internet.
+Skrip kecil dengan selectComposition dan renderMedia membuat banyak video dari satu
+daftar.
+Caption: suara menjadi daftar kata bertanda waktu, dikelompokkan jadi halaman, lalu
+ditampilkan dalam <Sequence>.
+Spasi di depan setiap kata dan 
+whiteSpace: "pre"
+ wajib dijaga.
+
+===== PAGE 77 =====
+BAB 8 DARI 8
+D a r i  k o d e  j a d i  f i l e  v i d e o
+Sam pai bab ini, videom u hidup di layar Studio. Sekarang saatnya
+m engubahnya m enjadi file M P4 yang bisa kam u kirim , unggah, dan
+tonton di m ana saja.
+DI BAB INI KAM U AKAN
+M erender video lewat tom bol di Studio dan lewat perintah di term inal
+M em ilih kodek dan kualitas yang pas
+M em buat GIF, video transparan, dan gam bar diam
+M engenali cara m em percepat render dan m em baca pesan error um um
+Tahu kapan perlu Lam bda, Player, atau lisensi berbayar
+
+===== PAGE 78 =====
+78
+Remotion untuk Pemula
+8 .1A p a  itu  re n d e r?
+Selama ini kamu menonton videomu di Studio. Itu seperti melihat adonan kue di dalam oven kaca.
+Kelihatan, tetapi belum ada kue yang bisa dibawa pulang.
+Render adalah proses memasak itu sampai matang. Remotion membuka videomu di browser tanpa
+layar, mengambil gambar untuk setiap frame satu per satu, lalu menyambung semuanya menjadi
+satu file video. Video 5 detik dengan 30 fps berarti 150 gambar.
+Gambar 8.1Empat cara mengubah kode menjadi file video. Dua yang pertama cukup untuk memulai.
+Karena setiap frame dibuat dari kode, hasilnya selalu sama. Render dua kali, dapat video yang sama
+persis. Inilah alasan Bab 3 menekankan bahwa video adalah fungsi dari nomor frame.
+8 .2C a ra  te rm u d a h : to m b o l R e n d e r d i S tu d io
+Buka Studio dengan npm run dev, pilih composition yang mau kamu render, lalu klik tombol Render
+di bagian atas. Kamu juga bisa menekan huruf R di keyboard.
+Sebuah jendela pengaturan terbuka. Untuk pemula, bawaannya sudah baik. Kamu cukup memeriksa
+tiga hal:
+Nam a file dan tem pat sim pan. Bawaannya di folder out.
+Codec. Biarkan H.264 kalau kamu ingin file M P4 biasa.
+Tom bol Render video. Klik, tunggu sampai bilah kemajuan penuh, lalu buka folder out.
+Selesai. Kamu baru saja membuat video.
+
+===== PAGE 79 =====
+79
+Remotion untuk Pemula
+KALAU TOMBOL TIDAK KELIHATAN
+Tombol Render hanya muncul kalau sebuah composition sudah dipilih di panel kiri. Pilih salah satu
+dulu, lalu coba lagi.
+8 .3C a ra  k e d u a : p e rin ta h  d i te rm in a l
+Cara ini lebih cepat kalau kamu sudah tahu video mana yang mau dirender, dan bisa dijalankan
+berulang kali tanpa mengklik apa pun. Bentuk umumnya:
+npx remotion render <id-composition> <lokasi-file>
+M isalnya, untuk composition bernama HaloDunia:
+npx remotion render HaloDunia out/halo.mp4
+Beberapa hal yang bagus diketahui:
+Kalau kamu tidak menulis nama composition, Remotion menampilkan daftar untuk dipilih.
+Kalau kamu tidak menulis lokasi file, hasilnya masuk ke folder out.
+Kalau kamu tidak menulis kodek, Remotion memakai H.264.
+Bagian <id-composition> adalah id yang kamu tulis di Root.tsx pada Bab 3.
+Gam bar diam  dengan still
+Kadang kamu hanya butuh satu gambar, misalnya untuk thumbnail. Pakai perintah still dan
+sebutkan nomor frame yang kamu mau:
+npx remotion still HaloDunia out/thumbnail.png --frame=60
+Frame dihitung dari 0. Jadi --frame=60 pada video 30 fps adalah gambar di detik kedua.
+M au beberapa gambar sekaligus? Pakai render dengan --frames:
+npx remotion render HaloDunia out/frame --frames=0,30,90 --image-format=png
+Hasilnya tiga file di folder out/frame, dengan nama seperti element-00.png, element-30.png, dan
+element-90.png.
+
+===== PAGE 80 =====
+80
+Remotion untuk Pemula
+Bendera yang paling berguna
+Tambahan di belakang perintah disebut flag, tandanya dua tanda hubung di depan. Ini yang paling
+sering kamu pakai:
+FlagGunanyaContoh
+--propsMengganti isi video (Bab 7)--props=data.json
+--codecMemilih bahasa video--codec=h265
+--crfMengatur kualitas--crf=20
+--scaleMemperbesar atau memperkecil gambar--scale=0.5
+--concurrencyBerapa tab yang bekerja bersamaan--concurrency=4
+--framesHanya merender sebagian frame--frames=0-59
+--every-nth-frameMelewati frame, khusus GIF--every-nth-frame=2
+--log=verboseMenampilkan catatan lengkap--log=verbose
+Semua flag bisa digabung dalam satu perintah.
+AW AS
+Di W indows, menulis JSON langsung di belakang --props sering gagal karena tanda kutip hilang.
+Simpan datanya di file, misalnya data.json, lalu tulis --props=data.json.
+8 .4M e m ilih  k o d e k  d a n  k u a lita s
+Kodek adalah bahasa yang dipakai file video untuk memadatkan gambar. Video mentah itu sangat
+besar. Tanpa pemadatan, satu menit video bisa makan beberapa gigabita. Kodek memadatkannya
+menjadi puluhan megabita.
+Remotion mendukung enam kodek video. Dokumentasi resminya memberi gambaran seperti ini:
+
+===== PAGE 81 =====
+81
+Remotion untuk Pemula
+Gambar 8.2Enam kodek video di Remotion. Penilaian mengikuti tabel di Encoding Guide dokumentasi Remotion.
+Aturan sederhananya: kalau ragu, pakai H.264. Itu pilihan bawaan, hasilnya M P4, dan bisa diputar
+di hampir semua perangkat.
+Kapan pindah ke yang lain?
+H.265 kalau kamu ingin file lebih kecil dan perangkat penontonmu mendukung.
+VP8 atau VP9 kalau videonya untuk halaman web atau butuh latar transparan.
+AV1 kalau ukuran file jauh lebih penting daripada lama render.
+ProRes kalau videonya akan disunting lagi di aplikasi seperti Final Cut, Premiere, atau DaVinci.
+CRF: tom bol kualitas
+CRF adalah angka yang mengatur keseimbangan antara kualitas dan ukuran file. Cara
+mengingatnya mudah: angka kecil berarti kualitas bagus dan file besar. Angka besar berarti file
+kecil dan gambar lebih kasar.
+Tiap kodek punya rentang dan angka bawaan sendiri, jadi angkanya tidak boleh dicampur:
+
+===== PAGE 82 =====
+82
+Remotion untuk Pemula
+KodekTerbaikPaling kecilBawaan
+H.26415118
+H.26505123
+VP84639
+VP906328
+AV106330
+Angka 23 bagus untuk H.264, tetapi akan terlihat jelek untuk W ebM . Kalau kamu belum punya
+alasan khusus, jangan ubah CRF. Angka bawaannya sudah dipilih dengan baik.
+PRORES TIDAK PUNYA CRF
+ProRes memakai pengaturan lain bernama profil (--prores-profile). Ini wajar, karena ProRes
+memang dibuat untuk kualitas, bukan untuk ukuran kecil.
+8 .5G IF , v id e o  tra n s p a ra n , d a n  a u d io  s a ja
+GIF
+Format ini berisi gambar bergerak tanpa suara. Cukup ganti kodeknya:
+npx remotion render HaloDunia out/halo.gif --codec=gif --every-nth-frame=2 --scale=0.5
+Dua flag tambahannya punya tugas sendiri.
+--every-nth-frame=2 hanya mengambil setiap frame kedua. Video 30 fps menjadi GIF 15 fps.
+Ukuran file jauh lebih kecil.
+--number-of-gif-loops mengatur berapa kali GIF mengulang. Kalau dihilangkan, GIF berputar
+tanpa henti. Angka 0 mematikan pengulangan.
+AW AS
+GIF boros ukuran. Video 10 detik di 1080p bisa menghasilkan file yang sangat besar. Perkecil
+dengan --scale dan kurangi frame dengan --every-nth-frame.
+Video dengan latar transparan
+Kadang kamu butuh animasi yang ditempel di atas video lain, tanpa kotak latar. Syaratnya ada tiga,
+dan ketiganya harus terpenuhi:
+
+===== PAGE 83 =====
+83
+Remotion untuk Pemula
+1. Jangan beri latar apa pun di komponenmu. Di Studio, tombol kotak catur menunjukkan apakah
+videomu benar transparan.
+2. Pakai kodek VP8 atau VP9.
+3. Pakai gambar PNG dan format piksel yuva420p.
+npx remotion render Judul out/judul.webm --codec=vp8 --image-format=png --pixel-
+format=yuva420p
+Kamu bisa menyetelnya sekali di remotion.config.ts supaya tidak mengetik ulang:
+remotion.config.ts
+import { Config } from "@remotion/cli/config";
+Config.setVideoImageFormat("png");
+Config.setPixelFormat("yuva420p");
+Config.setCodec("vp8");
+SIAPA YANG BISA MEMUTARNYA?
+Menurut dokumentasi, Chrome dan Firefox bisa memutar WebM transparan. Aplikasi edit video
+biasanya tidak. Kalau tujuanmu aplikasi edit, cek dulu apakah aplikasinya mendukung.
+Hanya suara
+Kalau kamu hanya butuh audionya, pilih kodek audio seperti mp3, aac, atau wav:
+npx remotion render HaloDunia out/suara.mp3 --codec=mp3
+8 .6K e n a p a  re n d e r la m b a t, d a n  c a ra
+m e m p e rc e p a tn y a
+Render bisa terasa lama, apalagi untuk video panjang. Dokumentasi Remotion memberi daftar
+penyebab. Berikut yang paling sering, dari yang paling mudah diperbaiki.
+1. Resolusi terlalu besar. Semakin banyak piksel, semakin lama prosesnya. Kalau hasil 1080p tidak
+wajib, kecilkan dengan --scale=0.5.
+2. Concurrency kurang pas. Remotion membuka beberapa tab browser yang bekerja bersamaan.
+Jumlah tab itulah concurrency. Terlalu sedikit membuat komputermu menganggur, terlalu banyak
+membuat memori habis. Perintah berikut mencoba beberapa nilai dan menunjukkan yang tercepat di
+komputermu:
+
+===== PAGE 84 =====
+84
+Remotion untuk Pemula
+npx remotion benchmark
+3. Kodek yang berat. VP8, VP9, dan AV1 memadatkan sangat kuat, tetapi lambat. H.264 paling
+cepat.
+4. Form at gam bar PNG. PNG lebih lambat daripada JPEG. Pakai PNG hanya kalau videomu
+memang harus transparan.
+5. Efek yang berat. Bayangan, kabur, gradasi, dan elemen W ebGL memakai GPU. Komputer di
+awan biasanya tidak punya GPU sehingga bagian ini bisa lambat. Kalau sebuah efek tidak berubah
+sepanjang video, pertimbangkan menggantinya dengan gambar jadi.
+6. Video sum ber yang tidak dioptim alkan. Pakai <Video> dari @remotion/media seperti di Bab 6.
+Dokumentasi menyebut tag video lama kurang optimal.
+CARI TAHU SENDIRI
+Jalankan npx remotion render NamaVideo out/uji.mp4 --log=verbose. Remotion akan
+mencantumkan frame yang paling lama dirender. Dari situ kamu tahu bagian mana yang perlu
+disederhanakan.
+8 .7M e re n d e r le w a t s k rip
+Di Bab 7 kamu sudah melihat skrip kecil yang membuat banyak video dari satu daftar. Itulah yang
+disebut server side rendering, disingkat SSR: merender lewat kode Node.js, bukan lewat tombol.
+Tiga langkahnya selalu sama:
+1. bundle() membungkus proyekmu.
+2. selectComposition() memilih video dan menghitung ukurannya.
+3. renderMedia() yang melakukan render.
+Skrip ini cocok kalau kamu ingin membuat video otomatis, misalnya satu video untuk tiap baris data.
+8 .8M e re n d e r d i te m p a t la in
+Komputermu sendiri biasanya cukup. Tetapi ada saatnya kamu butuh lebih.
+Rem otion Lam bda
+Ini layanan dari AW S. Idenya: video dipotong menjadi banyak bagian, tiap bagian dikerjakan
+komputer berbeda pada saat yang sama, lalu disambung kembali. Hasilnya jauh lebih cepat untuk
+video panjang atau banyak video.
+
+===== PAGE 85 =====
+85
+Remotion untuk Pemula
+Gambar 8.3Cara Remotion Lambda membagi satu video ke banyak komputer. Angka frame hanyalah contoh.
+Lambda butuh akun AW S dan beberapa langkah pengaturan. Untuk belajar dan untuk video buatan
+sendiri, ini belum perlu.
+Pilihan lain
+Google Cloud Run. Dokumentasi menyebutnya masih versi alpha, jadi belum matang.
+Docker. M embungkus proyekmu dan semua kebutuhannya dalam satu kotak yang bisa
+dijalankan di server mana pun. Dokumentasi menyediakan contoh Dockerfile.
+GitHub Actions. M erender otomatis setiap kali kamu mengunggah perubahan kode.
+Vercel. Tersedia paket dan panduan khusus di dokumentasi.
+Semua pilihan ini baru berguna kalau kamu sudah nyaman dengan dua cara pertama.
+8 .9P la y e r: m e m u ta r ta n p a  re n d e r
+Ada satu alat lagi yang sering membingungkan pemula. Player adalah komponen yang memutar
+videomu langsung di dalam halaman web. Tidak ada file M P4 yang dibuat. Video dijalankan dari
+kodenya, dan isinya bisa berubah saat itu juga.
+
+===== PAGE 86 =====
+86
+Remotion untuk Pemula
+Gambar 8.4Player memutar video di halaman web tanpa render. Untuk mendapatkan file MP4, render tetap diperlukan.
+Contoh paling mudah: pengunjung situsmu mengetik namanya, lalu langsung melihat video ucapan
+yang memakai namanya. Itu dibuat dengan Player dan props dari Bab 7.
+Remotion juga punya cara merender langsung di browser lewat paket @remotion/web-renderer.
+Dokumentasi menyatakan paket ini stabil sejak versi 4.0.491, tetapi hanya mendukung sebagian
+elemen HTM L dan membutuhkan browser yang mengerti W ebCodecs. Untuk pemula, cukup tahu
+bahwa opsi ini ada.
+8 .1 0A p a k a h  p e rlu  b a y a r lis e n s i?
+Pertanyaan ini penting kalau kamu berniat memakai Remotion untuk bisnis. Gambar berikut
+meringkas halaman License FAQ di dokumentasi.
+
+===== PAGE 87 =====
+87
+Remotion untuk Pemula
+Gambar 8.5Ringkasan aturan lisensi. Ini bukan nasihat hukum, jadi baca aturan resmi sebelum berjualan.
+Intinya: perorangan dan tim kecil (sampai 3 orang) bisa memakai Remotion gratis, termasuk untuk
+keperluan komersial. Perusahaan dengan 4 orang atau lebih memerlukan Company License
+berbayar.
+Kodenya bisa dibaca publik, tetapi Remotion bukan open source dalam arti penuh. Lisensinya
+khusus. Aturan bisa berubah, jadi buka halaman lisensi resmi di remotion.dev sebelum mengambil
+keputusan.
+8 .1 1K a la u  a d a  y a n g  e rro r
+Tiga pesan yang paling sering muncul, dan penyelesaiannya.
+Videonya berkedip atau tersendat. Ini hampir selalu berarti ada gerakan yang tidak bergantung
+pada 
+useCurrentFrame()
+. Ingat dari Bab 5: render memakai banyak tab yang tidak saling berbagi
+keadaan. Gunakan nomor frame untuk semua gerakan, pakai random("seed") bukan
+Math.random(), dan jangan pakai animasi CSS atau setTimeout.
+Error delayRender() was called but not cleared. Remotion menunggu sesuatu, biasanya data
+atau gambar, lalu menyerah setelah 30 detik. Penyebab umumnya: kamu memanggil
+delayRender()
+ tetapi lupa memanggil 
+continueRender()
+, atau internetnya putus saat mengambil
+data atau font dari luar.
+Error Target closed. Tab browser mendadak mati. Biasanya karena memori habis. Turunkan
+--concurrency supaya tiap tab punya sumber daya lebih banyak. Di Linux, pastikan paket yang
+dibutuhkan Chrome sudah terpasang.
+
+===== PAGE 88 =====
+88
+Remotion untuk Pemula
+TIP UNTUK SEMUA ERROR
+Tambahkan --log=verbose pada perintah render. Catatannya jauh lebih rinci dan sering langsung
+menunjuk penyebabnya.
+JUJUR SOAL INI
+Untuk buku ini, perintah render MP4, --crf, --scale, --concurrency, GIF, WebM dengan alfa,
+still, --frames, dan --props dijalankan sungguhan di Remotion 4.0.537. Semuanya
+menghasilkan file. Lambda, Cloud Run, Docker, GitHub Actions, Vercel, dan Player tidak
+dijalankan. Bagian itu bersumber dari dokumentasi.
+8 .1 2S e te la h  b u k u  in i
+Kamu sudah melewati jalur dari nol sampai bisa membuat, mengatur, dan merender video dengan
+kode. Beberapa arah lanjutan, silakan pilih yang paling menarik bagimu:
+Efek dan transisi. Lampiran A dan B memuat semua yang tersedia. Coba satu per satu.
+Caption otom atis. Lanjutkan dari akhir Bab 7 dengan W hisper atau layanan transkripsi lain.
+Data nyata. Hubungkan video dengan data dari internet lewat calculateMetadata, lalu buat
+video yang selalu segar.
+Aplikasi. Gabungkan Player dan props untuk membuat alat yang menghasilkan video bagi
+orang lain.
+Belajar dari proyek orang. Dokumentasi Remotion punya banyak contoh dan templat yang bisa
+kamu bongkar.
+Dan kalau kamu memakai Claude seperti di Bab 2, kamu bisa meminta Claude menjelaskan
+potongan kode yang belum kamu pahami. Itu cara belajar yang sah, dan sering lebih cepat daripada
+membaca sendirian.
+
+===== PAGE 89 =====
+89
+Remotion untuk Pemula
+RINGKASAN BAB
+Render mengubah kode menjadi file video dengan mengambil gambar tiap frame lalu
+menyambungnya.
+Dua cara pemula: tombol Render di Studio (atau tekan R) dan
+npx remotion render <id> out/nama.mp4.
+npx remotion still membuat gambar diam. Flag --frame memilih frame yang diambil.
+H.264 adalah pilihan aman. CRF kecil berarti kualitas bagus dan file besar.
+GIF memakai 
+--codec=gif
+. Video transparan butuh VP8 atau VP9, PNG, dan 
+yuva420p
+.
+Render lambat? Kecilkan resolusi, cari concurrency terbaik dengan benchmark, hindari kodek
+berat.
+Lambda, Docker, dan GitHub Actions untuk kebutuhan lanjutan. Player memutar video di web
+tanpa render.
+Perorangan dan tim sampai 3 orang gratis. Perusahaan 4 orang atau lebih perlu lisensi
+berbayar.
+
+===== PAGE 90 =====
+90
+Remotion untuk Pemula
+LAM PIRAN A
+G a l e r i  8 1  e f e k
+Sem ua efek dari paket @remotion/effects versi 4.0.537. Gam bar contoh dibuat dari
+satu foto yang sam a (atau bentuk polos untuk efek yang m em buat pola sendiri), jadi
+kam u bisa m em bandingkan pengaruhnya langsung.
+CARA MEMAKAINYA
+Pasang di prop effects pada <CanvasImage>, <Solid>, <Video>, <Img>, atau
+<HtmlInCanvas>. Contoh: effects={[blur({radius: 8})]}. Impor dari alamat paket sendiri,
+misalnya import {blur} from "@remotion/effects/blur". Beberapa efek bisa ditumpuk.
+W arna dan cahaya
+Mengubah warna, terang gelap, atau menambah kilau. Cocok untuk memberi suasana pada video.
+
+Menaikkan atau menurunkan kecerahan
+gambar.
+
+Menambah atau mengurangi beda
+antara bagian terang dan gelap.
+
+Mengatur eksposur dalam satuan stop,
+seperti pada kamera foto.
+
+Mengatur titik hitam, titik putih, dan
+nada tengah dalam satu penyetelan.
+
+Mengatur seberapa pekat warna.
+
+Menguatkan warna yang pucat lebih
+banyak daripada warna yang sudah
+pekat.
+
+Memutar warna pada roda warna.
+Misalnya biru berubah menjadi hijau.
+
+Menimpakan satu warna rata di atas
+gambar.
+
+Mengoreksi suhu warna (biru ke kuning)
+dan rona (hijau ke magenta).
+
+===== PAGE 91 =====
+91
+Remotion untuk Pemula
+
+Beberapa koreksi warna dasar sekaligus
+dalam satu proses.
+
+Mengatur bagian gelap dan bagian
+terang secara terpisah tanpa mengubah
+warna.
+
+Memasang tabel warna 3D berformat
+.cube, seperti filter warna siap pakai.
+
+Mengubah gambar menjadi hitam putih.
+
+Membalik warna menjadi negatif.
+
+Mengubah semua warna menjadi dua
+warna saja, menurut terang gelapnya.
+
+Mewarnai gambar dengan warna yang
+berubah dari satu sisi ke sisi lain.
+
+Mewarnai gambar seperti kamera
+panas: dingin biru, panas merah.
+
+Membuat warna tertentu menjadi
+transparan. Dipakai untuk latar hijau
+(greenscreen).
+
+Menambah cahaya lembut di sekitar
+bagian yang terang.
+
+Cahaya bocor berwarna seperti pada
+film kamera lama.
+
+Membuat jejak cahaya ke satu arah dari
+bagian yang terang.
+
+Kilau cahaya yang menyapu, seperti
+permukaan yang mengkilap.
+
+Menggelapkan atau mewarnai pinggiran
+gambar.
+
+===== PAGE 92 =====
+92
+Remotion untuk Pemula
+Kabur dan fokus
+Mengaburkan seluruh gambar atau hanya sebagian.
+
+Mengaburkan gambar dengan kabur
+Gaussian yang halus.
+
+Kabur seperti lensa kamera. Titik terang
+menyebar menjadi bulatan bokeh.
+
+Mengaburkan seperti memperbesar
+dengan sangat cepat dari satu titik.
+
+Mengaburkan hanya di dalam satu area
+persegi.
+
+Kaburnya makin kuat ke satu arah.
+
+Kaburnya makin kuat dari tengah menuju
+tepi.
+Piksel dan titik
+Gambar dipecah menjadi blok atau titik. Sering dipakai untuk gaya retro atau sensor.
+
+Mengubah gambar menjadi blok piksel
+yang besar.
+
+Blok pikselnya makin besar ke satu arah.
+
+Blok pikselnya makin besar dari tengah
+menuju tepi.
+
+Memecah gambar menjadi kotak kecil
+yang lenyap satu per satu dengan
+urutan acak.
+
+Mengubah terang gelap menjadi
+lingkaran, kotak, atau garis, seperti
+cetakan koran.
+
+Titik halftone yang ukurannya berubah
+dari satu sisi ke sisi lain.
+
+===== PAGE 93 =====
+93
+Remotion untuk Pemula
+
+Mengubah gambar menjadi deretan titik
+berukuran sama dengan warna
+sumbernya.
+Lensa dan lengkungan
+Membengkokkan, memiringkan, atau menggeser gambar.
+
+Melengkungkan gambar ke luar seperti
+layar tabung. Sisi dan sudutnya
+menggembung.
+
+Lensa sangat lebar. Bagian tengah
+gambar menggembung.
+
+Membuat gambar bergelombang seperti
+riak air.
+
+Menggoyang gambar seperti air atau
+udara panas di atas aspal.
+
+Mengacak sebagian gambar yang
+berbentuk lingkaran dengan noise.
+
+Memisahkan kanal merah dan biru
+sehingga tepi benda berpendar warna,
+seperti lensa murah.
+
+Memiringkan gambar ke samping atau
+ke atas dan bawah.
+
+Menggeser keempat sudut gambar,
+misalnya supaya pas menempel di layar
+sebuah foto.
+
+Mencerminkan gambar.
+
+===== PAGE 94 =====
+94
+Remotion untuk Pemula
+
+Memperbesar atau memperkecil
+gambar.
+
+Menggeser gambar dengan angka
+relatif, 0 sampai 1 dari ukuran gambar.
+
+Menggeser gambar dengan jumlah
+piksel yang pasti.
+
+Mengulang gambar ke seluruh layar.
+Setiap salinan kedua dicerminkan.
+
+Mengulang salinan kecil gambar ke
+kanan dan ke bawah.
+Tepi dan bayangan
+Bekerja pada garis tepi benda, terutama teks dan logo.
+
+Menambah bayangan kabur di belakang
+gambar.
+
+Menggambar garis tepi di sekeliling
+bagian yang tidak transparan.
+
+Memberi sorotan dan bayangan di tepi
+teks atau logo supaya tampak timbul.
+
+Membuat tepi gambar menjadi kasar
+dan bergerigi.
+
+Menambah relief garis yang tampak
+timbul.
+
+===== PAGE 95 =====
+95
+Remotion untuk Pemula
+Tekstur dan latar buatan
+Efek yang menghasilkan pola sendiri. Berguna untuk latar belakang tanpa perlu gambar.
+
+Menambah tekstur kain karung goni
+buatan.
+
+Membuat pola kain flanel berpetak.
+
+Menambah tekstur kertas buatan.
+
+Menambah lapisan plastik pembungkus
+buatan.
+
+Membuat pola papan catur yang
+berulang.
+
+Menggambar garis kotak di atas
+gambar.
+
+Garis miring yang bergantian warna.
+
+Membuat cincin lingkaran yang sepusat.
+
+Pita gelombang yang berulang.
+
+Pita zigzag yang berulang.
+
+Pola sinar menyebar bergaya retro.
+
+Latar dua warna dengan pita
+bergelombang seperti cairan.
+
+Menambah garis kontur seperti peta
+ketinggian di atas gambar.
+
+Gradasi dua warna dari satu sisi ke sisi
+lain.
+
+Membuat bintik kelabu berlapis untuk
+awan, asap, dan tekstur alami.
+
+===== PAGE 96 =====
+96
+Remotion untuk Pemula
+
+Menambah butiran halus seperti pada
+film.
+
+Lapisan bintik kelabu acak seperti TV
+tanpa sinyal.
+
+Menambah lubang kecil acak yang
+menembus gambar.
+
+Garis tipis mendatar seperti pada layar
+TV tabung.
+M em buka dan m enutup
+Mengungkap atau menyembunyikan gambar. Bisa dipakai seperti transisi.
+
+Memunculkan gambar dari satu arah,
+dengan tepi yang bisa dibuat lembut.
+
+Mengungkap gambar lewat kisi seperti
+tirai jendela.
+
+Merobek gambar sepanjang garis
+zigzag. Kedua sisi terbuka perlahan.
+
+Memudar menjadi pola warna uji siaran
+TV.
+
+===== PAGE 97 =====
+97
+Remotion untuk Pemula
+Tiga dim ensi
+Efek yang memakai WebGPU. Di mesin pembuat buku ini WebGPU tidak tersedia, jadi gambar contohnya tidak
+dibuat.
+
+Membungkus gambar mengelilingi
+tabung yang bisa diputar. Memakai
+WebGPU.
+
+Membungkus gambar menjadi bola yang
+bisa diputar. Memakai WebGPU.
+
+Melengkungkan gambar seperti halaman
+kertas yang dibuka. Memakai WebGPU.
+Contoh gambar tidak ada. Efek ini
+butuh WebGPU, yang tidak ada di
+mesin pembuat buku ini.
+Contoh gambar tidak ada. Efek ini
+butuh WebGPU, yang tidak ada di
+mesin pembuat buku ini.
+Contoh gambar tidak ada. Efek ini
+butuh WebGPU, yang tidak ada di
+mesin pembuat buku ini.
+
+===== PAGE 98 =====
+98
+Remotion untuk Pemula
+LAM PIRAN B
+G a l e r i  1 9  t r a n s i s i
+Transisi dipakai di dalam  <TransitionSeries>. Tiap gam bar m enunjukkan satu
+m om en di tengah peralihan dari adegan A (pem andangan gunung berlabel A) ke
+adegan B (latar hijau tosca dengan lingkaran berlabel B).
+CARA MEMAKAINYA
+Transisi = presentasi (bentuk peralihannya) ditambah timing (kecepatannya). Contoh:
+presentation={fade()} dan timing={linearTiming({durationInFrames: 20})}. Daftar di bawah
+memakai versi 4.0.537. Satu transisi lagi, cube(), ada di dokumentasi tetapi belum ada di versi itu.
+
+Kedua adegan terseret ke satu arah
+dengan kabur gerak yang kuat, seperti
+kamera yang menyapu cepat.
+
+Kedua adegan melengkung seperti
+halaman buku yang dibalik, lengkap
+dengan bayangan.
+
+Adegan lama terhapus berputar seperti
+jarum jam, adegan baru terbuka di
+bawahnya.
+
+Kedua adegan memperbesar melintasi
+titik tengah yang bergerak, dengan
+kabur zoom.
+
+Adegan lama dan baru saling
+melengkung di sepanjang sumbu x.
+
+Adegan lama terbakar dengan tepi
+menyala, dan adegan baru terlihat di
+bagian yang sudah terbakar.
+
+Zoom sambil berputar melewati kilat
+putih di antara dua adegan.
+
+Adegan baru memudar masuk di atas
+adegan lama. Adegan baru harus tidak
+transparan.
+
+Cahaya film terbakar digabung dengan
+kabur radial.
+
+===== PAGE 99 =====
+99
+Remotion untuk Pemula
+
+Adegan lama dibalik 180 derajat,
+adegan baru muncul di sisi
+belakangnya.
+
+Adegan baru terlihat lewat lingkaran
+yang membesar dari tengah, seperti
+diafragma kamera.
+
+Kabur searah yang menyatukan dua
+adegan.
+
+Potongan tegas ala editor: kedua
+adegan sedikit membesar dan ada
+kilatan singkat di titik potong.
+
+Adegan lama bergelombang dari tengah,
+sambil memudar ke adegan baru.
+
+Adegan baru mendorong adegan lama
+keluar layar.
+
+Dua adegan bertukar dengan perspektif,
+kedalaman, dan pantulan lantai.
+
+Adegan baru meluncur menutupi adegan
+lama.
+
+Adegan lama mengecil sambil berputar,
+adegan baru membesar dari sudut
+berlawanan, diberi kabur zoom.
+
+Adegan lama membesar mendekati
+penonton lalu memudar. Adegan baru
+mengecil dari ukuran besar ke ukuran
+biasa.
+
+===== PAGE 100 =====
+100
+Remotion untuk Pemula
+LAM PIRAN C
+C o n t e k a n  s a t u  h a l a ma n
+Tem pel di dekat layar. Isinya hal yang paling sering kam u cari ulang.
+P e rin ta h  te rm in a l
+Mau apaKetik
+Membuat proyek barunpx create-video@latest
+Membuka Studionpm run dev
+Merender videonpx remotion render <id> out/nama.mp4
+Memilih composition dari daftarnpx remotion render
+Gambar diam di frame tertentunpx remotion still <id> out/a.png --frame=60
+Render dengan isian barunpx remotion render <id> out/a.mp4 --props=data.json
+Render GIFnpx remotion render <id> out/a.gif --codec=gif
+Mencari concurrency terbaiknpx remotion benchmark
+Memeriksa versi Nodenode --version
+K e y b o a rd  d i S tu d io
+TombolFungsinya
+SpacePutar atau jeda
+← dan →Mundur atau maju satu frame
+Shift + ← atau →Mundur atau maju satu detik
+A
+ dan 
+E
+Lompat ke awal dan ke akhir
+GLompat ke nomor frame tertentu
+RMembuka jendela Render
+TMenyalakan kotak catur untuk memeriksa transparansi
+MMenyenyapkan suara pratinjau
+?Melihat semua pintasan
+
+===== PAGE 101 =====
+101
+Remotion untuk Pemula
+R u m u s  y a n g  p a lin g  s e rin g  d ip a k a i
+Am bil nom or fram e dan info video:
+const frame = useCurrentFrame();
+const { fps, width, height, durationInFrames } = useVideoConfig();
+Ubah nom or fram e m enjadi nilai lain (misalnya transparansi dari 0 ke 1 selama 30 frame):
+const opacity = interpolate(frame, [0, 30], [0, 1], {
+  extrapolateLeft: "clamp",
+  extrapolateRight: "clamp",
+});
+Gerak m em antul:
+const skala = spring({ frame, fps, config: { damping: 12 } });
+M ulai di fram e 60, tam pil 90 fram e:
+<Sequence from={60} durationInFrames={90}>
+  <Judul />
+</Sequence>
+Adegan berurutan tanpa m enghitung from:
+<Series>
+  <Series.Sequence durationInFrames={60}><Adegan1 /></Series.Sequence>
+  <Series.Sequence durationInFrames={90}><Adegan2 /></Series.Sequence>
+</Series>
+Gam bar, video, dan suara dari folder public:
+<Img src={staticFile("foto.png")} />
+Untuk video dan suara, pakai 
+Video
+ dan 
+Audio
+ dari 
+@remotion/media
+ seperti di Bab 6.
+
+===== PAGE 102 =====
+102
+Remotion untuk Pemula
+K o n v e rs i c e p a t
+MauHitung
+Detik menjadi framedetik × fps
+Frame menjadi detikframe ÷ fps
+Durasi video 10 detik di 30 fps300 frame
+Durasi video 1 menit di 30 fps1.800 frame
+U k u ra n  u m u m
+UntukLebar × tinggi
+Reels, TikTok, Shorts (vertikal)1080 × 1920
+YouTube (mendatar)1920 × 1080
+Persegi1080 × 1080
+M e m ilih  c e p a t
+SituasiPilihan
+File MP4 biasaH.264, tanpa mengubah CRF
+Latar transparanVP8 atau VP9, --image-format=png, --pixel-format=yuva420p
+Akan disunting lagiProRes
+Video terlalu lambat dirender--scale=0.5, lalu coba benchmark
+Video berkedipPastikan semua gerak bergantung pada useCurrentFrame()
+
+===== PAGE 103 =====
+103
+Remotion untuk Pemula
+K a mu s  i s t i l a h
+Lupa arti sebuah kata? Cari di sini. Urutannya sesuai abjad.
+AbsoluteFill. Pembungkus yang membuat sebuah elemen menutupi seluruh layar video. Dipakai
+untuk menumpuk lapisan.
+Alfa. Bagian dari gambar yang menyimpan informasi transparan. Video dengan alfa bisa ditempel di
+atas video lain tanpa kotak latar.
+Bundle. Hasil membungkus seluruh proyekmu supaya bisa dirender oleh skrip. Dibuat dengan
+bundle().
+calculateM etadata. Fungsi yang dijalankan sebelum render untuk menentukan durasi, ukuran, atau
+isian video berdasarkan data.
+Caption. Teks yang muncul sesuai ucapan. Di Remotion, caption adalah daftar kata dengan waktu
+mulai dan selesai.
+Codec. Lihat Kodek.
+Com position. Satu video di dalam proyekmu, lengkap dengan nama (id), ukuran, fps, dan
+durasinya. Satu proyek boleh punya banyak composition.
+Concurrency. Jumlah tab browser yang bekerja bersamaan saat render. M akin banyak tidak selalu
+makin cepat.
+CRF. Angka yang mengatur kualitas video. Angka kecil berarti kualitas bagus dan file besar.
+defaultProps. Isian bawaan sebuah composition. Dipakai kalau tidak ada isian lain dari luar.
+delayRender. Perintah untuk meminta Remotion menunggu dulu sebelum mengambil gambar
+frame, misalnya sampai data selesai diunduh. Pasangannya continueRender.
+Easing. Cara sebuah gerakan berubah kecepatan, misalnya pelan di awal lalu cepat di akhir.
+Efek. Perubahan tampilan seperti kabur, bercahaya, atau berpiksel. Remotion punya paket
+@remotion/effects dengan 81 efek.
+fps. Singkatan dari frames per second, jumlah frame dalam satu detik. Nilai umum: 24, 30, dan 60.
+Flag. Tambahan di belakang perintah terminal, diawali dua tanda hubung, misalnya --codec=gif.
+Folder. Pembungkus di Studio untuk merapikan daftar composition. Tidak memengaruhi isi video.
+Fram e. Satu gambar dalam video. Video adalah deretan frame yang diputar cepat.
+GIF. Format gambar bergerak tanpa suara dan dengan ukuran file besar.
+
+===== PAGE 104 =====
+104
+Remotion untuk Pemula
+H.264. Kodek yang paling umum. Bawaan Remotion, hasilnya file M P4.
+Hot reload. Tampilan Studio yang langsung berubah saat kamu menyimpan kode, tanpa memuat
+ulang halaman.
+Im g. Komponen Remotion untuk menampilkan gambar. Lebih aman daripada tag gambar biasa
+karena Remotion menunggu gambarnya selesai dimuat.
+interpolate. Fungsi untuk mengubah satu rentang angka menjadi rentang angka lain, misalnya
+frame 0 sampai 30 menjadi transparansi 0 sampai 1.
+Kodek. Bahasa yang dipakai file video untuk memadatkan gambar. Contoh: H.264, VP9, ProRes.
+Kom ponen. Potongan tampilan yang bisa dipakai ulang. Di Remotion, tiap adegan biasanya sebuah
+komponen.
+Lam bda. Layanan AW S yang dipakai Remotion Lambda untuk merender video di banyak komputer
+sekaligus.
+Lapisan. Elemen yang ditumpuk di atas elemen lain. Elemen yang ditulis belakangan tampil di
+depan.
+Loop. Pengulangan. Bisa berarti video yang berulang atau GIF yang berputar terus.
+Node.js. Program yang menjalankan kode JavaScript di komputermu, di luar browser. Remotion
+membutuhkannya.
+npm . Pengelola paket untuk Node.js. Dipakai untuk memasang Remotion dan paket tambahan.
+Overlay. Elemen yang ditempel di atas video lain, seperti judul atau logo.
+Piksel. Titik terkecil pada gambar. Resolusi 1920 × 1080 berarti 1.920 titik ke samping dan 1.080
+titik ke bawah.
+Player. Komponen yang memutar video Remotion langsung di halaman web tanpa render.
+Props. Isian yang diberikan ke sebuah komponen dari luar. Dipakai supaya satu desain bisa
+menghasilkan banyak video.
+random . Fungsi Remotion untuk angka acak yang selalu sama bila nilai seed sama. Dipakai
+sebagai pengganti Math.random().
+React. Pustaka JavaScript untuk membuat tampilan dari komponen. Remotion dibangun di atasnya.
+Render. Proses mengubah kode menjadi file video, gambar, atau suara.
+Resolusi. Ukuran gambar dalam piksel, misalnya 1920 × 1080.
+Sequence. Pembungkus yang mengatur kapan sebuah bagian mulai tampil dan berapa lama.
+
+===== PAGE 105 =====
+105
+Remotion untuk Pemula
+Series. Pembungkus yang menyusun beberapa bagian berurutan secara otomatis, satu setelah
+yang lain.
+spring. Fungsi untuk gerakan yang memantul seperti per.
+SSR. Singkatan dari server side rendering, merender lewat kode Node.js, bukan lewat tombol di
+Studio.
+staticFile. Fungsi untuk menunjuk berkas di folder public, seperti gambar, video, dan suara.
+Still. Composition yang hanya satu gambar, bukan video. Cocok untuk thumbnail dan poster.
+Studio. Aplikasi di browser tempat kamu menonton, mengatur, dan merender videomu. Dibuka
+dengan npm run dev.
+Term inal. Jendela tempat kamu mengetik perintah ke komputer.
+Transisi. Cara berpindah dari satu adegan ke adegan berikutnya, seperti memudar atau
+menggeser.
+TSX. Jenis berkas tempat kamu menulis komponen. Gabungan TypeScript dan tampilan bergaya
+HTM L.
+useCurrentFram e. Fungsi yang memberi tahu nomor frame saat ini. Semua gerakan di Remotion
+bersumber darinya.
+useVideoConfig. Fungsi yang memberi tahu ukuran, fps, dan durasi video.
+W ebGL. Teknologi browser untuk gambar tiga dimensi dan efek berat. Beberapa efek Remotion
+membutuhkannya.
+W ebGPU. Teknologi browser yang lebih baru untuk grafis. Tiga efek di Lampiran A
+membutuhkannya.
+Zod. Pustaka opsional untuk memeriksa bentuk props. Berguna kalau kamu ingin Studio
+menampilkan formulir isian.
+
+===== PAGE 106 =====
+106
+Remotion untuk Pemula
+S u mb e r  d a n  c a t a t a n  k e j u j u r a n
+Buku ini m enjelaskan apa yang saya baca dan apa yang saya coba. Dua hal itu tidak
+selalu sam a, jadi saya pisahkan.
+S u m b e r u ta m a
+Semua isi teknis bersumber dari dokumentasi resmi Remotion, yang bisa dibuka gratis.
+Dokumentasi: remotion.dev/docs
+Kode sumber dan dokumentasi: github.com/remotion-dev/remotion
+Panduan encoding: remotion.dev/docs/encoding
+Aturan lisensi: remotion.dev/docs/license
+Halaman dokumentasi yang dipakai untuk tiap bab meliputi: apa itu Remotion, komponen
+Composition, Sequence, Series, interpolate, spring, Img, Video, Audio, staticFile, props
+dan calculateMetadata, paket @remotion/captions, @remotion/shapes,
+@remotion/rough-notation, @remotion/transitions, @remotion/effects, panduan render, panduan
+encoding, performa, pemecahan masalah, Player, Lambda, dan lisensi.
+V e rs i y a n g  d ip a k a i
+Buku ini ditulis dengan Remotion 4.0.537, versi terbaru yang tersedia di npm saat penulisan.
+Dokumentasi di cabang utama GitHub sedikit lebih baru. M isalnya, transisi cube dan beberapa efek
+tertentu sudah tercantum di dokumentasi tetapi belum ada di versi 4.0.537. Kalau kamu memakai
+versi yang lebih baru, bagian kecil bisa berbeda. Selalu cek dokumentasi untuk versi milikmu.
+Y a n g  s u n g g u h  d ic o b a
+Bagian berikut dijalankan sungguhan, dan hasilnya terlihat di gambar di dalam buku:
+M embuat proyek, membuka Studio, dan mengambil tangkapan layarnya
+Bentuk dari @remotion/shapes
+Semua efek di Lampiran A, kecuali tiga yang disebut di bawah, dirender dengan Remotion
+Semua transisi di Lampiran B dirender dengan Remotion
+Empat gaya caption di Bab 7, memakai data kata yang ditulis manual
+Perintah render M P4, --crf, --scale, --concurrency, GIF, W ebM  dengan alfa, still,
+--frames, dan --props
+
+===== PAGE 107 =====
+107
+Remotion untuk Pemula
+Kode contoh lengkap di Bab 3, 4, dan 7 (Halo, Kartu, KartuAngka, calculateMetadata, dan
+skrip 
+render-semua.mjs
+) diperiksa tipenya dengan TypeScript lalu dirender
+Y a n g  h a n y a  d ib a c a  d a ri d o k u m e n ta s i
+Bagian berikut belum dijalankan untuk buku ini. Isinya mengikuti dokumentasi, dan bisa saja ada
+langkah kecil yang berbeda di komputermu:
+Transkripsi otomatis dengan W hisper, ElevenLabs, atau layanan lain
+visualizeAudio, noise, motion blur, Lottie, dan Three.js
+Remotion Lambda, Cloud Run, Docker, GitHub Actions, dan Vercel
+Player dan renderer di browser
+T ig a  e fe k  y a n g  tid a k  b is a  d ip e rlih a tk a n
+Efek cylinder, sphere, dan page-turn membutuhkan W ebGPU. Lingkungan tempat buku ini
+dibuat tidak punya W ebGPU, jadi ketiganya tidak bisa dirender. Di Lampiran A, ketiganya diberi
+tanda dan penjelasan, bukan gambar rekaan. Kalau komputermu mendukung W ebGPU, kamu bisa
+mencobanya sendiri.
+S o a l c a k u p a n
+Dokumentasi Remotion berisi lebih dari seribu halaman. Buku ini tidak membahas setiap halaman.
+Yang dibahas adalah jalur yang dibutuhkan pemula: dari memahami ide dasar sampai bisa membuat
+dan merender video sendiri. Topik seperti peta animasi, M ediabunny, pembuatan aplikasi SaaS, dan
+pembaruan versi hanya disinggung atau tidak dibahas. Untuk itu, buka dokumentasinya langsung.
+S o a l lis e n s i
+Ringkasan lisensi di Bab 8 diambil dari halaman License FAQ dan bukan nasihat hukum. Aturan dan
+harga bisa berubah. Bacalah halaman resmi sebelum memakai Remotion untuk bisnis.
+S o a l g a m b a r d a n  c o n to h
+Semua gambar penjelasan dan galeri di buku ini dibuat khusus untuk buku ini, memakai Remotion
+sendiri. Angka dan teks di dalam contoh, seperti persentase di kartu angka, hanyalah contoh untuk
+belajar dan bukan data yang diklaim benar.
