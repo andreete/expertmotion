@@ -216,7 +216,7 @@ Reference hardware = PRD §6 T0 laptop unless stated. Budgets are owned by PERFO
 
 | ID | Statement | Metric | Target | Measurement | Priority | Related |
 |---|---|---|---|---|---|---|
-| NFR-020 | No more than 10 s of work shall be lost on crash or power loss. | age of the newest restorable checkpoint at kill time | ≤ 10 s; restore succeeds in 100 % of 20 kill tests | int, vm | M / P0 | FR-165, FR-166, PRD-003 |
+| NFR-020 | No more than 10 s of work shall be lost on crash or power loss. Autosave is a debounce: a checkpoint is written 2 s after the last edit and at the latest every 5 s while the project is dirty, plus before Execute and before render (a fixed 10 s timer only meets the limit at its boundary; POC-005). | age of the newest restorable checkpoint at kill time | ≤ 10 s (design target ≤ 5 s); restore succeeds in 100 % of 20 kill tests | int, vm | M / P0 | FR-165, FR-166, PRD-003 |
 | NFR-021 | A render failure (engine crash, encoder failure, stall, cancel) shall never crash or hang the application. | Editor responsive within N s after the failure; orphan processes | responsive ≤ 10 s; 0 orphan Chrome/FFmpeg processes | int, vm (kill tests) | M / P0 | FR-143, FR-144, PRD-015 |
 | NFR-022 | Sessions shall be crash-free. | % of sessions without Shell or Service fatal exit | ≥ 99 % | beta | M / P0 | PRD §5 |
 | NFR-023 | The Local Service shall be supervised and restarted with bounded backoff; the Editor shall reconnect automatically. | restart delays; reconnect time; max attempts | 1 s, 3 s, 9 s; reconnect ≤ 5 s after `ready`; 3 attempts then EM-8002 | int, vm | M / P0 | FR-171, ARCHITECTURE §5 |

@@ -63,4 +63,4 @@ Full criteria: `docs/DEFINITION_OF_DONE.md`.
 
 ## 8. Current phase
 
-Documentation only (Stage 0–1). No application code is written or executed until the Operator starts Stage 2 with an implementation agent. See `process.md`.
+Stage 2 (technical proof of concept), started 2026-10-24 on the Operator's instruction. Throwaway proof code lives in `poc/`; product code (Stage 3) starts only after the Stage 2 exit criteria pass (`docs/POC_PLAN.md` §1). Current state and next tasks: `process.md`.

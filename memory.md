@@ -67,6 +67,8 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 
 ## 6. Known limitations and open questions
 
+- Stage 2 results so far (2026-10-24, Linux): POC-010 curl matrix 44/44; POC-005 DB half 69/69 over 3 runs; POC-004 offline half 19/19 (live half needs a key). Windows proofs not run. SEC-011 and NFR-020 were amended from these results.
+
 - Indonesian TTS quality from open models is "news reader", not expressive.
 - Local music generation needs Python + ≥ 4 GB VRAM for usable speed; fallback is a royalty-free loop library.
 - JavaScript shipped to the Creator can be extracted by a determined attacker; encryption at rest does not protect against the device owner.
@@ -80,4 +82,4 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 - Every doc starts with the header table (Status, Owner, Last updated, Depends on, Used by).
 - Times in the Composition Model are milliseconds; frames are derived at render.
 - Commit after every batch of documents; `process.md` entry after every meaningful work unit.
-- Documentation phase rule (Operator, 2026-10-24): no application code is written or executed until the Operator starts Stage 2; another model will implement from these documents.
+- Phase rule (Operator, 2026-10-24): documentation phase ended and Stage 2 (PoC) started the same day on the Operator's instruction; proof code is throwaway under `poc/`, run on the shared server only via `bash poc/run-capped.sh`. Product code (Stage 3) only after Stage 2 exit criteria pass.

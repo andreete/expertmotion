@@ -1,0 +1,2 @@
+{ "name": "poc-010", "private": true, "type": "module", "version": "0.0.0",
+  "dependencies": { "express": "4.22.3" } }
