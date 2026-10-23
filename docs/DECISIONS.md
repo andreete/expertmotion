@@ -49,7 +49,7 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Alternatives** (criteria from §4.2): Electron; Tauri 2 + Node sidecar (pkg/SEA); Neutralino + Node extension; Node SEA alone with a browser; Bun compile.
 - **Selected**: Electron with Remotion's official Electron pattern (bundle at build time, `renderMedia` in the main/service process, UI via IPC/HTTP).
 - **Rationale**: Remotion documents and supports Electron; the preview Chromium is the same engine family as the renderer (parity); `better-sqlite3-multiple-ciphers` ships Electron prebuilds; ASAR integrity fuses and `safeStorage` (DPAPI) are built in; mature signing/updater tooling. Tauri has no Remotion guide, previews in WebView2 (parity risk), and needs a separately packaged Node sidecar; SEA cannot load native addons from its VFS without extraction tricks.
-- **Trade-offs**: larger installer (~150–250 MB before models) and higher idle RAM (~130–200 MB) than Tauri; two Chromium instances during render (Electron + Headless Shell).
+- **Trade-offs**: larger installer (≈ 300–400 MB compressed before models; budget ≤ 450 MB, measured in POC-001) and higher idle RAM (~130–200 MB) than Tauri; two Chromium instances during render (Electron + Headless Shell).
 - **Consequences**: `DEPLOYMENT_AND_PACKAGING.md` is Electron-specific; the UI remains a plain web app so development runs in a browser against the Local Service.
 
 ## ADR-005 Local Service is a private, token-authenticated loopback HTTP + SSE API
@@ -76,7 +76,7 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Status**: accepted
 - **Problem**: The Operator wants source, prompts and orchestration protected from competitors; a distributed app cannot be made impossible to reverse-engineer (§4.3).
 - **Alternatives**: none (plain JS); obfuscation only; V8 bytecode everywhere; server-side "secret sauce" (breaks local-first).
-- **Selected**: bundle + minify with no production source maps; ASAR integrity fuses; V8 bytecode (electron-vite) only for the licence and prompt modules (never the Remotion renderer path, where `Function.toString` is required); prompt/template assets encrypted at rest and decrypted in memory; signed installer and signed updates; dependency integrity via lockfile and hash checks; Ed25519 licence.
+- **Selected**: bundle + minify with no production source maps; ASAR integrity fuses; V8 bytecode (bytenode, or the electron-vite plugin as fallback) only for the licence and prompt modules in the main/service process (never the renderer or Remotion path, where `Function.toString` is required; compatibility with the pinned Electron is verified in POC-006); prompt/template assets encrypted at rest and decrypted in memory; signed installer and signed updates; dependency integrity via lockfile and hash checks; Ed25519 licence.
 - **Trade-offs**: all layers are reversible by a determined attacker; bytecode is tied to the Electron version.
 - **Consequences**: documentation says "raises the cost of extraction"; `THREAT_MODEL.md` lists what is not protected.
 
@@ -151,6 +151,6 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 ## ADR-017 Remotion licence path is a launch blocker to resolve with Remotion
 
 - **Status**: accepted
-- **Problem**: Remotion is free for individuals and companies ≤ 3 people; companies of 4+ need a Company License (Automators: $0.01/render, $100/month minimum). Public docs do not define how renders on an end user's own PC are metered, and v5 makes render telemetry mandatory, which conflicts with Private Mode.
+- **Problem**: Remotion is free for individuals and companies ≤ 3 people; companies of 4+ need a Company License (Automators: $0.01/render, $100/month minimum). Public docs do not define how renders on an end user's own PC are metered. From Remotion 5.0 render reporting is mandatory for the Automators licence (voluntary below 5.0, optional for Creators; Remotion states telemetry never blocks a render), which would conflict with Private Mode if Expertmotion ever falls under Automators.
 - **Selected**: proceed on the free licence while the Operator's company is ≤ 3 people; the BRD requires written confirmation from Remotion before commercial launch; the Engine passes `licenseKey` when a Company License exists; Private Mode behaviour with telemetry is documented as an open question.
 - **Consequences**: `BRD.md`, `RISKS_AND_ASSUMPTIONS.md` (RISK-001).

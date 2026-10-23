@@ -121,5 +121,5 @@ Expertmotion lets a person with no editing team and no technical skills turn raw
 1. All P0 requirements verified per TEST_PLAN on a clean Windows VM and on the reference laptop.
 2. Vulnerability checklist complete; threat model reviewed.
 3. Installer and updater signed; licence issuance runbook tested end to end.
-4. Remotion licence position confirmed in writing (ADR-017).
+4. Remotion licence position confirmed in writing (ADR-017, BRD-010).
 5. Documentation current; process.md and memory.md updated; known limitations published in About.

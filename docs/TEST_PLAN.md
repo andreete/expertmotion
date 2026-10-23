@@ -179,3 +179,225 @@ Stage tags (which gate requires the case) follow ROADMAP.md: §2 → Stages 2, 3
 | QA-109 | Empty timeline copy | no clips | 1. Observe `stage.timeline.empty`. | Points to Insert; no "drag material here" copy | e2e | P0 | L |
 | QA-110 | Safe-area overlay and ratio switch | 16:9 → 9:16 | 1. Switch ratio in Output Settings. | Player canvas resizes; safe-area overlay updates; text relayouts via `u`; no horizontal scroll at 1280×720 (UX-050) | e2e | P0 | W |
 | QA-111 | Timeline is read-only in MVP | — | 1. Attempt to drag an element. | No drag; tooltip "Reordering and trimming arrive in a later release" / ID variant (P1 PRD-036) | e2e | P0 | L |
+
+## 11. Output Settings (PRD-008, PRD-019; ADR-010; FR-output group)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-112 | Pixel table: every ratio × resolution derives the documented dimensions | — | 1. For each of the 28 cells in PERFORMANCE.md §3 call `deriveDimensions(ratio, resolution)`. | Exact match with the table (e.g. 4:5 720p = 720×900, 5:4 1080p = 1350×1080, 9:16 2K = 1440×2560, 4:3 2160p = 2880×2160); all even | unit | P0 | L |
+| QA-113 | Custom ratio rules | — | 1. Custom 2:3 at 1080p. 2. Custom 1:4. 3. Custom 7:5 at 720p. | 2:3 → 1080×1620; 1:4 rejected (clamp 1:3…3:1) with EM-3103; 7:5 → long side round-to-even; both sides ≥ 240 | unit | P0 | L |
+| QA-114 | Ratio buttons show orientation and pixels | 1080p selected | 1. Inspect `agent.output.ratio.*`. | Each shows orientation glyph and "W×H" with width first (UX-023); switching Resolution updates the labels | e2e | P0 | L |
+| QA-115 | Tier gating of resolutions | hardware fake T0, T1, T2 | 1. Open Resolution control under each tier. | T0: 2K and 2160p disabled with "needs a GPU tier"; T1: 2K enabled, 2160p enabled with warning; T2: all enabled (PRD-019) | e2e | P0 | L |
+| QA-116 | Performance Profile availability and tooltip | T0, T1, T2 fakes | 1. Inspect profile buttons and `agent.output.profile.help`. | T0: Standard only (others disabled with reason, not hidden); T1: Accelerated; Turbo with warning; T2: all; tooltip text equals PERFORMANCE.md §2 verbatim (UX-022) | e2e | P0 | L |
+| QA-117 | Auto ratio from the first inserted Clip | assets 1080×1920 and 1920×1080 | 1. Enable `agent.output.ratio.auto`. 2. Insert the portrait clip first. 3. New project, insert landscape first. 4. Insert a 1080×1350 clip first. | 9:16, then 16:9, then 4:5 chosen (nearest by aspect difference); Auto turns off when the Creator picks a ratio manually | unit + e2e | P0 | L |
+| QA-118 | Reset to Defaults asks and names what resets | changed settings | 1. `agent.output.reset`. | Modal lists ratio, resolution, profile, Auto, Private Mode; confirm restores Project Settings defaults; recorded as an intent | e2e | P0 | L |
+| QA-119 | Frame rate lives in Project Settings, not Output Settings | — | 1. Inspect `agent.output`. 2. Open `hdr.menu.file.settings`. | No fps control in Output Settings; fps 24/25/30/50/60 in Project Settings; profiles never alter fps (ADR-010) | e2e | P0 | L |
+| QA-120 | Ratio/resolution changes are scalar intents | — | 1. Pick 9:16, then 1:1. | `op:output.setRatio` twice; first superseded and restorable; version per change | int | P0 | L |
+
+## 12. Export (PRD-014, PRD-015, PRD-017; EM-31xx; FR-export group; NFR-render group)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-121 | Preflight: disk (EM-3102) | fake disk free = 100 MB; estimate 500 MB | 1. Open `scr.export`. | Preflight row red with EM-3102, required vs available sizes, "Choose another folder" action; Start disabled | int + e2e | P0 | L |
+| QA-122 | Preflight: memory (EM-3101) | fake free RAM 1.5 GB (Standard); 2.5 GB (Accelerated) | 1. Open export under each. | Standard needs ≥ 2 GB → blocked; Accelerated needs ≥ 3 GB → blocked; thresholds per PERFORMANCE.md §7 | int | P0 | L |
+| QA-123 | Preflight: dimensions (EM-3103) | custom ratio producing 239 px side (forced via API) | 1. POST /renders. | 400 EM-3103 | int | P0 | L |
+| QA-124 | Preflight: duration (EM-3104) | composition 0.9 s; composition 30:01 | 1. Export. | EM-3104 both; message names the limit | int | P0 | L |
+| QA-125 | Preflight: assets (EM-1301) | referenced asset file deleted on disk | 1. Export. | EM-1301 with the asset name and "Re-import" action | int | P0 | L |
+| QA-126 | Preflight: engine binaries (EM-3001) | FFmpeg renamed away | 1. Export. | EM-3001 naming the component with "Repair installation" guidance | int + manual | P0 | W |
+| QA-127 | Preflight: Trial notice (EM-5001) | Trial Mode; 1080p chosen | 1. Open export. | Notice "Trial: watermark and 720p. Purchase to remove." (UX-025); profile summary shows 720p; Start enabled | e2e | P0 | L |
+| QA-128 | Render 30 s 1080p30 completes and validates | licensed; 3 clips, 2 transitions, captions; D1 | 1. Start. 2. Wait. | `sys.render.progress` percent increases; ETA appears after ≥ 5 % and ≥ 3 samples (UX-026); done state with Open folder / Reveal; ffprobe: 1920×1080, 30 fps, duration = derived ± 1 frame, h264 + aac; time ≤ 90 s on D1 recorded | manual (scripted) | P0 | W |
+| QA-129 | Progress and ETA over SSE | fake Engine scripted progress | 1. Start. 2. Observe events. | `render.progress` throttled (≤ 4/s), monotonic percent, ETA null until conditions met, `render.done` with outputId | int | P0 | L |
+| QA-130 | Cancel removes partial file and kills Chrome | real render at 30 % | 1. Cancel. | Job `cancelled`; Chrome Headless Shell process gone within 5 s; no partial file in the output folder; app responsive | manual | P0 | W |
+| QA-131 | Chrome killed during render → failed, app alive | render running | 1. Kill `chrome-headless-shell.exe`. | `sys.toast` "Export failed · EM-3xxx" with Details and Try again (UX-031); partial removed; Editor interactive; next render works | manual | P0 | W |
+| QA-132 | Output validation rejects a wrong file | fake Engine produces 1280×720 when 1920×1080 requested | 1. Render. | Job `failed` EM-3xxx "output mismatch"; file quarantined/deleted; never marked `done` | int | P0 | L |
+| QA-133 | Output folder control | — | 1. Choose a folder via Shell dialog. 2. Choose a read-only folder. | Folder persisted per project; read-only → EM-6xxx before start | e2e + manual | P0 | W |
+| QA-134 | GIF export | 5 s composition | 1. Export GIF. | Valid GIF, dimensions per table (capped per PERFORMANCE/ASSET rules if any), loops | manual | P0 | W |
+| QA-135 | PNG still export | — | 1. Export still at playhead 2 s. | PNG with exact dimensions; frame equals the Player frame (diff ≤ 1 %) | manual + golden | P0 | W |
+| QA-136 | Alpha export | `preset:background.none` | 1. Export WebM alpha. | VP9 + yuva420p, `imageFormat` png; transparent background verified in a compositor | manual | P1 | W |
+| QA-137 | One render at a time per project | render running | 1. Start a second. | Queued (status `queued`), starts after the first; Settings concurrency fixed at 1 job | int | P0 | L |
+| QA-138 | Trial export enforced server-side | Trial; API request for 1080p without watermark flag | 1. POST /renders directly. | Service forces 720p + watermark regardless of client (not only UI) | int | P0 | L |
+| QA-139 | Render matrix set A (28 rows) | licensed; D1 | 1. Run QA_PROCESS.md §5 set A script. | All rows match the pixel table; audio present; duration ± 1 frame; plays in two players | manual (scripted) | P0 | W |
+| QA-140 | Render matrix set B (frame rates) | D1 | 1. Run set B. | `r_frame_rate` exact; frame counts; clap test within 1 frame | manual (scripted) | P0 | W |
+| QA-141 | Render matrix set C (profiles) | D1 (+ D3) | 1. Run set C. | Outputs visually identical (≤ 1 %); time and peak RAM recorded vs budgets; Turbo on T1 warns; NVENC used on T2 Accelerated/Turbo when available, silent fallback otherwise | manual (scripted) | P0 | W, T2 |
+| QA-142 | Render matrix set D and E (edge, durations) | D1 | 1. Run sets D and E. | Per QA_PROCESS.md §5 rows; 30-min row may run nightly | manual | P0/P1 | W |
+| QA-143 | Background tasks paused during Standard render | ingest and model download queued | 1. Start Standard render. | Both paused, resume after; Turbo allows them | int | P0 | L |
+| QA-144 | `render.estimate` tool | — | 1. Call with version + profiles. | Seconds, bytes, warnings returned without starting anything | int | P0 | L |
+
+## 13. Golden frames and parity (PRD-013, PRD §5 parity; ARCHITECTURE §7; FR-engine group)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-145 | Every P0 preset × 7 ratios renders without overflow | baselines committed | 1. `npm run test:golden`. | 44 presets × 7 ratios × 3 frames within ≤ 1 % diff of baselines; no element outside the safe area (overlay check) | golden | P0 | L (50 %), W |
+| QA-146 | Player vs renderStill parity | Windows; 10 sampled frames across presets | 1. Screenshot the Player at frame f. 2. `renderStill` at f. 3. pixelmatch. | Diff ≤ 1 % for all samples; any failure names the preset and frame | golden | P0 | W |
+| QA-147 | Long text and negative/edge values | 120-char Indonesian title; `op:clip.setPlaybackRate` 0.25 and 4; 8 effects attempted | 1. Render stills. | Text fits; rates clamp at bounds; effects capped at 3 (T0 2) with notice; stills pass | golden + unit | P0 | L |
+| QA-148 | Catalogue loops built and bounded | `npm run build:engine` | 1. Build. 2. Sum sizes. | One 2 s 480 px webm per preset; total ≤ 40 MB | manual (scripted) | P0 | W |
+| QA-149 | Baseline update discipline | engine change PR | 1. Attempt to merge with changed baselines. | PR contains `--update` note, before/after images, reviewer approval; hook blocks silent baseline changes | manual | P0 | L |
+| QA-150 | Frame-based animation only | static analysis | 1. Lint `packages/engine` for `Date.now`, `setTimeout`, `requestAnimationFrame`, `Math.random` without `random()` seed. | None in composition code | unit (lint) | P0 | L |
+
+## 14. Providers and Model Assignment (PRD-010, PRD-011; AI-015, AI-016; FR-provider group)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-151 | Validate key success | fake OpenRouter HTTP returning 200 for `/models` | 1. `scr.providers` → add OpenRouter key → Test. | Status validated; key stored encrypted; models listed with context length, tools flag, pricing | int + e2e | P0 | L |
+| QA-152 | Invalid key shows a clear error | fake 401 | 1. Test. | EM-4xxx "key not accepted" with "Check key" action; nothing saved as validated; key never logged | int + e2e | P0 | L |
+| QA-153 | List models and Capability Table | fake `/models` fixture with 50 models | 1. Open model picker. | Filter by `tools` support; context length shown; pricing parsed to per-million; unknown pricing → "n/a" | int | P0 | L |
+| QA-154 | Independent assignment per agent | two models | 1. Assign model A to Brainstorming, B to Editor. 2. Send in each. | Each request uses its model; footers `agent.brainstorm.footer.model` / `agent.editor.footer.model` differ (AI-015) | int + e2e | P0 | L |
+| QA-155 | Usage and cost labelling | fake responses with and without `usage.cost` | 1. Run each. | "$0.004" when provider returns cost; "≈ $0.004" when computed from Capability Table; "n/a" otherwise (UX-020); `Usage Record` rows persisted | int + e2e | P0 | L |
+| QA-156 | Budget per project and per month | limits set | 1. Exceed each. | Warning at 80 %, EM-4201 at 100 % for the right scope | int | P0 | L |
+| QA-157 | Live validation with a real key (opt-in) | `OPENROUTER_TEST_KEY` | 1. `eval:agents --live` for GS-01. | Passes; cost recorded; key budget on provider side not exceeded | manual | P0 | L, W |
+| QA-158 | Remove connection wipes credential | connection exists | 1. Remove. | Row deleted; encrypted blob gone; assignments fall back to "none" with inline notice | int | P0 | L |
+| QA-159 | Additional providers behind the same adapter interface | OpenAI/Anthropic/Gemini fakes | 1. Add each. | Same flows as OpenRouter; capability differences honoured (JSON mode vs tools) | int | P1 | L |
+
+## 15. Private Mode (PRD-020; AI-017; SEC-network group)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-160 | Egress module blocks every outbound call | Private Mode on; fake network layer counting calls | 1. Trigger provider call, model download, update check. | All rejected at the egress module with the Private Mode notice; zero network calls counted | int | P0 | L |
+| QA-161 | UI state in Private Mode | on | 1. Inspect. | `sys.privatemode.banner` on every screen; `agent.modelbar.status` private icon; both composers disabled with the inline note (UX-024); deterministic picks still work | e2e | P0 | L |
+| QA-162 | Zero outbound connections on Windows | Private Mode on; packet capture (Wireshark or Firewall log) | 1. Scripted 10-minute session: import, pick, Insert, export. | No outbound connection from any Expertmotion process (Shell, Service, Chrome Headless Shell, FFmpeg) | manual | P0 | W |
+| QA-163 | Engine Binaries get no proxy and no network | Private Mode on; P1 whisper binary (when shipped) | 1. Run captions. | Spawn environment lacks proxy variables; egress check before spawn; capture shows nothing | manual | P1 | W |
+| QA-164 | Toggling off restores agents | — | 1. Toggle off. | Composers enabled; pending downloads resume only after an explicit click | e2e | P0 | L |
+
+## 16. Licence (PRD-017; ADR-014; FR-licence group; SEC-licence group)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-165 | Valid key activates | key issued for this machine's fingerprint | 1. `scr.license` → paste → Activate. | Status licensed with tier, licensee, update-eligibility date; `hdr.action.license` reflects; exports unwatermarked | manual | P0 | W |
+| QA-166 | Tampered key rejected | valid key with one payload byte changed | 1. Activate. | EM-5xxx "signature invalid"; remains in Trial | unit + manual | P0 | L, W |
+| QA-167 | Fingerprint mismatch | key for another machine | 1. Activate. | EM-5xxx "issued for another computer" with re-bind guidance; re-bind limit enforced (LICENSE_OPERATIONS.md) | unit + manual | P0 | W |
+| QA-168 | Revoked key | key id on bundled `revocations.json` | 1. Activate; 2. Also start with an already-activated revoked key. | Refused / downgraded to Trial with EM-5xxx and support text | unit + manual | P0 | W |
+| QA-169 | Trial watermark and 720p cap | Trial | 1. Export 1080p. | File is 720p row dimensions and carries the watermark in all 7 ratios (golden check of the watermark position inside the safe area) | golden + manual | P0 | W |
+| QA-170 | Clock tampering | licensed; set the system clock back 1 year | 1. Launch. | Monotonic check flags; licence stays valid for the installed version; update eligibility uses the last-seen time; no silent downgrade without message | manual | P1 | W |
+| QA-171 | Licence module is bytecode-protected and not on the renderer path | packaged build | 1. Inspect `resources/app.asar` for `license` module source. 2. Confirm Engine bundle has no bytecode. | Licence module not readable as JS source; Engine bundle plain JS (ADR-007) | manual | P0 | W |
+| QA-172 | Public key only in the repository | repo scan | 1. Search for the private key pattern. | None; `LICENSE_OPERATIONS.md` documents offline signing | manual | P0 | L |
+
+## 17. Security checklist items (PRD-016; SEC- groups; VULNERABILITY_CHECKLIST.md)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-173 | Local API requires the Service Token | Service running | 1. Requests without token, with a wrong token, with token in query on a non-SSE route. | 401 for all; SSE route accepts the per-launch token in query only | int | P0 | L |
+| QA-174 | Host/Origin allow-list | — | 1. Valid token with `Origin: http://evil.local`; with `Host: 127.0.0.1.evil`. | 403 both | int | P0 | L |
+| QA-175 | Request forgery from a foreign page | Playwright page served on another port | 1. `fetch` the Service with and without `credentials: include`; attempt EventSource. | All blocked (no cookies; bearer missing; Origin rejected) | e2e | P0 | L |
+| QA-176 | Electron hardening flags | packaged build | 1. Inspect `webPreferences` and fuses. 2. Try `require` in DevTools (dev build) / confirm DevTools disabled (prod). | `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`; preload exposes only `{port, token, dialogs}`; CSP set; `--inspect` refused | manual | P0 | W |
+| QA-177 | Path restrictions on file APIs | — | 1. Output folder = `C:\Windows\System32`. 2. Import a junction to a system folder. 3. `..` in any id. | Refused with EM; no write outside allowed roots | int + manual | P0 | W |
+| QA-178 | Credentials never in clear | DB dump, logs, diagnostics zip | 1. Search for the key. | Not found anywhere | manual | P0 | W |
+| QA-179 | Malicious asset inputs | fixtures: polyglot PNG/HTML, control-char names, SRT with 100k cues and `<script>` | 1. Import all. | Sanitised or rejected; HTML never rendered; caption text escaped; names sanitised (`sanitizeFilename`) | int | P0 | L |
+| QA-180 | No unsafe execution path from model input | fuzz corpus for op args | 1. Run 1000 fuzzed ops through validator and `ProcessRunner` arg builder. | All rejected or treated as data; no spawn with model-derived arguments outside the allow-list; no `eval`/`new Function` in production bundles (grep) | unit | P0 | L |
+| QA-181 | Dependency integrity | `npm ci` from lockfile; modified lockfile | 1. Run `audit:deps`. 2. Tamper lockfile integrity field. | Audit clean at high/critical; licence allow-list passes; tampered lockfile fails `npm ci` | manual (scripted) | P0 | L |
+| QA-182 | Production artefact exposure | see QA-008 | — | — | manual | P0 | W |
+| QA-183 | JSON body limits and rate of SSE | — | 1. POST 10 MB body. 2. Open 50 SSE connections. | 413; connection cap with 429/503 and no memory growth beyond budget | int | P0 | L |
+| QA-184 | Secrets not in the repository | pre-commit hook; repo history | 1. Attempt to commit a fake `sk-or-…` key. 2. Run the scanner on history. | Commit blocked; history clean | manual | P0 | L |
+
+## 18. Performance budgets (PERFORMANCE.md §5; NFR-performance group)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-185 | Cold start ≤ 5 s (to confirm) | D1, warm disk cache cleared by reboot | 1. Launch 5 times; median. | ≤ 5 s to `stage.player.frame` visible, or revised target recorded with evidence | manual | P0 | W |
+| QA-186 | Idle RAM ≤ 450 MB | D1, 2 min idle | 1. Sum private bytes of Shell, Service, Editor. | ≤ 450 MB | manual | P0 | W |
+| QA-187 | Peak RAM during Standard render ≤ 40 % of total | D1 (16 GB) and MIN (8 GB) | 1. Render the 30 s workload. | ≤ 6.4 GB on D1; on MIN no swap-thrash (commit charge stays below physical), render completes or EM-3101 blocks beforehand | manual | P0 | W, MIN |
+| QA-188 | Ingest 1 min 1080p30 ≤ 20 s | D1 | 1. Import. | ≤ 20 s to ready | manual | P0 | W |
+| QA-189 | Catalogue hover ≤ 300 ms, seek ≤ 100 ms | D1 | see QA-072, QA-103 | within budgets | e2e (perf) | P0 | W |
+| QA-190 | Hardware Monitor overhead | D1 | 1. Compare CPU/RAM with monitor on vs off over 10 min. | < 1 % CPU, < 20 MB; `systeminformation` calls ≤ 1 per 30 s | manual | P0 | W |
+| QA-191 | Installer and app data sizes | build | 1. Measure. | Installer ≤ 450 MB; app data baseline ≤ 200 MB; loops ≤ 40 MB | manual | P0 | W |
+| QA-192 | Shared-server suite under the cap | L | 1. `verify` under `systemd-run` cap; read `memory.current` peak. | Peak ≤ 900 MB; no OOM kill; value recorded in `process.md` | manual (scripted) | P0 | L |
+| QA-193 | Hardware Tier detection | D1 (T0), D4 (T1), D3 (T2), VM without GPU info | 1. Launch each; open `scr.hardware`. | Correct tier; defaults applied per PERFORMANCE.md §1; RAM < 8 GB warns at startup (MIN) | manual | P0 | W |
+| QA-194 | Low-memory render block | MIN with free RAM < 2 GB (fill memory with a helper) | 1. Export. | EM-3101 before start with free vs required | manual | P0 | MIN |
+
+## 19. Accessibility and layout (UX-050…UX-054; ACCESSIBILITY_AND_I18N.md)
+
+| ID | Title | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-195 | Keyboard-only P0 workflow | no mouse | 1. Complete flows F1–F8 with keyboard shortcuts (EDITOR_INTERACTION_MODEL.md §4). | All completable; visible focus at every step (UX-051) | manual + e2e | P0 | W |
+| QA-196 | Contrast and semantics | axe/Lighthouse on each screen | 1. Run. | No critical violations; text contrast ≥ 4.5:1; icon-only controls have tooltips and labels (UX-043) | e2e (axe) | P0 | L |
+| QA-197 | Layout at 1280×720 and icon-rail below 1280 | window sizes 1280×720, 1100×720, 1000×700 | 1. Resize. | All regions visible at 1280×720; Library Panel collapses to rail between 1024–1279; notice below 1024; no overlap (UX-050) | e2e | P0 | W |
+| QA-198 | Reduced motion honoured | OS reduce-motion on | 1. Inspect UI transitions and loops. | UI transitions ≤ 1 frame; loops pause until hover; Player content unaffected (UX-054) | manual | P1 | W |
+| QA-199 | Indonesian variants complete and forbidden words absent | `en.json`, `id.json` | 1. `npm run lint`. | Every key has an ID value (UX-041); no forbidden technical words outside diagnostics namespace (UX-040) | unit (lint) | P0 | L |
+| QA-200 | Long Indonesian copy truncates with tooltip | 100-char preset label fixture | 1. Inspect Intent Queue and Plan Card. | Ellipsis + tooltip; no overflow (UX-053) | e2e | P0 | L |
+| QA-201 | Intent removed from queue | queued intent (status `removed` per AI_WORKFLOW.md §3) | 1. Remove the item. | Status `removed`; stays visible in a collapsed "removed" group; not compiled or planned; restorable | e2e + unit | P0 | L |
+
+## 20. Golden Scenarios (GOLDEN_SCENARIOS.md GS-01…GS-20; PRD-012, AI-014; AI_WORKFLOW.md §13)
+
+Each case runs three ways where applicable: (a) Compile path unit test, (b) fake provider replaying the recorded Edit Plan, (c) optional live model. Expected Intent Queue, Edit Plan, Operations and render settings are the ones in GOLDEN_SCENARIOS.md; the case passes when the executed Composition Version equals the expected fixture (canonical JSON hash) and the render settings match.
+
+| ID | Scenario | Preconditions | Steps | Expected result | Type | Pri | Env |
+|---|---|---|---|---|---|---|---|
+| QA-202 | GS-01 | fixtures `GS-01/` | run (a)/(b); (c) with `--live` | Intent Queue, plan, ops, version hash and render settings equal the fixture; PRD-012 group 1–10 | unit + int | P0 | L |
+| QA-203 | GS-02 | `GS-02/` | as above | as above | unit + int | P0 | L |
+| QA-204 | GS-03 | `GS-03/` | as above | as above | unit + int | P0 | L |
+| QA-205 | GS-04 | `GS-04/` | as above | as above | unit + int | P0 | L |
+| QA-206 | GS-05 | `GS-05/` | as above | as above | unit + int | P0 | L |
+| QA-207 | GS-06 | `GS-06/` | as above | as above | unit + int | P0 | L |
+| QA-208 | GS-07 | `GS-07/` | as above | as above | unit + int | P0 | L |
+| QA-209 | GS-08 | `GS-08/` | as above | as above | unit + int | P0 | L |
+| QA-210 | GS-09 | `GS-09/` | as above | as above | unit + int | P0 | L |
+| QA-211 | GS-10 | `GS-10/` | as above | as above | unit + int | P0 | L |
+| QA-212 | GS-11 | `GS-11/` (Locked Key group per AI-014) | run (b) | Locked Key violation caught 100 %; re-prompt once; drop with notice; version untouched for locked keys | int | P0 | L |
+| QA-213 | GS-12 | `GS-12/` | as QA-212 | as QA-212 | int | P0 | L |
+| QA-214 | GS-13 | `GS-13/` | as QA-212 | as QA-212 | int | P0 | L |
+| QA-215 | GS-14 | `GS-14/` | as QA-212 | as QA-212 | int | P0 | L |
+| QA-216 | GS-15 | `GS-15/` | run (a)/(b)/(c) | equals fixture | unit + int | P0 | L |
+| QA-217 | GS-16 | `GS-16/` | as above | equals fixture | unit + int | P0 | L |
+| QA-218 | GS-17 | `GS-17/` | as above | equals fixture | unit + int | P0 | L |
+| QA-219 | GS-18 | `GS-18/` | as above | equals fixture | unit + int | P0 | L |
+| QA-220 | GS-19 | `GS-19/` | as above | equals fixture | unit + int | P0 | L |
+| QA-221 | GS-20 | `GS-20/` | as above | equals fixture | unit + int | P0 | L |
+| QA-222 | Live aggregate | `OPENROUTER_TEST_KEY`; one mid-tier model | 1. `eval:agents --live` over GS-01…GS-20, 3 runs each. | ≥ 90 % first-attempt valid plans (PRD §5); results table in GOLDEN_SCENARIOS.md updated with model, date, rate; 0 unvalidated mutations | manual (scripted) | P0 | L |
+
+## 21. Summary and traceability
+
+| Area | Cases | P0 | Automated (unit/int/golden/e2e) | Manual |
+|---|---|---|---|---|
+| §2 Packaging | QA-001…011 (11) | 10 | 0 | 11 |
+| §3 Lifecycle and recovery | QA-012…023 (12) | 11 | 6 | 8 |
+| §4 Projects | QA-024…034 (11) | 9 | 9 | 3 |
+| §5 Ingestion | QA-035…049 (15) | 13 | 14 | 3 |
+| §6 Ordering and Insert | QA-050…056 (7) | 7 | 7 | 0 |
+| §7 Catalogue and intents | QA-057…077 (21) | 21 | 21 | 0 |
+| §8 Editor Agent plans | QA-078…093 (16) | 15 | 16 | 0 |
+| §9 Execute and rollback | QA-094…101 (8) | 8 | 8 | 0 |
+| §10 Player and Timeline View | QA-102…111 (10) | 10 | 10 | 0 |
+| §11 Output Settings | QA-112…120 (9) | 9 | 9 | 0 |
+| §12 Export | QA-121…144 (24) | 23 | 13 | 12 |
+| §13 Golden frames | QA-145…150 (6) | 6 | 4 | 2 |
+| §14 Providers | QA-151…159 (9) | 8 | 8 | 1 |
+| §15 Private Mode | QA-160…164 (5) | 4 | 3 | 2 |
+| §16 Licence | QA-165…172 (8) | 7 | 3 | 8 |
+| §17 Security | QA-173…184 (12) | 12 | 7 | 7 |
+| §18 Performance | QA-185…194 (10) | 10 | 1 | 10 |
+| §19 Accessibility and layout | QA-195…201 (7) | 6 | 6 | 2 |
+| §20 Golden Scenarios | QA-202…222 (21) | 21 | 20 | 1 |
+| **Total** | **222 cases (QA-001…QA-222)** | **210** | — | — |
+
+(Cases with both automated and manual parts are counted in both columns.)
+
+Traceability to PRD (filled by the consistency pass into INDEX.md "P0 → stage → test"):
+
+| PRD | Primary QA cases |
+|---|---|
+| PRD-001 | QA-001…011 |
+| PRD-002 | QA-024, QA-102…111, QA-197 (all `el:` ids present is checked by the e2e selector sweep in QA-077 run) |
+| PRD-003 | QA-014, QA-015, QA-024…027 |
+| PRD-004 | QA-028, QA-029, QA-030, QA-032 |
+| PRD-005 | QA-035…049 |
+| PRD-006 | QA-050…056 |
+| PRD-007 | QA-106…111 |
+| PRD-008 | QA-112…120, QA-139, QA-140 |
+| PRD-009 | QA-102…105 |
+| PRD-010 | QA-151…158 |
+| PRD-011 | QA-154, QA-155, QA-091 |
+| PRD-012 | QA-057…069, QA-078…101, QA-202…211 |
+| PRD-013 | QA-057, QA-058, QA-070, QA-145…150 |
+| PRD-014 | QA-121…144 |
+| PRD-015 | QA-013, QA-016, QA-021, QA-131, QA-132 |
+| PRD-016 | QA-008, QA-012, QA-173…184 |
+| PRD-017 | QA-127, QA-138, QA-165…172 |
+| PRD-018 | QA-003, usability rounds (QA_PROCESS.md §9) |
+| PRD-019 | QA-115, QA-116, QA-122, QA-193, QA-194 |
+| PRD-020 | QA-160…164 |
+| PRD-021 | hand-over test recorded at each gate (STAGE_MANAGEMENT.md §2), not a QA case |
+
+## 22. Change log
+
+| Date | Change |
+|---|---|
+| 2026-10-24 | First baseline: QA-001…QA-222. |

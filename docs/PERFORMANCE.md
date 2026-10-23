@@ -82,7 +82,7 @@ Project Settings frame rate ∈ {24, 25, 30, 50, 60}; default 30. Changing fps r
 | Same, Turbo on T2 | ≤ 30 s (to confirm) | T2 desktop |
 | Idle RAM (Shell + Service + Editor) | ≤ 450 MB | reference laptop |
 | Peak RAM during Standard render | ≤ 40 % of total RAM; never swap-thrash | reference laptop (16 GB → ≤ 6.4 GB) |
-| Disk: installer | ≤ 450 MB | — |
+| Disk: installer (compressed, before models) | ≤ 450 MB (expected ≈ 300–400 MB) | POC-001 |
 | Disk: app data baseline | ≤ 200 MB + media + models | — |
 | Catalogue loops total | ≤ 40 MB (webm, 2 s, 480 px) | build |
 

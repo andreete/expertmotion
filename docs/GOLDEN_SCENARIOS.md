@@ -5,7 +5,7 @@
 | Status | baseline (expected values are the contract; fixtures marked **[TO SELECT]** are chosen in Stage 2) |
 | Owner | AI agent architect + QA lead |
 | Last updated | 2026-10-24 |
-| Depends on | GLOSSARY.md, AI_WORKFLOW.md (§3 schemas, §4 Target Resolution, §5 ops, §6 Property Classes, §7 Compile vs Rewrite, §8 tools, §9 hand-off, §12 failures, §13 evaluation), DESIGN_CATALOGUE.md, PERFORMANCE.md, ELEMENT_IDS.md, DATABASE_SCHEMA.md (§4 Composition Model), MCP_AND_TOOLING.md, PRD.md, UXRD.md §4 |
+| Depends on | GLOSSARY.md, AI_WORKFLOW.md (§3 schemas, §4 Target Resolution, §5 ops, §6 Property Classes, §7 Compile vs Rewrite, §8 tools, §9 hand-off, §12 failures, §13 evaluation), DESIGN_CATALOGUE.md, PERFORMANCE.md, ELEMENT_IDS.md, DATABASE_SCHEMA.md (§4 Composition Model), ERROR_CATALOGUE.md, MCP_AND_TOOLING.md, PRD.md, UXRD.md §4 |
 | Used by | TEST_PLAN.md, QA_PROCESS.md, AGENT_DESIGN.md, SYSTEM_PROMPT.md, POC_PLAN.md, DEFINITION_OF_DONE.md, ROADMAP.md |
 | Owner of | the 20 Golden Scenarios, the fixture set, the base states B0–B3, the scenario execution harness contract (`test/fixtures/plans/GS-xx.json`) |
 | ID range | GS-01 … GS-20 (scenario ids; variants are `GS-xxb`). Note: the `GS-` prefix is not yet listed in GLOSSARY.md "Identifier prefixes"; GLOSSARY.md defines the term Golden Scenario and names this file |
@@ -26,7 +26,7 @@ Each scenario is both an **acceptance test** (PRD-012 "Golden scenarios 1–10 p
 | Fault injection | Test-only environment variables read by the Local Service in test builds only: `EM_TEST_DISK_FREE_MB`, `EM_TEST_CRASH_AFTER_OP`, `EM_TEST_TIER`, `EM_TEST_KILL_CHROME_AT_PERCENT`. They are compiled out of release builds (a packaging test asserts the strings are absent). |
 | Render settings column | Standard render for the 16:9 bases: ratio 16:9, 1080p (1920×1080), 30 fps, H.264 CRF 18, AAC, `imageFormat: jpeg`, Performance Profile Standard (concurrency 1), `gl` per tier (PERFORMANCE §2). Scenarios state only what differs. |
 | Provider | Unless stated, the Model Assignment for both agents is the **fake provider** (`FakeProviderAdapter`, MCP_AND_TOOLING §5.1) with model id `fake-mid` (`toolCalling: true`, `contextLength: 128000`), replaying `test/fixtures/plans/GS-xx.json`. |
-| Error codes | Defined codes are cited from their owner; codes marked *(proposed)* are proposals for ERROR_CATALOGUE.md (see §6). |
+| Error codes | All codes are cited from ERROR_CATALOGUE.md (its copy is authoritative; copy quoted here is abbreviated). Codes marked *(proposed)* exist only in MCP_AND_TOOLING.md §3.3.1 and await the catalogue (see §5). |
 
 ### 1.1 Fixtures
 
@@ -189,7 +189,7 @@ Queue copy: "Transition · Fade → all 2 cuts · applied directly" / "Transisi 
 
 **Expected render settings**: standard; `durationInFrames` 540.
 
-**Edge handling**: with a single Clip (no Cuts) the pick is rejected at step 4 with "Add a second clip first" / "Tambahkan klip kedua dulu" and no intent is queued (**[GAP-2]**: AI_WORKFLOW §4 has no code for "transition with zero cuts"; proposed EM-2202).
+**Edge handling**: with a single Clip (no Cuts) the pick is rejected at step 4 with EM-2202 and no intent is queued (**[GAP-2]**: the EM-2202 copy "No clips yet / Insert at least one asset…" addresses zero clips; a one-clip project needs "Add a second clip first" / "Tambahkan klip kedua dulu" wording or its own code).
 
 **Pass criteria**: two `stage.timeline.element.transition` elements; duration label "00:18.00"; `lib.catalogue.card.selected` on Fade; golden still at 4 750 ms (middle of cut 0) shows a 50 % blend of `c1` and `c2` (pixel diff ≤ 1 % against the reference frame); no provider call.
 
@@ -229,7 +229,7 @@ Queue copy: "Transition · Fade → all 2 cuts · applied directly" / "Transisi 
 
 **Expected render settings**: standard; 540 frames.
 
-**Edge handling**: selecting `c3` (last Clip, no following Cut) and picking a transition → rejected "This clip has no cut after it; select an earlier clip" / "Klip ini tidak punya potongan setelahnya; pilih klip sebelumnya" (proposed EM-2202), no intent. Selecting a `stage.timeline.element.transition` directly targets that Cut.
+**Edge handling**: selecting `c3` (last Clip, no following Cut) and picking a transition → rejected "This clip has no cut after it; select an earlier clip" / "Klip ini tidak memiliki potongan setelahnya; pilih klip sebelumnya" (no catalogue code yet; same **[GAP-2]**), no intent. Selecting a `stage.timeline.element.transition` directly targets that Cut.
 
 **Pass criteria**: `cut:1` still fade; Intent Queue shows both items, item 1 not struck through (it still owns `cut:1.transition`) but annotated; Player still shows a fade at 12 500 ms and a slide at 4 750 ms.
 
@@ -335,7 +335,7 @@ Both items carry the note "applies to new text" / "berlaku untuk teks baru" (AI_
 | 1 | effect | `preset:effect.vignette`, `{intensity: 0.5}` | `{kind:'clip', id:'c2'}` | `[clip c2]` | `clip:c2.effects` | list | false | compiled |
 | 2 | effect | `preset:effect.film-grain`, `{intensity: 0.5}` | clip c2 | `[clip c2]` | `clip:c2.effects` | list | false | compiled; display "Effects: Vignette, Film grain" / "Efek: Vignet, Butir film" |
 | 3 | effect | `preset:effect.vignette`, `{intensity: 0.8}` | clip c2 | `[clip c2]` | `clip:c2.effects` | list (dedupe by presetId → merge, newest params win) | false | compiled; display "Vignette intensity 0.5 → 0.8" |
-| 4 | effect | `preset:effect.glow` | clip c2 | `[clip c2]` | `clip:c2.effects` | list | false | **rejected** (CM-006: ≤ 2 effects per element on T0) |
+| 4 | effect | `preset:effect.glow` | clip c2 | `[clip c2]` | `clip:c2.effects` | list | false | **rejected** (CM-006: ≤ 2 effects per element on T0 → EM-2105) |
 
 **Expected path**: Compile for 1–3; item 4 is rejected at pipeline step 4 (catalogue/hardware validation) before any plan.
 
@@ -345,14 +345,14 @@ Both items carry the note "applies to new text" / "berlaku untuk teks baru" (AI_
 { "origin": "compile", "baseVersion": "vB2+2", "goal": "Update Vignette on clip 2",
   "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "clip 2: Vignette intensity 0.5 → 0.8",
     "ops": [ { "op": "op:effect.setParams", "target": { "kind": "clip", "id": "c2" }, "args": { "presetId": "preset:effect.vignette", "params": { "intensity": 0.8 } } } ] } ],
-  "touchesLockedKeys": [], "risks": [ { "code": "GPU-SOFTWARE", "message": "Effects render in software on this computer (slower)", "severity": "info" } ], "status": "executed" }
+  "touchesLockedKeys": [], "risks": [ { "code": "EM-2103", "message": "'Vignette' needs a graphics card to render at normal speed. On this computer it will work but render slowly.", "severity": "warn" } ], "status": "executed" }
 ```
 
 **Expected Composition diff**: `c2.effects = [{vignette, {intensity 0.8}, static}, {film-grain, {intensity 0.5}, static}]` (two entries, never three). Duration **18 000 ms**. Three new versions.
 
 **Expected render settings**: standard with `chromiumOptions.gl: 'swangle'` (T0).
 
-**Expected failure (item 4)**: toast `sys.toast` "This clip already has 2 effects; a CPU-only computer allows 2 per clip. Remove one first." / "Klip ini sudah punya 2 efek; komputer tanpa GPU membatasi 2 per klip. Hapus satu dulu." Code *(proposed)* EM-2203. The queue shows item 4 as `rejected` with that reason. Variant GS-06b on T1: Glow is accepted (3 effects), a fourth is rejected with the same code and "3 per clip".
+**Expected failure (item 4)**: `sys.toast` **EM-2105** "Effect limit reached: A clip can have up to 2 effects on this computer. Remove one before adding another." / "Batas efek tercapai: Satu klip dapat memiliki hingga 2 efek di komputer ini. Hapus satu sebelum menambah yang lain." (`{max}` = 2, `tier` = T0). The queue shows item 4 as `rejected` with that reason. Variant GS-06b on T1: Glow is accepted (3 effects), a fourth is rejected with EM-2105 and `{max}` = 3. The T0 startup notice EM-3402 "No graphics card detected" was shown once at launch.
 
 **Pass criteria**: exactly two `EffectInstance`s on `c2`; `op:effect.add` was issued twice and `op:effect.setParams` once (operations_history); item 4 created no version; the GPU badge is visible on every effect card on T0; render still at 9 000 ms differs from the un-effected reference (effects applied) and renders within 2× the Standard budget on the reference T0 laptop.
 
@@ -477,7 +477,7 @@ Rewrite envelope: `lockedKeys: ["cut:0.transition", "sequence.clips"]`, `creator
   "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "potongan 2: Push cut → Wipe (dari kiri) 500 ms; durasi 0:18.1 → 0:18.0",
     "ops": [ { "op": "op:transition.set", "intentId": "<intent 1>", "target": { "kind": "cut", "index": 1 }, "args": { "presetId": "preset:transition.wipe", "durationMs": 500, "timing": "linear", "params": { "direction": "from-left" } } } ] } ],
   "touchesLockedKeys": [],
-  "risks": [ { "code": "LOCKED-SKIPPED", "message": "Potongan 1 (Slide) kamu pilih sendiri, jadi tidak diubah. Pilih Wipe di katalog untuk menggantinya.", "severity": "info" } ],
+  "risks": [ { "code": "LOCKED-SKIPPED", "message": "Potongan 1 (Geser) Anda pilih sendiri, jadi tidak diubah. Pilih Sapu di katalog untuk menggantinya.", "severity": "info" } ],
   "status": "valid" }
 ```
 
@@ -531,7 +531,7 @@ EN variant of the risk: "Cut 1 (Slide) was your own pick, so it was left unchang
 
 **Expected render settings**: standard; 675 frames.
 
-**Expected failure**: a forced `POST /plans/<stale>/execute` (API test, bypassing the disabled button) returns **409** with *(proposed)* `EM-2301` "Plan is out of date; re-plan" / "Rencana sudah usang; susun ulang"; no version is created.
+**Expected failure**: a forced `POST /plans/<stale>/execute` (API test, bypassing the disabled button) returns **409** with **EM-2301** "Composition changed, plan is out of date" / "Komposisi berubah, rencana kedaluwarsa" (action "Plan again" / "Rencanakan lagi" re-runs the plan with the same intents); no version is created. The stale badge copy stays as UXRD §4 rule 4 states it.
 
 **Pass criteria**: first plan row `status = 'stale'`, never executed; second plan validates first time; `operations_history` for `vB1+2` has 3 rows; the stale badge and the disabled Execute were visible (UI test on element ids).
 
@@ -570,11 +570,11 @@ EN variant of the risk: "Cut 1 (Slide) was your own pick, so it was left unchang
   "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "Judul 'Harga Resmi' 0:00–0:02.5",
     "ops": [ { "op": "op:text.add", "args": { "text": "Harga Resmi", "variant": "preset:text.title", "atMs": 0, "durationMs": 2500, "position": { "x": 0, "y": -120 } } } ] } ],
   "touchesLockedKeys": [],
-  "risks": [ { "code": "LOCKED-DROPPED", "message": "1 langkah dihapus: transisi potongan 2 kamu pilih sendiri (Fade). Ubah lewat katalog bila ingin lebih cepat.", "severity": "warn" } ],
+  "risks": [ { "code": "EM-2302", "message": "Rencana Editor Agent mencoba mengubah pengaturan yang sudah Anda pilih (Transisi potongan 2). Langkah itu dihapus. Periksa rencana sebelum Execute.", "severity": "warn" } ],
   "status": "valid" }
 ```
 
-EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it in the catalogue if you want it faster."
+EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings you already picked (Transition on cut 2). Those steps were removed. Review the plan before Execute." `{keys}` is rendered with UI labels, never raw `cut:1.transition` (ERROR_CATALOGUE §8).
 
 **Expected Composition diff**: `t1` added; `transitions` unchanged (fade 500 ×2). Total **18 000 ms**. Head `vB2+1`.
 
@@ -593,7 +593,7 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 1. `agent.editor.composer`: "bikin intronya lebih hidup" → send.
 2. Observe three spinner phases.
-3. Read the error in `agent.editor.thread` and expand "Show raw response" / "Tampilkan respons mentah".
+3. Read the error in `agent.editor.thread` and expand "Show raw answer" / "Tampilkan jawaban mentah".
 
 **Expected Intent Queue**
 
@@ -605,7 +605,7 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Expected Edit Plan**: none persisted as `valid`; an `edit_plans` row with `status: 'invalid'` and `validation: [{path: "", code: "EM-4301", message: "…"}]` may exist for transparency.
 
-**Expected failure**: chat message "The model did not return a usable plan (EM-4301). Try again or switch model." / "Model tidak mengembalikan rencana yang bisa dipakai (EM-4301). Coba lagi atau ganti model." with actions "Try again" / "Coba lagi" and "Switch model" / "Ganti model" (UX-033); the raw text of response 3 is shown collapsed. Re-prompt 2 includes the Zod issue `steps[0].ops[0].op: invalid op name "op:transition.add"` and `durationMs: must be ≤ 2000`.
+**Expected failure**: chat message **EM-4301** "The model's answer could not be used: fake-mid returned a plan Expertmotion could not understand after two tries. Try again, rephrase, or choose a more capable model. The raw answer is available below." / "Jawaban model tidak dapat dipakai: fake-mid mengembalikan rencana yang tidak dapat dipahami Expertmotion setelah dua kali percobaan. Coba lagi, ubah kalimat, atau pilih model yang lebih mampu. Jawaban mentahnya tersedia di bawah." with actions "Try again" / "Coba lagi" and "Show raw answer" / "Tampilkan jawaban mentah" (collapsed) (UX-033); log fields `zodErrors[]`, `attempts: 3`. Re-prompt 2 includes the Zod issue `steps[0].ops[0].op: invalid op name "op:transition.add"` and `durationMs: must be ≤ 2000`.
 
 **Expected Composition diff**: none. Head stays `vB1`. Duration **19 000 ms**.
 
@@ -647,7 +647,7 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Expected render settings**: 9:16 1080p → **1080×1920**, 30 fps, 540 frames, `gl: swangle`.
 
-**Expected failure/edge**: tooltip on 4K and 2K: "Needs a GPU tier (T1 or higher)" / "Butuh tingkat GPU (T1 ke atas)" (PERFORMANCE §1 "disabled with reason"); the click is inert. GS-13b (T1): 2K enabled; 4K enabled with warning "Slow on this computer; expect several minutes" / "Lambat di komputer ini; bisa beberapa menit". GS-13c: a fake plan containing `op:output.setResolution {preset: '2160p'}` on T0 → CM-010 `warn` on the plan and the Export preflight refuses the render (**[GAP-6]** PERFORMANCE §7 has no preflight row for the tier gate; CM-010 says "render blocks" without a code; proposed EM-3105). GS-13d: Auto on and B0 → the first Insert (FX-V3, portrait) sets `9:16` automatically via `op:output.setRatio` with `source: 'system'`.
+**Expected failure/edge**: tooltip on 4K and 2K = **EM-3105** (info) "Resolution not available on this computer: 2160p needs a graphics card with at least 4 GB of memory. 1080p is the highest option here." / "Resolusi tidak tersedia di komputer ini: 2160p membutuhkan kartu grafis dengan memori minimal 4 GB. 1080p adalah pilihan tertinggi di sini."; the click is inert. GS-13b (T1): 2K enabled; 4K enabled with warning "Slow on this computer; expect several minutes" / "Lambat di komputer ini; bisa beberapa menit". GS-13c: a fake plan containing `op:output.setResolution {preset: '2160p'}` on T0 → CM-010 `warn` on the plan (message = EM-3105 copy) and the Export preflight refuses the render (**[GAP-6]** PERFORMANCE §7 has no preflight row for the tier gate, and EM-3105 is `info`, so the blocking case has no `error` code). GS-13d: Auto on and B0 → the first Insert (FX-V3, portrait) sets `9:16` automatically via `op:output.setRatio` with `source: 'system'`.
 
 **Pass criteria**: Player frame aspect 9:16 within 1 px; export dialog summary says 1080×1920; `settings.resolution` still `1080p`; no intent rows for the disabled buttons; the reason tooltip text matches the EN string (ID variant present in `id.json`).
 
@@ -674,9 +674,9 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Expected render settings**: `{ratio '16:9', resolution '1080p' → 1920×1080, fps 30, codec h264, crf 18, audioCodec aac, imageFormat jpeg, concurrency 1, hardwareAcceleration 'disabled', gl 'angle' (T1), disallowParallelEncoding true}`; `durationInFrames 540`. Estimated size ≈ 25 MB → required free space = 3 × 25 + 500 = **575 MB**.
 
-**Expected failure (step 2)**: `EM-3102` "Not enough disk space: 575 MB needed, 300 MB free. Free space or choose another folder." / "Ruang disk tidak cukup: butuh 575 MB, tersisa 300 MB. Kosongkan ruang atau pilih folder lain." Start disabled; no `render_jobs` row.
+**Expected failure (step 2)**: **EM-3102** "Not enough disk space: The output folder needs about 0.6 GB free; 0.3 GB is available. Free space or choose another folder." / "Ruang disk tidak cukup: Folder keluaran membutuhkan sekitar 0,6 GB kosong; tersedia 0,3 GB. Kosongkan ruang atau pilih folder lain." Actions "Choose folder" / "Pilih folder" (→ `scr.export.folder`) and "Check again" / "Periksa lagi". Start disabled; no `render_jobs` row.
 
-**Expected success (steps 4–5)**: `render_jobs` row `queued → rendering → done`, `progress` monotonic, `eta_ms` present after 10 %; `outputs` row with `validated = 1` after ffprobe: `duration_ms` within ±33 ms of 18 000, `width 1920`, `height 1080`, `fps 30`, video codec h264, audio aac; thumbnail written; SSE `render.progress` ≥ 5 events and one `render.done`.
+**Expected success (steps 4–5)**: `render_jobs` row `queued → rendering → done`, `progress` monotonic, `eta_ms` present after 10 %; `outputs` row with `validated = 1` after ffprobe: `duration_ms` within ±33 ms of 18 000, `width 1920`, `height 1080`, `fps 30`, video codec h264, audio aac; thumbnail written; SSE `render.progress` ≥ 5 events and one `render.done`. (GS-14b: an ffprobe mismatch, e.g. a test build forcing 25 fps, yields **EM-3205** "Output check failed" with `{field: fps, expected: 30, actual: 25}` and `validated = 0`; the file is kept for inspection.)
 
 **Pass criteria**: both states observed in order; the output plays in Windows Media Player; file name follows the `scr.export.filename` pattern; render time on the reference laptop ≤ 90 s (PERFORMANCE §5, to confirm); the Editor stayed responsive (Player seek < 100 ms during render is **not** required; UI remains interactive).
 
@@ -698,9 +698,9 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Expected render settings**: as GS-14.
 
-**Expected behaviour**: `render_jobs` row 1 → `cancelled` (`finished_at` set, `output_id` NULL); the Chrome Headless Shell process and FFmpeg child spawned for job 1 are gone within 5 s (no orphan `chrome-headless-shell` / `ffmpeg` processes owned by the Local Service); the partial file in `outputs/<projectId>/` is deleted; SSE `render.cancelled`; no `outputs` row for job 1. Job 2 completes normally (`done`, `validated = 1`).
+**Expected behaviour**: `render_jobs` row 1 → `cancelled` (`finished_at` set, `output_id` NULL); dialog shows **EM-3202** (info) "Rendering cancelled: Rendering was cancelled. The partial file was removed." / "Render dibatalkan: Render dibatalkan. File yang belum selesai dihapus."; the Chrome Headless Shell process and FFmpeg child spawned for job 1 are gone within 5 s (no orphan `chrome-headless-shell` / `ffmpeg` processes owned by the Local Service); the partial file in `outputs/<projectId>/` is deleted; SSE `render.cancelled`; no `outputs` row for job 1. Job 2 completes normally (`done`, `validated = 1`).
 
-**Edge handling**: closing the window during a render → the Desktop Shell prompts "An export is running. Stop it and quit?" / "Ekspor sedang berjalan. Hentikan dan keluar?" (ARCHITECTURE §5 step 5). Killing the Service during a render → on restart the job is `failed` with "interrupted" and the partial file deleted (DATABASE_SCHEMA §7; *(proposed)* code `EM-3106`).
+**Edge handling**: closing the window during a render → the Desktop Shell prompts "An export is running. Stop it and quit?" / "Ekspor sedang berjalan. Hentikan dan keluar?" (ARCHITECTURE §5 step 5). Killing the Service during a render → on restart the job is `failed` with **EM-3203** "Rendering was interrupted" / "Render terhenti" and the partial file deleted (DATABASE_SCHEMA §7).
 
 **Pass criteria**: zero files in the output folder after cancel; process list clean; the Editor never shows `sys.offline`; memory of the Local Service returns to within 50 MB of its pre-render value within 30 s; job 2 succeeds.
 
@@ -714,9 +714,9 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 **Creator actions**
 
 1. Toggle `agent.output.private` on. `sys.privatemode.banner` appears: "Private Mode: nothing leaves this computer. Agents and model downloads are paused." / "Mode Privat: tidak ada yang keluar dari komputer ini. Agen dan unduhan model dijeda."
-2. Try to type in `agent.editor.composer` → it is `.disabled` with inline notice "Agents are unavailable in Private Mode. Your picks still work." / "Agen tidak tersedia dalam Mode Privat. Pilihanmu tetap berfungsi."; `agent.modelbar.status` shows "Private Mode".
+2. Try to type in `agent.editor.composer` → it is `.disabled` with the inline notice **EM-4401** "Agents are off in Private Mode: Private Mode blocks all internet use, so the agents are unavailable. Designs, timeline and export still work." / "Agen nonaktif dalam Private Mode: Private Mode memblokir semua akses internet, sehingga agen tidak tersedia. Desain, timeline dan ekspor tetap berfungsi." (action "Turn off Private Mode" / "Matikan Private Mode"); `agent.modelbar.status` shows "Private Mode".
 3. Design ▸ Transitions → click `preset:transition.fade` (nothing selected).
-4. `hdr.action.models` → every `scr.models.row.install` is disabled with the same reason.
+4. `hdr.action.models` → every `scr.models.row.install` is disabled with **EM-7006** "Download paused" / "Unduhan dijeda" (`reason: private`).
 5. `hdr.action.export` → render a 1080p export.
 6. Toggle `agent.output.private` off → composers re-enable; type "halo" and send → the fake provider receives the call.
 
@@ -732,7 +732,7 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Expected render settings**: standard; the render completes (no network needed).
 
-**Expected failure (unit level)**: a direct call to `egressFetch(providerUrl, …, 'provider')` while Private Mode is on throws `EM-4003` *(proposed, MCP_AND_TOOLING §3.3.1)* **before** DNS resolution; a programmatic `POST /projects/:id/plans` with an interpretive intent returns 409 with `EM-4003`.
+**Expected failure (unit level)**: a direct call to `egressFetch(providerUrl, …, 'provider')` while Private Mode is on throws **EM-8202** "Blocked by Private Mode" (MCP_AND_TOOLING §5.6) **before** DNS resolution; a programmatic `POST /projects/:id/plans` with an interpretive intent returns 409 with EM-4401.
 
 **Pass criteria**: a network capture (test harness socket monitor) shows **zero** outbound connections between steps 1 and 6 (PRD-020); the fake adapter's call counter is unchanged until step 6; the pick compiled and rendered; the banner is visible on every screen; the composer re-enables within 1 s of toggling off.
 
@@ -776,7 +776,7 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Expected render settings**: standard; 540 frames after step 5.
 
-**Edge handling (GS-17b)**: an in-process failure instead of a kill (op 3 throws a validator `block`, e.g. CM-005) → `ExecutionResult {ok: false, error: {code: 'EM-2xxx', step: 1}, rollback: {performed: true, toVersion: 'vB1'}}`, Plan Card badge "Not applied · EM-2xxx" / "Tidak diterapkan · EM-2xxx" (UXRD §4 rule 2); the model is unchanged.
+**Edge handling (GS-17b)**: an in-process failure instead of a kill (op 3 throws a validator `block`, e.g. CM-005) → `ExecutionResult {ok: false, error: {code: 'EM-2307', step: 1}, rollback: {performed: true, toVersion: 'vB1'}}`, Plan Card badge "Not applied · EM-2307" / "Tidak diterapkan · EM-2307" with the copy "Step 1 failed, so the whole change was undone. Your project is unchanged." / "Langkah 1 gagal, sehingga seluruh perubahan dibatalkan. Proyek Anda tidak berubah." (UXRD §4 rule 2); the model is unchanged. A second Execute of an already-applied plan returns **EM-2308** "Already applied" (idempotency, AI_WORKFLOW §6).
 
 **Pass criteria**: DB integrity check passes after restart (`PRAGMA integrity_check = ok`); version count before = after the crash; no partial element (`t1` absent, no transitions) in the head model; the second Execute succeeds without a new provider call; `agent_runs` for the plan is `done` (the agent run had finished before Execute).
 
@@ -789,10 +789,10 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Creator actions**
 
-1. Open the project: `agent.editor.footer.ctx` tooltip shows "85 % of this month's budget used ($0.85 of $1.00)" / "85 % anggaran bulan ini terpakai ($0,85 dari $1,00)" (warning at 80 %, AI_WORKFLOW §11); `sys.toast` warning once per session.
+1. Open the project: `sys.toast` **EM-4202** (warn, once per session) "80 % of budget used: This project has used $0.85 of its $1.00 AI budget." / "80 % anggaran terpakai: Proyek ini telah memakai $0,85 dari anggaran AI $1,00." (AI_WORKFLOW §11); `agent.editor.footer.ctx` tooltip repeats the figures.
 2. `agent.editor.composer`: "tambahkan fade di semua potongan" → send → plan arrives; usage now $1.05.
 3. `agent.editor.composer`: "sekarang tambahkan judul" → send.
-4. Read the error; open `scr.providers` via "Raise budget" / "Naikkan anggaran", set $5.00, save; send again → works.
+4. Read the error; open `scr.providers` via "Change budget" / "Ubah anggaran", set `scr.providers.budget.month` to $5.00, save; send again → works.
 5. Meanwhile click `preset:transition.slide` with `c1` selected → compiles regardless of budget.
 
 **Expected Intent Queue**
@@ -807,7 +807,7 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Expected Edit Plan**: for step 2 none; for the retry a normal `editor-agent` plan.
 
-**Expected failure (step 3)**: chat message "Monthly budget reached ($1.05 of $1.00). Raise the limit in Providers or wait until next month." / "Anggaran bulanan tercapai ($1,05 dari $1,00). Naikkan batas di Penyedia atau tunggu bulan depan." with action "Raise budget" / "Naikkan anggaran"; `agent_runs` row with `status 'failed'`, `error_code 'EM-4201'`, no `usage_records` row for it.
+**Expected failure (step 3)**: chat message **EM-4201** "Budget reached: This project has used its AI budget of $1.00. Raise the limit in Providers to continue." / "Anggaran tercapai: Proyek ini telah memakai anggaran AI sebesar $1,00. Naikkan batasnya di Providers untuk melanjutkan." with action "Change budget" / "Ubah anggaran" (→ `scr.providers.budget.month`); `agent_runs` row with `status 'failed'`, `error_code 'EM-4201'`, no `usage_records` row for it.
 
 **Expected Composition diff**: only item 3 changes the model (`cut:0` slide; duration 19 000 − 500 = **18 500 ms**); head `vB1+1`.
 
@@ -852,7 +852,7 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
 
 **Expected render settings**: standard. Not rendered.
 
-**Edge handling**: restoring an intent whose target no longer exists (Clip removed) → "Cannot restore: the clip no longer exists" / "Tidak bisa dipulihkan: klip sudah tidak ada", status stays `superseded`. `agent.editor.intentqueue.clear` removes only `superseded` and `rejected` items, never `compiled`/`executed` ones (history lives in versions).
+**Edge handling**: restoring an intent whose target no longer exists (Clip removed) → "Cannot restore: the clip no longer exists" / "Tidak bisa dipulihkan: klip sudah tidak ada", status stays `superseded`. `agent.editor.intentqueue.item.remove` sets status `removed` (AI_WORKFLOW §3); `agent.editor.intentqueue.clear` removes only `superseded`, `rejected` and `removed` items, never `compiled`/`executed` ones (history lives in versions).
 
 **Pass criteria**: three versions with the listed causes; item statuses exactly as in the table; `Ctrl+Z` after step 3 moves the head to the 96 version (undo = version move, DATABASE_SCHEMA §4.5) and the queue display updates accordingly; no provider call.
 
@@ -888,14 +888,14 @@ EN: "1 step removed: the transition on cut 2 was your own pick (Fade). Change it
     "ops": [ { "op": "op:caption.setStyle", "intentId": "<intent 1>", "target": { "kind": "project" }, "args": { "presetId": "preset:caption.box", "params": { "fontSize": 64, "position": "bottom", "maxLines": 2 } } } ] } ],
   "touchesLockedKeys": [],
   "risks": [
-    { "code": "PRESET-LATER", "message": "A 'Pop' caption style (words that bounce) arrives in a later update; Box with a larger size is the closest available now.", "severity": "info" },
+    { "code": "EM-9004", "message": "'Pop captions' is not available in this version of Expertmotion yet; Box with a larger size is the closest available now.", "severity": "info" },
     { "code": "ASSET-NEEDED", "message": "No music track in this project. Import an audio file (MP3/WAV) and ask again; the bed will be set to soft volume and duck under your voice.", "severity": "warn" } ],
   "status": "valid" }
 ```
 
-ID variants of the two risks: "Gaya caption 'Pop' (kata memantul) hadir di pembaruan berikutnya; Box dengan ukuran lebih besar adalah yang terdekat saat ini." / "Belum ada musik di proyek ini. Impor file audio (MP3/WAV) lalu minta lagi; musik akan dipasang pelan dan meredam saat suaramu terdengar."
+ID variants of the two risks: "'Caption Pop' belum tersedia di versi Expertmotion ini; Kotak dengan ukuran lebih besar adalah yang terdekat saat ini." (EM-9004 copy) / "Belum ada musik di proyek ini. Impor file audio (MP3/WAV) lalu minta lagi; musik akan dipasang pelan dan meredam saat suara Anda terdengar."
 
-The agent is expected to call `catalogue.search {query: "pop", category: "caption"}` (returns `[]` in MVP because P1 presets are absent from the capabilities block) and `assets.list` (no audio) before answering; it must **not** emit `op:audio.addBed` without an `assetId` (Zod would reject it, EM-2403 in the dry run).
+The agent is expected to call `catalogue.search {query: "pop", category: "caption"}` (returns `[]` in MVP because P1 presets are absent from the capabilities block) and `assets.list` (no audio) before answering; it must **not** emit `op:audio.addBed` without an `assetId` (Zod would reject it in the dry run: EM-4503 *(proposed, MCP_AND_TOOLING §3.3.1)*, surfaced as EM-2303 "Plan is not valid" if uncorrected).
 
 **Expected Edit Plan — run 2**
 
@@ -916,7 +916,7 @@ The agent is expected to call `catalogue.search {query: "pop", category: "captio
 
 | Requested | Catalogue status | MVP response in the plan |
 |---|---|---|
-| "captions pop" (`preset:caption.pop`) | **P1** (PRD-031) | choose a P0 style (`box`), risk `info` explaining the substitution |
+| "captions pop" (`preset:caption.pop`) | **P1** (PRD-031) | choose a P0 style (`box`), risk `info` with the EM-9004 "Coming in a later version" copy |
 | music bed from an existing track (`op:audio.addBed`, `preset:audio.bed-soft`) | **P0** | applied once an asset exists |
 | generate music (`music.generate`) | **P2** (PRD-051) | never proposed; the plan asks for an import instead |
 | ducking (`preset:audio.duck-voice`) | **P0** | applied with the bed |
@@ -994,32 +994,47 @@ A release candidate ships only when (a) and (b) are green on Windows CI and the 
 
 ## 5. Error codes referenced
 
-| Code | Status | Meaning here | Owner |
+All defined codes are owned by ERROR_CATALOGUE.md; the two rows marked *proposed* come from MCP_AND_TOOLING.md §3.3.1 and are not yet in the catalogue.
+
+| Code | Severity | Meaning here | Scenarios |
 |---|---|---|---|
-| EM-1301 | defined | referenced asset missing before render | PERFORMANCE.md §7 |
-| EM-1xxx | band | import/ingest failures (GS-07b malformed SRT) | ERROR_CATALOGUE.md |
-| EM-2201 | defined | motion/effect pick with no selection and no clip under the playhead | AI_WORKFLOW.md §4 |
-| EM-2202 | *proposed* | transition pick with no applicable Cut (GS-02 edge, GS-03 edge) | ERROR_CATALOGUE.md |
-| EM-2203 | *proposed* | effect limit for the Hardware Tier reached (GS-06) | ERROR_CATALOGUE.md |
-| EM-2301 | *proposed* | Execute on a Stale Plan (GS-10; HTTP 409 per AI-013) | ERROR_CATALOGUE.md |
-| EM-24xx | *proposed* | tool-layer errors (GS-20 dry run) | MCP_AND_TOOLING.md §3.3.1 |
-| EM-3102 | defined | disk preflight (GS-14) | PERFORMANCE.md §7 |
-| EM-3105 | *proposed* | resolution not allowed for the Hardware Tier at render (GS-13c) | ERROR_CATALOGUE.md |
-| EM-3106 | *proposed* | render interrupted by Service restart (GS-15 edge) | ERROR_CATALOGUE.md |
-| EM-4003 | *proposed* | egress blocked by Private Mode (GS-16) | MCP_AND_TOOLING.md §3.3.1 |
-| EM-4201 | defined | budget exceeded (GS-18) | AI_WORKFLOW.md §11 |
-| EM-4301 | defined | invalid JSON after retries (GS-12) | AI_WORKFLOW.md §12 |
+| EM-1301 | error | referenced asset missing before render | GS-14 preflight row |
+| EM-1xxx | — | import/ingest failures (malformed SRT) | GS-07b |
+| EM-2103 | warn | preset needs a GPU; renders slowly on T0 | GS-06 |
+| EM-2105 | error | effect limit for the Hardware Tier reached | GS-06 |
+| EM-2201 | error | pick with nothing selected and no clip under the playhead | GS-12 (Target Resolution) |
+| EM-2202 | error | no clips yet (used for "no Cut" until GAP-2 is settled) | GS-02, GS-03 edges |
+| EM-2301 | warn | Stale Plan (HTTP 409 on Execute) | GS-10 |
+| EM-2302 | error | plan touched Locked Keys; steps removed | GS-11 |
+| EM-2303 | error | plan not valid | GS-20 (uncorrected dry-run failure) |
+| EM-2307 | error | Execute failed; rolled back | GS-17b |
+| EM-2308 | info | plan already applied (idempotency) | GS-17b |
+| EM-3102 | error | disk preflight | GS-14 |
+| EM-3105 | info | resolution not available on this computer | GS-13 |
+| EM-3202 | info | render cancelled, partial file removed | GS-15 |
+| EM-3203 | warn | render interrupted by restart | GS-15 edge |
+| EM-3205 | error | output check (ffprobe) failed | GS-14b |
+| EM-3402 | warn | no graphics card detected | GS-06 |
+| EM-4005 | info | model works in simple (JSON) mode | MCP_AND_TOOLING §3.5 |
+| EM-4201 | error | budget reached | GS-18 |
+| EM-4202 | warn | 80 % of budget used | GS-18 |
+| EM-4301 | error | model answer unusable after two tries | GS-12 |
+| EM-4401 | info | agents off in Private Mode | GS-16 |
+| EM-4503 *(proposed)* | error | invalid tool input after two corrections | GS-20 |
+| EM-7006 | info | model download paused (Private Mode) | GS-16 |
+| EM-8202 | info | egress blocked by Private Mode | GS-16 |
+| EM-9004 | info | feature coming in a later version | GS-20 |
 
 ## 6. Open points raised by the scenarios (to settle in the owning documents; not fixed here)
 
 | Ref | Gap | Owning document |
 |---|---|---|
 | GAP-1 | Per-target expansion and partial supersession of multi-target intents (GS-02 → GS-03) | AI_WORKFLOW.md §6 |
-| GAP-2 | Code and copy for a transition pick when no Cut applies | AI_WORKFLOW.md §4, ERROR_CATALOGUE.md |
+| GAP-2 | Code and copy for a transition pick when no Cut applies (one clip, or last clip selected); EM-2202 covers only "no clips yet" | AI_WORKFLOW.md §4, ERROR_CATALOGUE.md |
 | GAP-3 | `op:theme.set` lacks `textDefaults`; the Theme-default text path of §4 has no op (GS-04, GS-19) | AI_WORKFLOW.md §5 |
 | GAP-4 | Element ids used by the scenarios but absent from ELEMENT_IDS.md: `lib.text.add.input`, `lib.assets.card.action.captions`, `agent.editor.plancard.replan` | ELEMENT_IDS.md |
 | GAP-5 | Planning rule for a hand-off mixing Compile-able and interpretive intents (GS-08) | AI_WORKFLOW.md §7, §9 |
-| GAP-6 | Tier-gated resolution has no preflight row / code (GS-13c) | PERFORMANCE.md §7 |
+| GAP-6 | Tier-gated resolution has no preflight row; EM-3105 is `info`, the blocking case at render has no `error` code (GS-13c) | PERFORMANCE.md §7, ERROR_CATALOGUE.md |
 | GAP-7 | `ElementRef.kind` has no `sequence` value although `op:clip.insert` targets "sequence" (GS-01 uses `project`) | AI_WORKFLOW.md §3, §5 |
 
 ## 7. Traceability
