@@ -36,7 +36,7 @@ Rules: every control has an accessible name from visible text, `aria-label`, or 
 | `hdr.action.*` | `button` | tooltip text (UI_UX_SPECIFICATION.md §4) | `aria-disabled` + description with the reason (never `disabled` attribute so the reason is reachable) |
 | `lib.search.input` | `searchbox` | "Search the catalogue" / "Cari di katalog" | results count announced politely: "{n} results" / "{n} hasil" |
 | `lib.catalogue.tab` | `tab` | category label | `aria-selected` |
-| `lib.catalogue.card` | `button` inside `grid` (roving tabindex) | "{label}, {category} preset{, in your picks}{, slower without GPU}{, needs model {model}}" / "{label}, preset {category}{, dalam pilihan Anda}{, lebih lambat tanpa GPU}{, perlu model {model}}" | `aria-pressed` for selected; description: params summary; focus triggers the same live preview as hover (announced "Previewing {label}" / "Mencoba {label}") |
+| `lib.catalogue.card` | `button` inside `grid` (roving tabindex) | "{label}, {category} preset{, in your picks}{, slower without GPU}{, needs model {model}}" / "{label}, preset {category}{, dalam pilihan kamu}{, lebih lambat tanpa GPU}{, perlu model {model}}" | `aria-pressed` for selected; description: params summary; focus triggers the same live preview as hover (announced "Previewing {label}" / "Mencoba {label}") |
 | `lib.catalogue.card.thumb` | `img` (video element `aria-hidden`) | "" (decorative; label carries meaning) | — |
 | `lib.text.size` number | `spinbutton` | "Font size in layout units" / "Ukuran font dalam satuan tata letak" | `aria-valuemin/max/now` |
 | `lib.text.colour` swatch | `radio` in `radiogroup` "Text colour" / "Warna teks" | colour name from palette ("Accent orange" / "Oranye aksen") + hex | `aria-checked` |
@@ -57,7 +57,7 @@ Rules: every control has an accessible name from visible text, `aria-label`, or 
 | `agent.*.composer` | `textbox` (multiline) | "Message to the Brainstorming Agent" / "Pesan untuk Brainstorming Agent" etc. | `aria-describedby` → disabled reason (Private Mode / not configured) |
 | `agent.*.footer.ctx` | `status` | "Context used: {used} of {limit} tokens" / "Konteks terpakai: {used} dari {limit} token" | — |
 | `agent.brainstorm.handoff` | `group` | "Proposed changes from the Brainstorming Agent, {n} items" / "Usulan perubahan dari Brainstorming Agent, {n} item" | row checkboxes labelled by their title |
-| `agent.editor.intentqueue` | `list` | "Your picks, {n} items" / "Pilihan Anda, {n} item" | each `listitem` name = title + status chip text; superseded items say "replaced by {label}; Restore available" / "diganti oleh {label}; Pulihkan tersedia" (line-through alone is not announced) |
+| `agent.editor.intentqueue` | `list` | "Your picks, {n} items" / "Pilihan kamu, {n} item" | each `listitem` name = title + status chip text; superseded items say "replaced by {label}; Restore available" / "diganti oleh {label}; Pulihkan tersedia" (line-through alone is not announced) |
 | `agent.editor.plancard` | `region` | "Plan: {goal}. Status: {status}. Based on version {v}" / "Rencana: {goal}. Status: {status}. Berdasarkan versi {v}" | steps as ordered `list`; risks as `list` with severity word |
 | `agent.editor.execute` | `button` | "Execute plan (Control Enter)" / "Jalankan rencana (Control Enter)" | `aria-disabled` + reason |
 | `agent.output.profile.*` / `.ratio.*` / `.resolution.*` | `radio` in `radiogroup` ("Performance profile" / "Profil performa", "Aspect ratio, width to height" / "Rasio aspek, lebar banding tinggi", "Resolution" / "Resolusi") | e.g. "9 by 16, portrait, 1080 by 1920 pixels" / "9 banding 16, potret, 1080 kali 1920 piksel" | `aria-checked`; disabled radios keep focusable with reason in description |
@@ -68,7 +68,7 @@ Rules: every control has an accessible name from visible text, `aria-label`, or 
 | Modals | `dialog` `aria-modal` | `aria-labelledby` title | focus trapped; Esc |
 | Tour step | `dialog` (non-modal, `aria-live` off) | "Tour step {n} of 10: {title}" / "Langkah tur {n} dari 10: {title}" | target element gets `aria-describedby` → step body |
 
-Live announcements (visually hidden `aria-live="polite"` region `sys.live`, proposed id not yet in ELEMENT_IDS.md): plan ready, applied with version, export done/failed, reconnected, ingest complete ("{name} ready" / "{name} siap"). At most one announcement per 2 s; coalesced.
+Live announcements (visually hidden `aria-live="polite"` region `sys.live`, ELEMENT_IDS.md): plan ready, applied with version, export done/failed, reconnected, ingest complete ("{name} ready" / "{name} siap"). At most one announcement per 2 s; coalesced.
 
 ## 3. Caption and preview accessibility
 

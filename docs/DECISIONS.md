@@ -162,3 +162,11 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Rule**: additions only (no renames, no meaning changes), each logged here; editing requires `GLOSSARY_CHANGE=1` (HG-005).
 - **2026-10-24 additions**: terms *Machine Code*, *keyId (kid)*, *Cut index* (0-based in data, 1-based in UI); *Asset* now includes subtitle files (SRT/VTT); *Provider Connection* includes a custom OpenAI-compatible https base URL; *Resolution* notes the stored lowercase values; *Intent Queue* notes the `removed` status; identifier prefixes `GS-`, `ASM-`, `LIC-`, `AGD-`, `TR-`, `HG-`, `IX-`, `CM-`, `K-`, `R-`; copy rule: friendly "kamu" in Creator-facing Indonesian copy, "Anda" only in legal/licence texts.
 - **Consequences**: documents written before these additions were aligned in the consistency pass of 2026-10-24.
+
+## ADR-019 Two FFmpeg builds; H.264 encoding path for ingestion
+
+- **Status**: provisional (settled in Stage 2, POC-003)
+- **Problem**: Remotion ships a slim FFmpeg (`@remotion/compositor-win32-x64-msvc`) built for its output codecs; ingestion must probe and decode sources it does not cover (AV1, HDR, FLAC, ProRes). A full FFmpeg configured as LGPL has no libx264, yet the ingestion pipeline (ASSET_INGESTION.md §4) encodes playable copies and proxies to H.264.
+- **Alternatives**: (A) bundle a GPL-configured full FFmpeg with libx264 and accept GPL obligations for that binary (source offer, notices); (B) decode with the LGPL full build to a raw pipe and encode with the compositor FFmpeg that Remotion already uses for H.264 output; (C) use OpenH264/`h264_mf` (Media Foundation) encoders in the LGPL build on Windows.
+- **Selected (provisional)**: (B) as default, (C) as the measured alternative in POC-003; (A) only if both fail quality or speed targets, after legal review (BRD §6).
+- **Consequences**: `resources/engine/compositor/` (slim, output) and `resources/bin/ffmpeg-full/` (LGPL, ingestion) in the installer; ASSET_INGESTION §3/§4 command lines are updated once POC-003 picks the encoder; Third-Party Notices list both builds.

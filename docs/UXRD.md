@@ -61,7 +61,7 @@ PRD.md §2 owns the one-line persona table. This section adds the detail the UX 
 | J6 | I am ready to publish | choose the platform format and export without technical questions | the file is right first time | `agent.output.ratio.*`, `agent.output.resolution.*`, `scr.export` |
 | J7 | Something fails | know what happened, what to do, and that my work is safe | I keep trust in the product | `sys.toast`, `stage.player.state.error`, `scr.project.recover` |
 | J8 | I am on a hotspot or offline | keep working with everything that does not need the internet | my day is not blocked | `agent.output.private`, `sys.privatemode.banner` |
-| J9 | I worry about cost | see what each AI call used, honestly labelled | I can budget | `agent.*.footer.ctx`, `scr.providers.budget.limit`, Plan Card usage line |
+| J9 | I worry about cost | see what each AI call used, honestly labelled | I can budget | `agent.*.footer.ctx`, `scr.providers.budget.project`, `scr.providers.budget.month`, Plan Card usage line |
 
 ## 3. UX principles
 
@@ -105,7 +105,7 @@ Verification methods: **UT** moderated usability test (§8), **UI** automated UI
 | UX-001 | A new Creator reaches a first exported MP4 within 10 minutes of launching the installer for the first time, including onboarding. | In UT with 5 participants matching persona 1.1, median ≤ 10 min, no participant > 15 min; task = three provided clips, one transition, one caption style, export 9:16 1080p (720p in Trial Mode). | UT | PRD-018, PRD §5 |
 | UX-002 | Insert is discoverable without the tour. | ≥ 4 of 5 UT participants who skipped the tour find `lib.assets.insert` and place clips within 3 minutes of their first import, unprompted. The Asset Panel empty state names the Insert step. | UT, IR | PRD-006 |
 | UX-003 | The Creator understands what Execute does before pressing it the first time. | After their first Plan Card appears, ≥ 4 of 5 participants correctly state (think-aloud) that "nothing changes until I press Execute" and name at least one listed step. | UT | PRD-012, AI-004 |
-| UX-004 | Every Catalogue Card previews on the Creator's own footage before a click. | Hover on `lib.catalogue.card` updates `stage.player.canvas` within 300 ms (PERFORMANCE.md §5); when no Clip exists, the Player shows the preset on a neutral sample with the label "Sample · insert a clip to preview on your video" / "Contoh · sisipkan klip untuk melihat di video Anda". | PT, UI | ADR-011 |
+| UX-004 | Every Catalogue Card previews on the Creator's own footage before a click. | Hover on `lib.catalogue.card` updates `stage.player.canvas` within 300 ms (PERFORMANCE.md §5); when no Clip exists, the Player shows the preset on a neutral sample with the label "Sample · insert a clip to preview on your video" / "Contoh · sisipkan klip untuk melihat di video kamu". | PT, UI | ADR-011 |
 | UX-005 | The Creator never needs to type a parameter to get a result. | Every P0 preset in DESIGN_CATALOGUE.md produces a valid Composition Version from a single click with defaults; parameters are reachable through "Details" or the Editor Agent. | UI | AI-011, PRD-013 |
 | UX-006 | Catalogue Search finds presets by plain words in EN and ID. | Typing "lembut" or "smooth" into `lib.search.input` lists `preset:transition.fade` first; search covers labels and tags (DESIGN_CATALOGUE.md §13). | UI | — |
 
@@ -114,7 +114,7 @@ Verification methods: **UT** moderated usability test (§8), **UI** automated UI
 | ID | Requirement | Acceptance criteria | Verification | Traces |
 |---|---|---|---|---|
 | UX-010 | Every change to the Composition Model is traceable to a visible Intent Queue item. | For each `composition.updated` event, the Intent Queue contains ≥ 1 item with status `executed` or `compiled` whose `propertyKey` appears in the version diff. No change without an item. | UI | AI-010, P3 |
-| UX-011 | Superseded picks stay visible and can be restored in one click. | `agent.editor.intentqueue.item.superseded` is struck through, shows "replaced by", and `.item.restore` re-queues it (making the newer one superseded). | UI | AI-018 |
+| UX-011 | Superseded picks stay visible and can be restored in one click. | `agent.editor.intentqueue.item.superseded` is struck through, shows "replaced by", and `.item.restore` sets it back to `queued` (stamping `restoredAt`, AI_WORKFLOW.md §3) and makes the newer one superseded in turn. | UI | AI-018 |
 | UX-012 | The five states (§4) are visually distinct. | Side-by-side screenshots of S1–S5 are classified correctly by ≥ 4 of 5 UT participants after the tour. Badge copy differs for every state. | UT, IR | brief §16 |
 | UX-013 | Deterministic picks are labelled as applied directly, not as AI work. | Compile-path versions show "Applied directly" on the toast and the Intent Queue item; no model name or token usage is shown for them. | UI | ADR-002 |
 | UX-014 | Undo is one gesture and always available after a mutation. | Ctrl+Z (or toast "Undo") moves the project head to the previous Composition Version within 500 ms; Ctrl+Y redoes; the Player and Timeline View refresh. P0 covers linear undo; P1 (PRD-034) adds the version list. | UI | PRD-034 |
@@ -168,7 +168,7 @@ Applies to every region and screen; UI_UX_SPECIFICATION.md §9 gives the compone
 
 | State | Rule | Required content | Forbidden |
 |---|---|---|---|
-| **Empty** | Every list or canvas that can be empty teaches the next action in ≤ 2 sentences and offers one button. | Icon (Lucide), one headline, one sentence, one primary action, EN/ID. Examples: `lib.assets.empty` "Drop video, image or audio here" / "Letakkan video, gambar, atau audio di sini"; `stage.timeline.empty` "Insert assets, then your picks and the Editor Agent fill this timeline." / "Sisipkan aset, lalu pilihan Anda dan Editor Agent mengisi lini masa ini." | Blank space; a disabled control with no explanation. |
+| **Empty** | Every list or canvas that can be empty teaches the next action in ≤ 2 sentences and offers one button. | Icon (Lucide), one headline, one sentence, one primary action, EN/ID. Examples: `lib.assets.empty` "Drop video, image or audio here" / "Letakkan video, gambar, atau audio di sini"; `stage.timeline.empty` "Insert assets, then your picks and the Editor Agent fill this timeline." / "Sisipkan aset, lalu pilihan kamu dan Editor Agent mengisi lini masa ini." | Blank space; a disabled control with no explanation. |
 | **Loading** | Show a skeleton for layout-stable regions and a spinner with a verb for operations; after 8 s add "This is taking longer than usual" / "Ini lebih lama dari biasanya" and, where supported, a cancel. | Verb phrase naming the object: "Loading preview…" / "Memuat pratinjau…", "Asking Claude 3.5 Sonnet…" / "Bertanya ke Claude 3.5 Sonnet…", "Preparing proxy for beach.mp4…" / "Menyiapkan proxy untuk beach.mp4…". | Indefinite spinners without a label; blocking the whole window for a panel-local load. |
 | **Error** | Every error has an `EM-` code, a plain-language sentence, a recovery action, and a "Details" disclosure that copies the code and context. Errors appear where the action happened (inline), escalating to `sys.toast` only when the origin is not on screen. | Code, cause in one sentence, one or two actions. "Could not import holiday.mov · EM-1xxx. The file uses a codec we cannot read yet. Try converting it to MP4." / "Tidak dapat mengimpor holiday.mov · EM-1xxx. Berkas memakai codec yang belum bisa dibaca. Coba ubah ke MP4." | Technical words (UX-040); stacking more than 3 toasts; auto-dismissing errors that need action. |
 | **Degraded** | When a capability is unavailable (Private Mode, T0 tier, Trial Mode, model not installed) the control stays visible, disabled, with the reason adjacent. | Reason text or badge: `lib.catalogue.card.badge.gpu`, `agent.output.resolution.2160p.disabled` "Needs a GPU tier" / "Perlu GPU". | Hiding controls; silently substituting a different result. |
@@ -180,7 +180,7 @@ Toast severity and timing are owned by UI_UX_SPECIFICATION.md §10.
 | Roadmap Stage | UX deliverable | Exit criterion |
 |---|---|---|
 | Stage 1 Definition | This document, USER_FLOWS, EDITOR_INTERACTION_MODEL, UI_UX_SPECIFICATION, ACCESSIBILITY_AND_I18N, ONBOARDING_TOUR | Traceability: every `el:` id appears in UI_UX_SPECIFICATION.md |
-| Stage 2 PoC | Clickable prototype of F2, F3, F8 (static data) | UT round 1 (§8) |
+| Stage 2 PoC | Clickable prototype of F2, F3, F8 (static data); optional, non-gating (ROADMAP.md Stage 2 task 11: does not gate exit) | UT round 1 (§8) |
 | Stage 4 Editor MVP | Real Editor without agents | UT round 2 |
 | Stage 5 AI Orchestration | Plan Card, Intent Queue, handoff | UT round 3 (UX-003, UX-012) |
 | Stage 6 Rendering | Export, preflight, progress, recovery | UT round 4 (UX-001, UX-030, UX-031) |

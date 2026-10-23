@@ -27,7 +27,7 @@ Every significant action gets the ten points required by the brief §16, in a fi
 | 9 | Error handling | `EM-` range + meaning (ERROR_CATALOGUE.md owns codes) and where the error is shown |
 | 10 | Undo / recovery | How the Creator reverses it |
 
-Copy EN / ID appears where the action produces a new string. Property keys follow AI_WORKFLOW.md examples (`cut:3.transition`, `project.captionStyle`, `clip:abc.effects`, `text:xyz.fontSize`, `theme.text.fontSize`, `project.ratio`).
+Copy EN / ID appears where the action produces a new string. Property keys follow AI_WORKFLOW.md examples (`cut:3.transition`, `project.captionStyle`, `clip:abc.effects`, `text:xyz.fontSize`, `theme.textDefaults.fontSize`, `project.ratio`).
 
 ```
 Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed intent ─► (4) Compile | Editor Agent
@@ -47,7 +47,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 3 | none. |
 | 4 | none. |
 | 5 | Transient `previewPreset` in Editor memory only. |
-| 6 | Player enters "Previewing Fade" / "Mencoba Pudar" overlay chip; plays a 2 s loop; restores the real frame on pointer leave (≤ 300 ms budget, PERFORMANCE.md §5). With no Clip: neutral sample with label "Sample · insert a clip to preview on your video" / "Contoh · sisipkan klip untuk melihat di video Anda". |
+| 6 | Player enters "Previewing Fade" / "Mencoba Pudar" overlay chip; plays a 2 s loop; restores the real frame on pointer leave (≤ 300 ms budget, PERFORMANCE.md §5). With no Clip: neutral sample with label "Sample · insert a clip to preview on your video" / "Contoh · sisipkan klip untuk melihat di video kamu". |
 | 7 | None; the affected Cut/element is outlined with a dashed accent while hovering. |
 | 8 | None. |
 | 9 | Preview render error → Player shows the last real frame and a 2 s inline note "Preview unavailable for this preset" / "Pratinjau tidak tersedia untuk preset ini" (`EM-2xxx`, composition preview); never a toast. |
@@ -59,7 +59,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 |---|---|
 | 1 | Click or Enter on `lib.catalogue.card`. |
 | 2 | Card gets `.selected`; a chip flies to the Intent Queue (200 ms); Intent Queue item appears in state S1 immediately (optimistic), replaced by the server item on `intent.updated`. |
-| 3 | Per category: **transition** `transition / cut:<n>.transition / exclusive-group`; **caption** `caption / project.captionStyle / exclusive-group`; **background** `background / project.background / exclusive-group`; **motion** `motion / <element>.motion / exclusive-group`; **shape** `shape / project.shapes / list`; **easing** `easing / theme.easing or <element>.motion.easing / scalar`; **effect** `effect / <element>.effects / list`; **audio** `audio / project.audioBed or audio:<id>.ducking / list or exclusive-group`. Target per AI_WORKFLOW.md §4. |
+| 3 | Per category: **transition** `transition / cut:<n>.transition / exclusive-group`; **caption** `caption / project.captionStyle / exclusive-group`; **background** `background / project.background / exclusive-group`; **motion** `motion / <element>.motion / exclusive-group`; **shape** `shape / project.shapes / list`; **easing** `easing / theme.easing or <element>.motion.easing / scalar`; **effect** `effect / <element>.effects / list`; **audio** `audio / project.audioBed or audio:<id>.ducking / list or exclusive-group`. Target per AI_WORKFLOW.md §4. A multi-target result (e.g. all Cuts) is stored as one parent intent plus one child per Cut with `parentIntentId` (`cut:0.transition`, `cut:1.transition`, … in data; "cut 1", "cut 2" in copy); a later pick on one Cut supersedes only that child (AI_WORKFLOW.md §6). |
 | 4 | Compile when fully specified (all P0 presets with defaults). Editor Agent only when Target Resolution cannot settle (e.g. motion with nothing selected and no Clip under the playhead → reject instead, `EM-2201`). |
 | 5 | Intent `queued` → `compiled`; same-key intents `superseded`; new Composition Version; `hdr.title.dirty`. |
 | 6 | Player reloads the new version and seeks to the first affected time (first affected Cut, element start, or stays for project-wide picks). |
@@ -74,8 +74,8 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 |---|---|
 | 1 | Change a control in `lib.text.*` (click, keyboard, or numeric input + Enter). |
 | 2 | Control shows the new value; Intent Queue item optimistic; if no Text Layer is selected a small caption under the control reads "applies to new text" / "berlaku untuk teks baru". |
-| 3 | `text / text:<id>.<field>` (selected) or `theme.text.<field>` (nothing selected) / `scalar`; variant → `text:<id>.variant / exclusive-group`; effect → `text:<id>.effect / exclusive-group`; opacity → `<element>.opacity / scalar` for the selected element. |
-| 4 | Compile, always (brief §16 "selecting a known font size should create a typed operation directly"). |
+| 3 | `text / text:<id>.<field>` (selected) or `theme.textDefaults.<field>` (nothing selected) / `scalar`; variant → `text:<id>.variant / exclusive-group`; effect → `text:<id>.effect / exclusive-group`; opacity → `<element>.opacity / scalar` for the selected element. |
+| 4 | Compile, always (brief §16 "selecting a known font size should create a typed operation directly"): `op:text.setStyle` for the selected Text Layer, `op:theme.setTextDefaults` when nothing is selected. |
 | 5 | Scalar supersede within the key; one Composition Version per pick, coalesced when picks arrive < 2 s apart (one version, several ops; one Intent Queue item each). |
 | 6 | Player updates the selected Text Layer in place; for Theme defaults no visible change until Add Text. |
 | 7 | Selected text element pulses; nothing for Theme defaults. |
@@ -87,7 +87,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | Type in the Add Text field and click `lib.text.add` (Enter in the field). |
+| 1 | Click `lib.text.add`, type in `lib.text.add.input` (text + variant) and confirm with `lib.text.add.confirm` (Enter in the field). |
 | 2 | Field clears; new Text Layer appears selected; inspector opens. |
 | 3 | `text / text:new / list` with `params {text, variant, atMs: playhead, durationMs: 3000, position: variant default}`. |
 | 4 | Compile when text is present. Empty text → `needsInterpretation: true` → Editor Agent proposes copy (F6.E1); disabled with hint when no provider is configured. |
@@ -109,7 +109,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 5 | Asset rows + files; no Composition Version. |
 | 6 | None. |
 | 7 | None. |
-| 8 | File copied to `media/<projectId>/<assetId>/`, DB row, probe/proxy/thumbnail/waveform written as produced (`asset.updated`, proposed). |
+| 8 | File copied to `media/<projectId>/<assetId>/`, DB row, probe/proxy/thumbnail/waveform written as produced (`ingest.progress` per stage, then `ingest.done`). |
 | 9 | `EM-1xxx`: unsupported type/codec, damaged file, too large (limit in ASSET_INGESTION.md), duplicate (info). Shown on the card (`.state.unsupported`) and in `lib.assets.error` when more than one fails. `EM-6xxx` disk full. |
 | 10 | Remove card (asks only if the Asset is used by a Clip: "beach.mp4 is in the timeline. Remove it and clip 2?" / "beach.mp4 ada di lini masa. Hapus beserta klip 2?"). |
 
@@ -235,7 +235,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | Type in `agent.editor.composer`, Enter or `.send`; optional target chip (IX-10). |
+| 1 | Type in `agent.editor.composer`, Enter or `.send`; or click `agent.editor.plan` to plan the queued intents without a message; optional target chip (IX-10). |
 | 2 | User bubble; "Asking <model>…" with Cancel; Execute disabled while planning. |
 | 3 | `chat`-sourced intent: category inferred by Rewrite (or `layout`/`text`/… when the Creator used the inspector chip), `propertyKey` set by the plan validator per op, `needsInterpretation: true`. |
 | 4 | Editor Agent: Rewrite envelope with queued intents, Locked Keys, capabilities → `EditPlan` → validation → dry run. |
@@ -243,7 +243,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 6 | None until Execute. Optional "Preview plan" (P1) renders the dry-run version into the Player with a "Preview only" chip. |
 | 7 | None until Execute. |
 | 8 | Message, plan, validation and usage persisted. |
-| 9 | `EM-41xx`/`EM-43xx`/`EM-42xx` as IX-12; `touchesLockedKeys` → one re-prompt, then dropped with a risk row; 409 when a run is already in progress → "The Editor Agent is still working on the previous request" / "Editor Agent masih mengerjakan permintaan sebelumnya". |
+| 9 | `EM-41xx`/`EM-43xx`/`EM-42xx` as IX-12; `touchesLockedKeys` → one re-prompt, then dropped with a risk row; 409 when a run is already in progress → "The Editor Agent is still working on the previous request" / "Editor Agent masih mengerjakan permintaan sebelumnya"; stale or invalid plan → `agent.editor.plancard.replan` re-plans against the current version. |
 | 10 | Cancel (IX-16); a plan can be discarded ("Discard plan" / "Buang rencana") without any state change. |
 
 ### IX-15 Execute
@@ -259,7 +259,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 7 | Elements in `ExecutionResult.diff` pulse (added = accent, modified = accent-2, removed = fade out 200 ms). |
 | 8 | Intents, plan, ops, result, usage in one transaction (AI_WORKFLOW.md §2 step 14). |
 | 9 | Mid-transaction failure → SQLite rollback, badge "Not applied · EM-2xxx" / "Tidak diterapkan · EM-2xxx" with Details; stale → 409, badge "Composition changed; re-plan" / "Komposisi berubah; susun ulang"; post-validation `block` → rollback with the rule named ("Video would be shorter than 1 second" / "Video akan kurang dari 1 detik"). |
-| 10 | Toast "Applied: 3 changes · v13" / "Diterapkan: 3 perubahan · v13" with **Undo** (moves head to `fromVersion`); Ctrl+Z; Ctrl+Y redo. |
+| 10 | Toast "Applied: 3 changes · v13" / "Diterapkan: 3 perubahan · v13" with **Undo** (moves head to `fromVersion`); `hdr.action.undo` / Ctrl+Z; `hdr.action.redo` / Ctrl+Y. |
 
 ### IX-16 Cancel (agent request or running plan)
 
@@ -295,7 +295,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | Click `agent.output.ratio.*` (incl. `.custom` → inline W:H fields, clamped 1:3…3:1), `agent.output.ratio.auto` toggle, `agent.output.resolution.*`, `agent.output.profile.*`; or `lib.text.ratio` / `lib.text.videosize` shortcuts. |
+| 1 | Click `agent.output.ratio.*` (incl. `.custom` → `scr.ratio.custom` dialog with `.width`, `.height`, `.preview`, `.apply`, clamped 1:3…3:1), `agent.output.ratio.auto` sticky toggle (a manual ratio pick turns it off), `agent.output.resolution.*`, `agent.output.profile.*`; or `lib.text.ratio` / `lib.text.videosize` shortcuts. |
 | 2 | Button active state; pixel labels under every ratio recompute from PERFORMANCE.md §3; Player frame animates to the new aspect (200 ms); `stage.player.controls.ratio`/`.res` update. Profile: Player quality switches (Draft/Full) and a one-line note "Preview: Draft" / "Pratinjau: Draft". |
 | 3 | ratio: `layout / project.ratio / scalar`; resolution: `layout / project.resolution / scalar`; profile: `output / project.performanceProfile / scalar`; auto: `layout / project.ratioAuto / scalar`. |
 | 4 | Compile. |
@@ -355,7 +355,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | Ctrl+S / `hdr.action.save` / `hdr.menu.file.save`; Ctrl+Shift+S Save As; Ctrl+O Open; Ctrl+N New; `hdr.menu.file.recent`; `hdr.menu.file.settings`. |
+| 1 | Ctrl+S / `hdr.action.save` / `hdr.menu.file.save`; Ctrl+Shift+S Save As; Ctrl+O Open (`scr.project.open`, with `scr.project.open.delete` per row); Ctrl+N New; `hdr.menu.file.recent`; `hdr.menu.file.settings`. |
 | 2 | Save: `hdr.title.dirty` clears, toast "Saved" / "Tersimpan" (1.5 s); Save As: name dialog; Open/New with unsaved changes: modal "Save changes to 'promo-kafe'?" / "Simpan perubahan ke 'promo-kafe'?" Save / Don't save / Cancel; Settings: `scr.project.settings`. |
 | 3 | Settings changes: fps → `output / project.fps / scalar`; duration policy → `output / project.durationPolicy / scalar`; others (name, output folder) none. |
 | 4 | Compile for fps/duration policy. |
@@ -370,15 +370,15 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | `hdr.action.backup`; `hdr.action.restore`. |
-| 2 | Native save/open dialog; progress toast; Restore shows a preview card before committing. |
+| 1 | `hdr.action.backup` → `scr.backup` (`.backup.passphrase` default, `.backup.plain` with warning, `.backup.start`); `hdr.action.restore` → `scr.backup` (`.restore.file`, `.restore.passphrase` when encrypted, `.restore.start`). |
+| 2 | Native save/open dialog; passphrase fields; `scr.backup.progress`; Restore shows a preview card (name, versions, assets, size) with the note "Restored as a new project; nothing is overwritten" / "Dipulihkan sebagai proyek baru; tidak ada yang ditimpa" before committing. |
 | 3 | none. |
 | 4 | none. |
-| 5 | Backup: none. Restore as new project: new project; Replace: current project versions replaced (confirmation UX-015). |
+| 5 | Backup: none. Restore: always a new project (DATABASE_SCHEMA.md §6; never overwrites); a same-identity project becomes "<name> (restored)" with `EM-6303`. |
 | 6–7 | After restore: Player/Timeline load the restored head. |
-| 8 | Zip without credentials or Database Key; restore writes DB rows + media. |
-| 9 | `EM-6xxx` (newer-version zip, disk, damaged zip) in the dialog. |
-| 10 | Replace keeps the replaced project as a checkpoint for 7 days (File ▸ Recover). |
+| 8 | Zip without credentials, licence or Database Key; encrypted with an Argon2id-derived key (SECURITY.md SEC-052) unless the Creator chose plain; restore validates manifest hashes, then writes DB rows + media and re-ingests missing derived files. |
+| 9 | `EM-6302` (not a backup / newer version), `EM-6305` (passphrase not accepted; nothing imported), `EM-6304` (disk), `EM-6303` (restored as a copy, info) in the dialog. |
+| 10 | Delete the restored copy (Open ▸ Delete, `scr.project.open.delete`); the original project is never touched. |
 
 ### IX-24 Menu Tab switch, Catalogue Search, Project Title edit
 
@@ -398,7 +398,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | `hdr.action.hardware` → `scr.hardware` popover; `hdr.action.models` → `scr.models`; `hdr.action.license` → popover; `hdr.menu.help.*` → tour / diagnostics / licence / about / docs. |
+| 1 | `hdr.action.hardware` → `scr.hardware` popover; `hdr.action.models` → `scr.models`; `hdr.action.license` → popover and `scr.license` (`.status`, `.machinecode`, `.machinecode.copy`, `.buy`, `.remove`, `.rebind`); `hdr.menu.help.*` → tour / diagnostics / licence / about / docs. |
 | 2 | Popovers open anchored (120 ms); screens open as sheets; Esc closes; focus returns to the trigger. |
 | 3–4 | none. |
 | 5 | Model installs/removals (F11); licence activation (F13); tour restart. |

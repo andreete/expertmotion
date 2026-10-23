@@ -124,7 +124,7 @@ Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS
 
 | # | category | presetId / params | target (as given) | resolvedTargets | propertyKey | propertyClass | needsInterpretation | status |
 |---|---|---|---|---|---|---|---|---|
-| 1 | asset | `params: {assetIds: [FX-V3, FX-V1, FX-V2]}` (Sequence Badge order) | `{kind: 'project'}` | `[{kind: 'project'}]` | `sequence.clips` | list | false | compiled |
+| 1 | asset | `params: {assetIds: [FX-V3, FX-V1, FX-V2]}` (Sequence Badge order) | `{kind: 'sequence'}` | `[{kind: 'sequence'}]` | `sequence.clips` | list | false | compiled |
 
 Queue item copy: "Insert 3 clips · applied directly" / "Sisipkan 3 klip · langsung diterapkan".
 
@@ -136,9 +136,9 @@ Queue item copy: "Insert 3 clips · applied directly" / "Sisipkan 3 klip · lang
 { "origin": "compile", "baseVersion": "vB0", "goal": "Insert 3 clips in Sequence Badge order",
   "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "3 clips added; duration 0:19",
     "ops": [
-      { "op": "op:clip.insert", "args": { "assetId": "FX-V3", "atIndex": 0 } },
-      { "op": "op:clip.insert", "args": { "assetId": "FX-V1", "atIndex": 1 } },
-      { "op": "op:clip.insert", "args": { "assetId": "FX-V2", "atIndex": 2 } } ] } ],
+      { "op": "op:clip.insert", "target": { "kind": "sequence" }, "args": { "assetId": "FX-V3", "atIndex": 0 } },
+      { "op": "op:clip.insert", "target": { "kind": "sequence" }, "args": { "assetId": "FX-V1", "atIndex": 1 } },
+      { "op": "op:clip.insert", "target": { "kind": "sequence" }, "args": { "assetId": "FX-V2", "atIndex": 2 } } ] } ],
   "touchesLockedKeys": [], "risks": [], "status": "executed" }
 ```
 
@@ -576,7 +576,7 @@ EN variant of the risk: "Cut 1 (Slide) was your own pick, so it was left unchang
   "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "Judul 'Harga Resmi' 0:00–0:02.5",
     "ops": [ { "op": "op:text.add", "args": { "text": "Harga Resmi", "variant": "preset:text.title", "atMs": 0, "durationMs": 2500, "position": { "x": 0, "y": -120 } } } ] } ],
   "touchesLockedKeys": [],
-  "risks": [ { "code": "EM-2302", "message": "Rencana Editor Agent mencoba mengubah pengaturan yang sudah Anda pilih (Transisi potongan 2). Langkah itu dihapus. Periksa rencana sebelum Execute.", "severity": "warn" } ],
+  "risks": [ { "code": "EM-2302", "message": "Rencana Editor Agent mencoba mengubah pengaturan yang sudah kamu pilih (Transisi potongan 2). Langkah itu dihapus. Periksa rencana sebelum Execute.", "severity": "warn" } ],
   "status": "valid" }
 ```
 
@@ -782,7 +782,7 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
 
 **Expected render settings**: standard; 540 frames after step 5.
 
-**Edge handling (GS-17b)**: an in-process failure instead of a kill (op 3 throws a validator `block`, e.g. CM-005) → `ExecutionResult {ok: false, error: {code: 'EM-2307', step: 1}, rollback: {performed: true, toVersion: 'vB1'}}`, Plan Card badge "Not applied · EM-2307" / "Tidak diterapkan · EM-2307" with the copy "Step 1 failed, so the whole change was undone. Your project is unchanged." / "Langkah 1 gagal, sehingga seluruh perubahan dibatalkan. Proyek Anda tidak berubah." (UXRD §4 rule 2); the model is unchanged. A second Execute of an already-applied plan returns **EM-2308** "Already applied" (idempotency, AI_WORKFLOW §6).
+**Edge handling (GS-17b)**: an in-process failure instead of a kill (op 3 throws a validator `block`, e.g. CM-005) → `ExecutionResult {ok: false, error: {code: 'EM-2307', step: 1}, rollback: {performed: true, toVersion: 'vB1'}}`, Plan Card badge "Not applied · EM-2307" / "Tidak diterapkan · EM-2307" with the copy "Step 1 failed, so the whole change was undone. Your project is unchanged." / "Langkah 1 gagal, sehingga seluruh perubahan dibatalkan. Proyek kamu tidak berubah." (UXRD §4 rule 2); the model is unchanged. A second Execute of an already-applied plan returns **EM-2308** "Already applied" (idempotency, AI_WORKFLOW §6).
 
 **Pass criteria**: DB integrity check passes after restart (`PRAGMA integrity_check = ok`); version count before = after the crash; no partial element (`t1` absent, no transitions) in the head model; the second Execute succeeds without a new provider call; `agent_runs` for the plan is `done` (the agent run had finished before Execute).
 

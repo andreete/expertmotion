@@ -32,7 +32,8 @@ expertmotion/
   apps/service/            Local Service: http, db, ingest, render, hardware, license, settings
   apps/ui/                 Editor: Vite + React 19 + Tailwind v4 + @remotion/player
   packages/composition-model/   Zod schema, applyOps, validate, deriveTiming, hash (pure)
-  packages/engine/         ExpertmotionTimeline, catalogue registry + preset components, Root.tsx, build scripts
+  packages/catalogue/      React-free Design Catalogue registry: preset ids, labels EN/ID, Zod params, defaults, flags, Compile defaults (ADR-013)
+  packages/engine/         ExpertmotionTimeline, preset React components keyed by presetId, Root.tsx, build scripts
   packages/agents/         intents (Target Resolution, Property Classes, Compile, Rewrite, Locked Keys), provider adapters, runners, tools
   packages/models/         local model registry, download, engine process adapters
   packages/shared/         ids, hashing, HttpError, formats, fitText, egress module, i18n helpers
@@ -42,7 +43,7 @@ expertmotion/
   AGENTS.md CLAUDE.md SYSTEM_PROMPT.md process.md memory.md
 ```
 
-Dependency direction (enforced by ESLint `import/no-restricted-paths`): `shared` ← `composition-model` ← `engine` ← `agents` ← `service` ← `desktop`; `ui` imports `shared`, `composition-model` (types) and `engine` (Player component) only. The catalogue registry data must not create a cycle between `composition-model` and `engine` (see §13 open point).
+Dependency direction (enforced by ESLint `import/no-restricted-paths`): `shared` ← `catalogue` ← `composition-model` ← `engine` ← `agents` ← `service` ← `desktop`; `ui` imports `shared`, `catalogue`, `composition-model` (types) and `engine` (Player component) only. `packages/catalogue` is React-free and imports nothing but `shared`, so `composition-model` validation and `agents` Compile read preset schemas without a cycle through `engine` (ADR-013, ARCHITECTURE.md §4).
 
 ## 3. Repository scripts (root `package.json`)
 
@@ -50,9 +51,9 @@ Dependency direction (enforced by ESLint `import/no-restricted-paths`): `shared`
 |---|---|---|
 | `dev` | Service (tsx watch) + Editor (Vite) concurrently, browser mode, no Electron | Linux or Windows |
 | `dev:capped` | `scripts/dev-capped.sh`: same as `dev` inside a systemd user cgroup (§4) | Linux dev server only |
-| `dev:service` | Service alone with `EXPERTMOTION_DEV_TOKEN` printed on start | both |
+| `dev:service` | Service alone; uses `EM_TOKEN` when set, otherwise generates a dev token and prints it once on start (TRD §4) | both |
 | `dev:ui` | Editor alone (proxies `/api` to the Service port) | both |
-| `dev:desktop` | electron-vite dev: Shell spawns the Service and loads the Vite URL | Windows |
+| `dev:desktop` | electron-vite dev: Shell starts the Service with `utilityProcess.fork`, sends the bootstrap over `parentPort`/`postMessage`, loads the Vite URL | Windows |
 | `typecheck` | `tsc -b` across all workspaces | both |
 | `lint` | ESLint + i18n lint (`en.json` vs `id.json` keys, forbidden words UX-040) + docs link check | both |
 | `format` / `format:check` | Prettier write / check | both |
@@ -60,7 +61,7 @@ Dependency direction (enforced by ESLint `import/no-restricted-paths`): `shared`
 | `test:e2e` | Playwright against `dev` (browser mode) or against the Electron build (`--electron`) | browser mode on Linux through an SSH tunnel; Electron mode on Windows |
 | `test:golden` | `renderStill` fixtures × 7 ratios, pixel diff ≤ 1 % (`--update` to re-baseline, review required) | Linux at reduced resolution and concurrency 1 under the cap; Windows full |
 | `eval:agents` | golden scenarios on the fake provider; `--live --model <id>` for live runs with the test key (the only name; GOLDEN_SCENARIOS.md §4.3 uses it) | both (live needs network and a key) |
-| `build:engine` | `bundle()` the Remotion project to `packages/engine/dist/bundle/` and build catalogue loops to `packages/engine/dist/catalogue/` (≤ 40 MB) | Windows (loops); bundle only also works on Linux |
+| `build:engine` | `bundle()` the Remotion project to `apps/desktop/resources/engine/` (the prebuilt bundle served as `serveUrl`; ARCHITECTURE.md §7, DEPLOYMENT_AND_PACKAGING.md B3) and build catalogue loops to `apps/desktop/dist/ui/catalogue/` (≤ 40 MB) | Windows (loops); bundle only also works on Linux |
 | `build:service` | esbuild/tsup bundle of the Service for packaging | both |
 | `build:ui` | Vite production build | both |
 | `build:desktop` | `build:engine` + `build:service` + `build:ui` + electron-builder NSIS, fuses, signing when `CSC_LINK` is set | Windows |
@@ -78,7 +79,7 @@ Script names are contracts: `AGENTS.md`, hooks and the gates refer to them; rena
 | Tests under the cap | `systemd-run --user --scope -p MemoryHigh=900M -p MemoryMax=1200M npm run test` (the `verify.sh` wrapper does this automatically when it detects `systemd-run` and a user session) |
 | Measure | before and after any render or heavy test: `cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice/<unit>.scope/memory.current` (the `dev-capped.sh` prints the exact path); record the peak in the `process.md` entry |
 | Render limits | `concurrency: 1`; one Render Job at a time; ≤ 720p; ≤ 5 s; `imageFormat: jpeg`; never two Chrome Headless Shell instances; no in-memory caches of bundles or outputs beyond the single prebuilt bundle path |
-| Ports | **never 3000 or 4000** (other tenant); the predecessor repository uses 4100 and 5173; Expertmotion development uses `EXPERTMOTION_PORT=4110` (Service) and `EXPERTMOTION_UI_PORT=4120` (Vite); anything else in 4100–4199 only. Production Shell picks a free port in 47600–47699 (ARCHITECTURE.md §5), never used in development on this server. |
+| Ports | **never 3000 or 4000** (other tenant); the predecessor repository uses 4100 and 5173; Expertmotion development uses `EM_PORT=4110` (Service) and `EM_UI_PORT=4120` (Vite) (variable names per TRD §4: `EM_PORT`, `EM_UI_PORT`, `EM_TOKEN`, `EM_DATA_DIR`, `EM_PRIVATE_MODE`); anything else in 4100–4199 only. Production Shell picks a free port in 47600–47699 (ARCHITECTURE.md §5), never used in development on this server. |
 | Electron | cannot run or build here (no display, insufficient RAM): `apps/desktop` is type-checked only; its tests run on Windows |
 | Browser access | `ssh -L 4120:127.0.0.1:4120 -L 4110:127.0.0.1:4110 <server>` then open `http://127.0.0.1:4120`; the Service's Host/Origin allow-list includes `127.0.0.1:4120` in development only |
 | Fixtures | media fixtures ≤ 2 s, ≤ 720p, ≤ 2 MB each, committed under `fixtures/media/` with licence notes; large fixtures are generated by FFmpeg at test time (colour bars, tone) |
@@ -93,7 +94,7 @@ If the cap throttles (MemoryHigh) the run becomes slow but survives; if MemoryMa
 | Prerequisites | Windows 10/11 64-bit, Node 22 LTS via nvm-windows or the installer, Git, Visual Studio Build Tools (only for rebuilding native modules; the release uses prebuilds), PowerShell 7 |
 | Clone and install | `git clone … && npm ci` |
 | Browser mode | `npm run dev` then `http://127.0.0.1:4120` |
-| Electron mode | `npm run dev:desktop` (Shell spawns Service with a token over stdin, loads Vite) |
+| Electron mode | `npm run dev:desktop` (Shell starts the Service with `utilityProcess.fork` and hands over `{token, port, dataDir, dbKey}` via `parentPort`/`postMessage`, never stdin/argv/env; loads Vite) |
 | Native modules | `npx electron-builder install-app-deps` after changing Electron or `better-sqlite3-multiple-ciphers` versions |
 | Full renders | allowed; respect Performance Profile ceilings; record peak RAM with the Hardware Monitor or Task Manager in the `process.md` entry when measuring budgets |
 | Packaging | `npm run build:desktop`; unsigned builds for local testing (`CSC_IDENTITY_AUTO_DISCOVERY=false`); signed builds only by the Operator with the certificate (§10) |
@@ -201,7 +202,7 @@ Approval requires the review agent's findings resolved and the Operator's merge.
 
 | # | Point | Owner | Resolve by |
 |---|---|---|---|
-| 1 | ARCHITECTURE.md §4 places the catalogue registry data in `packages/engine` while `packages/composition-model` validation and `packages/agents` Compile both need preset params schemas; if `engine` imports `composition-model` (for the model types) this is a cycle. Proposed: move registry **data** (ids, Zod params, defaults, flags, labels) to `packages/shared/catalogue/` or a new `packages/catalogue`, keep preset **components** in `engine`. Needs an ADR note and a BLUEPRINT.md update. | Principal architect | Stage 2 entry |
+| 1 | **Decided** (ADR-013, ARCHITECTURE.md §4): registry **data** (ids, labels, Zod params, defaults, flags, Compile defaults) lives in the React-free `packages/catalogue`; preset **components** stay in `packages/engine`, keyed by preset id. BLUEPRINT.md carries the file layout. | Principal architect | closed 2026-10-24 |
 | 2 | Choice of commit-trailer agent name format for `Co-Authored-By` across providers. | Operator | Stage 2 |
 
 ## 14. Change log

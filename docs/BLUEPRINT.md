@@ -89,7 +89,7 @@ expertmotion/
     fixtures/                  sample media (short, CC0), Composition Model fixtures, recorded provider replies
     golden/                    golden frames per preset × 7 ratios, Golden Scenario expectations
     e2e/                       Playwright specs (Editor against a dev Local Service)
-  resources/                   build-time outputs copied into the installer (git-ignored): engine/bundle, engine/chrome, engine/ffmpeg, catalogue/loops
+  resources/                   build-time outputs copied into the installer (git-ignored): engine/bundle, engine/chrome, engine/compositor (Remotion slim FFmpeg), bin/ffmpeg-full (LGPL full build for ingestion), catalogue/loops
   scripts/                     dev-capped.sh (Linux cgroup wrapper), verify.sh
   docs/                        this documentation
 ```
@@ -529,7 +529,8 @@ Legend: **keep** = logic retained, **rename** = identifier or file renamed, **re
 | **Catalogue loops** `resources/catalogue/loops/<category>/<name>.webm` | `packages/engine/scripts/build-loops.ts` (`renderMedia`, vp9, 2 s, 480 px, ≤ 40 MB total) | one loop per preset row in DESIGN_CATALOGUE.md; `index.json` with sizes | build fails if a preset lacks a loop (EM-3302 would otherwise show at runtime) |
 | **Golden frames** `test/golden/<preset>/<ratio>.png` | `scripts/golden-frames.ts` (`renderStill`) | one still per preset × 7 ratios | compared in TEST_PLAN parity tests (≤ 1 % diff) |
 | **Chrome Headless Shell** `resources/engine/chrome/win64/` | copied from `node_modules/.remotion/chrome-headless-shell/win64/` at package time, version pinned by its `VERSION` file | browser binary | file hash recorded in SBOM; EM-3001 if missing |
-| **FFmpeg / ffprobe** `resources/engine/ffmpeg/` | from `@remotion/compositor-win32-x64-msvc` (name to verify, ASSESSMENT.md §4) | binaries used by `@remotion/renderer` (via `binariesDirectory`) and by `ingest/` | SBOM |
+| **FFmpeg (slim) / ffprobe** `resources/engine/compositor/` | from `@remotion/compositor-win32-x64-msvc` (verified on npm 2026-10-24) | used by `@remotion/renderer` (via `binariesDirectory`) for output encoding | SBOM |
+| **FFmpeg (full, LGPL-configured) / ffprobe** `resources/bin/ffmpeg-full/` | separate prebuilt (DEPLOYMENT_AND_PACKAGING.md B4) | used by `ingest/` for probing and decoding AV1/HDR/FLAC/ProRes sources; H.264 encoding path per ADR-019 | SBOM, Third-Party Notices |
 | **Engine Binaries** `resources/ai/<engine>/` | release script downloads pinned, hash-checked release archives (whisper.cpp, sherpa-onnx, sd.cpp) | P1/P2 only; absent in P0 builds | SBOM + Third-Party Notices (BRD-020) |
 | **Electron installer** `release/Expertmotion-<semver>-x64.exe`, `latest.yml`, blockmap | electron-builder (NSIS, per-user install to `%LOCALAPPDATA%\Expertmotion\app`), signed with the Operator's OV certificate (BRD-015) | Shell + Editor + Service + Engine + resources | Authenticode signature; updater verifies signature (EM-8103) |
 | **SBOM + notices** `release/sbom.cdx.json`, `THIRD_PARTY_NOTICES.txt` | `tools/release/sbom.mjs` (CycloneDX) + licence checker | npm tree + binaries + fonts + (later) models | gate: no GPL in bundled JS (BRD-019), no `licence:paid` preset (BRD-017) |
@@ -588,7 +589,7 @@ Explicitly **not** in the slice: agents runtime, providers, Brainstorming, capti
 | PRD-002 | Editor three-column layout, Header menus | `apps/ui` | `packages/shared` (i18n keys) |
 | PRD-003 | create/open/save/Save As/recent/autosave/recovery | `apps/service/projects`, `apps/service/db` | `apps/ui/screens/project*`, `apps/desktop` (dialogs) |
 | PRD-004 | encrypted SQLite + media folder | `apps/service/db`, `apps/desktop` (`safeStorage`) | `packages/shared` |
-| PRD-005 | import video/image/audio, transcode, proxies, thumbnails | `apps/service/ingest` | `apps/ui/library/assets`, `resources/engine/ffmpeg` |
+| PRD-005 | import video/image/audio, transcode, proxies, thumbnails | `apps/service/ingest` | `apps/ui/library/assets`, `resources/bin/ffmpeg-full`, `resources/engine/compositor` |
 | PRD-006 | asset preview, metadata, Sequence Badges, Insert | `apps/ui/library/assets`, `apps/service/routes/assets` | `packages/composition-model` (`op:clip.insert`) |
 | PRD-007 | Composition Model, Tracks, read-only Timeline View | `packages/composition-model`, `apps/ui/stage/Timeline.tsx` | `apps/service/composition` |
 | PRD-008 | Output Settings (ratios, resolutions, fps, profiles) | `packages/engine/formats`, `apps/ui/agent-panel/output` | `apps/service/render/profiles.ts` |

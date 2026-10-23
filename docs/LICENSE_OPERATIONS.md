@@ -8,7 +8,7 @@
 | Depends on | GLOSSARY.md (Licence Key, Machine Fingerprint, Trial Mode, Database Key, Service Token), DECISIONS.md (ADR-006, ADR-007, ADR-014), ARCHITECTURE.md (§4 `license` module, §5 lifecycle, §8 filesystem), PERFORMANCE.md (§3 pixel table, §7 preflight), ELEMENT_IDS.md (`hdr.action.purchase`, `hdr.action.license`, `scr.license`, `scr.onboarding.license`), BRD.md (§3 business model, BRD-001…BRD-008, BRD-023), RISKS_AND_ASSUMPTIONS.md (RISK-008, 019, 021, 022, 027) |
 | Used by | SECURITY.md, THREAT_MODEL.md, ERROR_CATALOGUE.md (EM-5xxx), TEST_PLAN.md (QA- licence cases), API_SPECIFICATION.md (`/license` routes), DATABASE_SCHEMA.md (`license_state` table), DEPLOYMENT_AND_PACKAGING.md (`revoked.json`, build date, public keys), UI_UX_SPECIFICATION.md (`scr.license` copy), ONBOARDING_TOUR.md |
 | Owner of | Licence Key token format and encoding, signing keys and rotation, Machine Fingerprint derivation and tolerance rule, offline verification algorithm, Trial Mode rules, re-bind policy, revocation list format, clock-tamper handling, issuance runbook, delivery email, refund/revoke procedure, support scripts, licence test-case descriptions |
-| ID range | none reserved in GLOSSARY.md; normative statements are referenced by section number (e.g. "LICENSE_OPERATIONS §6 step 7"). Error codes are proposed here and owned by ERROR_CATALOGUE.md; test IDs are assigned in TEST_PLAN.md; business rules are BRD-001…BRD-008. |
+| ID range | `LIC-` (reserved in GLOSSARY.md for licence-operations requirements). This document currently states its rules as numbered algorithm steps and section references (e.g. "LICENSE_OPERATIONS §6 step 7") and has no separate requirement list; when one is written it uses `LIC-001…`. Error codes EM-5001…5009 are owned by ERROR_CATALOGUE.md (final); test IDs are assigned in TEST_PLAN.md; business rules are BRD-001…BRD-008. |
 
 Wording rule (GLOSSARY "Words to avoid"): this document never claims the licence is unbreakable. Every check below can be bypassed by patching the binary; that is the accepted ADR-007 boundary (§14). The licence exists to make honest purchase the easy path and casual sharing inconvenient, not to stop a determined attacker.
 
@@ -29,7 +29,7 @@ Everything is offline (ADR-014). No licence server exists at launch. The only ne
 |---|---|
 | Licence Key | the full `EM1-…` string the Creator pastes |
 | Payload | the JSON object inside the Licence Key (§3.1) |
-| Machine Code | the Creator-visible, copyable string `MC1-…` that encodes the three component hashes of the Machine Fingerprint (§5.3). Defined here; proposed for GLOSSARY.md |
+| Machine Code | the Creator-visible, copyable string `MC1-…` that encodes the three component hashes of the Machine Fingerprint (§5.3). Derivation defined here; term in GLOSSARY.md |
 | keyId (`kid`) | two-character identifier of the Operator signing key pair (§4) |
 | revocation epoch (`rev`) | integer on the Payload; a Licence Key is revoked when `revoked.json` lists its `licenseId` with an epoch greater than the Payload's `rev` (§8) |
 | build date | ISO date compiled into each release; a Licence Key covers a build when `buildDate ≤ updatesUntil` (§6 step 9) |
@@ -94,7 +94,7 @@ Illustrative (not valid): `EM1-A1-PMRGIZLMMVZCEOSFGMZ2IYLOMNSTGZZ…-Q7ZH4Y2R3VT
 | Backups | two sealed copies on separate USB media in two physical locations, plus one paper copy of the sealed hex; the passphrase stored separately from the media. Restore drill once before launch and once a year |
 | Rotation (scheduled) | every 36 months or when the Operator's hardware changes hands: release N adds the new public key as `active` and marks the old one `retiring` (still verifies); the CLI signs with the new key from release N onwards; the old key is set to `revoked` only after `updatesUntil` of the last key signed with it has passed (so every legitimately issued key stays verifiable) |
 | Rotation (compromise) | the leaked `kid` is set to `revoked` in an emergency release; every licence signed with it is reissued under the new `kid` from the audit log (§10.4) and delivered by email; `revoked.json` is not involved (the key itself is dead). Creators who do not update keep working on their current build, since the old build still trusts the old key — this is the accepted leakage |
-| Unknown `kid` at verification | the Licence Key was signed with a key newer than the installed build: EM-5009 (proposed) "Update Expertmotion to use this key" rather than "invalid", because the key may be perfectly good |
+| Unknown `kid` at verification | the Licence Key was signed with a key newer than the installed build: EM-5009 "Update Expertmotion to use this key" rather than "invalid", because the key may be perfectly good |
 
 ## 5. Machine Fingerprint
 
@@ -146,14 +146,14 @@ Runs at Local Service start (ARCHITECTURE §5 step 2), on `POST /license/activat
 |---|---|---|
 | 1 | Normalise the input string (§3.3) and split on `-`; require exactly 4 parts | EM-5006 malformed key |
 | 2 | Part 1 must equal `EM1` (or another known prefix) | EM-5006 |
-| 3 | Look up part 2 (`kid`) in the embedded public-key table | unknown → EM-5009 (proposed, "update Expertmotion"); status `revoked` → EM-5002 |
+| 3 | Look up part 2 (`kid`) in the embedded public-key table | unknown → EM-5009 ("update Expertmotion"); status `revoked` → EM-5002 |
 | 4 | Base32-decode parts 3 and 4; the signature must be exactly 64 bytes; the Payload ≤ 4 KB | EM-5006 |
 | 5 | Ed25519-verify the signature over `UTF8("EM1") ‖ 0x00 ‖ UTF8(kid) ‖ 0x00 ‖ payloadBytes` with the public key | EM-5002 invalid signature |
 | 6 | Parse the Payload as JSON and validate with the Zod schema of §3.1 (`v === 1`, ULID shape, tier enum, `fpc.length === 3`, dates parse) | EM-5006 |
 | 7 | Revocation: load the newest trusted `revoked.json` (§8); if an entry with `lid` exists and `entry.epoch > payload.rev` | EM-5004 revoked |
 | 8 | Fingerprint: compute `c1..c3` (§5.2) and apply the tolerance rule (§5.4) against `fpc` | EM-5003 fingerprint mismatch |
 | 9 | Updates eligibility: compare the compiled `buildDate` (ISO date of the release, DEPLOYMENT_AND_PACKAGING.md) with `upd`: `buildDate ≤ upd` → covered; otherwise the licence is genuine but does not cover this build | EM-5005 updates expired for this build → state `updatesExpired` (exports behave as Trial Mode; §7) |
-| 10 | Clock check (§9): update `lastSeen`, set `clockAnomaly` if the clock went backwards by more than 24 h; never fails the licence | EM-5007 (proposed, informational) |
+| 10 | Clock check (§9): update `lastSeen`, set `clockAnomaly` if the clock went backwards by more than 24 h; never fails the licence | EM-5007 (info) |
 | 11 | Persist `{licenseKey, lid, tier, name, upd, status, lastVerifiedAt, clockAnomaly}` in the encrypted database table `license_state` (DATABASE_SCHEMA.md); keep the decision in memory for the session | — |
 | 12 | Emit SSE `license.updated {status, tier, upd}` so `hdr.action.license` and `scr.license` refresh | — |
 
@@ -218,7 +218,7 @@ Indonesian variants of the strings above are in §16.3.
 | Rule | Specification |
 |---|---|
 | Stored value | `lastSeen` = the latest wall-clock time observed by the Local Service, written to `license_state` at startup, every hour while running, and at shutdown; a copy is wrapped with the Database Key material in `keyring.bin` (ARCHITECTURE §8) so deleting the database alone does not reset it |
-| Detection | at startup and hourly: if `now < lastSeen − 24 h` → set `clockAnomaly = true`, log the two timestamps (no other data), raise EM-5007 (proposed, informational, shown once in `hdr.action.license` as a small badge "clock changed") |
+| Detection | at startup and hourly: if `now < lastSeen − 24 h` → set `clockAnomaly = true`, log the two timestamps (no other data), raise EM-5007 (info, shown once in `hdr.action.license` as a small badge "clock changed") |
 | Effect on the licence | **none**. The licence is perpetual; `licensed` stays `licensed`. The flag exists for support diagnosis and to disarm the incentive to tamper |
 | Effective time | `effectiveNow = max(lastSeen, now)` is used for: the Trial soft reminder, the update-feed eligibility check (a release whose `releaseDate > upd` is not offered by the updater), and the `revoked.json` freshness comparison |
 | Build-date check | §6 step 9 compares `buildDate` with `upd` and does not use the clock at all, so rolling the clock back cannot make an uncovered build covered |
@@ -360,7 +360,7 @@ ID: `Subjek: Pengembalian dana Expertmotion Anda` — "Halo {name}, pengembalian
 
 ## 13. Support: "licence not accepted"
 
-### 13.1 Error codes required (proposed; ERROR_CATALOGUE.md owns the final text)
+### 13.1 Error codes used (all adopted in ERROR_CATALOGUE.md, which owns the final text; the copy below is this document's abbreviated version)
 
 | Code | Trigger (§6 step) | Severity | Copy (EN) | Copy (ID) | Primary action |
 |---|---|---|---|---|---|
@@ -370,8 +370,8 @@ ID: `Subjek: Pengembalian dana Expertmotion Anda` — "Halo {name}, pengembalian
 | EM-5004 | step 7 | error | This licence key has been revoked (for example after a refund or a move to another computer). Contact support if this is unexpected. | Kunci lisensi ini telah dicabut (misalnya setelah pengembalian dana atau pindah ke komputer lain). Hubungi dukungan jika ini tidak Anda duga. | Contact support |
 | EM-5005 | step 9 | warning | Your licence covers updates until {upd}; this version was released later. Exports run in Trial Mode until you renew or install a version from before that date. | Lisensi Anda mencakup pembaruan hingga {upd}; versi ini dirilis setelahnya. Ekspor berjalan dalam Trial Mode sampai Anda memperpanjang atau memasang versi sebelum tanggal itu. | Renew / Get earlier version |
 | EM-5006 | steps 1, 2, 4, 6 | error | This doesn't look like an Expertmotion licence key. Keys start with "EM1-". Paste the full key or drop the .emlicense file here. | Ini tidak terlihat seperti kunci lisensi Expertmotion. Kunci diawali "EM1-". Tempel kunci lengkap atau seret berkas .emlicense ke sini. | Paste again |
-| EM-5007 (proposed) | step 10 | info | The computer's clock moved backwards. Your licence is unaffected. | Jam komputer bergeser mundur. Lisensi Anda tidak terpengaruh. | Dismiss |
-| EM-5009 (proposed) | step 3 (unknown `kid`) | warning | This key was issued for a newer version of Expertmotion. Update Expertmotion, then activate again. | Kunci ini diterbitkan untuk versi Expertmotion yang lebih baru. Perbarui Expertmotion, lalu aktifkan lagi. | Check for updates |
+| EM-5007 | step 10 | info | The computer's clock moved backwards. Your licence is unaffected. | Jam komputer bergeser mundur. Lisensi Anda tidak terpengaruh. | Dismiss |
+| EM-5009 | step 3 (unknown `kid`) | warning | This key was issued for a newer version of Expertmotion. Update Expertmotion, then activate again. | Kunci ini diterbitkan untuk versi Expertmotion yang lebih baru. Perbarui Expertmotion, lalu aktifkan lagi. | Check for updates |
 
 ### 13.2 Support scripts (Operator side)
 
@@ -451,7 +451,7 @@ Additional cases TEST_PLAN.md should derive: malformed strings (EM-5006 variants
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-Elements already in ELEMENT_IDS.md: `scr.license.input`, `.activate`, `.trial.continue`, `.error`. Proposed additions (ELEMENT_IDS.md allows new elements): `scr.license.status`, `.machinecode`, `.machinecode.copy`, `.buy`, `.remove`, `.rebind`. `{storeUrl}` is a build-time constant (`EXPERTMOTION_STORE_URL`, placeholder `https://example.invalid/expertmotion/buy` until `[Operator decision D-2]`); the Desktop Shell opens it with `shell.openExternal` after validating it is `https:`. The Editor never embeds a payment page.
+All elements are defined in ELEMENT_IDS.md (`scr.license` row): `scr.license.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.trial.continue`, `.remove`, `.rebind`, `.error`. `{storeUrl}` is a build-time constant (`EXPERTMOTION_STORE_URL`, placeholder `https://example.invalid/expertmotion/buy` until `[Operator decision D-2]`); the Desktop Shell opens it with `shell.openExternal` after validating it is `https:`. The Editor never embeds a payment page.
 
 Flow "Buy": `hdr.action.purchase` → `scr.license` → `scr.license.buy` → system browser → storefront → payment → the Creator receives the §12 email → back in `scr.license`, pastes or drops the key → `scr.license.activate` → `POST /license/activate` → §6 → SSE `license.updated` → status card updates, `hdr.action.purchase` disappears, `sys.toast` "Licence activated. Thank you!".
 
@@ -506,7 +506,7 @@ Flow "Move to another computer": `scr.license.rebind` shows a dialog with the Ma
 | 2 | Store URL (`[Operator decision D-2]`) | BRD.md §12 | Stage 6 |
 | 3 | Re-bind beyond 3 per 12 months: fee or discretion | BRD.md §3.2 | Stage 6 |
 | 4 | Revoke the old key on renewal (default yes) | this document §10.2 | Stage 4 |
-| 5 | Add `Machine Code` and the term `keyId` to GLOSSARY.md; add `scr.license.status/.machinecode/.machinecode.copy/.buy/.remove/.rebind` to ELEMENT_IDS.md | GLOSSARY.md, ELEMENT_IDS.md | Stage 1 consistency pass |
-| 6 | Reserve EM-5007 (clock anomaly, informational, licence unaffected) and EM-5009 (unknown keyId); ERROR_CATALOGUE.md has meanwhile taken EM-5008 for "transfer limit reached", a CLI-side condition the app cannot detect; its EM-5007 copy ("exports stay in trial mode") contradicts §9 and ADR-014 and must be reconciled | ERROR_CATALOGUE.md | Stage 1 |
+| 5 | **Closed**: GLOSSARY.md defines `Machine Code` and `keyId (kid)`; ELEMENT_IDS.md defines `scr.license.status/.machinecode/.machinecode.copy/.buy/.remove/.rebind` | GLOSSARY.md, ELEMENT_IDS.md | done |
+| 6 | **Closed**: ERROR_CATALOGUE.md (final) defines EM-5007 as `info`, licence unaffected (matches §9 and ADR-014); EM-5008 "transfer limit reached" is raised by the Operator CLI / support flow only (§8.1 re-bind limit), never by the app's verifier; EM-5009 unknown `kid` adopted as `warn` | ERROR_CATALOGUE.md | done |
 | 7 | Library choice libsodium vs `@noble/ed25519` | TRD.md | Stage 2 |
-| 8 | Whether the Glossary should reserve a `LIC-` prefix for licence-operations requirements; this document deliberately introduces none | GLOSSARY.md owner | Stage 1 |
+| 8 | **Closed**: GLOSSARY.md reserves `LIC-` for licence-operations requirements; this document keeps its step/section references for now and numbers any future requirement list `LIC-001…` | GLOSSARY.md owner | done |

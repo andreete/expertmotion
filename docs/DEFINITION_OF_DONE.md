@@ -69,8 +69,8 @@ A generated UI, untested code change, or successful compilation alone does not p
 | ID | Done when |
 |---|---|
 | D-PRESET-1 | Catalogue row in DESIGN_CATALOGUE.md with id, labels EN/ID, params, defaults, Property Class, priority, flags (`gpu`, `webgpu`, `model:*`, `licence:*`), preview asset path, tags EN/ID; REMOTION_CAPABILITY_MAP.md row with the Remotion API and source. |
-| D-PRESET-2 | Registry entry in `packages/engine/src/catalogue/<category>.ts` (Zod params schema, defaults) and the React implementation keyed by `presetId`; sizes in `u`; frame-based animation; `fitText` for text; stays inside the safe area in every ratio. |
-| D-PRESET-3 | Compile table entry in `packages/agents` (category → ops with defaults) and a unit test proving the preset compiles to valid ops without a provider call (AI-011). |
+| D-PRESET-2 | Registry entry in `packages/catalogue/src/<category>.ts` (React-free: Zod params schema, defaults, labels, flags, Compile defaults; ADR-013) and the React implementation in `packages/engine` keyed by `presetId`; sizes in `u`; frame-based animation; `fitText` for text; stays inside the safe area in every ratio. |
+| D-PRESET-3 | Compile table entry in `packages/agents` (category → ops, defaults read from `packages/catalogue`) and a unit test proving the preset compiles to valid ops without a provider call (AI-011). |
 | D-PRESET-4 | Preview loop built (2 s, 480 px, webm) by `build:engine`; total catalogue loops ≤ 40 MB after the addition. |
 | D-PRESET-5 | Golden frames committed for **all 7 ratios** (16:9, 9:16, 1:1, 4:5, 5:4, 4:3, 3:4) at the fixed frames; diff ≤ 1 % against the Player screenshot at the same frames on Windows (parity). |
 | D-PRESET-6 | Validator rules specific to the preset implemented and tested (e.g. transition ≤ 50 % of the shorter Clip; effect count ≤ 3, T0 ≤ 2). |

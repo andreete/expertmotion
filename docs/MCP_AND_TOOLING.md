@@ -8,7 +8,7 @@
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, ADR-003, ADR-015, ADR-009), AI_WORKFLOW.md (§3, §8, §10, §11, §12), ARCHITECTURE.md (§3, §4, §9), ASSESSMENT.md (§4, §8), PERFORMANCE.md, ERROR_CATALOGUE.md, MASTER_PROJECT_PROMPT.md (§8.5, §9, §20) |
 | Used by | AGENT_DESIGN.md, SYSTEM_PROMPT.md, API_SPECIFICATION.md, SECURITY.md, THREAT_MODEL.md, AGENT_SKILLS.md, HOOKS_AND_GUARDRAILS.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md, TRD.md |
 | Owner of | the MCP decision record (ADR-015 evaluation), the Tool registry structure and execution wrapper, tool permission tags, the JSON-mode fallback protocol, the provider adapter layer, the single egress module, the development-time vs runtime tooling distinction |
-| ID range | none. Tool contracts are referenced by tool name (`composition.get`); requirements remain `AI-0xx` in AI_WORKFLOW.md; codes defined in ERROR_CATALOGUE.md are cited as-is; the tool-layer codes proposed here use the free band EM-45xx and are marked "proposed" until ERROR_CATALOGUE.md appends them |
+| ID range | none. Tool contracts are referenced by tool name (`composition.get`); requirements remain `AI-0xx` in AI_WORKFLOW.md; codes defined in ERROR_CATALOGUE.md are cited as-is; the tool-layer codes EM-4501…4507 and the egress code EM-8203 were first proposed here (§3.3.1) and are now adopted in ERROR_CATALOGUE.md (159 codes, final) |
 
 This document records why Expertmotion does **not** use the Model Context Protocol (MCP) in the MVP (ADR-015), and specifies what it uses instead: a registry of typed, in-process Tools with a permission model, an execution wrapper, a provider adapter layer, and a single network egress module. It references AI_WORKFLOW.md for every schema and never redefines one. Terms follow GLOSSARY.md.
 
@@ -157,12 +157,12 @@ Every call, from a model or from the runtime, goes through `executeTool(name, ra
 
 | Step | Action | On failure |
 |---|---|---|
-| 1 Lookup | find the tool in the registry | `EM-4501` unknown tool (proposed) |
-| 2 Permission | `ctx.caller ∈ tool.callers`; a model caller may never reach `mutate`/`spawn` | `EM-4502` tool not permitted for this caller (proposed) |
-| 3 Input validation | `tool.input.safeParse(rawInput)` | `EM-4503` invalid tool input, `issues[]` from Zod (proposed); the model may correct itself (max 2 corrections per run, AI_WORKFLOW §8) |
-| 4 Preconditions | `spawn` tools: model installed and not Private-Mode-blocked for downloads; `composition.*`: project exists and `baseVersion` known | `EM-4506` precondition failed (proposed), message names the missing piece |
-| 5 Run | `Promise.race(handler(input, ctx), timeout(tool.timeoutMs))`, honouring `ctx.signal` | `EM-4504` tool timed out (proposed) |
-| 6 Output validation | `tool.output.safeParse(result)` | `EM-4505` tool returned an invalid result (proposed; an internal bug, logged at `error`, never shown as the model's fault) |
+| 1 Lookup | find the tool in the registry | `EM-4501` unknown tool |
+| 2 Permission | `ctx.caller ∈ tool.callers`; a model caller may never reach `mutate`/`spawn` | `EM-4502` tool not permitted for this caller |
+| 3 Input validation | `tool.input.safeParse(rawInput)` | `EM-4503` invalid tool input, `issues[]` from Zod; the model may correct itself (max 2 corrections per run, AI_WORKFLOW §8) |
+| 4 Preconditions | `spawn` tools: model installed and not Private-Mode-blocked for downloads; `composition.*`: project exists and `baseVersion` known | `EM-4506` precondition failed, message names the missing piece |
+| 5 Run | `Promise.race(handler(input, ctx), timeout(tool.timeoutMs))`, honouring `ctx.signal` | `EM-4504` tool timed out |
+| 6 Output validation | `tool.output.safeParse(result)` | `EM-4505` tool returned an invalid result (an internal bug, logged at `error`, never shown as the model's fault) |
 | 7 Result budget | serialise; if > `resultBudgetBytes`, apply the tool's summariser (or truncate arrays with `"…(+N more)"`) and set `truncated: true` | — |
 | 8 Log | one JSON line (§3.3.2) | — |
 | 9 Return | `{ok: true, result}` or `{error: {code, message, issues?}}` | — |
@@ -176,22 +176,22 @@ Error envelope (the shape the model receives as the tool result; AI_WORKFLOW §8
 Rules:
 - The `message` is written for the model (English, terse, names the path). When an error must be shown to the Creator (after corrections are exhausted), the Editor shows the ERROR_CATALOGUE copy for the code, EN/ID, never the raw Zod text; the raw text sits behind "Details".
 - A wrapper error never throws into the agent loop; it is returned as the tool result so the model can correct (AI-005). After the second correction on the same tool, the run ends with the last error code and the Plan Card shows "The model could not use a tool correctly · EM-45xx" / "Model tidak dapat memakai alat dengan benar · EM-45xx".
-- `ctx.signal` is aborted by `agent.editor.cancel`; an aborted call returns `EM-4507` cancelled (proposed); the run is marked `cancelled` and the chat shows `EM-4303` "Request cancelled" (ERROR_CATALOGUE.md).
+- `ctx.signal` is aborted by `agent.editor.cancel`; an aborted call returns `EM-4507` cancelled; the run is marked `cancelled` and the chat shows `EM-4303` "Request cancelled" (ERROR_CATALOGUE.md).
 
-#### 3.3.1 Error codes: proposed additions (EM-45xx tool layer, EM-8203 egress) and reused definitions
+#### 3.3.1 Error codes: tool-layer band (EM-45xx), egress code (EM-8203) and reused definitions
 
-ERROR_CATALOGUE.md (147 codes) already covers Private Mode, JSON mode and cancellation; only the tool-layer band and one egress code are new. Proposed rows follow the catalogue's column set (severity, EN/ID title and body, action, log fields) and its style guide (formal "Anda", no jargon).
+ERROR_CATALOGUE.md (159 codes, final) owns every code below; the tool-layer band and EM-8203 were first proposed in this document and are adopted there with the copy shown (the catalogue's text is authoritative where it differs). Private Mode, JSON mode and cancellation codes are reused as defined.
 
 | Code | Meaning | Creator copy EN / ID |
 |---|---|---|
-| EM-4501 (proposed, error) | Unknown tool name | "The model asked for a tool that does not exist. Try again or choose another model." / "Model meminta alat yang tidak ada. Coba lagi atau pilih model lain." |
-| EM-4502 (proposed, error) | Tool not permitted for this caller | "The model tried an action it is not allowed to take. Nothing was changed." / "Model mencoba tindakan yang tidak diizinkan. Tidak ada yang berubah." |
-| EM-4503 (proposed, error) | Invalid tool input after two corrections | "The model sent incomplete details twice. Try again or choose another model." / "Model dua kali mengirim detail yang tidak lengkap. Coba lagi atau pilih model lain." |
-| EM-4504 (proposed, error) | Tool timed out | "A step took too long and was stopped. Try again." / "Satu langkah terlalu lama dan dihentikan. Coba lagi." |
-| EM-4505 (proposed, error) | Tool returned an invalid result | "Something went wrong inside Expertmotion. Nothing was changed." / "Terjadi kesalahan di dalam Expertmotion. Tidak ada yang berubah." Action: Open Diagnostics |
-| EM-4506 (proposed, error) | Tool precondition failed | "This step needs something that is missing (for example a model or an asset). Add it and try again." / "Langkah ini membutuhkan sesuatu yang belum ada (misalnya model atau aset). Tambahkan lalu coba lagi." |
-| EM-4507 (proposed, info) | Tool call cancelled | "The step was cancelled. Nothing was changed." / "Langkah dibatalkan. Tidak ada yang berubah." |
-| EM-8203 (proposed, error) | Egress blocked: host not on the allow-list | "Expertmotion only connects to the providers you configured. The request to \"{host}\" was blocked." / "Expertmotion hanya terhubung ke penyedia yang Anda atur. Permintaan ke \"{host}\" diblokir." |
+| EM-4501 (error) | Unknown tool name | "The model asked for a tool that does not exist. Try again or choose another model." / "Model meminta alat yang tidak ada. Coba lagi atau pilih model lain." |
+| EM-4502 (error) | Tool not permitted for this caller | "The model tried an action it is not allowed to take. Nothing was changed." / "Model mencoba tindakan yang tidak diizinkan. Tidak ada yang berubah." |
+| EM-4503 (error) | Invalid tool input after two corrections | "The model sent incomplete details twice. Try again or choose another model." / "Model dua kali mengirim detail yang tidak lengkap. Coba lagi atau pilih model lain." |
+| EM-4504 (error) | Tool timed out | "A step took too long and was stopped. Try again." / "Satu langkah terlalu lama dan dihentikan. Coba lagi." |
+| EM-4505 (error) | Tool returned an invalid result | "Something went wrong inside Expertmotion. Nothing was changed." / "Terjadi kesalahan di dalam Expertmotion. Tidak ada yang berubah." Action: Open Diagnostics |
+| EM-4506 (error) | Tool precondition failed | "This step needs something that is missing (for example a model or an asset). Add it and try again." / "Langkah ini membutuhkan sesuatu yang belum ada (misalnya model atau aset). Tambahkan lalu coba lagi." |
+| EM-4507 (info) | Tool call cancelled | "The step was cancelled. Nothing was changed." / "Langkah dibatalkan. Tidak ada yang berubah." |
+| EM-8203 (error) | Egress blocked: host not on the allow-list | "Expertmotion only connects to the providers you configured. The request to \"{host}\" was blocked." / "Expertmotion hanya terhubung ke penyedia yang Anda atur. Permintaan ke \"{host}\" diblokir." |
 | EM-8202 (defined) | Egress blocked: Private Mode is on | catalogue copy "Blocked by Private Mode" / "Diblokir Private Mode" (`{action}` = "Ask {model}"); the composer notice itself is EM-4401 "Agents are off in Private Mode" |
 
 Defined codes reused unchanged (ERROR_CATALOGUE.md): EM-4101/4102 (provider timeout, rate limit), EM-4103 (provider 5xx), EM-4201/4202 (budget reached / 80 %), EM-4301 (invalid JSON after retries), EM-4303 (request cancelled), EM-4304 (request interrupted by restart), EM-4005 (JSON mode notice), EM-4401 (agents off in Private Mode), EM-8201 (offline), EM-8202 (blocked by Private Mode), EM-2201 (Target Resolution reject), EM-2302 (plan touched Locked Keys; steps removed), EM-31xx (preflight).

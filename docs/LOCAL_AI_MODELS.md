@@ -189,9 +189,9 @@ The shipped `registry.json` (in `packages/models/registry.json`, signed as part 
 
 | Step | Behaviour | Error |
 |---|---|---|
-| 0 Private Mode | if on → dialog "Private Mode blocks downloads. Turn it off to install this model (≈ 1.6 GB)." Installed models keep working. | `EM-6006` |
+| 0 Private Mode | if on → dialog "Private Mode blocks downloads. Turn it off to install this model (≈ 1.6 GB)." Installed models keep working. | `EM-7006` |
 | 1 Confirm | sheet shows: model, task, size, licence name + link + use restrictions (OpenRAIL-M), tier recommendation, estimated speed on this PC, disk needed | — |
-| 2 Disk check | free space on the models volume ≥ `Σ bytes × 1.1 + 500 MB`; else refuse | `EM-6007` |
+| 2 Disk check | free space on the models volume ≥ `Σ bytes × 1.1 + 500 MB`; else refuse | `EM-7004` |
 | 3 Download | one file at a time, HTTP GET with `Range: bytes=<partSize>-` when a `.part` exists (resume); 2 retries with backoff per network error; progress (bytes, %, speed, ETA) via SSE `model.progress {modelId, file, bytes, total, bps}`; pause/cancel buttons; app restart resumes automatically; download runs through the single egress module (AI_WORKFLOW.md §1) so Private Mode toggling mid-download pauses it | `EM-6002` after retries exhausted |
 | 4 Verify | streaming sha256 of the completed file compared with the registry; mismatch → file deleted, one automatic retry, then `EM-6002` "download corrupted" | `EM-6002` |
 | 5 Install | move from `.partial` into the model folder; write `manifest.json` with `state: 'installed'`; SSE `model.installed`; Catalogue Card badges (`lib.catalogue.card.badge.model`) and Generator Cards update | — |
@@ -236,7 +236,7 @@ Resolution defaults for images: SD 1.5 512×512 (or 512×896 for 9:16 thumbnails
 | Tier below `minTier` | model hidden from defaults, shown greyed with "needs a GPU tier" and still installable at the Creator's risk (except WebGPU/VRAM-bound FLUX, which is hidden on T0) | `EM-6005` when run and memory check fails |
 | Free RAM insufficient at run time | refuse with the number needed; suggest closing apps or the smaller model | `EM-6005` |
 | Engine crash / timeout | job `failed`; the Creator can retry with the smaller model (one-click) | `EM-6003` / `EM-6004` |
-| Private Mode | downloads blocked; installed models work | `EM-6006` |
+| Private Mode | downloads blocked; installed models work | `EM-7006` |
 | Python runtime missing (music) | offer the download (§9) or the loop library | `EM-6001` |
 | Quality below acceptance (§7) for Indonesian TTS | the Generator Card states "news-reader quality"; the Brainstorming Agent may suggest recording or a cloud voice (not MVP) | — |
 
@@ -315,7 +315,7 @@ Installer budget ≤ 450 MB (PERFORMANCE.md §5); the torch runtime alone exceed
 | QA-LM-001 | Every registry row has licence id/name, redistribution flag, sha256 for every file, `minTier`, flag id used by DESIGN_CATALOGUE.md |
 | QA-LM-002 | Download: interrupt at 50 %, restart app → resumes from `.part`, hash verifies |
 | QA-LM-003 | Corrupted file (flip one byte) → `EM-6002`, file removed, retry offered |
-| QA-LM-004 | Private Mode on → install refused with `EM-6006`; installed model still runs |
+| QA-LM-004 | Private Mode on → install refused with `EM-7006`; installed model still runs |
 | QA-LM-005 | Engine with no network: packet capture shows zero connections during `captions.generate`, `tts.generate`, `thumbnail.generate` |
 | QA-LM-006 | Timeout kill: a hung engine (debug flag) is killed with its child processes; job `EM-6004`; service alive |
 | QA-LM-007 | T0 machine: FLUX hidden, SD 1.5 warns, whisper-small default |

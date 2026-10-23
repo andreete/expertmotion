@@ -237,7 +237,7 @@ Production receives its configuration from the `utilityProcess` bootstrap messag
 |---|---|---|
 | `EM_PORT` | `4110` (fixed, on the shared Linux server and in every dev setup; the predecessor already uses 4100/5173 and the other tenant 3000/4000). Production never uses it: the Shell picks a random free port in 47600–47699 | Local Service port when no bootstrap message is present |
 | `EM_DATA_DIR` | `./.em-data` (git-ignored) in development; `%APPDATA%\Expertmotion` in production | root of `data\`, `media\`, `outputs\`, `models\`, `logs\` |
-| `EM_TOKEN` | none (the Service generates one and prints it once when absent) | **dev-only** fixed Service Token so the Vite Editor and curl can authenticate; refused when a bootstrap message is present |
+| `EM_TOKEN` | none (the Service generates one, prints it once and writes `<dataDir>/dev-token` 0600 when absent; SEC-014) | **dev-only** fixed Service Token so the Vite Editor and curl can authenticate; refused when a bootstrap message is present |
 | `EM_DB_KEY_HEX` | none (dev: derived from a file `.em-data/dev.key` created on first run) | **dev-only** Database Key; never set in production |
 | `EM_PRIVATE_MODE` | unset | `1` forces Private Mode on at startup regardless of settings (tests, air-gapped development) |
 | `EM_ENGINE_BUNDLE_DIR` | `resources/engine/bundle` | folder passed as `serveUrl`; `npm run build:engine` fills it |

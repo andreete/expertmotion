@@ -126,13 +126,14 @@ Operating rule: stay on the free path, re-evaluate the headcount question at eve
 
 This is the `LICENSING_AND_COMPLIANCE` section referenced by ADR-009.
 
-### 6.1 Engine Binaries and the GPL-3 TTS engine
+### 6.1 Engine Binaries and the GPL-3 phonemizer in the TTS engine
 
 | Component | Licence | Handling |
 |---|---|---|
-| sherpa-onnx | Apache-2.0 | ship as a separate Engine Binary; notice |
-| Piper engine (`piper1-gpl`) | GPL-3 | if shipped: run only as a **separate process** invoked with files in / files out (ARCHITECTURE §3 "Engine Binaries"); never linked into Expertmotion code; ship unmodified binary; include the GPL-3 text and a **written offer of the corresponding source** (or bundle the source archive) in Third-Party Notices; Expertmotion's own code stays proprietary because it only executes the program (the aggregate/mere-aggregation position **[UNVERIFIED legal position; counsel review before launch]**) |
-| Piper voice `id_ID-news_tts-medium` | voice-specific licence per model card **[UNVERIFIED]** | LOCAL_AI_MODELS.md must record the model card licence before the voice is offered in the Model Manager |
+| sherpa-onnx (`sherpa-onnx-offline-tts`, runs the Piper VITS voices and Kokoro; ADR-009) | Apache-2.0 | ship as a separate Engine Binary; notice |
+| espeak-ng phonemizer (library + `espeak-ng-data`) inside the sherpa-onnx TTS binary | **GPL-3.0-or-later** | this is the GPL component Expertmotion actually ships: run only as a **separate process** (files in / files out, LOCAL_AI_MODELS.md §3.4); never linked into Expertmotion code; include the GPL-3 text and a **written offer of the corresponding source** in Third-Party Notices; the aggregate/mere-aggregation position is **[UNVERIFIED legal position; counsel review before launch]** |
+| Piper engine (`piper1-gpl`) | GPL-3 | **not shipped in MVP** (ADR-009; voices run on sherpa-onnx). If ever adopted: same separate-process handling, unmodified binary, GPL-3 text and source offer as the row above |
+| Piper voice `id_ID-news_tts-medium` | repository labelled MIT on Hugging Face; the voice card cites a training dataset of unclear licence **[UNVERIFIED]** (RISK-002) | LOCAL_AI_MODELS.md §2.2 must record the dataset licence before the voice is offered in the Model Manager |
 | whisper.cpp + ggml Whisper weights | MIT (engine), MIT (OpenAI weights) | notice |
 | stable-diffusion.cpp | MIT | notice |
 | ACE-Step runtime (embedded Python, PyTorch) | Python PSF, PyTorch BSD-3, ACE-Step Apache-2.0 | notices; downloaded on demand (ADR-008) |
@@ -168,7 +169,8 @@ Bundled fonts are limited to SIL Open Font License 1.1 families (OFL permits bun
 | Electron | MIT | notice |
 | Chromium (inside Electron and Chrome Headless Shell) | BSD-3-Clause plus many third-party licences (Electron ships `LICENSES.chromium.html`) | ship that file in Third-Party Notices |
 | Chrome Headless Shell (downloaded by Remotion) | Chromium licences as above **[UNVERIFIED packaging terms for redistribution inside an installer]** | confirm redistribution terms with the Remotion confirmation request (BRD-010) |
-| FFmpeg (Remotion compositor build) | LGPL-2.1+ or GPL-2+ depending on build flags **[UNVERIFIED which configuration Remotion ships]** | notice; if GPL build, same separate-process handling as §6.1 (it already is a separate process) |
+| FFmpeg, Remotion slim build (`@remotion/compositor-win32-x64-msvc`, output only) | LGPL-2.1+ or GPL-2+ depending on Remotion's build flags **[UNVERIFIED which configuration Remotion ships]** | notice; if GPL build, same separate-process handling as §6.1 (it already is a separate process) |
+| FFmpeg, Expertmotion full build for ingestion (`resources/bin/ffmpeg-full/`) | **LGPL-2.1+** (LGPL-configured: no `--enable-gpl`, no `--enable-nonfree`, hence no libx264 unless the §6.1 GPL handling is accepted for it) | notice with exact build flags, source URL and sha256 (DEPLOYMENT_AND_PACKAGING.md B4, ASSET_INGESTION.md §3) |
 | Node.js (inside Electron) | MIT + bundled third-party notices | notice |
 | React, Vite, Tailwind, Zod, Express, Vercel AI SDK, `systeminformation` | MIT | notice |
 | `better-sqlite3-multiple-ciphers`, SQLite3MultipleCiphers | MIT; SQLite public domain | notice |
@@ -258,7 +260,7 @@ Priority codes: MoSCoW (Must/Should/Could/Won't) and P0/P1/P2 (PRD.md). Status i
 | BRD-016 | A Windows build machine or CI is available from Stage 2 (PoC) onwards; the Linux dev server is used only for headless parts | ASSESSMENT §10; RISK-015 | Must / P0 | ROADMAP.md | A Windows build of the PoC exists at the Stage 2 gate | stage-gate evidence | planned |
 | BRD-017 | Remotion Store paid items (e.g. `cube`) and Elements with unclear terms are excluded from the shipped catalogue until their terms are verified | §6.4; cost control | Must / P0 | DESIGN_CATALOGUE.md | No `licence:paid` preset is implemented in the Engine | catalogue lint | planned |
 | BRD-018 | Only models with a verified commercially usable licence are listed in the Model Manager; non-commercial models (MusicGen, XTTS-v2, F5-TTS, Fish/OpenAudio, OmniVoice) are excluded | §6.2 | Must / P1 | LOCAL_AI_MODELS.md | Registry entries carry licence name + URL + verification date; an automated check fails the build for entries without them | registry lint | planned |
-| BRD-019 | GPL-3 engines (Piper) run as separate processes only; GPL text and a source offer are included in Third-Party Notices; no GPL code is linked into Expertmotion modules | §6.1; ADR-009 | Must / P1 | DEPLOYMENT_AND_PACKAGING.md | Dependency graph shows no GPL package in the bundled JavaScript; notices contain the offer | licence checker in CI | planned |
+| BRD-019 | GPL-3 components (the espeak-ng phonemizer inside the sherpa-onnx TTS binary; piper1-gpl if ever shipped) run as separate processes only; GPL text and a source offer are included in Third-Party Notices; no GPL code is linked into Expertmotion modules | §6.1; ADR-009 | Must / P1 | DEPLOYMENT_AND_PACKAGING.md | Dependency graph shows no GPL package in the bundled JavaScript; notices contain the offer | licence checker in CI | planned |
 | BRD-020 | Third-Party Notices (npm licence report + hand-maintained binary/model/font entries) are generated per release and shown in `scr.about` | §6.3–§6.4 | Must / P0 | build pipeline | Every bundled binary, font and model appears with licence name and text | release checklist | planned |
 | BRD-021 | The Model Manager shows the licence of every Local Model next to its size and tier | T-5; GLOSSARY "Model Manager" | Must / P1 | ELEMENT_IDS `scr.models.row` | Each row displays the licence name linking to the full text | UI test | planned |
 | BRD-022 | Terms of Service and Privacy Notice (EN/ID) containing points T-1…T-12 are published on the landing page and linked from onboarding and `scr.about` before launch | §6.5, §7 | Must / P0 | counsel review | Documents exist, are linked, and the onboarding wizard requires acknowledgement | release checklist | planned |
@@ -273,7 +275,7 @@ Priority codes: MoSCoW (Must/Should/Could/Won't) and P0/P1/P2 (PRD.md). Status i
 | Risk ID | Business impact summary | BRD requirements affected |
 |---|---|---|
 | RISK-001 | Remotion licence ambiguity for end-user renders and v5 telemetry could force a Company License (US$100/month minimum), a product change or a launch delay | BRD-009, BRD-010, BRD-011, BRD-012 |
-| RISK-002 | Indonesian TTS quality may disappoint the primary market; GPL engine adds compliance work | BRD-018, BRD-019 |
+| RISK-002 | Indonesian TTS quality may disappoint the primary market; the GPL-3 espeak-ng phonemizer adds compliance work; the `id_ID-news_tts-medium` voice card cites a dataset of unclear licence | BRD-018, BRD-019 |
 | RISK-003 | Local music generation hardware needs limit the Tools story on T0 machines | BRD-018 |
 | RISK-004 | Code-signing cost and SmartScreen warnings on an unknown OV certificate reduce conversion | BRD-015, K-08 |
 | RISK-007 | Creator LLM cost surprises damage trust even though the Operator pays nothing | BRD-003, K-04 |

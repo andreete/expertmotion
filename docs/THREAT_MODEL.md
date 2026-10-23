@@ -77,7 +77,7 @@ flowchart LR
   MAIN -- B3 postMessage: token, port, dbKey --> API
   API --> DB
   RQ -- B4 spawn argv, scrubbed env, loopback media grants --> CH & FF & WH
-  CH -- B4 GET /media?grant --> API
+  CH -- B4 GET /media/<grant>/<assetId>/<variant> --> API
   EG -- B5 HTTPS, allow-list, Private Mode gate --> P & M
   MAIN -- B5 electron-updater, signature check --> U
   API -- B6 ids only, prefix check --> FS
@@ -106,7 +106,7 @@ Likelihood and impact: L/M/H. Residual risk is what remains after the listed SEC
 | T-02 | **S**poofing: DNS-rebinding or `Host` spoofing to make a browser treat `127.0.0.1` as a site origin | same as T-01 via browser | M | SEC-006 (Host/Origin), SEC-012 (no cookies) | L |
 | T-03 | **T**ampering: oversize or malformed JSON/Composition Model | crash, memory exhaustion | M | SEC-009, Zod validation everywhere | L |
 | T-04 | **I**nformation disclosure: token in URLs or logs (`/api/events?token=`) | token theft → T-01 | M | SEC-005, SEC-015, SEC-100 | L: query token is loopback-only and per-launch |
-| T-05 | **I**nformation disclosure: path traversal in `/media`, `/outputs`, `/thumbs` | read arbitrary files | M | SEC-010 | L |
+| T-05 | **I**nformation disclosure: path traversal in `/media/<grant>/…` (assets and `outputs/<outputId>` variants) | read arbitrary files | M | SEC-010 | L |
 | T-06 | **D**enial of service: flood of render/provider requests | machine unusable, money spent | M | SEC-011, one render per project (ARCHITECTURE §9) | M: a token holder can still queue work |
 | T-07 | **E**levation: Engine (Chrome) uses media grants to reach other routes | Chrome page content reads project data | L | grants are route-bound and job-scoped (SEC-010); Chrome has no token | L |
 | T-08 | **R**epudiation: cannot tell which client caused a change | support confusion | L | access log with route and status (SEC-015), Intent Queue provenance | L |
@@ -215,7 +215,7 @@ Likelihood and impact: L/M/H. Residual risk is what remains after the listed SEC
 |---|---|---|---|
 | Local API auth | 401/403 matrix, token in query only on `/api/events`, no `Set-Cookie`, rate limits | yes (supertest) | SEC-004–012, POC-010 |
 | Browser forgery | CSRF page from `file://` and `http://localhost:8000` against a running Service | yes (Playwright) | SEC-006, 012, POC-010 |
-| Path handling | traversal corpus against media/outputs/thumbs; `app://` traversal | yes | SEC-010, 025 |
+| Path handling | traversal corpus against `/media/<grant>/<assetId>/<variant>` and `/media/<grant>/outputs/<outputId>/<variant>`; `app://` traversal | yes | SEC-010, 025 |
 | Electron config | `webPreferences` snapshot test; fuses read from the built exe; CSP violation test; `window.open` blocked | yes (snapshot + CLI) | SEC-020–029, 133 |
 | Secrets | log grep for the SEC-100 corpus; process listing during render; artefact scan | yes | SEC-042, 043, 045, 100 |
 | Data at rest | open DB with stock sqlite3; other-user DPAPI test; backup wrong passphrase | partly | SEC-040, 050, 052 |

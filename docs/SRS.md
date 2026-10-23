@@ -38,8 +38,8 @@ All product terms: GLOSSARY.md. Identifier prefixes (`PRD-`, `FR-`, `NFR-`, `AI-
 | AI_WORKFLOW.md | schemas, limits (≤ 40 steps, ≤ 200 ops), failure handling |
 | ERROR_CATALOGUE.md | EM codes |
 | SECURITY.md | SEC-001…SEC-096 controls referenced by §5.4 |
-| API_SPECIFICATION.md (planned) | Local Service routes and SSE events |
-| DATABASE_SCHEMA.md | DDL, Composition Model JSON Schema (`schemaVersion`), version hashing (§4.5), checkpoints, backup format (§7), retention (§8) |
+| API_SPECIFICATION.md | Local Service routes and SSE events (events table owns the event names) |
+| DATABASE_SCHEMA.md | DDL, Composition Model JSON Schema (`schemaVersion`), version hashing (§4.5), checkpoints, backup format (§6), crash recovery (§7), retention (§8) |
 
 ### 1.5 Overview
 
@@ -129,7 +129,7 @@ The Editor is the only user interface. Every element is identified by an Element
 | Interface | Direction | Contract | Constraints |
 |---|---|---|---|
 | Local Service REST API | Editor → Local Service | API_SPECIFICATION.md (routes under `/api`, JSON, Zod-validated; errors as `{code: 'EM-xxxx', message, details?}`) | loopback only; `Authorization: Bearer <Service Token>`; Host/Origin allow-list; body ≤ 2 MB except media upload routes; 409 on concurrent agent run or Execute |
-| Local Service SSE | Local Service → Editor | `/api/events` with events `service.ready`, `intent.updated`, `plan.ready`, `composition.updated`, `render.progress`, `render.done`, `ingest.progress`, `download.progress`, `provider.status`, `usage.updated`; 15 s heartbeat | token in query string (EventSource limitation), single-use per launch |
+| Local Service SSE | Local Service → Editor | `/api/events` with the events owned by API_SPECIFICATION.md (events table): `intent.updated`, `plan.ready`, `plan.invalid`, `composition.updated`, `render.queued`, `render.progress`, `render.done`, `render.failed`, `render.cancelled`, `ingest.progress`, `ingest.done`, `ingest.failed`, `agent.run.started`, `agent.run.delta`, `agent.run.done`, `agent.run.failed`, `model.progress`, `model.installed`, `model.failed`, `hardware.tick`, `license.changed`, `settings.changed`, `service.notice`; 15 s heartbeat | token in query string (EventSource limitation), single-use per launch |
 | Media serving | Local Service → Editor Player and Engine Chrome | `/media/:assetId` (original or proxy) with unguessable ids, range requests | loopback only; ids are 128-bit random |
 | Shell ↔ Service control | Desktop Shell → Local Service | `{token, port, dataDir, dbKey}` over stdin at spawn; `ready` on stdout; SIGTERM for shutdown; checkpoint request before close | secrets never in argv or environment |
 | Shell ↔ Editor | preload `contextBridge` | `{port, token}`, native dialogs (file/folder pickers, open folder), window controls | `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` |

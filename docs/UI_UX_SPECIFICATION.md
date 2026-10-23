@@ -10,7 +10,7 @@
 | Owner of | design tokens, layout grid, component library, screen specifications, copy deck (UI strings), notification rules, Catalogue Card / Plan Card / Intent Queue item anatomy |
 | ID range | CMP-01 … CMP-20 (components), SCR- sections keyed by element id |
 
-The mockup (`docs/assets/expertmotion-editor-mockup.png`) says "Remason Editor" and uses a purple accent and placeholder values (480p, 768×768); this specification translates its structure into Expertmotion and replaces every placeholder with values owned by PERFORMANCE.md and DESIGN_CATALOGUE.md. Element ids are from ELEMENT_IDS.md and are never redefined here. Each string is EN / ID; the MVP UI renders EN (ADR-012). i18n keys follow ACCESSIBILITY_AND_I18N.md (`ui.<region>.<element>.<state>`).
+The mockup (`docs/assets/expertmotion-editor-mockup.png`) carries a "Remason" label that is not the product name (GLOSSARY.md), a purple accent and placeholder values (an export button below the 720p minimum, read as the Draft preview quality per ELEMENT_IDS.md assumption 4, and a square size that is not in the pixel table); this specification translates its structure into Expertmotion and replaces every placeholder with values owned by PERFORMANCE.md and DESIGN_CATALOGUE.md. Element ids are from ELEMENT_IDS.md and are never redefined here. Each string is EN / ID; the MVP UI renders EN (ADR-012). i18n keys follow ACCESSIBILITY_AND_I18N.md (`ui.<region>.<element>.<state>`).
 
 ## 1. Design system
 
@@ -135,7 +135,7 @@ Icons never appear without a text label or tooltip (UX-043).
 | CMP-12 | **Progress** | bar (determinate/indeterminate), ring 16/24, with label and ETA slot | normal, paused (striped), error (danger) |
 | CMP-13 | **Chat bubble** | user (right, accent-ink on `--em-panel-2` with accent left border), assistant (left, panel-2), system (centred, muted, 12 px); markdown subset (bold, lists, code spans); attachments thumb | streaming (caret), error (danger border + actions), cancelled (muted) |
 | CMP-14 | **PlanCard** | see §11.2 | draft/valid (Proposed), executing, executed, failed, stale, invalid, cancelled |
-| CMP-15 | **IntentItem** | see §11.3 | queued, compiled/applied, planned, executed, superseded, rejected, restored |
+| CMP-15 | **IntentItem** | see §11.3 | queued (incl. restored, marked via `restoredAt`), compiled/applied, planned, executed, superseded, rejected; `removed` items leave the list |
 | CMP-16 | **TrackLane** | header 96 px (icon + name + mute/visibility toggles P1) + lane | default, focused, drop-target |
 | CMP-17 | **ElementBar** | per element kind colour stripe: clip accent, overlay accent-2, text `#F4F5F7`, caption info, audio `#8FB3FF`, transition diamond on the Cut, effect/motion as small glyphs stacked above the bar, background full-width faint band, generated with `sparkles` glyph | default, hover (tooltip with name + times), selected (2 px accent), pulse-added/-modified/-removed, dimmed (outside playhead's Clip when "focus mode" on, P1) |
 | CMP-18 | **Inspector** | property sheet: key/value rows in `t-body-s`, section headers, "Ask Editor Agent to change" button | default, multi-select summary, empty |
@@ -148,15 +148,16 @@ Implements PRD-002, PRD-003, PRD-014, PRD-017, PRD-019.
 
 | Element | Component | Content EN / ID | States | Notes |
 |---|---|---|---|---|
-| `hdr.logo` | wordmark (SVG) "Expertmotion" | — | hover underline; click → `scr.about` | Never "Remason" |
+| `hdr.logo` | wordmark (SVG) "Expertmotion" | — | hover underline; click → `scr.about` | The mockup's "Remason" label is not the product name |
 | `hdr.menu.file` … `.help` | tab buttons, 13 px 500 | File / Berkas · Home / Beranda · Design / Desain · Tools / Alat · Help / Bantuan | Home/Design/Tools: active tab has 2 px accent underline; File/Help open menus | Shortcuts 1/2/3 |
-| `hdr.menu.file.*` | menu | New Video / Video Baru (Ctrl+N) · Open… / Buka… (Ctrl+O) · Recent / Terbaru ▸ · Save / Simpan (Ctrl+S) · Save As… / Simpan Sebagai… · Import… / Impor… (Ctrl+I) · Export… / Ekspor… (Ctrl+E) · Project Settings… / Pengaturan Proyek… · Recover… / Pulihkan… | Export disabled with reason until a Clip exists | Divider before Recover |
+| `hdr.menu.file.*` | menu | New Video / Video Baru (Ctrl+N) · Open… / Buka… (Ctrl+O) · Recent / Terbaru ▸ · Save / Simpan (Ctrl+S) · Save As… / Simpan Sebagai… · Import… / Impor… (Ctrl+I) · Export… / Ekspor… (Ctrl+E) · Project Settings… / Pengaturan Proyek… · Recover… / Pulihkan… | Export disabled with reason until a Clip exists; Recover carries a badge when a checkpoint newer than the saved state exists | Divider before Recover |
 | `hdr.menu.help.*` | menu | Tour / Tur · Shortcuts / Pintasan (Shift+?) · Diagnostics / Diagnostik · Licence / Lisensi · Documentation / Dokumentasi · About / Tentang | — | Documentation opens local HTML in system browser |
 | `hdr.title` | inline-edit text, `t-body` 500 | "Untitled" / "Tanpa Judul" default | edit (input), error "Name cannot be empty" / "Nama tidak boleh kosong" | ≤ 80 chars |
 | `hdr.title.dirty` | 6 px accent dot after title | tooltip "Unsaved changes" / "Perubahan belum disimpan" | shown/hidden | |
 | `hdr.action.hardware` | IconButton `activity` | tooltip "Hardware Monitor" / "Monitor Perangkat Keras" | warn dot when free RAM < 2 GB or disk < 1 GB | opens `scr.hardware` popover |
 | `hdr.action.save` | IconButton `save` | "Save (Ctrl+S)" / "Simpan (Ctrl+S)" | disabled when clean | |
-| `hdr.action.backup` / `.restore` | IconButton `archive` / `archive-restore` | "Back up project to zip" / "Cadangkan proyek ke zip" · "Restore project from zip" / "Pulihkan proyek dari zip" | restore shows info dot when a newer checkpoint exists (tooltip "Newer checkpoint available · File ▸ Recover") | |
+| `hdr.action.undo` / `.redo` | IconButton `undo-2` / `redo-2` | "Undo (Ctrl+Z)" / "Batalkan (Ctrl+Z)" · "Redo (Ctrl+Y)" / "Ulangi (Ctrl+Y)" | disabled when `canUndo` / `canRedo` is false (`composition.updated`) | |
+| `hdr.action.backup` / `.restore` | IconButton `archive` / `archive-restore` | "Back up project to zip" / "Cadangkan proyek ke zip" · "Restore project from zip" / "Pulihkan proyek dari zip" | no badge (the newer-checkpoint badge sits on `hdr.menu.file.recover`); both open `scr.backup` | |
 | `hdr.action.models` | IconButton `boxes` | "Model Manager" / "Pengelola Model" | progress ring while downloading | |
 | `hdr.action.purchase` | Button primary 28 | "Purchase" / "Beli Lisensi" | hidden when licensed | |
 | `hdr.action.license` | IconButton `key-round` / `badge-check` | popover: "Trial Mode · watermark and 720p" / "Mode Uji Coba · watermark dan 720p" with Enter key / Purchase; or "Licensed to <name> · updates until <date>" / "Berlisensi atas nama <name> · pembaruan hingga <date>" | trial (warn), licensed (success), expired-updates (info) | |
@@ -182,7 +183,7 @@ Implements PRD-005, PRD-006, PRD-013, brief §7.2.
 |---|---|---|---|
 | `lib.catalogue.tab` | horizontal scrollable tabs, 28 px | Transitions / Transisi · Captions / Caption · Backgrounds / Latar · Motion / Gerak · Shapes / Bentuk · Easing / Easing · Effects / Efek · Audio / Audio; count badge | active underline; keyboard ←/→ |
 | `lib.catalogue.card` | CMP-04 grid, 2 columns at 300 px (3 at ≥ 380), 8 px gap | one per Design Preset in the category, P0 first, then P1/P2 greyed with "Coming later" / "Segera hadir" badge (hidden by default; toggle "Show upcoming" / "Tampilkan yang akan datang" in the tab overflow) | see §11.1 |
-| `lib.catalogue.empty` (search; proposed id) | empty pattern | as above | — |
+| `lib.catalogue.empty` (search) | empty pattern | as above | — |
 
 ### 5.3 Home mode (`lib.text.*`)
 
@@ -190,7 +191,7 @@ Order top to bottom; every control is a deterministic pick (IX-03/IX-04).
 
 | Element | Component | Content EN / ID | Notes |
 |---|---|---|---|
-| Add Text block | Field text + `lib.text.add` Button primary | placeholder "Type your text…" / "Ketik teks Anda…"; button "Add Text" / "Tambah Teks" | Enter adds; empty → "or let the Editor Agent suggest one" link |
+| Add Text block | `lib.text.add` Button primary opens `lib.text.add.input` (text + variant) with `lib.text.add.confirm` | placeholder "Type your text…" / "Ketik teks kamu…"; button "Add Text" / "Tambah Teks"; confirm "Add" / "Tambah" | Enter adds; empty → "or let the Editor Agent suggest one" link |
 | `lib.text.variant` | Segmented 2×2 | Title / Judul · Subtitle / Subjudul · Lower third / Nama bawah · Callout / Sorotan (P1 adds Quote / Kutipan) | `preset:text.*` |
 | `lib.text.font` | Select with font preview | Plus Jakarta Sans · Inter · Archivo · JetBrains Mono (`preset:font.*`) | bundled only |
 | `lib.text.size` | Segmented presets + number field (u) | 34 · 48 · 64 · 90 · 110 · custom; help "Sizes scale with the video; 34 is the smallest readable on phones" / "Ukuran mengikuti video; 34 adalah yang terkecil terbaca di ponsel" | book §4.5 ranges |
@@ -207,9 +208,9 @@ Order top to bottom; every control is a deterministic pick (IX-03/IX-04).
 | Card | Title EN / ID | Subtitle EN / ID | Availability badge |
 |---|---|---|---|
 | `.voice` | Generate Voice / Buat Suara | "Indonesian and English voices, offline" / "Suara Indonesia dan Inggris, offline" | P1; model badge if not installed |
-| `.captions` | Generate Captions / Buat Caption | "From your video's audio, offline" / "Dari audio video Anda, offline" | P1; model badge |
+| `.captions` | Generate Captions / Buat Caption | "From your video's audio, offline" / "Dari audio video kamu, offline" | P1; model badge |
 | `.music` | Generate Music / Buat Musik | "Needs a GPU with 4 GB" / "Perlu GPU 4 GB" on T0 | P2 "Coming later" |
-| `.thumbnail` | Generate Thumbnail / Buat Thumbnail | "Cover image from a frame and your title" / "Gambar sampul dari frame dan judul Anda" | P2 |
+| `.thumbnail` | Generate Thumbnail / Buat Thumbnail | "Cover image from a frame and your title" / "Gambar sampul dari frame dan judul kamu" | P2 |
 | `.hashtags` | Suggest Hashtags / Saran Hashtag | "Uses your connected AI model" / "Memakai model AI yang terhubung" | P1; disabled in Private Mode with reason |
 
 ### 5.5 Asset Panel (`lib.assets.*`)
@@ -223,6 +224,7 @@ Order top to bottom; every control is a deterministic pick (IX-03/IX-04).
 | `lib.assets.card.meta` | tooltip / inspector row | "1920×1080 · 30 fps · 0:15 · stereo · 48 MB" | |
 | `lib.assets.card.badge.sequence` | 20 px circle top-left | number or "+" | hover "Click to set order" / "Klik untuk mengatur urutan" |
 | `lib.assets.card.select` | checkbox top-right | — | |
+| `lib.assets.card.action.usecaptions` / `.action.remove` | card menu (⋯) | "Use as captions" / "Pakai sebagai caption" (SRT/VTT assets only; `op:caption.importSrt`) · "Remove" / "Hapus" | Remove asks for confirmation when a Clip uses the asset (`EM-1101`) |
 | `lib.assets.card.state.ingesting` | progress bar + step | "Probing… / Making proxy… / Thumbnails…" / "Memeriksa… / Membuat proxy… / Thumbnail…" | |
 | `lib.assets.card.state.unsupported` | danger border | reason + "Remove" / "Hapus" | |
 | `lib.assets.insert` | Button primary full-width 36 | "Insert" / "Sisipkan" → "Insert 3" / "Sisipkan 3" | disabled "Select assets to insert" / "Pilih aset untuk disisipkan" |
@@ -245,7 +247,7 @@ Implements PRD-007, PRD-009.
 | `stage.timeline.track.video/.overlay/.text/.caption/.audio` | CMP-16 lanes; names Video / Video · Overlay / Lapisan · Text / Teks · Captions / Caption · Audio / Audio | project-wide items (caption style, background) show as a chip in the lane header: "Karaoke" / "Spotlight" | drop-target |
 | `stage.timeline.element.*` | CMP-17 | label = asset name / text content / preset label; times on hover | selected, pulses |
 | `stage.timeline.inspector` | CMP-18 docked right 260 px | header "Clip 2 · beach.mp4" / "Klip 2 · beach.mp4"; rows: Start, Duration, Trim, Playback rate, Volume, Fit, Motion, Effects (chips), Transition in/out; button "Ask Editor Agent to change" / "Minta Editor Agent mengubah" (A); P1 adds editable trim | empty "Select an element to inspect it" / "Pilih elemen untuk melihat rinciannya" |
-| `stage.timeline.empty` | empty pattern over lanes | "Insert assets, then your picks and the Editor Agent fill this timeline." / "Sisipkan aset, lalu pilihan Anda dan Editor Agent mengisi lini masa ini." | hidden once a Clip exists |
+| `stage.timeline.empty` | empty pattern over lanes | "Insert assets, then your picks and the Editor Agent fill this timeline." / "Sisipkan aset, lalu pilihan kamu dan Editor Agent mengisi lini masa ini." | hidden once a Clip exists |
 
 ## 7. Agent Panel (`agent.*`)
 
@@ -262,10 +264,10 @@ Implements PRD-010, PRD-011, PRD-012, PRD-008, PRD-020.
 
 | Element | Component | Content EN / ID | States |
 |---|---|---|---|
-| `agent.brainstorm.panel` | section header `t-label` "BRAINSTORMING AGENT" + help icon (tooltip "Ideas and planning. Never changes your video directly." / "Ide dan perencanaan. Tidak pernah mengubah video Anda secara langsung.") | — | collapsible |
+| `agent.brainstorm.panel` | section header `t-label` "BRAINSTORMING AGENT" + help icon (tooltip "Ideas and planning. Never changes your video directly." / "Ide dan perencanaan. Tidak pernah mengubah video kamu secara langsung.") | — | collapsible |
 | `agent.brainstorm.thread` | scroll area; CMP-13 bubbles | first-run system bubble: "Tell me what the video is for and who will watch it." / "Ceritakan video ini untuk apa dan siapa penontonnya." | empty, streaming, error |
 | `agent.brainstorm.handoff` | Card accent-dashed border inside the thread | title "Proposed changes" / "Usulan perubahan"; rows with checkbox + category icon + "Caption style · Editorial → project"; buttons "Send to Editor Agent" / "Kirim ke Editor Agent" (primary) · "Dismiss" / "Abaikan" (ghost) | collapsed receipt after action |
-| `agent.brainstorm.composer` | textarea auto-grow 1–6 lines, `.attach` IconButton `paperclip`, `.send` IconButton `send-horizontal` | placeholder "Describe your idea…" / "Jelaskan ide Anda…"; disabled note in Private Mode (UX-024) or when not configured "Connect a provider to chat" / "Hubungkan penyedia untuk mengobrol" | status line above: "Asking <model>…" + Cancel |
+| `agent.brainstorm.composer` | textarea auto-grow 1–6 lines, `.attach` IconButton `paperclip`, `.send` IconButton `send-horizontal` | placeholder "Describe your idea…" / "Jelaskan ide kamu…"; disabled note in Private Mode (UX-024) or when not configured "Connect a provider to chat" / "Hubungkan penyedia untuk mengobrol" | status line above: "Asking <model>…" + Cancel |
 | `agent.brainstorm.footer.model` | select-like text button | "claude-3.5-sonnet ▾" | opens per-agent Model Assignment |
 | `agent.brainstorm.footer.ctx` | `t-mono` | "1 240 / 200 000" + tooltip "Context used in the last request / model limit" / "Konteks terpakai pada permintaan terakhir / batas model" | amber ≥ 60 %, red ≥ 85 % |
 
@@ -273,8 +275,8 @@ Implements PRD-010, PRD-011, PRD-012, PRD-008, PRD-020.
 
 | Element | Component | Content EN / ID | States |
 |---|---|---|---|
-| `agent.editor.panel` | header `t-label` "EDITOR AGENT" + help ("Turns your picks and instructions into a plan. Nothing changes until you press Execute." / "Mengubah pilihan dan instruksi Anda menjadi rencana. Tidak ada yang berubah sampai Anda menekan Execute.") | — | |
-| `agent.editor.intentqueue` | list pinned at the top of the thread area; header "Your picks (3)" / "Pilihan Anda (3)" + `.clear` ghost "Clear" / "Bersihkan" | CMP-15 items, newest first | empty: "Your picks and requests appear here." / "Pilihan dan permintaan Anda muncul di sini." |
+| `agent.editor.panel` | header `t-label` "EDITOR AGENT" + help ("Turns your picks and instructions into a plan. Nothing changes until you press Execute." / "Mengubah pilihan dan instruksi kamu menjadi rencana. Tidak ada yang berubah sampai kamu menekan Execute.") | — | |
+| `agent.editor.intentqueue` | list pinned at the top of the thread area; header "Your picks (3)" / "Pilihan kamu (3)" + `agent.editor.plan` Button secondary "Plan" / "Susun rencana" (enabled when a queued intent needs interpretation) + `.clear` ghost "Clear" / "Bersihkan" | CMP-15 items, newest first | empty: "Your picks and requests appear here." / "Pilihan dan permintaan kamu muncul di sini." |
 | `agent.editor.thread` | CMP-13 bubbles between queue and composer | system bubbles for handoffs and results | |
 | `agent.editor.plancard` | CMP-14 (§11.2) | — | — |
 | `agent.editor.execute` | Button primary 36 inside the Plan Card footer | "Execute" / "Execute" (kept as a product term; tooltip "Apply this plan (Ctrl+Enter)" / "Terapkan rencana ini (Ctrl+Enter)") | disabled reasons: "No plan yet" / "Belum ada rencana" · "Composition changed; re-plan" / "Komposisi berubah; susun ulang" · "Plan has a blocking issue" / "Rencana punya masalah pemblokir" |
@@ -288,9 +290,9 @@ Implements PRD-010, PRD-011, PRD-012, PRD-008, PRD-020.
 |---|---|---|---|
 | `agent.output` | section header `t-label` "OUTPUT" / "KELUARAN" + summary when collapsed "9:16 · 1080p · Standard" | — | collapsible |
 | Performance Profile row | label "Performance profile" / "Profil performa" + `agent.output.profile.help` ⓘ (PERFORMANCE.md §2 tooltip verbatim) | `agent.output.profile.standard/.accelerated/.turbo` Segmented 3: Standard / Standard · Accelerated / Accelerated · Turbo / Turbo; sublabels "1 frame at a time · Draft preview" / "Accelerated: 2 in parallel" / "Turbo: up to 4 · Full preview" (short EN: "1× · Draft", "2× parallel", "4× · Full") | disabled with reason "Needs a GPU with 4 GB" / "Perlu GPU 4 GB"; Turbo on T1 warn dot "May use a lot of memory" / "Bisa memakai banyak memori" |
-| Aspect Ratio row | label "Aspect ratio (width:height)" / "Rasio aspek (lebar:tinggi)" + ⓘ (proposed `agent.output.ratio.help`: "Width first, then height. The preview frame changes shape; your clips are fitted inside." / "Lebar dulu, lalu tinggi. Bingkai pratinjau berubah bentuk; klip Anda disesuaikan di dalamnya.") + `agent.output.ratio.auto` Toggle "Auto" / "Otomatis" (tooltip "Use the first clip's shape" / "Pakai bentuk klip pertama") | `agent.output.ratio.16x9/.9x16/.1x1/.4x5/.5x4/.4x3/.3x4/.custom` Segmented 4×2, each with orientation glyph (rectangle outline in true proportion) + label + `t-mono` pixel sublabel from PERFORMANCE.md §3 for the current Resolution, e.g. "9:16 · 1080×1920" | active; Custom opens W:H fields (clamped 1:3…3:1, ≥ 240 px) |
+| Aspect Ratio row | label "Aspect ratio (width:height)" / "Rasio aspek (lebar:tinggi)" + ⓘ (`agent.output.ratio.help`: "Width first, then height. The preview frame changes shape; your clips are fitted inside." / "Lebar dulu, lalu tinggi. Bingkai pratinjau berubah bentuk; klip kamu disesuaikan di dalamnya.") + `agent.output.ratio.auto` sticky Toggle "Auto" / "Otomatis" (tooltip "Use the first clip's shape" / "Pakai bentuk klip pertama"; a manual ratio pick turns it off) | `agent.output.ratio.16x9/.9x16/.1x1/.4x5/.5x4/.4x3/.3x4/.custom` Segmented 4×2, each with orientation glyph (rectangle outline in true proportion) + label + `t-mono` pixel sublabel from PERFORMANCE.md §3 for the current Resolution, e.g. "9:16 · 1080×1920" | active; Custom opens `scr.ratio.custom` (`.width`, `.height`, `.preview`, `.apply`; clamped 1:3…3:1, ≥ 240 px) |
 | Resolution row | label "Resolution" / "Resolusi" | `agent.output.resolution.720p/.1080p/.2k/.2160p` Segmented 4: "720p" · "1080p" · "2K" · "2160p (4K)" with pixel sublabels for the current ratio | `.disabled` sublabel "Needs a GPU tier" / "Perlu GPU"; 2160p on T1 warn dot; Trial Mode: 1080p+ shows lock glyph "Trial exports at 720p" / "Uji coba mengekspor 720p" (still selectable; export forces 720p) |
-| `agent.output.private` | Toggle private colour + label "Private Mode" / "Mode Privat" + ⓘ (proposed `agent.output.private.help`: "Blocks all internet use: AI agents, model downloads, update checks. Editing and export keep working." / "Memblokir semua penggunaan internet: agen AI, unduhan model, pemeriksaan pembaruan. Penyuntingan dan ekspor tetap berjalan.") | — | on/off |
+| `agent.output.private` | Toggle private colour + label "Private Mode" / "Mode Privat" + ⓘ (`agent.output.private.help`: "Blocks all internet use: AI agents, model downloads, update checks. Editing and export keep working." / "Memblokir semua penggunaan internet: agen AI, unduhan model, pemeriksaan pembaruan. Penyuntingan dan ekspor tetap berjalan.") | — | on/off |
 | `agent.output.reset` | Button ghost `rotate-ccw` | "Reset to Defaults" / "Kembalikan ke Bawaan" | confirmation (IX-19) |
 
 Frame rate and duration are **not** here (ADR-010); a link row "Frame rate 30 fps · Project Settings →" / "Laju bingkai 30 fps · Pengaturan Proyek →" sits under Resolution.
@@ -300,15 +302,17 @@ Frame rate and duration are **not** here (ADR-010); a link row "Frame rate 30 fp
 | Screen | Layout | Content EN / ID (key items) | States | Implements |
 |---|---|---|---|---|
 | `scr.onboarding` | full-window, 720 px centred column, step indicator 1–6, "Skip setup" ghost top-right | copy in ONBOARDING_TOUR.md §2 | per step | PRD-018 |
-| `scr.license` | Modal 560 | status card; `.input` masked key field with paste button; `.activate` primary "Activate" / "Aktifkan"; `.trial.continue` ghost "Continue with trial" / "Lanjutkan uji coba"; purchase link "Buy a licence (opens browser)" / "Beli lisensi (membuka browser)"; `.error` inline; proposed `.rebind` confirm card | idle, validating, success, error, rebind | PRD-017, F13 |
-| `scr.providers` | Sheet 560 from right; `.list` of Provider Connections; `.add` | `.provider.select` (OpenRouter default; OpenAI, Anthropic, Google Gemini P1) · `.key.input` masked · `.validate` "Validate" / "Validasi" · `.models.list` table: model, context (k), tools ✓, structured ✓, streaming ✓, price "≈ $/M in · out" or "n/a" · `.assign.brainstorm` / `.assign.editor` selects · `.budget.limit` per project and per month ($) with "Warn at 80 %" · `.test` "Test both" / "Uji keduanya" · `.save` primary | validating, error `EM-4xxx`, saved | PRD-010, PRD-011, brief §9 |
-| `scr.models` | Sheet 640 | `.tier` header "Your PC: T0 · CPU only" / "PC Anda: T0 · hanya CPU"; `.list` grouped by engine; `.row`: name, task, size, licence (link to notice), min tier, state; `.row.install` / `.row.remove`; `.row.progress` "312 MB / 1.6 GB · ≈ 10 min" | installed, downloading, paused (Private Mode), failed `EM-7xxx` | ADR-008, F11 |
+| `scr.license` | Modal 560 | `.status` card; `.machinecode` "Machine code" / "Kode mesin" (`MC1-…`) with `.machinecode.copy`; `.input` masked key field with paste button; `.activate` primary "Activate" / "Aktifkan"; `.trial.continue` ghost "Continue with trial" / "Lanjutkan uji coba"; `.buy` link "Buy a licence (opens browser)" / "Beli lisensi (membuka browser)"; `.remove` "Deactivate on this computer" / "Nonaktifkan di komputer ini" (confirmation); `.rebind` confirm card; `.error` inline. Formal "Anda" register is allowed on this screen (licence text) | idle, validating, success, error, rebind | PRD-017, F13 |
+| `scr.providers` | Sheet 560 from right; `.list` of Provider Connections; `.add` | `.provider.select` (OpenRouter default; OpenAI, Anthropic, Google Gemini P1) · `.key.input` masked · `.validate` "Validate" / "Validasi" · `.models.list` table: model, context (k), tools ✓, structured ✓, streaming ✓, price "≈ $/M in · out" or "n/a" · `.assign.brainstorm` / `.assign.editor` selects · `.budget.project` / `.budget.month` ($, per connection; 0 = unlimited) with "Warn at 80 %" · `.test` "Test both" / "Uji keduanya" · `.save` primary | validating, error `EM-4xxx`, saved | PRD-010, PRD-011, brief §9 |
+| `scr.models` | Sheet 640 | `.tier` header "Your PC: T0 · CPU only" / "PC kamu: T0 · hanya CPU"; `.list` grouped by engine; `.row`: name, task, size, licence (link to notice), min tier, state; `.row.install` / `.row.remove`; `.row.progress` "312 MB / 1.6 GB · ≈ 10 min" | installed, downloading, paused (Private Mode), failed `EM-7xxx` | ADR-008, F11 |
 | `scr.hardware` | Popover 320 anchored to `hdr.action.hardware` | `.cpu` "CPU 23 %" · `.ram` "RAM 9.1 / 16 GB" · `.procmem` "Expertmotion 612 MB" · `.disk` "Disk free 48 GB" · `.gpu` "GPU: present / not detected" (percent only with nvidia-smi) · `.workload` "Rendering 42 % · Ingest idle" / "Merender 42 % · Impor diam"; footer "Tier T0 · readings stay on this PC" / "Tier T0 · data tetap di PC ini" | refreshing every 2 s while open | PRD-019 |
 | `scr.project.new` | Modal 420 | `.name`; fps select (default 30); ratio default Auto; resolution default 1080p; "Create" / "Buat" | — | PRD-003 |
-| `scr.project.open` | Modal 560 | recent list (name, last opened, duration, thumbnail) + "Browse…" / "Telusuri…" | empty "No projects yet" / "Belum ada proyek" | PRD-003 |
+| `scr.project.open` | Modal 560 | `.list` (name, last opened, duration, thumbnail, disk usage) + "Browse…" / "Telusuri…"; `.delete` per row (confirmation; typed name when Outputs exist) | empty "No projects yet" / "Belum ada proyek" | PRD-003 |
 | `scr.project.settings` | Modal 560 | `.name` · `.fps` 24/25/30/50/60 · `.ratio` · `.resolution` · `.duration.policy` "Fit content" / "Sesuai isi" · "Fixed" / "Tetap" + ms · `.output.folder` path + Browse · language "Indonesian / English" (project language for agents and generators) | fps change note "Timing stays the same; frame counts are recalculated" / "Waktu tetap sama; jumlah frame dihitung ulang" | PRD-008 |
-| `scr.project.recover` | Modal 560 | list of checkpoints: time, version, "3 changes after last save"; actions Restore / Pulihkan · Open last saved / Buka simpanan terakhir · Show both / Tampilkan keduanya | auto-opens on relaunch when newer checkpoint exists | PRD-003, F9 |
-| `scr.export` | Modal 560, two phases | **Setup:** `.profile.summary` "9:16 · 1080×1920 · 30 fps · 0:42 · Standard"; `.codec` Segmented "MP4 (H.264)" / "GIF" / "PNG still"; `.quality` select Standard/High (CRF); `.filename`; `.folder` + Browse; `.preflight` checklist rows (Disk, Memory, Dimensions, Duration, Assets, Engine, Licence) each ✓ / ⚠ / ℹ with message; estimate line "≈ 1 min 30 s · ≈ 35 MB" (from `render.estimate`); `.start` primary "Start export" / "Mulai ekspor". **Running:** `.progress` bar + "Frame 412 / 1260 · 33 %"; `.eta` "Estimating…" → "≈ 1 min left" / "≈ 1 mnt lagi"; `.cancel` danger ghost; "You can close this and keep editing" / "Anda bisa menutup ini dan terus menyunting". **Done:** `.done` thumbnail, name, size, duration; `.open.folder` primary "Open folder" / "Buka folder"; "Export again" / "Ekspor lagi"; share hint none (no cloud) | blocked, running, done, failed (`EM-3xxx` + Try again / Details), cancelled | PRD-014, F8 |
+| `scr.project.recover` | Modal 560 | `.list` of checkpoints: time, version, "3 changes after last save"; actions `.restore` "Restore" / "Pulihkan" · Open last saved / Buka simpanan terakhir · Show both / Tampilkan keduanya | auto-opens on relaunch when newer checkpoint exists | PRD-003, F9 |
+| `scr.backup` | Modal 480, Backup or Restore mode | **Backup:** `.backup.passphrase` "Passphrase (recommended)" / "Frasa sandi (disarankan)" with confirm field and strength hint; `.backup.plain` checkbox "Save without a passphrase" / "Simpan tanpa frasa sandi" with warning "Anyone with this file can read your clips, text and chats. Provider keys and the licence are never included." / "Siapa pun yang punya berkas ini bisa membaca klip, teks, dan percakapan kamu. Kunci penyedia dan lisensi tidak pernah disertakan."; include Outputs checkbox; `.backup.start` primary "Back up" / "Cadangkan". **Restore:** `.restore.file` picker; `.restore.passphrase` (shown when the manifest says encrypted); preview card (name, versions, assets, size) with note "Restored as a new project. Nothing is overwritten." / "Dipulihkan sebagai proyek baru. Tidak ada yang ditimpa."; `.restore.start` primary "Restore" / "Pulihkan"; `.progress` | idle, running, done, failed (`EM-6301…6305`) | SECURITY.md SEC-052, DATABASE_SCHEMA.md §6, F14 |
+| `scr.history` | Sheet 480 | `.list` of Composition Versions (time, origin compile / plan / insert / restore, diff summary); `.item` row, current head highlighted; `.item.restore` "Go to this version" / "Ke versi ini" (creates a new head entry, undoable) | empty, loading | FR-169 (P1 UI) |
+| `scr.export` | Modal 560, two phases | **Setup:** `.profile.summary` "9:16 · 1080×1920 · 30 fps · 0:42 · Standard"; `.codec` Segmented "MP4 (H.264)" / "GIF" / "PNG still"; `.quality` select Standard/High (CRF); `.filename`; `.folder` + Browse; `.preflight` checklist rows (Disk, Memory, Dimensions, Duration, Assets, Engine, Licence) each ✓ / ⚠ / ℹ with message; estimate line "≈ 1 min 30 s · ≈ 35 MB" (from `render.estimate`); `.start` primary "Start export" / "Mulai ekspor". **Running:** `.progress` bar + "Frame 412 / 1260 · 33 %"; `.eta` "Estimating…" → "≈ 1 min left" / "≈ 1 mnt lagi"; `.cancel` danger ghost; "You can close this and keep editing" / "Kamu bisa menutup ini dan terus menyunting". **Done:** `.done` thumbnail, name, size, duration; `.open.folder` primary "Open folder" / "Buka folder"; "Export again" / "Ekspor lagi"; share hint none (no cloud) | blocked, running, done, failed (`EM-3xxx` + Try again / Details), cancelled | PRD-014, F8 |
 | `scr.generate.*` | Sheet 480 | `.input` (script / prompt / source) · `.language` id/en · `.model` installed models (+ Install link) · `.run` primary "Generate" / "Buat" · `.progress` · `.result` (player / editable pages / image grid / hashtag chips with copy) · `.insert` primary "Insert into video" / "Sisipkan ke video" | model missing, running, done, failed `EM-7xxx` | PRD-031/033 (P1), PRD-051/052 (P2) |
 | `scr.diagnostics` | Sheet 640 | tabs Logs / Versions / Hardware; "Copy diagnostics bundle" / "Salin bundel diagnostik" (zip path shown); note "Secrets are redacted" / "Rahasia disamarkan" | — | PRD-015, PRD-021 |
 | `scr.about` | Modal 420 | wordmark, version, licence state, "Third-party notices" / "Pemberitahuan pihak ketiga" (incl. GPL source offer for the TTS engine), "Known limitations" / "Keterbatasan yang diketahui", "Update checks paused (Private Mode)" when applicable | — | PRD §7.5 |
@@ -357,7 +361,7 @@ Rules: errors originating in a visible region are inline, not toasts; toasts nev
 |---|---|
 | Size | 2-column grid: 134×(75+28) at 300 px panel; 3-column at ≥ 380 px |
 | Hover | raise 2 px + `--sh-2`, border `--em-line-strong`; thumb loop plays; **live preview** request to the Player after 150 ms (EDITOR_INTERACTION_MODEL.md IX-01); Player shows chip "Previewing Fade" / "Mencoba Pudar" |
-| Selected (`.selected`) | 2 px accent inset + `bookmark` glyph top-left; tooltip "In your picks" / "Dalam pilihan Anda" |
+| Selected (`.selected`) | 2 px accent inset + `bookmark` glyph top-left; tooltip "In your picks" / "Dalam pilihan kamu" |
 | Badges | `.badge.gpu` `cpu` glyph warn: "Slower without GPU" / "Lebih lambat tanpa GPU"; `.badge.model` `download-cloud` info: "Needs <model> · click to install" / "Perlu <model> · klik untuk memasang"; P1/P2: "Coming later" / "Segera hadir" (card 50 % opacity, not clickable) |
 | Details (ⓘ) | popover with param fields (defaults from DESIGN_CATALOGUE.md) and "Apply with these settings" / "Terapkan dengan pengaturan ini"; still a Compile path (fully specified) |
 | Keyboard | focus = hover behaviour; Enter = click; Space = Details |
@@ -379,7 +383,7 @@ Rules: errors originating in a visible region are inline, not toasts; toasts nev
 │ .notes [ Notes for the next plan… / Catatan untuk rencana berikutnya… ]      │  textarea; never parsed; sent as creatorNotes
 │ usage  1 240 in · 310 out · ≈ $0.004  ⓘ                                      │  "≈" when computed; "n/a" when unknown
 │ ────────────────────────────────────────────────────────────────────────── │
-│ [Discard]                              [Re-plan]        [ Execute  ⌃↵ ]     │  footer: ghost · secondary · primary (agent.editor.execute); .cancel replaces Execute while running
+│ [Discard]                              [Re-plan]        [ Execute  ⌃↵ ]     │  footer: ghost · secondary (agent.editor.plancard.replan) · primary (agent.editor.execute); .cancel replaces Execute while running
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -412,7 +416,7 @@ Previous plans collapse under "Previous plans (2)" / "Rencana sebelumnya (2)". A
 |---|---|
 | Left | category icon (§1.5); source glyph when not `ui`: `message-circle` (brainstorm) / `bot` (chat) |
 | Title | "<Category> · <Preset label> → <resolved target>" from `resolvedTargets` ("all 2 cuts", "cut 2", "project", "Title 'Diskon 50%'", "new text"); truncate with tooltip |
-| Status chip (right) | queued `bookmark` muted "Queued" / "Antre" · compiled `check` accent-2 "applied directly · v3" / "langsung diterapkan · v3" · planned `lightbulb` "in plan" / "dalam rencana" · executed `check-circle-2` success "applied · v5" / "diterapkan · v5" · rejected `octagon-alert` danger reason + code · restored `history` "restored" / "dipulihkan" |
+| Status chip (right) | queued `bookmark` muted "Queued" / "Antre" · compiled `check` accent-2 "applied directly · v3" / "langsung diterapkan · v3" · planned `lightbulb` "in plan" / "dalam rencana" · executed `check-circle-2` success "applied · v5" / "diterapkan · v5" · rejected `octagon-alert` danger reason + code · a queued item with `restoredAt` set adds `history` "restored" / "dipulihkan" beside its Queued chip (status stays `queued`) |
 | Superseded (`.item.superseded`) | whole title struck through (`text-decoration: line-through`), 60 % opacity, chip "replaced by <label>" / "diganti oleh <label>", `.item.restore` ghost button "Restore" / "Pulihkan" always visible (not hover-only) |
 | Actions | `.item.remove` × (queued/rejected only; 5 s Undo toast); click on an executed item scrolls the Timeline View to the element and flashes it |
 | Grouping | items executed in the same version collapse under "Applied in v5 (3)" / "Diterapkan di v5 (3)" after 30 s; expandable |
@@ -424,7 +428,7 @@ Previous plans collapse under "Previous plans (2)" / "Rencana sebelumnya (2)". A
 | Key (ACCESSIBILITY_AND_I18N.md scheme) | EN | ID |
 |---|---|---|
 | `ui.sys.offline.title` | Expertmotion's local service is not responding | Layanan lokal Expertmotion tidak merespons |
-| `ui.sys.offline.body` | Reconnecting… {n}/3. Your work is checkpointed. | Menyambung ulang… {n}/3. Pekerjaan Anda sudah di-checkpoint. |
+| `ui.sys.offline.body` | Reconnecting… {n}/3. Your work is checkpointed. | Menyambung ulang… {n}/3. Pekerjaan kamu sudah di-checkpoint. |
 | `ui.sys.privatemode.banner` | Private Mode is on. Agents, model downloads and update checks are paused; everything else works. | Mode Privat aktif. Agen, unduhan model, dan pemeriksaan pembaruan dijeda; fitur lain tetap berjalan. |
 | `ui.sys.update.available` | Update {version} available | Pembaruan {version} tersedia |
 | `ui.sys.update.restart` | Restart to update | Mulai ulang untuk memperbarui |
@@ -437,14 +441,14 @@ Previous plans collapse under "Previous plans (2)" / "Rencana sebelumnya (2)". A
 | `ui.agent.common.cost.approx` | Approximate: computed from the model's listed price, not reported by the provider | Perkiraan: dihitung dari harga model yang tercantum, bukan dari penyedia |
 | `ui.agent.common.cost.na` | n/a — this provider does not report cost | n/a — penyedia ini tidak melaporkan biaya |
 | `ui.stage.player.previewing` | Previewing {preset} | Mencoba {preset} |
-| `ui.stage.player.sample` | Sample · insert a clip to preview on your video | Contoh · sisipkan klip untuk melihat di video Anda |
+| `ui.stage.player.sample` | Sample · insert a clip to preview on your video | Contoh · sisipkan klip untuk melihat di video kamu |
 | `ui.stage.player.version.ok` | Preview up to date · v{version} | Pratinjau sudah terbaru · v{version} |
 | `ui.lib.assets.intimeline` | In timeline | Di lini masa |
 | `ui.lib.text.appliesnew` | applies to new text | berlaku untuk teks baru |
 | `ui.lib.text.applythis` | Apply to this text | Terapkan ke teks ini |
 | `ui.hdr.export.disabled` | Insert at least one clip first | Sisipkan minimal satu klip dulu |
 | `ui.scr.export.trial` | Trial: watermark and 720p. Purchase to remove. | Uji coba: watermark dan 720p. Beli lisensi untuk menghapusnya. |
-| `ui.scr.export.keepediting` | You can close this and keep editing | Anda bisa menutup ini dan terus menyunting |
+| `ui.scr.export.keepediting` | You can close this and keep editing | Kamu bisa menutup ini dan terus menyunting |
 | `ui.scr.export.cancelled` | Export cancelled. No file was saved. | Ekspor dibatalkan. Tidak ada berkas tersimpan. |
 | `ui.scr.export.quit.title` | An export is running | Ekspor sedang berjalan |
 | `ui.scr.export.quit.body` | Cancel it and quit? | Batalkan dan keluar? |
@@ -471,7 +475,7 @@ Strings for onboarding and the tour live in ONBOARDING_TOUR.md; error strings li
 | Onboarding / tour | PRD-018 | FR-onb-* |
 | Providers / Models / Hardware | PRD-010, 019; ADR-008 | FR-scr-* |
 
-## Notes (observed, not fixed here)
+## Notes (resolved)
 
-1. The mockup shows ⓘ icons on "Video Dimensions" and "Private Mode"; ELEMENT_IDS.md has only `agent.output.profile.help`. This document proposes `agent.output.ratio.help` and `agent.output.private.help`.
-2. PERFORMANCE.md §3: 4:5 at 720p is 864×1080 and 5:4 is 1080×864, which keeps the long side at 1080 while 9:16 at 720p (720×1280) keeps the short side at 720; the pixel sublabels will show whatever the table says, but the convention sentence ("the preset name refers to the long side so that 9:16 1080p = 1080×1920") reads as the short side. Worth a check by the Engine lead.
+1. The ⓘ icons on "Video Dimensions" and "Private Mode" are `agent.output.ratio.help` and `agent.output.private.help` in ELEMENT_IDS.md (added 2026-10-24).
+2. PERFORMANCE.md §3 is short-side based: the preset number is the short side, so 4:5 at 720p is 720×900, 5:4 at 720p is 900×720 and 2K means short side 1440. Pixel sublabels are computed from that table (FR-096); nothing is hard-coded here.

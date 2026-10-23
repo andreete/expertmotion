@@ -167,10 +167,10 @@ Installer behaviour (`oneClick: false`): welcome → EULA (BRD) → install loca
 | whisper.cpp (CPU + optional Vulkan) | 5–15 MB | prebuilt release sizes **[estimate]** | models not included |
 | sherpa-onnx (TTS) | 20–40 MB | onnxruntime included **[estimate]** | P1; may ship with the first P1 release instead |
 | stable-diffusion.cpp | 10–40 MB | **[estimate]** | P2; ship when thumbnails land |
-| **Total installed (MVP: without sd.cpp)** | **≈ 360–460 MB** | | **Installer (LZMA): ≈ 180–260 MB [estimate]**, within budget |
+| **Total installed (MVP: without sd.cpp)** | **≈ 360–460 MB** | | **Installer: ≈ 300–400 MB compressed before models [estimate]; budget ≤ 450 MB; measured in POC-001** |
 | Model weights (downloaded) | 0.5–7 GB per model | LOCAL_AI_MODELS.md | never in the installer (ADR-008) |
 
-Reconciliation note: ADR-004 says "installer ~150–250 MB before models", ASSESSMENT §10 says "≈ 300–400 MB before models", PERFORMANCE §5 caps the installer at ≤ 450 MB. These describe compressed vs uncompressed sizes; POC-001 measures the real numbers and the three documents are then aligned.
+Size wording is unified across ADR-004, ASSESSMENT §10, PERFORMANCE §5 and this table: installer ≈ 300–400 MB compressed before models, budget ≤ 450 MB, measured in POC-001 (the component estimates above are uncompressed; NSIS LZMA compression of the Electron runtime is the main saving, Chrome Headless Shell and the webm loops compress little).
 
 ## 8. First-run tasks (Desktop Shell + Local Service, in order)
 
@@ -227,7 +227,7 @@ Build steps on CI mirror §2; artefacts (`release/<version>/`) are uploaded with
 | Deterministic inputs | `SOURCE_DATE_EPOCH` set from the commit time for archives; Vite/esbuild `define` constants from `package.json` only |
 | Two-build check | VC-123: two builds from the same commit produce identical unsigned file hashes |
 | SBOM | `npx @cyclonedx/cyclonedx-npm --output-file release/<v>/sbom.json` (CycloneDX JSON), plus a hand-maintained `sbom-binaries.json` for non-npm binaries (Chrome Headless Shell, whisper.cpp, sherpa-onnx, sd.cpp) with version, sha256, licence, source URL |
-| Third-Party Notices | `npm run notices` collects npm licences (`license-checker-rseverything` or equivalent) + `vendor/win64/NOTICES/*` (FFmpeg LGPL/GPL build flags, Chrome for Testing terms, whisper.cpp MIT, sherpa-onnx Apache-2.0, Piper GPL-3 source offer, model licences from LOCAL_AI_MODELS.md) into `resources/THIRD_PARTY_NOTICES.txt`; shown in Help ▸ About |
+| Third-Party Notices | `npm run notices` collects npm licences (`license-checker-rseverything` or equivalent) + `vendor/win64/NOTICES/*` (full FFmpeg LGPL build flags and the compositor FFmpeg's notice, Chrome for Testing terms, whisper.cpp MIT, sherpa-onnx Apache-2.0, GPL-3 text and source offer for the espeak-ng phonemizer inside the sherpa-onnx TTS binary (and piper1-gpl if ever shipped, ADR-009), model licences from LOCAL_AI_MODELS.md) into `resources/THIRD_PARTY_NOTICES.txt`; shown in Help ▸ About |
 | Hashes | `SHA256SUMS` over every artefact in `release/<v>/`, signed with the Operator's release GPG/SSH key (optional, for power users) |
 
 ## 12. Release artefact naming
@@ -292,4 +292,4 @@ Electron's `crashReporter` is either not started or started with `uploadToServer
 | Fuses / ASAR integrity | supported (ASAR integrity since Electron 16 on macOS) | ASAR integrity **not** supported on Linux (Electron doc lists macOS and Windows only) → rely on AppImage immutability and signatures |
 | Engine Binaries | mac-arm64 / mac-x64 Chrome Headless Shell; universal builds double the size | linux64 Chrome Headless Shell needs system libraries (Remotion lists them) |
 | Hardware acceleration | VideoToolbox (`hardwareAcceleration`) | NVENC with driver ≥ 525 |
-| Open questions | Gatekeeper behaviour for child binaries spawned from `resources/`; notarization of GPL Piper | sandboxing (`--no-sandbox` must **not** be used; AppImage + Chromium sandbox needs user namespaces) |
+| Open questions | Gatekeeper behaviour for child binaries spawned from `resources/`; notarization of the sherpa-onnx TTS binary that embeds the GPL-3 espeak-ng phonemizer | sandboxing (`--no-sandbox` must **not** be used; AppImage + Chromium sandbox needs user namespaces) |
