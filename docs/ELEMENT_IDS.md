@@ -103,13 +103,14 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `lib.catalogue.card.badge.model` | lock/download badge | "Needs a model that is not installed". Click → Model Manager. |
 | `lib.catalogue.card.badge.gpu` | (added) | "Needs a GPU" (WebGL/WebGPU effects) when Hardware Tier is T0. |
 | `lib.catalogue.card.selected` | (state) | Pick is in the Intent Queue. |
+| `lib.catalogue.empty` | (state) | Search returned nothing; shows suggested queries. |
 | `lib.text.font` | Home ▸ Font | Font family picker (bundled fonts). |
 | `lib.text.size` | Home ▸ Font Size | Size presets + numeric input. |
 | `lib.text.weight` | Home ▸ Text Style | Weight/style toggles. |
 | `lib.text.colour` | Home ▸ Colour | Theme colour swatches + custom. |
 | `lib.text.align` | (added per brief) | Left / centre / right. |
 | `lib.text.effect` | Home ▸ Text Effect | Text animation presets (rough-notation, kinetic). |
-| `lib.text.variant` | Home ▸ Text Style | Title / Subtitle / Caption / Lower third variants. |
+| `lib.text.variant` | Home ▸ Text Style | Title / Subtitle / Lower third / Callout variants (`preset:text.*`). |
 | `lib.text.add` | Home ▸ Add Text | Adds a Text Layer at the playhead with current picks. |
 | `lib.text.opacity` | Home ▸ Opacity | Opacity for the selected element. |
 | `lib.text.ratio` | Home ▸ Ratio Setting | Shortcut to `agent.output.ratio.*`. |
@@ -173,6 +174,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `agent.output` | settings block | Output Settings container. |
 | `agent.output.profile.standard` / `.accelerated` / `.turbo` | Speed buttons | Performance Profile selector (policies in PERFORMANCE.md). |
 | `agent.output.profile.help` | ⓘ | Tooltip explaining profiles honestly. |
+| `agent.output.ratio.help` / `agent.output.private.help` | ⓘ | Tooltips for Video Dimensions (pixel table) and Private Mode (what is blocked). |
 | `agent.output.ratio.16x9` / `.9x16` / `.1x1` / `.4x5` / `.5x4` / `.4x3` / `.3x4` / `.custom` | Video Dimensions | Aspect Ratio selector; shows orientation icon and pixel label for the current Resolution. |
 | `agent.output.ratio.auto` | Auto | Pick ratio from the first inserted Clip. |
 | `agent.output.resolution.720p` / `.1080p` / `.2k` / `.2160p` | 480p/HD/2K/4K buttons | Resolution selector; `.disabled` with reason below the Hardware Tier threshold. |
@@ -183,9 +185,9 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 
 | Element ID | Purpose |
 |---|---|
-| `scr.onboarding` | First-run wizard: `.welcome`, `.license`, `.provider`, `.models`, `.tour`, `.done`. |
-| `scr.license` | Licence entry / status / purchase link; `.input`, `.activate`, `.trial.continue`, `.error`. |
-| `scr.providers` | Provider Connections: `.list`, `.add`, `.provider.select`, `.key.input`, `.validate`, `.models.list`, `.assign.brainstorm`, `.assign.editor`, `.budget.limit`, `.test`, `.save`. |
+| `scr.onboarding` | First-run wizard: `.welcome`, `.license`, `.provider`, `.models`, `.hardware`, `.tour`, `.done`. |
+| `scr.license` | Licence entry / status / purchase link; `.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.trial.continue`, `.remove`, `.rebind`, `.error`. |
+| `scr.providers` | Provider Connections: `.list`, `.add`, `.provider.select`, `.key.input`, `.validate`, `.models.list`, `.assign.brainstorm`, `.assign.editor`, `.budget.project`, `.budget.month`, `.test`, `.save`. |
 | `scr.models` | Model Manager: `.list`, `.row`, `.row.install`, `.row.remove`, `.row.progress`, `.tier`. |
 | `scr.hardware` | Hardware Monitor popover: `.cpu`, `.ram`, `.procmem`, `.disk`, `.gpu`, `.workload`. |
 | `scr.project.new` / `.open` / `.settings` / `.recover` | Project dialogs; settings has `.name`, `.fps`, `.ratio`, `.resolution`, `.duration.policy`, `.output.folder`. |
@@ -203,6 +205,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `sys.render.progress` | Persistent render progress chip in the header area. |
 | `sys.update` | Update available / downloaded / restart prompt. |
 | `sys.privatemode.banner` | Banner while Private Mode is on. |
+| `sys.live` | Visually hidden ARIA live region for status announcements. |
 
 ## Assumptions where the mockup does not define behaviour
 

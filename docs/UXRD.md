@@ -33,7 +33,7 @@ PRD.md §2 owns the one-line persona table. This section adds the detail the UX 
 |---|---|
 | Who | Runs a café, salon or online shop; makes two or three promo videos a month; often delegates to a nephew or part-time staff. |
 | Goals | Brand consistency (same colours, same font), quick turnaround, no subscription per seat, a result that looks "not amateur". |
-| Skills | Lower than Septi: uses WhatsApp and Instagram, has used Canva templates. Will read a tooltip once and never again. |
+| Skills | Lower than Septi: uses WhatsApp and Instagram, has used ready-made Canva layouts. Will read a tooltip once and never again. |
 | Devices | Older Windows 10 laptop (8 GB RAM, T0) or the shop PC; sometimes a 1280×720 screen. |
 | Anxieties | "Which button do I press first?" · "Is this the price for the licence, or per video?" · "What if my staff breaks the project?" |
 | Success looks like | Reuses last month's project, swaps the clips, keeps the Theme, exports 1:1 and 9:16 versions. |

@@ -26,7 +26,7 @@ Mapping: `@remotion/transitions` presentations + `linearTiming`/`springTiming`. 
 | `preset:transition.fade` | Fade / Pudar | — | P0 | | fade |
 | `preset:transition.slide` | Slide / Geser | `direction: from-left|from-right|from-top|from-bottom` (default from-right) | P0 | | slide |
 | `preset:transition.wipe` | Wipe / Sapu | `direction` (default from-left) | P0 | | wipe |
-| `preset:transition.push-cut` | Push cut / Dorong potong | `direction` | P0 | | pushCut |
+| `preset:transition.push-cut` | Push cut / Dorong potong | — (punch-in + flash hard cut; no direction) | P0 | | pushCut |
 | `preset:transition.clock-wipe` | Clock wipe / Sapu jam | — | P0 | | clockWipe |
 | `preset:transition.iris` | Iris / Iris | — | P0 | | iris |
 | `preset:transition.flip` | Flip / Balik | `direction: from-left|from-right|from-top|from-bottom` | P1 | | flip |
@@ -75,7 +75,7 @@ Mapping: CSS backgrounds on an `AbsoluteFill` behind the video track (book §4.6
 | `preset:background.dots` | Dots / Titik | repeating radial gradient | P0 | |
 | `preset:background.moving-gradient` | Moving gradient / Gradasi bergerak | angle interpolated by frame | P1 | |
 | `preset:background.noise-clouds` | Clouds / Awan | `@remotion/noise` | P1 | |
-| `preset:background.video-dim` | Dim video / Video redup | gradient overlay above the video track (book §6.3) | P0 | |
+| `preset:background.video-dim` | Dim video / Video redup | gradient layer rendered **above** the video track (an overlay, listed here because the Creator picks it from Backgrounds; book §6.3) | P0 | |
 | `preset:background.paper` | Paper / Kertas | effects texture generator | P2 | gpu |
 | `preset:background.none` | None / Tanpa latar | transparent (alpha export) | P0 | |
 
@@ -151,7 +151,9 @@ Mapping: `@remotion/effects` via the `effects` prop on `<Video>`, `<Img>`, `<Sol
 | `preset:effect.light-leak` | Light leak / Bocor cahaya | light leak | `intensity` | P1 | gpu |
 | `preset:effect.scanlines` | Scanlines / Garis TV | scanlines | `intensity` | P2 | gpu |
 | `preset:effect.glitch-blocks` | Glitch / Glitch | block dissolve | `intensity` | P2 | gpu |
-| `preset:effect.cylinder` / `.sphere` / `.page-turn` | 3D … | WebGPU effects | — | P2 | webgpu |
+| `preset:effect.cylinder` | Cylinder / Tabung | cylinder (WebGPU) | `rotation` | P2 | webgpu |
+| `preset:effect.sphere` | Sphere / Bola | sphere (WebGPU) | `rotation` | P2 | webgpu |
+| `preset:effect.page-turn` | Page turn / Balik halaman | pageTurn (WebGPU) | `progress` | P2 | webgpu |
 
 The remaining ~60 effects from Appendix A are added in P2 using the same row format; REMOTION_CAPABILITY_MAP.md lists the full group inventory.
 
@@ -191,7 +193,7 @@ Text effects (`op:text.setEffect`, exclusive):
 | `preset:texteffect.kinetic` | Kinetic words / Kata bergerak | `KineticText` spring per word | P0 |
 | `preset:texteffect.counter` | Number counter / Angka berjalan | `AnimatedNumber` (ported) | P1 |
 
-Fonts (bundled woff2, OFL): `Inter`, `Plus Jakarta Sans`, `Archivo`, `JetBrains Mono` (`preset:font.<name>`). Google Fonts are not used at runtime (offline rule).
+Fonts (bundled woff2, OFL): `preset:font.inter` (Inter), `preset:font.plus-jakarta-sans` (Plus Jakarta Sans), `preset:font.archivo` (Archivo), `preset:font.jetbrains-mono` (JetBrains Mono). Google Fonts are not used at runtime (offline rule).
 
 ## 11. Themes (`theme`) — scalar
 

@@ -16,7 +16,7 @@ Detected at startup by the Hardware Monitor and re-checked on demand. The tier d
 | Tier | Detection rule | Defaults |
 |---|---|---|
 | **T0** CPU-only | no discrete GPU, or GPU without usable VRAM info, or VRAM < 4 GB | Profile Standard; `gl: 'swangle'` for WebGL effects; 2K/4K disabled with reason "needs a GPU tier"; local models: whisper small/medium, Piper voices, SD 1.5 (slow) |
-| **T1** GPU ≥ 4 GB | discrete or integrated GPU with ≥ 4 GB VRAM reported | Profile Accelerated available; `gl: 'angle'`; 2K enabled, 4K enabled with warning; whisper large-v3-turbo; FLUX.1-schnell q4 if ≥ 6.5 GB else SD 1.5; ACE-Step small |
+| **T1** GPU ≥ 4 GB | discrete or integrated GPU with ≥ 4 GB VRAM reported | Profile Accelerated available; `gl: 'angle'`; 2K enabled, 4K enabled with warning; whisper large-v3-turbo; SD 1.5 for thumbnails (FLUX.1-schnell q4 needs ≈ 7 GB + encoders → T2); ACE-Step small |
 | **T2** GPU ≥ 8 GB | ≥ 8 GB VRAM | Profile Turbo available; `hardwareAcceleration: 'if-possible'` (NVENC on NVIDIA driver ≥ 525); all presets; FLUX.1-schnell; ACE-Step full |
 
 RAM gates independent of tier: total RAM < 8 GB → warn at startup; free RAM < 2 GB before render → block render with `EM-3101`.
@@ -28,7 +28,7 @@ A Performance Profile is a resource policy. It never changes the frame rate or t
 | Policy | Standard | Accelerated | Turbo |
 |---|---|---|---|
 | Render concurrency (`renderMedia.concurrency`) | 1 | min(2, threads/2) | min(4, threads/2), measured by benchmark |
-| Preview quality in Player | Draft (proxy 720p, `scale` 0.5) | Draft | Full (source media, scale 1) |
+| Preview quality in Player | Draft (proxy media URLs + 720p-row composition metadata) | Draft | Full (source media, export-row metadata) |
 | `imageFormat` | jpeg | jpeg | jpeg (png only when alpha export is chosen) |
 | `hardwareAcceleration` | disabled | if-possible (T2 only; falls back silently) | if-possible (T2 only) |
 | `chromiumOptions.gl` | T0: swangle; T1/T2: angle | angle | angle |
@@ -44,23 +44,23 @@ Auto-selection (P1, PRD-035): run `npx remotion benchmark`-equivalent once per m
 
 ## 3. Aspect Ratios and Resolutions: exact output pixels
 
-Notation is width:height. Even dimensions only (H.264 requires multiples of 2). "Height-based" presets keep the short side; for portrait ratios the preset name refers to the long side so that 9:16 1080p = 1080×1920 (industry convention).
+Notation is width:height. Even dimensions only (H.264 requires multiples of 2). The preset number is always the **short side** (720, 1080, 1440, 2160): 16:9 1080p = 1920×1080 and 9:16 1080p = 1080×1920 (industry convention). The long side = round-to-even(short × ratio).
 
 | Ratio | 720p | 1080p | 2K | 2160p (4K) | Typical use |
 |---|---|---|---|---|---|
 | 16:9 | 1280×720 | 1920×1080 | 2560×1440 | 3840×2160 | YouTube, presentations |
 | 9:16 | 720×1280 | 1080×1920 | 1440×2560 | 2160×3840 | Reels, TikTok, Shorts |
 | 1:1 | 720×720 | 1080×1080 | 1440×1440 | 2160×2160 | Instagram feed |
-| 4:5 | 864×1080 | 1080×1350 | 1440×1800 | 2160×2700 | Instagram portrait |
-| 5:4 | 1080×864 | 1350×1080 | 1800×1440 | 2700×2160 | print-like landscape |
+| 4:5 | 720×900 | 1080×1350 | 1440×1800 | 2160×2700 | Instagram portrait |
+| 5:4 | 900×720 | 1350×1080 | 1800×1440 | 2700×2160 | print-like landscape |
 | 4:3 | 960×720 | 1440×1080 | 1920×1440 | 2880×2160 | classic TV |
 | 3:4 | 720×960 | 1080×1440 | 1440×1920 | 2160×2880 | portrait classic |
-| Custom | long side = preset long side; short side = round-to-even(long × ratio) | | | | |
+| Custom | short side = preset short side; long side = round-to-even(short × ratio) | | | | |
 
 Rules:
-- "2K" is defined as long side 2560 for 16:9 / 9:16 and 1440 short side otherwise (table values are authoritative).
+- "2K" is defined as short side 1440 (QHD-class); table values are authoritative.
 - Custom ratios are clamped to 1:3 … 3:1; width and height ≥ 240.
-- Draft preview = proxy at the 720p row with `scale` 0.5 in the Player; export never uses Draft.
+- Draft preview = the Player receives proxy media URLs and the 720p-row width/height as composition metadata (the Player has no `scale` option); export never uses Draft.
 - `Auto` sets the ratio from the first inserted Clip's probe (`detectFormat` ported from Experthinker Studio, extended to the seven ratios; nearest ratio by aspect difference).
 - The Composition Model stores ratio + resolution preset; pixel values are derived with this table at render (`calculateMetadata`).
 

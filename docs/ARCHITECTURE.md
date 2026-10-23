@@ -167,7 +167,7 @@ sequenceDiagram
 ## 7. Remotion Adapter
 
 - One composition `ExpertmotionTimeline` registered in the Engine's `Root.tsx` with `calculateMetadata` deriving `width`, `height`, `fps`, `durationInFrames` from the Composition Model (ratio × resolution table, fps setting, Σ clips − Σ transition overlaps).
-- `inputProps` = the Composition Model version (JSON, ≤ 2 MB) plus resolved asset URLs. Assets are served to Chrome by the Local Service (`/media/:assetId`) with token-less but random, unguessable IDs and a loopback-only listener; in the Player the same URLs are used.
+- `inputProps` = the Composition Model version (JSON, ≤ 2 MB) plus resolved asset URLs. Assets are served to Chrome Headless Shell by the Local Service at `/media/:assetId/...`; this is the **one documented exception** to the Service Token rule (ADR-005) because Chrome cannot add headers: the URLs carry a per-launch random media token in the path, ids are unguessable ULIDs, the listener is loopback-only and read-only, and `Range` requests are supported. The Player uses the same URLs.
 - Tracks render as stacked `AbsoluteFill`s; Clips use `<TransitionSeries>` on the video track; overlays/text/captions/audio use `<Sequence from durationInFrames>`; every preset is a React component keyed by `presetId` with a Zod params schema from the Design Catalogue.
 - The bundle is built at package time (`bundle()` → `resources/engine/`) and served with `serveUrl` pointing at the bundle folder. No webpack at runtime.
 - Preview: `@remotion/player` imports the same `ExpertmotionTimeline` component from `packages/engine`, so the Editor and the renderer share code; Draft mode swaps proxy URLs via a `quality` input prop.
