@@ -239,7 +239,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 2 | User bubble; "Asking <model>…" with Cancel; Execute disabled while planning. |
 | 3 | `chat`-sourced intent: category inferred by Rewrite (or `layout`/`text`/… when the Creator used the inspector chip), `propertyKey` set by the plan validator per op, `needsInterpretation: true`. |
 | 4 | Editor Agent: Rewrite envelope with queued intents, Locked Keys, capabilities → `EditPlan` → validation → dry run. |
-| 5 | Plan `draft` → `valid` | `invalid` | `stale`; Intent Queue items referenced become `planned`. |
+| 5 | Plan `draft` → `valid` / `invalid` / `stale`; Intent Queue items referenced become `planned`. |
 | 6 | None until Execute. Optional "Preview plan" (P1) renders the dry-run version into the Player with a "Preview only" chip. |
 | 7 | None until Execute. |
 | 8 | Message, plan, validation and usage persisted. |
@@ -344,7 +344,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 2 | Dialog opens with preflight rows filling in (≤ 2 s); Start enabled only when no ⚠ block; on Start the dialog shows progress and the header gains `sys.render.progress`; the dialog can be closed and reopened from the chip. |
 | 3 | none (`render.start` is Creator-only; agents may only suggest). |
 | 4 | none. |
-| 5 | Render Job `queued` → `rendering` → `done` | `failed` | `cancelled`; Output row on done. |
+| 5 | Render Job `queued` → `rendering` → `done` / `failed` / `cancelled`; Output row on done. |
 | 6 | Player keeps working (Draft); background ingest/download paused in Standard/Accelerated. |
 | 7 | Unchanged. |
 | 8 | Job rows, output file under `outputs/<projectId>/`, thumbnail. |
