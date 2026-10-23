@@ -1,0 +1,516 @@
+# Editor Interaction Model
+
+| Field | Value |
+|---|---|
+| Status | baseline |
+| Owner | UI/UX lead + AI agent architect |
+| Last updated | 2026-10-24 |
+| Depends on | MASTER_PROJECT_PROMPT.md §16, GLOSSARY.md, ELEMENT_IDS.md, UXRD.md, USER_FLOWS.md, AI_WORKFLOW.md (§3–§7, §12), DESIGN_CATALOGUE.md, PERFORMANCE.md, ARCHITECTURE.md §5 |
+| Used by | UI_UX_SPECIFICATION.md, FRD.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md, ERROR_CATALOGUE.md |
+| Owner of | the ten-point interaction spec per UI action, selection model, keyboard shortcuts, drag-and-drop rules, panel resize/collapse rules, responsive rules, focus management |
+| ID range | IX-01 … IX-40 (interaction ids used by TEST_PLAN) |
+
+## 0. How to read
+
+Every significant action gets the ten points required by the brief §16, in a fixed-row table:
+
+| # | Point | Meaning here |
+|---|---|---|
+| 1 | User action | The gesture, with element id(s) and shortcut |
+| 2 | Application response | Immediate UI feedback (≤ 100 ms) before any server round trip |
+| 3 | Structured edit intent | `category / propertyKey / propertyClass` of the Edit Intent created, or **none** |
+| 4 | Agent involvement | none · Compile (deterministic) · Editor Agent · Brainstorming Agent |
+| 5 | State changes | Intent Queue, plan, Composition Version, settings, selection |
+| 6 | Preview updates | What the Player does |
+| 7 | Timeline updates | What the Timeline View does |
+| 8 | Persistence | What is written, when (checkpoint ≤ 10 s, PRD-003) |
+| 9 | Error handling | `EM-` range + meaning (ERROR_CATALOGUE.md owns codes) and where the error is shown |
+| 10 | Undo / recovery | How the Creator reverses it |
+
+Copy EN / ID appears where the action produces a new string. Property keys follow AI_WORKFLOW.md examples (`cut:3.transition`, `project.captionStyle`, `clip:abc.effects`, `text:xyz.fontSize`, `theme.text.fontSize`, `project.ratio`).
+
+```
+Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed intent ─► (4) Compile | Editor Agent
+      ▲                                                         │
+      │                                     intent.updated / plan.ready / composition.updated (SSE)
+      └──────────── (10) undo = move head to previous version ◄─┘ (5)(6)(7)(8)
+```
+
+## 1. Library Panel actions
+
+### IX-01 Catalogue Card hover
+
+| # | Spec |
+|---|---|
+| 1 | Pointer enters `lib.catalogue.card` (or keyboard focus lands on it) for ≥ 150 ms. |
+| 2 | Card raises (shadow, 120 ms); `lib.catalogue.card.thumb` loop plays; after 150 ms the Editor asks the Player to show the preset on the Creator's current Composition Version (ADR-011): transitions preview around the nearest Cut, captions/backgrounds/effects on the frame under the playhead, motion/shapes/text on the element under the playhead or a sample. Tooltip after 400 ms: label EN, params summary, flags ("Slower without GPU" / "Lebih lambat tanpa GPU"). |
+| 3 | none. |
+| 4 | none. |
+| 5 | Transient `previewPreset` in Editor memory only. |
+| 6 | Player enters "Previewing Fade" / "Mencoba Pudar" overlay chip; plays a 2 s loop; restores the real frame on pointer leave (≤ 300 ms budget, PERFORMANCE.md §5). With no Clip: neutral sample with label "Sample · insert a clip to preview on your video" / "Contoh · sisipkan klip untuk melihat di video Anda". |
+| 7 | None; the affected Cut/element is outlined with a dashed accent while hovering. |
+| 8 | None. |
+| 9 | Preview render error → Player shows the last real frame and a 2 s inline note "Preview unavailable for this preset" / "Pratinjau tidak tersedia untuk preset ini" (`EM-2xxx`, composition preview); never a toast. |
+| 10 | Not applicable; nothing changed. |
+
+### IX-02 Catalogue Card click, per category
+
+| # | Spec |
+|---|---|
+| 1 | Click or Enter on `lib.catalogue.card`. |
+| 2 | Card gets `.selected`; a chip flies to the Intent Queue (200 ms); Intent Queue item appears in state S1 immediately (optimistic), replaced by the server item on `intent.updated`. |
+| 3 | Per category: **transition** `transition / cut:<n>.transition / exclusive-group`; **caption** `caption / project.captionStyle / exclusive-group`; **background** `background / project.background / exclusive-group`; **motion** `motion / <element>.motion / exclusive-group`; **shape** `shape / project.shapes / list`; **easing** `easing / theme.easing or <element>.motion.easing / scalar`; **effect** `effect / <element>.effects / list`; **audio** `audio / project.audioBed or audio:<id>.ducking / list or exclusive-group`. Target per AI_WORKFLOW.md §4. |
+| 4 | Compile when fully specified (all P0 presets with defaults). Editor Agent only when Target Resolution cannot settle (e.g. motion with nothing selected and no Clip under the playhead → reject instead, `EM-2201`). |
+| 5 | Intent `queued` → `compiled`; same-key intents `superseded`; new Composition Version; `hdr.title.dirty`. |
+| 6 | Player reloads the new version and seeks to the first affected time (first affected Cut, element start, or stays for project-wide picks). |
+| 7 | New/changed `stage.timeline.element.*` pulse once; transitions appear on Cuts; project-wide picks (caption style, background) show on their Track header. |
+| 8 | Intent, ops and version written in one transaction before `composition.updated`; checkpoint within 10 s. |
+| 9 | Catalogue validation → `EM-2xxx` inline under the Intent Queue item ("Needs a clip" / "Perlu klip"); hardware gating → `EM-2xxx` "Up to 2 effects per element on this PC" / "Maksimal 2 efek per elemen di PC ini"; model missing → `EM-7xxx` prompt to Model Manager; preset licence-excluded → never shown. |
+| 10 | Ctrl+Z or the toast Undo moves the head to the previous version; the Intent Queue item shows "undone" / "dibatalkan" and can be re-applied with Restore. |
+
+### IX-03 Text Panel pick (font, size, weight, colour, align, variant, effect, opacity)
+
+| # | Spec |
+|---|---|
+| 1 | Change a control in `lib.text.*` (click, keyboard, or numeric input + Enter). |
+| 2 | Control shows the new value; Intent Queue item optimistic; if no Text Layer is selected a small caption under the control reads "applies to new text" / "berlaku untuk teks baru". |
+| 3 | `text / text:<id>.<field>` (selected) or `theme.text.<field>` (nothing selected) / `scalar`; variant → `text:<id>.variant / exclusive-group`; effect → `text:<id>.effect / exclusive-group`; opacity → `<element>.opacity / scalar` for the selected element. |
+| 4 | Compile, always (brief §16 "selecting a known font size should create a typed operation directly"). |
+| 5 | Scalar supersede within the key; one Composition Version per pick, coalesced when picks arrive < 2 s apart (one version, several ops; one Intent Queue item each). |
+| 6 | Player updates the selected Text Layer in place; for Theme defaults no visible change until Add Text. |
+| 7 | Selected text element pulses; nothing for Theme defaults. |
+| 8 | As IX-02. |
+| 9 | `fitText` shrink → `warn` note on the item "Shrunk to 84 to fit the frame" / "Diperkecil ke 84 agar muat di bingkai"; invalid numeric (e.g. size 2) → inline field error, no intent. |
+| 10 | Ctrl+Z; Restore on the superseded item re-queues the older value. |
+
+### IX-04 Add Text
+
+| # | Spec |
+|---|---|
+| 1 | Type in the Add Text field and click `lib.text.add` (Enter in the field). |
+| 2 | Field clears; new Text Layer appears selected; inspector opens. |
+| 3 | `text / text:new / list` with `params {text, variant, atMs: playhead, durationMs: 3000, position: variant default}`. |
+| 4 | Compile when text is present. Empty text → `needsInterpretation: true` → Editor Agent proposes copy (F6.E1); disabled with hint when no provider is configured. |
+| 5 | New Text Layer id; selection = new layer; version. |
+| 6 | Player seeks to `atMs` and shows the text with the variant's default motion. |
+| 7 | `stage.timeline.element.text` added at the playhead on `stage.timeline.track.text`. |
+| 8 | As IX-02. |
+| 9 | Beyond total duration → trimmed + `warn` "Shortened to end of video" / "Dipersingkat sampai akhir video"; text > 200 chars → field error "Keep it under 200 characters" / "Maksimal 200 karakter". |
+| 10 | Ctrl+Z removes the layer (previous version); `op:text.remove` via inspector asks confirmation (UX-015). |
+
+### IX-05 Asset drop / import
+
+| # | Spec |
+|---|---|
+| 1 | Drop files on `lib.assets.drop`; or click the panel; or `hdr.menu.file.import`; or `lib.text.insert.image` / `.insert.video` (Home). |
+| 2 | Drop target highlights on drag-over with "Drop to import" / "Lepas untuk mengimpor"; cards appear instantly in `.state.ingesting` with a step label. |
+| 3 | none at import (an Asset is not a Composition change). `lib.text.insert.*` additionally creates `asset / sequence.clips / list` → Insert at playhead after ingest. |
+| 4 | none. |
+| 5 | Asset rows + files; no Composition Version. |
+| 6 | None. |
+| 7 | None. |
+| 8 | File copied to `media/<projectId>/<assetId>/`, DB row, probe/proxy/thumbnail/waveform written as produced (`asset.updated`, proposed). |
+| 9 | `EM-1xxx`: unsupported type/codec, damaged file, too large (limit in ASSET_INGESTION.md), duplicate (info). Shown on the card (`.state.unsupported`) and in `lib.assets.error` when more than one fails. `EM-6xxx` disk full. |
+| 10 | Remove card (asks only if the Asset is used by a Clip: "beach.mp4 is in the timeline. Remove it and clip 2?" / "beach.mp4 ada di lini masa. Hapus beserta klip 2?"). |
+
+### IX-06 Sequence Badge change
+
+| # | Spec |
+|---|---|
+| 1 | Click `lib.assets.card.badge.sequence` (cycles 1…n, then none); drag a card above/below another; or type a number in the badge. |
+| 2 | Badge renumbers; other badges shift to stay unique and gapless; `lib.assets.insert` label updates ("Insert 3" / "Sisipkan 3"); card auto-selects. |
+| 3 | none (ordering is pre-Composition state). |
+| 4 | none. |
+| 5 | Editor-side `sequenceOrder` saved to project settings (not the Composition Model). |
+| 6–7 | None. |
+| 8 | Saved with project settings on the next checkpoint. |
+| 9 | None. |
+| 10 | Click to cycle back; Esc while dragging cancels. |
+
+### IX-07 Insert
+
+| # | Spec |
+|---|---|
+| 1 | Click `lib.assets.insert` (Enter when focused). |
+| 2 | Button spinner (≤ 1 s); cards show "In timeline" / "Di lini masa" chip; Intent Queue item "Insert 3 clips" / "Sisipkan 3 klip". |
+| 3 | `asset / sequence.clips / list` with ordered `assetIds`. |
+| 4 | Compile → `op:clip.insert` × n; Auto ratio → additionally `op:output.setRatio` from the first Clip's probe. |
+| 5 | Clips appended after existing Clips (MVP; insert-at-playhead is P1 with reordering); version; Export enabled. |
+| 6 | Player seeks to the first new Clip. |
+| 7 | New `stage.timeline.element.clip` bars; Cuts between them; empty state removed. |
+| 8 | As IX-02. |
+| 9 | Asset still ingesting → that asset skipped with note; Asset missing (`EM-1301`) → rejected; duration > 30 min → `EM-2xxx` block "Video would be longer than 30 minutes" / "Video akan lebih dari 30 menit". |
+| 10 | Ctrl+Z removes the inserted Clips (previous version). |
+
+### IX-08 Generator Card click (Tools; P1/P2)
+
+| # | Spec |
+|---|---|
+| 1 | Click `lib.generator.card.*`. |
+| 2 | Opens `scr.generate.*` as a right-side sheet over the Agent Panel (not a blocking modal); the Player keeps working. |
+| 3 | On `.run`: `generate / project.generated.<kind> / list`, `needsInterpretation: false` (form is fully specified). |
+| 4 | Runtime Sub-agent (whisper, sherpa-onnx, …); hashtags/caption text use the connected LLM (ADR-009) and show the model name. |
+| 5 | Job rows; after `.insert`, a Plan Card with `op:generated.insert` / `op:caption.setPages` → Execute. |
+| 6 | After Execute: Player shows/plays the inserted result. |
+| 7 | New element on the relevant Track (`.generated`, `.caption`, `.audio`). |
+| 8 | Job + result asset persisted; generated files under `media/`. |
+| 9 | `EM-7xxx` (model missing, engine crash, no audio, hardware insufficient) in the sheet with a fallback action ("Use the smaller model" / "Pakai model lebih kecil"). |
+| 10 | Cancel in the sheet stops the job; after Execute, Ctrl+Z. |
+
+## 2. Stage actions
+
+### IX-09 Timeline element select
+
+| # | Spec |
+|---|---|
+| 1 | Click `stage.timeline.element`; Shift+click extends; Ctrl+click toggles; click empty lane clears; Tab/Shift+Tab cycles elements on the focused Track. |
+| 2 | Element gets `.selected` outline (2 px accent); `stage.timeline.inspector` opens with the read-only property sheet; Library Panel shows a chip "Picks apply to: clip 2" / "Pilihan berlaku untuk: klip 2". |
+| 3 | none. |
+| 4 | none. |
+| 5 | Editor selection (not persisted across restarts; see §3). |
+| 6 | Player seeks to the element's start if the playhead is outside it (toggle in `stage.player.menu`). |
+| 7 | Outline; adjacent Cuts highlighted for Clips. |
+| 8 | None. |
+| 9 | None. |
+| 10 | Esc clears selection. |
+
+### IX-10 Inspector "Ask Editor Agent to change"
+
+| # | Spec |
+|---|---|
+| 1 | Click the shortcut in `stage.timeline.inspector` (or press `A` with an element selected). |
+| 2 | `agent.editor.composer` focuses with a target chip "clip 2 · beach.mp4" and a prefilled stem "Change clip 2: " / "Ubah klip 2: ". |
+| 3 | Created only on send: category inferred by the Rewrite step from the instruction, target `clip:<id>`, `needsInterpretation: true`. |
+| 4 | Editor Agent (IX-14). |
+| 5–8 | As IX-14. |
+| 9 | As IX-14. |
+| 10 | Esc removes the chip and stem. |
+
+### IX-11 Player transport (play/pause, scrub, frame-step, fullscreen, menu)
+
+| # | Spec |
+|---|---|
+| 1 | Space / `stage.player.controls.play`; drag `.scrubber`; ←/→ frame; Shift+←/→ 1 s; Home/End start/end; `.fullscreen`; `stage.player.menu` items (safe area, Draft/Full quality, loop, mute). |
+| 2 | Immediate (≤ 50 ms toggle, ≤ 100 ms seek). |
+| 3 | none. |
+| 4 | none. |
+| 5 | Playhead in Editor memory; menu toggles in settings.json. |
+| 6 | Player state. |
+| 7 | `stage.timeline.head` follows; ruler auto-scrolls to keep the playhead visible. |
+| 8 | Player menu toggles only. |
+| 9 | Media error → `stage.player.state.error` `EM-1xxx` with "Rebuild preview" / "Bangun ulang pratinjau". |
+| 10 | Not applicable. |
+
+## 3. Agent Panel actions
+
+### IX-12 Brainstorm send
+
+| # | Spec |
+|---|---|
+| 1 | Type in `agent.brainstorm.composer`, press Enter or `.send` (Shift+Enter = newline); optional `.attach` (Asset or image). |
+| 2 | User bubble appended; composer clears but keeps the text in a recoverable buffer until the reply succeeds; status line "Asking <model>…" / "Bertanya ke <model>…" with Cancel; `.footer.ctx` updates after the reply. |
+| 3 | none directly. A handoff later produces intents with `source: brainstorm`. |
+| 4 | Brainstorming Agent (read-only tools only). |
+| 5 | Thread message rows; usage record; optional handoff card (`agent.brainstorm.handoff`). |
+| 6–7 | None (the Brainstorming Agent never mutates). |
+| 8 | Messages and usage persisted per project. |
+| 9 | `EM-41xx` timeout/rate limit, `EM-43xx` schema, `EM-42xx` budget: system bubble with "Try again" / "Coba lagi" and "Switch model" / "Ganti model"; composer restored. Private Mode: composer disabled with inline note (UX-024). Attachment to a non-vision model: blocked before send. |
+| 10 | Cancel aborts the request (no usage beyond what the provider bills for the partial call; shown as "cancelled"). Messages can be deleted from the thread (local only). |
+
+### IX-13 Handoff accept / dismiss
+
+| # | Spec |
+|---|---|
+| 1 | On `agent.brainstorm.handoff`: untick rows, click "Send to Editor Agent" / "Kirim ke Editor Agent" or "Dismiss" / "Abaikan". |
+| 2 | Card collapses to a one-line receipt "Sent 3 to Editor Agent" / "3 dikirim ke Editor Agent"; Editor Chat scrolls into view with a system bubble. |
+| 3 | One intent per ticked row, `source: brainstorm`; fully specified rows `needsInterpretation: false`. |
+| 4 | Compile for the specified rows; one Editor Agent run for the rest (batched into a single plan). |
+| 5 | Intent Queue grows; versions for compiled rows; plan `draft` → `valid`. |
+| 6–7 | Compiled rows refresh the Player/Timeline immediately; the plan waits for Execute. |
+| 8 | Intents persisted; handoff decision persisted on the brainstorm message. |
+| 9 | Invalid preset id → row greyed "Not available in this version" / "Tidak tersedia di versi ini"; rest proceed. |
+| 10 | Dismiss is reversible: the card stays in the thread collapsed with "Show again" / "Tampilkan lagi". Compiled rows: Ctrl+Z. |
+
+### IX-14 Editor send
+
+| # | Spec |
+|---|---|
+| 1 | Type in `agent.editor.composer`, Enter or `.send`; optional target chip (IX-10). |
+| 2 | User bubble; "Asking <model>…" with Cancel; Execute disabled while planning. |
+| 3 | `chat`-sourced intent: category inferred by Rewrite (or `layout`/`text`/… when the Creator used the inspector chip), `propertyKey` set by the plan validator per op, `needsInterpretation: true`. |
+| 4 | Editor Agent: Rewrite envelope with queued intents, Locked Keys, capabilities → `EditPlan` → validation → dry run. |
+| 5 | Plan `draft` → `valid` | `invalid` | `stale`; Intent Queue items referenced become `planned`. |
+| 6 | None until Execute. Optional "Preview plan" (P1) renders the dry-run version into the Player with a "Preview only" chip. |
+| 7 | None until Execute. |
+| 8 | Message, plan, validation and usage persisted. |
+| 9 | `EM-41xx`/`EM-43xx`/`EM-42xx` as IX-12; `touchesLockedKeys` → one re-prompt, then dropped with a risk row; 409 when a run is already in progress → "The Editor Agent is still working on the previous request" / "Editor Agent masih mengerjakan permintaan sebelumnya". |
+| 10 | Cancel (IX-16); a plan can be discarded ("Discard plan" / "Buang rencana") without any state change. |
+
+### IX-15 Execute
+
+| # | Spec |
+|---|---|
+| 1 | Click `agent.editor.execute` or Ctrl+Enter while the Editor Chat has focus; enabled only when plan `valid` and `baseVersion` = head. |
+| 2 | Plan Card badge → "Executing…" / "Menjalankan…" (S3), Execute replaced by progress, `agent.editor.cancel` enabled; steps tick as they complete. |
+| 3 | none new; executes the plan's intents. |
+| 4 | Runtime only: `composition.applyOps` (not callable by the model); sub-agent steps (captions, tts) run as plan steps. |
+| 5 | Transaction at `baseVersion` → new version; intents `executed`; plan `executed`; `hdr.title.dirty`. Idempotent by `planId`. |
+| 6 | Player reloads the new version; seeks to the first diff element. |
+| 7 | Elements in `ExecutionResult.diff` pulse (added = accent, modified = accent-2, removed = fade out 200 ms). |
+| 8 | Intents, plan, ops, result, usage in one transaction (AI_WORKFLOW.md §2 step 14). |
+| 9 | Mid-transaction failure → SQLite rollback, badge "Not applied · EM-2xxx" / "Tidak diterapkan · EM-2xxx" with Details; stale → 409, badge "Composition changed; re-plan" / "Komposisi berubah; susun ulang"; post-validation `block` → rollback with the rule named ("Video would be shorter than 1 second" / "Video akan kurang dari 1 detik"). |
+| 10 | Toast "Applied: 3 changes · v13" / "Diterapkan: 3 perubahan · v13" with **Undo** (moves head to `fromVersion`); Ctrl+Z; Ctrl+Y redo. |
+
+### IX-16 Cancel (agent request or running plan)
+
+| # | Spec |
+|---|---|
+| 1 | Click `agent.editor.cancel` (or the Cancel on the status line), or Esc while the chat has focus. |
+| 2 | Status line "Cancelling…" / "Membatalkan…" ≤ 1 s; then "Cancelled" / "Dibatalkan". |
+| 3 | none. |
+| 4 | Aborts the provider stream; a running plan is rolled back at the transaction boundary (ops are one transaction, so either nothing or everything; a multi-step plan with a sub-agent job cancels the job and rolls back). |
+| 5 | Plan `cancelled`; intents back to `queued`; version unchanged. |
+| 6–7 | Unchanged. |
+| 8 | Cancellation persisted on the plan/run. |
+| 9 | If the transaction already committed when Cancel arrives, the UI shows "Already applied · Undo?" / "Sudah diterapkan · Batalkan?" (`EM-2xxx` info). |
+| 10 | Re-run from the card. |
+
+### IX-17 Intent restore / remove / clear
+
+| # | Spec |
+|---|---|
+| 1 | `agent.editor.intentqueue.item.restore` on a struck-through item; `.item.remove` on a queued item; `.clear` clears all queued (not executed) items. |
+| 2 | Restore: item moves to the top unstruck, the item it replaces becomes struck; Remove: item slides out (200 ms) with a 5 s toast Undo; Clear: confirmation naming the count ("Clear 4 queued picks?" / "Hapus 4 pilihan antre?"). |
+| 3 | Restore creates a new intent copying the old (`status: restored`, `supersedes: [current]`); Remove sets the intent `rejected` with reason `creator-removed` (see Notes); Clear = Remove for each. |
+| 4 | Restore: Compile (or Editor Agent if it needed interpretation). |
+| 5 | Versions per Compile; a `valid` plan that referenced a removed intent becomes `stale` ("re-plan"). |
+| 6–7 | Compile results refresh as IX-02. |
+| 8 | As IX-02. |
+| 9 | Restoring an intent whose target no longer exists (Clip removed) → `EM-2xxx` "That clip is no longer in the timeline" / "Klip itu sudah tidak ada di lini masa". |
+| 10 | Toast Undo for Remove; Restore is itself the undo of supersede. |
+
+## 4. Output Settings actions
+
+### IX-18 Ratio / Resolution / Performance Profile change
+
+| # | Spec |
+|---|---|
+| 1 | Click `agent.output.ratio.*` (incl. `.custom` → inline W:H fields, clamped 1:3…3:1), `agent.output.ratio.auto` toggle, `agent.output.resolution.*`, `agent.output.profile.*`; or `lib.text.ratio` / `lib.text.videosize` shortcuts. |
+| 2 | Button active state; pixel labels under every ratio recompute from PERFORMANCE.md §3; Player frame animates to the new aspect (200 ms); `stage.player.controls.ratio`/`.res` update. Profile: Player quality switches (Draft/Full) and a one-line note "Preview: Draft" / "Pratinjau: Draft". |
+| 3 | ratio: `layout / project.ratio / scalar`; resolution: `layout / project.resolution / scalar`; profile: `output / project.performanceProfile / scalar`; auto: `layout / project.ratioAuto / scalar`. |
+| 4 | Compile. |
+| 5 | Version for ratio/resolution (they are Composition Model fields); profile is a project setting (version not required but recorded as an intent for visibility). |
+| 6 | Player re-letterboxes; `fitText` re-fits text; safe-area overlay redraws. |
+| 7 | Unchanged lengths; Track headers unchanged. |
+| 8 | As IX-02; profile in Project Settings. |
+| 9 | Resolution above tier → `.disabled` with reason "Needs a GPU tier" / "Perlu GPU" (not an error); Turbo on T1 → allowed with warning badge; custom ratio invalid → field error. |
+| 10 | Ctrl+Z (ratio/resolution); Reset to Defaults (IX-19). |
+
+### IX-19 Reset to Defaults
+
+| # | Spec |
+|---|---|
+| 1 | Click `agent.output.reset`. |
+| 2 | Modal names the changes: "Reset to 16:9 · 1080p · Standard · Auto off · Private Mode unchanged?" / "Kembalikan ke 16:9 · 1080p · Standard · Auto nonaktif · Mode Privat tidak berubah?". |
+| 3 | One `layout` intent per field that differs. |
+| 4 | Compile. |
+| 5 | One version. |
+| 6–7 | As IX-18. |
+| 8 | As IX-02. |
+| 9 | None. |
+| 10 | Ctrl+Z. |
+
+### IX-20 Private Mode toggle
+
+| # | Spec |
+|---|---|
+| 1 | Toggle `agent.output.private` (Space when focused). |
+| 2 | Toggle animates; `sys.privatemode.banner` slides in (200 ms); `agent.modelbar.status` icon; composers disable with inline note; Model Manager/Update controls disable. |
+| 3 | none (settings, not Composition). |
+| 4 | none; in-flight agent runs cancelled (IX-16 semantics). |
+| 5 | `settings.privateMode`; egress module flag; downloads paused. |
+| 6–7 | None. |
+| 8 | settings.json + DB settings immediately. |
+| 9 | None. The ADR-017 telemetry open question is surfaced in Export preflight copy if unresolved. |
+| 10 | Toggle off. |
+
+## 5. Header and project actions
+
+### IX-21 Export start / cancel
+
+| # | Spec |
+|---|---|
+| 1 | `hdr.action.export` / `hdr.menu.file.export` / Ctrl+E → `scr.export`; `.start`; `.cancel`. |
+| 2 | Dialog opens with preflight rows filling in (≤ 2 s); Start enabled only when no ⚠ block; on Start the dialog shows progress and the header gains `sys.render.progress`; the dialog can be closed and reopened from the chip. |
+| 3 | none (`render.start` is Creator-only; agents may only suggest). |
+| 4 | none. |
+| 5 | Render Job `queued` → `rendering` → `done` | `failed` | `cancelled`; Output row on done. |
+| 6 | Player keeps working (Draft); background ingest/download paused in Standard/Accelerated. |
+| 7 | Unchanged. |
+| 8 | Job rows, output file under `outputs/<projectId>/`, thumbnail. |
+| 9 | Preflight `EM-3101…3104`, `EM-1301`, `EM-3001`, `EM-5001` notice; runtime `EM-3xxx` with Try again / Details; cancel removes partial files. |
+| 10 | Cancel; re-export; failed job retains settings for one-click retry. |
+
+### IX-22 Save / Save As / Open / New / Recent / Project Settings
+
+| # | Spec |
+|---|---|
+| 1 | Ctrl+S / `hdr.action.save` / `hdr.menu.file.save`; Ctrl+Shift+S Save As; Ctrl+O Open; Ctrl+N New; `hdr.menu.file.recent`; `hdr.menu.file.settings`. |
+| 2 | Save: `hdr.title.dirty` clears, toast "Saved" / "Tersimpan" (1.5 s); Save As: name dialog; Open/New with unsaved changes: modal "Save changes to 'promo-kafe'?" / "Simpan perubahan ke 'promo-kafe'?" Save / Don't save / Cancel; Settings: `scr.project.settings`. |
+| 3 | Settings changes: fps → `output / project.fps / scalar`; duration policy → `output / project.durationPolicy / scalar`; others (name, output folder) none. |
+| 4 | Compile for fps/duration policy. |
+| 5 | Save marks the head version as saved; Save As clones the project (new id, same versions); New creates project "Untitled" with defaults; fps change re-derives frames (version). |
+| 6 | fps change: Player reloads; perceived timing unchanged. |
+| 7 | Ruler re-labels. |
+| 8 | DB; checkpoints continue regardless of Save. |
+| 9 | `EM-6xxx` write failure → toast with Retry and "Back up now"; name collision on Save As → inline. |
+| 10 | Open the previous project from Recent; Recover (F9.5). |
+
+### IX-23 Backup / Restore
+
+| # | Spec |
+|---|---|
+| 1 | `hdr.action.backup`; `hdr.action.restore`. |
+| 2 | Native save/open dialog; progress toast; Restore shows a preview card before committing. |
+| 3 | none. |
+| 4 | none. |
+| 5 | Backup: none. Restore as new project: new project; Replace: current project versions replaced (confirmation UX-015). |
+| 6–7 | After restore: Player/Timeline load the restored head. |
+| 8 | Zip without credentials or Database Key; restore writes DB rows + media. |
+| 9 | `EM-6xxx` (newer-version zip, disk, damaged zip) in the dialog. |
+| 10 | Replace keeps the replaced project as a checkpoint for 7 days (File ▸ Recover). |
+
+### IX-24 Menu Tab switch, Catalogue Search, Project Title edit
+
+| # | Spec |
+|---|---|
+| 1 | `hdr.menu.home` / `.design` / `.tools`; type in `lib.search.input` (`/` focuses it); click `hdr.title`. |
+| 2 | Library Panel swaps mode (120 ms crossfade), `lib.mode.header` updates; search filters cards live (debounce 150 ms) across labels and tags EN/ID, "No matches for 'x'" / "Tidak ada hasil untuk 'x'"; title becomes an input, Enter/blur saves, Esc cancels. |
+| 3 | none. |
+| 4 | none. |
+| 5 | Mode and last search in Editor memory (mode persisted per project). |
+| 6–7 | None. |
+| 8 | Title rename → DB. |
+| 9 | Empty title → reverts with inline "Name cannot be empty" / "Nama tidak boleh kosong". |
+| 10 | Esc. |
+
+### IX-25 Hardware Monitor, Model Manager, Licence popover, Help items
+
+| # | Spec |
+|---|---|
+| 1 | `hdr.action.hardware` → `scr.hardware` popover; `hdr.action.models` → `scr.models`; `hdr.action.license` → popover; `hdr.menu.help.*` → tour / diagnostics / licence / about / docs. |
+| 2 | Popovers open anchored (120 ms); screens open as sheets; Esc closes; focus returns to the trigger. |
+| 3–4 | none. |
+| 5 | Model installs/removals (F11); licence activation (F13); tour restart. |
+| 6–7 | None. |
+| 8 | Model files, licence state, tour flag. |
+| 9 | `EM-7xxx` models; `EM-5xxx` licence; hardware read failure → "Could not read GPU info" / "Tidak dapat membaca info GPU" (no code; informational). |
+| 10 | Close. |
+
+## 6. Selection model
+
+| Rule | Detail |
+|---|---|
+| Single selection | Click selects one Timeline Element; the inspector shows it; Design Picks target it (AI_WORKFLOW.md §4 "Creator selected" column). |
+| Multi selection | Shift+click range within one Track; Ctrl+click toggles across Tracks; inspector shows "3 elements" with common fields; picks apply to "each selected" per Target Resolution. Cuts are selectable as thin handles between Clips (single only). |
+| Playhead as implicit target | With nothing selected, motion/effect picks target the Clip under the playhead; text picks target a Text Layer under the playhead if one exists ("apply to this text" / "terapkan ke teks ini" offered). |
+| Selection vs. playhead independence | Selecting does not move the playhead unless "Seek on select" is on in `stage.player.menu` (default on). |
+| Clearing | Esc, click on empty lane, or a Composition Version that removes the element. |
+| Persistence | Selection is not saved; playhead position is saved per project (restore on open). |
+| Asset selection | Independent of timeline selection; `lib.assets.card.select` checkboxes; Space toggles the focused card. |
+| Indicators | `stage.timeline.element.selected`; Library Panel chip "Picks apply to: …" / "Pilihan berlaku untuk: …"; inspector header. |
+
+## 7. Keyboard shortcuts
+
+Windows keys; `Ctrl` = `Ctrl` (macOS build P2 maps to `Cmd`). Shortcuts are listed in Help and in tooltips.
+
+| Shortcut | Action | Scope | Element |
+|---|---|---|---|
+| Space | Play / pause | Editor (not in text fields) | `stage.player.controls.play` |
+| ← / → | Previous / next frame | Editor | `stage.player.controls.scrubber` |
+| Shift+← / → | −1 s / +1 s | Editor | same |
+| Home / End | Start / end | Editor | same |
+| J / K / L | Reverse-scrub step / pause / play (K pauses; J steps back 1 s because reverse playback is out of scope) | Editor | same |
+| Ctrl+S | Save | Global | `hdr.action.save` |
+| Ctrl+Shift+S | Save As | Global | `hdr.menu.file.saveas` |
+| Ctrl+O / Ctrl+N | Open / New | Global | `hdr.menu.file.open` / `.new` |
+| Ctrl+I | Import | Global | `hdr.menu.file.import` |
+| Ctrl+E | Export | Global | `hdr.action.export` |
+| Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) | Undo / redo (Composition Version head) | Global (text fields keep native undo while focused) | — |
+| Ctrl+Enter | Execute current plan | Agent Panel focused or global when a valid plan exists | `agent.editor.execute` |
+| Esc | Cancel running request · close popover/modal · clear selection · exit fullscreen (in that priority) | Global | `agent.editor.cancel`, … |
+| / | Focus Catalogue Search | Editor | `lib.search.input` |
+| 1 / 2 / 3 | Switch to Home / Design / Tools | Editor | `hdr.menu.*` |
+| Enter | Insert when Asset Panel focused and ≥ 1 selected | Library Panel | `lib.assets.insert` |
+| Delete | Remove selected Timeline Element (confirmation) | Stage | — |
+| A | Ask Editor Agent about the selection | Stage | inspector shortcut |
+| F | Fullscreen Player toggle | Editor | `stage.player.controls.fullscreen` |
+| Shift+? | Shortcut sheet | Global | — |
+| Alt+1 / Alt+2 / Alt+3 | Focus Library Panel / Stage / Agent Panel | Global | regions |
+| Ctrl+B / Ctrl+Shift+B | Collapse/expand Library Panel / Agent Panel | Global | regions |
+
+Shortcuts never fire while a text input, textarea or contenteditable has focus, except Ctrl+S, Ctrl+Enter (composer) and Esc.
+
+## 8. Drag-and-drop rules
+
+| Source → target | Allowed | Effect | Rejected feedback |
+|---|---|---|---|
+| OS files → `lib.assets.drop` | yes | Import (IX-05) | Unsupported types listed on the card |
+| OS files → `stage.player.canvas` or `stage.timeline` | yes | Import then Insert at end (video/image → Clip; audio → `op:audio.addLayer` at playhead) | Same |
+| OS files → Agent composer `.attach` | images only | Attach to the message (vision models) | "Only images can be attached here" / "Hanya gambar yang bisa dilampirkan di sini" |
+| Asset card → Asset card | yes | Reorder Sequence Badges (IX-06) | — |
+| Asset card → `stage.timeline.track.video` | yes (P0 end-append; P1 at drop index) | Insert that Asset | Still ingesting → not-allowed cursor |
+| Asset card → `stage.timeline.track.audio` | audio assets | `op:audio.addLayer` at drop time | Non-audio → not-allowed |
+| Catalogue Card → Timeline Element | yes | Same as click with explicit target (IX-02) | Category/target mismatch → not-allowed cursor + tooltip "Transitions go on cuts" / "Transisi ditempatkan di potongan" |
+| Catalogue Card → Player | yes | Same as click with playhead target | — |
+| Timeline Element → another position | P1 (PRD-036) | `op:clip.move` / `op:text.setTiming` | MVP: not-allowed cursor + tooltip "Reordering arrives in a later update; ask the Editor Agent" / "Pengurutan ulang hadir di pembaruan berikutnya; minta Editor Agent" |
+| Element edge → trim | P1 | `op:clip.setTrim` | MVP: as above |
+| Panel divider | yes | Resize (§9) | — |
+
+General: drag threshold 4 px; drop targets show a 2 px accent inset outline during drag-over; Esc cancels; keyboard alternative exists for every drop (import button, badge click, Insert).
+
+## 9. Panel resize and collapse
+
+| Rule | Value |
+|---|---|
+| Default widths (UI_UX_SPECIFICATION.md §3) | Library Panel 300 px · Stage flex · Agent Panel 360 px |
+| Library Panel range | 240–420 px; collapses to a 48 px icon rail (mode icons + assets icon) below 240 or via Ctrl+B |
+| Agent Panel range | 320–520 px; collapses to a 48 px rail (brainstorm, editor, output icons with badges for pending plan / unread) via Ctrl+Shift+B |
+| Stage minimum | 560 px wide; Player keeps aspect inside; Timeline View height 220 px min, resizable up to 50 % of the Stage height |
+| Agent Panel internal split | Brainstorming Chat / Editor Chat divider draggable 30–70 %; Output Settings fixed height, collapsible header |
+| Dividers | 6 px hit area, 1 px line; double-click resets to default; keyboard: focus divider, ←/→ by 16 px |
+| Persistence | Widths and collapsed states in settings.json per window size bucket (≤ 1279, 1280–1599, ≥ 1600) |
+| Collapsed rail behaviour | Clicking a rail icon opens that panel as an overlay (not pushing the Stage) until focus leaves; pinning re-expands |
+
+## 10. Minimum window and responsive rules
+
+| Width | Behaviour |
+|---|---|
+| ≥ 1600 | Defaults; Library Panel may show 3 catalogue columns |
+| 1280–1599 | Defaults (300 / flex / 360); 2 catalogue columns; minimum supported window **1280×720** (Electron `minWidth: 1280, minHeight: 720` for the main window; the Shell enforces it) |
+| 1024–1279 | Library Panel collapses to the icon rail automatically; opening it overlays the Stage; Agent Panel narrows to 320; Output Settings collapses to a header row showing "9:16 · 1080p · Standard" with expand |
+| < 1024 | Not supported: a non-blocking `sys.toast` "Expertmotion works best at 1280×720 or wider" / "Expertmotion bekerja paling baik pada 1280×720 atau lebih lebar"; both side panels collapse; nothing overlaps; the Shell prevents resizing below 1024×600 |
+| Height < 720 | Timeline View shrinks to 160 px and gains vertical scroll; Output Settings collapses |
+| Fullscreen Player | All panels hidden; Esc or F restores |
+| DPI | Layout in CSS px; 125 %/150 % Windows scaling supported; icons are SVG |
+
+## 11. Focus management
+
+| Situation | Rule |
+|---|---|
+| App start | Focus on the Project Title when the project is empty, otherwise on the Player. |
+| Mode switch | Focus moves to `lib.mode.header`; the first card/control is next in Tab order. |
+| Popover/modal open | Focus trapped inside; first focusable element focused; Esc closes; focus returns to the opener. Modals are `role="dialog"` with `aria-labelledby`. |
+| Toast with action | Not focus-stealing; F6 cycles regions including the toast stack; the toast action is reachable via Alt+T. |
+| Plan Card ready | Focus is not stolen; a live region announces "Plan ready: <goal>" / "Rencana siap: <goal>"; Ctrl+Enter works globally when a valid plan exists. |
+| Execute done | Live region announces "Applied, version 13" / "Diterapkan, versi 13"; focus stays. |
+| Error inline | Focus moves to the first errored field in forms; for Intent Queue rejects the item receives focus only if the Creator's last action created it. |
+| Region order (F6) | Header → Library Panel → Stage → Agent Panel → toasts. |
+| Tab order inside Stage | Player controls → scrubber → Timeline ruler → Tracks (Tab between Tracks, ←/→ between elements on a Track) → inspector. |
+| Timeline element focus | Roving tabindex; Enter selects; Space toggles multi-select; the inspector mirrors the focused element only on selection, not on focus. |
+| Deleted element | Focus moves to the next element on the same Track, else the Track header. |
+
+## Notes (inconsistencies observed, not fixed here)
+
+1. `EditIntent.status` in AI_WORKFLOW.md §3 has no value for a Creator-removed intent; this document uses `rejected` with reason `creator-removed` for `agent.editor.intentqueue.item.remove`. AI_WORKFLOW.md may prefer a dedicated `removed` status.
+2. ELEMENT_IDS.md lists `lib.text.variant` values "Title / Subtitle / Caption / Lower third"; DESIGN_CATALOGUE.md §10 P0 variants are Title / Subtitle / Lower third / Callout (no "Caption" variant). This document follows the catalogue.
