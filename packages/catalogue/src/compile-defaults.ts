@@ -6,7 +6,7 @@ export interface CompileRule { op: string; requires: readonly string[]; argsFrom
 
 const params = (p: PresetDef) => ({ ...p.defaults });
 export const COMPILE_RULES: Readonly<Record<Category, CompileRule>> = Object.freeze({
-  transition: { op: 'op:transition.set', requires: [], argsFrom: (p) => { const { durationMs, timing, easingId, ...rest } = p.defaults as Record<string, unknown>; return { presetId: p.id, durationMs, timing, ...(easingId === undefined ? {} : { easingId }), params: rest }; } },
+  transition: { op: 'op:transition.set', requires: [], argsFrom: (p) => { const { durationMs, timing, ...rest } = p.defaults as Record<string, unknown>; return { presetId: p.id, durationMs, timing, params: rest }; } },   // easingId and direction live in params (AI_WORKFLOW §5)
   caption: { op: 'op:caption.setStyle', requires: [], argsFrom: (p) => ({ presetId: p.id, params: params(p) }) },
   background: { op: 'op:background.set', requires: [], argsFrom: (p) => ({ presetId: p.id, params: params(p) }) },
   motion: { op: 'op:motion.set', requires: ['target'], argsFrom: (p) => ({ presetId: p.id, params: params(p) }) },

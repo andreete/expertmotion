@@ -191,7 +191,7 @@ export function applyOperations(model: CompositionModelT, ops: Operation[], ctx:
    // ApplyContext = { assets: AssetFacts[]; tier: 'T0'|'T1'|'T2'; catalogue: CatalogueRegistry; newId: () => string }
    // pure: never mutates `model`; stops at the first blocking Issue (step index in Issue.path = "steps[n].ops[m]")
 export function validate(model: CompositionModelT, ctx: ValidateContext): Issue[];   // CM-001 … CM-011 (DATABASE_SCHEMA §4.4)
-export function deriveTiming(model: CompositionModelT): Timing;
+export function deriveTiming(model: CompositionModelT): DerivedTiming;   // named DerivedTiming because `Timing` is the Zod element-timing schema (DATABASE_SCHEMA §4.2)
    // { durationMs, cutStartMs[], elementWindows: Record<id,{fromMs,toMs}>, warnings: Issue[] }   (DATABASE_SCHEMA §4.3)
 export function framesOf(ms: number, fps: number): number;      // Math.round(ms / 1000 * fps)
 export function hashModel(model: CompositionModelT): string;   // sha256Canonical → composition_versions.hash

@@ -4,7 +4,8 @@ export default defineConfig({
     include: ['packages/*/test/**/*.test.ts', 'apps/*/test/**/*.test.ts'],
     pool: 'forks',
     poolOptions: { forks: { singleFork: true } },          // one process: shared Linux server memory cap (AGENTS.md §4)
-    coverage: { provider: 'v8', include: ['packages/*/src/**'], reporter: ['text-summary'] },
+    coverage: { provider: 'v8', include: ['packages/*/src/**'], reporter: ['text-summary'],
+      thresholds: { 'packages/composition-model/src/**': { lines: 90 }, 'packages/agents/src/**': { lines: 90 } } },   // TRD TR-090
   },
   resolve: { conditions: ['source'] },
 });

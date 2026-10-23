@@ -390,7 +390,7 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 | Code | Rule | Severity |
 |---|---|---|
 | CM-001 | every `assetId` exists in `assets` with status `ready` | block |
-| CM-002 | `trimBeforeMs + durationMs / playbackRate ≤ asset.duration_ms` for video/audio | block |
+| CM-002 | `trimBeforeMs + durationMs × playbackRate ≤ asset.duration_ms` for video/audio (a Clip played at rate 2 consumes twice its timeline duration of source media; corrected 2026-10-24 from `÷`) | block |
 | CM-003 | `transitions[*].cutIndex < video.length − 1`, unique per cut | block |
 | CM-004 | transition `durationMs ≤ 0.5 × min(adjacent clip durations)` | warn → auto-clamp; block if < 100 ms |
 | CM-005 | total duration 1 000 … 1 800 000 ms | block |
@@ -403,7 +403,7 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 
 ### 4.5 Versioning and hashing
 
-Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions.hash`. `baseVersion` in plans is this hash. Undo moves `projects.head_version_id` to `parent_id` and records a new version row with `cause = 'undo'` (history is never deleted). Checkpoints: autosave every 10 s if dirty, before Execute, before render, max 20 files per project (oldest pruned).
+Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions.hash`. `baseVersion` in plans is this hash. Undo moves `projects.head_version_id` to `parent_id` and records a new version row with `cause = 'undo'` (history is never deleted). Checkpoints: debounced autosave (2 s after the last edit, at most every 5 s while dirty; NFR-020), before Execute, before render, max 20 files per project (oldest pruned).
 
 ## 5. Migrations
 
