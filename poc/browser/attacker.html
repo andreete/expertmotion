@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>attacker</title>
+<iframe name="sink" style="display:none"></iframe>
+<script>
+const T = 'http://127.0.0.1:4110';
+const r = {};
+const settle = (p, ms = 3000) => Promise.race([p, new Promise((res) => setTimeout(() => res('timeout'), ms))]);
+window.__run = async () => {
+  r.corsGet = await settle(fetch(T + '/api/v1/projects').then((x) => 'readable:' + x.status, (e) => 'blocked:' + e.name));
+  r.noCorsPost = await settle(fetch(T + '/api/v1/renders', { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: '{"x":1}' }).then((x) => 'opaque:' + x.type, (e) => 'blocked:' + e.name));
+  r.bearerGuess = await settle(fetch(T + '/api/v1/projects', { headers: { Authorization: 'Bearer guess' } }).then((x) => 'readable:' + x.status, (e) => 'blocked:' + e.name));
+  r.eventSource = await settle(new Promise((res) => { const es = new EventSource(T + '/api/v1/events'); es.onopen = () => { es.close(); res('opened'); }; es.onerror = () => { es.close(); res('error'); }; }));
+  r.img = await settle(new Promise((res) => { const i = new Image(); i.onload = () => res('loaded'); i.onerror = () => res('error'); i.src = T + '/media/' + 'A'.repeat(43) + '/01J9ZZZZZZZZZZZZZZZZZZZZZZ/proxy'; }));
+  r.form = await settle(new Promise((res) => { const f = document.createElement('form'); f.method = 'POST'; f.action = T + '/api/v1/renders'; f.target = 'sink'; f.enctype = 'text/plain'; const i = document.createElement('input'); i.name = '{"a":"'; i.value = '"}'; f.appendChild(i); document.body.appendChild(f); f.submit(); setTimeout(() => res('submitted'), 1000); }));
+  const t = []; for (const p of [47600, 47601, 4110]) { const t0 = performance.now(); await settle(fetch('http://127.0.0.1:' + p + '/api/v1/health', { mode: 'no-cors' }).catch(() => 0), 1500); t.push([p, Math.round(performance.now() - t0)]); }
+  r.portProbeMs = t;
+  return r;
+};
+</script>

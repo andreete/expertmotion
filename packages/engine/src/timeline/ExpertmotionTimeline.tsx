@@ -87,13 +87,13 @@ const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'd
   const src = quality === 'draft' && urls.proxy ? urls.proxy : urls.playable;
   const effects = effectsFor(clip.effects, frame, durationInFrames, fps);
   const crop = clip.crop ? { clipPath: `inset(${clip.crop.top * 100}% ${clip.crop.right * 100}% ${clip.crop.bottom * 100}% ${clip.crop.left * 100}%)` } : {};
-  const style: React.CSSProperties = { width: '100%', height: '100%', objectFit: clip.objectFit, ...crop };
+  const style: React.CSSProperties = { width: '100%', height: '100%', ...crop };   // objectFit goes through the prop (Remotion warns on style.objectFit for <Video>)
   const fadeIn = clip.fadeInMs ? interpolate(frame, [0, framesOf(clip.fadeInMs, fps)], [0, 1], clampOpts) : 1;
   const fadeOut = clip.fadeOutMs ? interpolate(frame, [durationInFrames - framesOf(clip.fadeOutMs, fps), durationInFrames], [1, 0], clampOpts) : 1;
   return (
     <AbsoluteFill style={motionStyle(clip.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId)}>
       {urls.kind === 'image'
-        ? <Img src={src} style={style} effects={effects} />
+        ? <Img src={src} style={{ ...style, objectFit: clip.objectFit }} effects={effects} />
         : <Video src={src} trimBefore={framesOf(clip.trimBeforeMs, fps)} playbackRate={clip.playbackRate} muted={clip.muted} volume={clip.volume * fadeIn * fadeOut} objectFit={clip.objectFit} style={style} effects={effects} />}
     </AbsoluteFill>
   );

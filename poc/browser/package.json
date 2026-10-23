@@ -1,0 +1,2 @@
+{ "name": "poc-browser", "private": true, "type": "module", "version": "0.0.0",
+  "dependencies": { "esbuild": "0.25.12", "pixelmatch": "8.0.0", "pngjs": "7.0.0" } }
