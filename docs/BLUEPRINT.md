@@ -5,7 +5,7 @@
 | Status | baseline |
 | Owner | Principal architect |
 | Last updated | 2026-10-24 |
-| Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 002, 004, 005, 011, 013, 015), ARCHITECTURE.md, DATABASE_SCHEMA.md, AI_WORKFLOW.md, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md, ASSESSMENT.md §1, PRD.md, MASTER_PROJECT_PROMPT.md §5, §10, §12 |
+| Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 002, 004, 005, 011, 013, 015), ARCHITECTURE.md §4, §5, §7, SECURITY.md (SEC-002, SEC-008, SEC-010), DEVELOPMENT_WORKFLOW.md, DATABASE_SCHEMA.md, AI_WORKFLOW.md, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md, ASSESSMENT.md §1, PRD.md, MASTER_PROJECT_PROMPT.md §5, §10, §12 |
 | Used by | TRD.md, API_SPECIFICATION.md, DEPLOYMENT_AND_PACKAGING.md, ROADMAP.md, POC_PLAN.md, DEVELOPMENT_WORKFLOW.md, TEST_PLAN.md, AGENT_DESIGN.md §6 (subagent scopes) |
 | Owner of | monorepo layout, package purposes and public API surfaces, dependency rules, the file-by-file port list from `/home/andre/experthinker-studio`, module data contracts (as names; schemas stay with their owners), build and release artefact list, the P0 vertical slice, PRD → package traceability |
 
@@ -18,7 +18,7 @@ Expertmotion is one installed Windows application (`Expertmotion.exe`) made of t
 | Part | Process | Code | Talks to |
 |---|---|---|---|
 | Desktop Shell | Electron main | `apps/desktop` | spawns the Local Service; hosts the Editor in a `BrowserWindow`; native dialogs, `safeStorage`, updater, tray |
-| Local Service | Node.js child process (Electron's embedded Node, `ELECTRON_RUN_AS_NODE=1`) | `apps/service` + `packages/*` | encrypted SQLite, filesystem, Engine, LLM providers (only when configured, never in Private Mode) |
+| Local Service | Electron `utilityProcess` (Electron's embedded Node; the `RunAsNode` fuse is off, so no plain Node child exists) | `apps/service` + `packages/*` | encrypted SQLite, filesystem, Engine, LLM providers (only when configured, never in Private Mode) |
 | Editor | React in the Electron renderer (or a browser in development) | `apps/ui` | Local Service only, over `http://127.0.0.1:<port>/api/v1` with the Service Token |
 | Engine | prebuilt Remotion bundle + Chrome Headless Shell + FFmpeg | `packages/engine` (bundle) + `resources/engine/` | driven by `@remotion/renderer` from the Local Service; the same `ExpertmotionTimeline` component is imported by the Editor's Player |
 
@@ -57,7 +57,7 @@ Every arrow is a typed contract (§4). The LLM appears exactly once (Editor Agen
 | Launch, onboarding, licence | `apps/desktop`, `apps/service/license`, `apps/ui/screens/onboarding` |
 | Import, probe, proxy, thumbnails | `apps/service/ingest`, `packages/shared` (ids, hashing) |
 | Sequence Badges, Insert | `apps/ui/library/assets`, `apps/service/http/assets`, `packages/composition-model` (`op:clip.insert`) |
-| Design Picks, Intent Queue | `apps/ui/library/catalogue`, `packages/agents/intents`, `packages/engine/catalogue` |
+| Design Picks, Intent Queue | `apps/ui/library/catalogue`, `packages/agents/intents`, `packages/catalogue` |
 | Brainstorming, Edit Plan, Execute | `packages/agents`, `apps/service/agents`, `packages/composition-model` |
 | Player, Timeline View | `apps/ui/stage`, `packages/engine` (component), `packages/composition-model` (timing) |
 | Output Settings, Export | `apps/ui/agent-panel/output`, `apps/service/render`, `packages/engine/formats` |
@@ -77,7 +77,8 @@ expertmotion/
     ui/                        Editor (React 19 + Vite 6 + Tailwind v4 + @remotion/player)
   packages/
     composition-model/         Zod schema, applyOps, validate, deriveTiming, diff, hashing, migrations   (React-free)
-    engine/                    Remotion compositions, presets, catalogue registry, Root.tsx, formats, build script
+    catalogue/                 Design Catalogue registry: preset ids, labels, Zod param schemas, defaults, flags, Compile defaults (React-free)
+    engine/                    Remotion: ExpertmotionTimeline, preset React implementations keyed by preset id, Root.tsx, formats, build script
     agents/                    schemas, intents compiler, rewrite, provider adapters, tool registry, prompts loader (React-free)
     models/                    Model Manager core + engine adapters (whisper.cpp, sherpa-onnx, sd.cpp)         (React-free)
     shared/                    ids, EmError + EM- code table type, i18n keys, DTO types, logger interface       (React-free)
@@ -89,8 +90,24 @@ expertmotion/
     golden/                    golden frames per preset × 7 ratios, Golden Scenario expectations
     e2e/                       Playwright specs (Editor against a dev Local Service)
   resources/                   build-time outputs copied into the installer (git-ignored): engine/bundle, engine/chrome, engine/ffmpeg, catalogue/loops
+  scripts/                     dev-capped.sh (Linux cgroup wrapper), verify.sh
   docs/                        this documentation
 ```
+
+Root npm scripts (the only names other documents refer to; DEVELOPMENT_WORKFLOW.md owns the exact commands):
+
+| Script | Does | Where |
+|---|---|---|
+| `dev` | Local Service (`EM_PORT`, default 4110) + Vite Editor (`EM_UI_PORT`, default 4120) together, browser mode | any |
+| `dev:capped` | `dev` inside the systemd user cgroup (MemoryHigh 900M, MemoryMax 1200M, swap 256M, Node heap 512 MB) | Linux dev server only |
+| `typecheck` | `tsc -b` over every workspace | any |
+| `test` | Vitest unit + integration (fakes for provider, render, egress, models) with coverage thresholds | any |
+| `test:e2e` | Playwright against `dev` (browser mode) or `--electron` against a desktop build | browser: any; Electron: Windows |
+| `eval:agents` | Golden Scenarios on the fake provider; `--live --model <id>` runs live with the test key | any (live needs network) |
+| `build:engine` | Engine bundle (`bundle()`) + catalogue loops + golden frames | Windows (loops need RAM) |
+| `build:desktop` | `build:engine` + service + ui + electron-builder NSIS, fuses, signing | Windows |
+| `lint` | ESLint (import boundaries, no-any, no-console, `data-el`), forbidden-word lint on `en.json`/`id.json`, React-free graph check | any |
+| `format` | Prettier write | any |
 
 Package names are scoped `@expertmotion/<name>`; apps are `@expertmotion/desktop`, `@expertmotion/service`, `@expertmotion/ui`.
 
@@ -99,24 +116,25 @@ Package names are scoped `@expertmotion/<name>`; apps are `@expertmotion/desktop
 | Package | May import | Must not import | React? |
 |---|---|---|---|
 | `packages/shared` | nothing internal | anything | no |
-| `packages/composition-model` | `shared`, `engine/catalogue` (React-free subpath) | `engine` root, `agents`, apps | no |
-| `packages/engine` | `shared`, `composition-model`, `remotion`, `@remotion/*` | `agents`, `models`, apps, `express`, `better-sqlite3` | yes (root); **no** under `src/catalogue/`, `src/formats.ts`, `src/metadata.ts`, `src/text/fit.ts`, `src/text/format-number.ts` |
-| `packages/agents` | `shared`, `composition-model`, `engine/catalogue`, `ai`, provider SDKs | `engine` root, apps, `@remotion/renderer` | no |
+| `packages/catalogue` | `shared`, `zod` | `engine`, `composition-model`, `agents`, apps, `react`, `remotion` | no |
+| `packages/composition-model` | `shared`, `catalogue` | `engine` (any path), `agents`, apps | no |
+| `packages/engine` | `shared`, `catalogue`, `composition-model`, `remotion`, `@remotion/*` | `agents`, `models`, apps, `express`, `better-sqlite3` | yes (root); **no** under `src/formats.ts`, `src/metadata.ts`, `src/text/format-number.ts` (React-free subpaths used by the service) |
+| `packages/agents` | `shared`, `catalogue`, `composition-model`, `ai`, provider SDKs | `engine` (any path), apps, `@remotion/renderer` | no |
 | `packages/models` | `shared` | everything else internal | no |
-| `apps/service` | all packages; `engine` root only inside `render/` (for `@remotion/renderer` types) | `apps/ui`, `apps/desktop`, `electron` | no |
-| `apps/ui` | `shared`, `composition-model`, `engine` (component + catalogue), `@remotion/player` | `agents` (except types), `models`, `apps/service`, `express`, `node:*` | yes |
-| `apps/desktop` | `shared` (types), `electron` | `apps/service` code (it spawns it), `apps/ui` code (it loads the built bundle), `packages/engine` | no |
+| `apps/service` | all packages; `engine` root only inside `render/` (for `@remotion/renderer` types); `engine/formats` and `engine/metadata` subpaths elsewhere | `apps/ui`, `apps/desktop`, `electron` (except `parentPort` typings in `main.ts`) | no |
+| `apps/ui` | `shared`, `catalogue`, `composition-model`, `engine` (component), `@remotion/player` | `agents` (except types), `models`, `apps/service`, `express`, `node:*` | yes |
+| `apps/desktop` | `shared` (types), `electron` | `apps/service` code (it forks the built file), `apps/ui` code (it loads the built bundle), `packages/engine` | no |
 
-Enforced by `eslint-plugin-import` `no-restricted-paths` plus a `tools/release/check-react-free.mjs` script that fails the build if `react` appears in the dependency graph of any React-free entry point (the predecessor convention "keep `schemas.ts` React-free: the server and MCP import it" generalised). `apps/service` never imports `react`; it imports `packages/engine/catalogue` and `packages/engine/metadata` only.
+The dependency graph is therefore acyclic: `shared → catalogue → composition-model → {engine, agents} → apps`. `catalogue` exists precisely so that `composition-model` (CM-007 preset validation) and `agents` (Compile defaults, capability lists) never import `engine`, and `engine` can import `composition-model` for timing (ADR-013, ARCHITECTURE.md §4). Enforced by `eslint-plugin-import` `no-restricted-paths` plus a `tools/release/check-react-free.mjs` script that fails the build if `react` appears in the dependency graph of any React-free entry point (the predecessor convention "keep `schemas.ts` React-free: the server and MCP import it" generalised).
 
 ### 2.2 Build outputs
 
 | Package | Build tool | Output | Consumed by |
 |---|---|---|---|
-| `packages/shared`, `composition-model`, `agents`, `models` | `tsc -b` (ESM, d.ts) | `dist/` | service, ui (type-only or ESM) |
+| `packages/shared`, `catalogue`, `composition-model`, `agents`, `models` | `tsc -b` (ESM, d.ts) | `dist/` | service, ui (type-only or ESM); `catalogue/dist/` also feeds `build:engine` (loop list) |
 | `packages/engine` | `tsc -b` for the library; `remotion bundle` (`@remotion/bundler` `bundle()`) for the Engine bundle; `renderMedia` loop for catalogue loops | `dist/` (library); `resources/engine/bundle/` (serveUrl folder); `resources/catalogue/loops/<category>/<name>.webm` | service (`serveUrl`), ui (component via `dist/`), ui (loops as static files) |
 | `apps/ui` | Vite 6 | `apps/ui/dist/` | desktop (served over the `app://` scheme), dev browser via Vite dev server |
-| `apps/service` | esbuild (single ESM file + externals for native modules) | `apps/service/dist/service.mjs` | desktop (spawned as child) |
+| `apps/service` | esbuild (single CommonJS file + externals for native modules; CJS because `utilityProcess.fork` loads a script path and the bytecode loader is CJS) | `apps/service/dist/service.cjs` | desktop (`utilityProcess.fork`) |
 | `apps/desktop` | electron-vite (main, preload); V8 bytecode only for `license/` and `prompts/` modules (ADR-007) | `apps/desktop/out/` | electron-builder |
 | installer | electron-builder (NSIS x64) | `release/Expertmotion-<version>-x64.exe` + `latest.yml` | Creator download, updater |
 
@@ -188,21 +206,21 @@ export const OPERATIONS: Record<OpName, { argsSchema: z.ZodTypeAny; target: Targ
 
 ### 3.3 `packages/engine`
 
-Purpose: everything Remotion. One composition, the Design Preset implementations, the catalogue registry (React-free subpath), formats and `calculateMetadata`, fonts, and the build script that produces the Engine bundle and the catalogue loops (ADR-001, ADR-011).
+Purpose: everything Remotion. One composition, the Design Preset **implementations** (React components keyed by preset id; the registry itself lives in `packages/catalogue`, §3.3a), formats and `calculateMetadata`, fonts, and the build script that produces the Engine bundle and the catalogue loops (ADR-001, ADR-011).
 
 ```
 packages/engine/
   src/
     Root.tsx                 <Composition id="ExpertmotionTimeline" component={ExpertmotionTimeline} calculateMetadata={calculateMetadata} defaultProps={EMPTY_INPUT}/>
     entry.ts                 registerRoot(RemotionRoot)           (ported pattern)
-    index.ts                 React exports: ExpertmotionTimeline, ThemeProvider, useLayout, components
-    catalogue/               React-free: index.ts (registry), transition.ts, caption.ts, background.ts, motion.ts, shape.ts, easing.ts, effect.ts, audio.ts, text.ts, theme.ts
+    index.ts                 React exports: ExpertmotionTimeline, ThemeProvider, useLayout, components, presetComponents
+    presets/index.ts         presetComponents: Record<PresetId, React.FC<params>>; build fails if a catalogue id has no component or vice versa
     formats.ts               React-free: ratios, resolveDimensions, safe areas, detectRatio          (ported formats.ts, extended)
     metadata.ts              React-free: calculateMetadata(inputProps) → {width,height,fps,durationInFrames,props}
     layout.tsx               useLayout(), useElementDuration()                                       (ported layout.tsx)
     theme.tsx                ThemeProvider/useTheme: palette + font pair tokens from Theme (replaces brand.ts)
     fonts.ts                 loadFonts(fontPairId) via @remotion/fonts + staticFile                   (ported fonts.ts)
-    text/fit.ts              fitText estimator + fitTextSafe wrapper                                 (ported fit.ts)
+    text/fitTextSafe.ts      wraps @remotion/layout-utils when `document` exists, else the estimator from packages/shared (ported fit.ts)
     text/format-number.ts    formatNumber(value, locale, opts)                                        (ported format-number.ts)
     timeline/                ExpertmotionTimeline.tsx, VideoTrack.tsx (TransitionSeries), OverlayTrack.tsx, TextTrack.tsx, CaptionTrack.tsx, AudioTrack.tsx, BackgroundLayer.tsx
     presets/<category>/<name>.tsx   one React component per preset id, props = Zod params
@@ -220,25 +238,18 @@ Public API (root, React):
 export const ExpertmotionTimeline: React.FC<EngineInputProps>;
 export type EngineInputProps = { model: CompositionModelT; assets: Record<string, AssetUrls>; quality: 'draft'|'full'; watermark: boolean };
    // AssetUrls = { playable: string; proxy?: string; durationMs: number; width?: number; height?: number; hasAudio: boolean }
+   // URLs are `http://127.0.0.1:<port>/media/<grant>/<assetId>/<variant>`: the Local Service builds them with the media grant of the
+   // current preview session (Player) or of the Render Job (Chrome Headless Shell); see API_SPECIFICATION.md §2.2 and SEC-010
+export const presetComponents: Record<PresetId, React.FC<any>>;   // one entry per `packages/catalogue` id; checked at build time
 export function useLayout(): Layout;                      // { width, height, ratio, u, safe, contentW, contentH, isLandscape }
 export function useElementDuration(): number;             // frames of the enclosing <Sequence>
 export const ThemeProvider: React.FC<{ theme: ThemeT; children }>; export function useTheme(): ThemeTokens;
 export { KineticText, AnimatedNumber, BarChart, LineChart, CaptionPage, Watermark } from './components';
 ```
 
-Public API (`@expertmotion/engine/catalogue`, `/formats`, `/metadata`, `/text`; React-free, imported by service and agents):
+Public API (`@expertmotion/engine/formats`, `/metadata`, `/text`; React-free subpaths imported by the service):
 
 ```ts
-// catalogue
-export interface PresetDef<P = unknown> { id: PresetId; category: Category; label: { en: string; id: string }; tags: string[]; params: z.ZodType<P>; defaults: P;
-  propertyClass: 'scalar'|'list'|'exclusive-group'; priority: 'p0'|'p1'|'p2'; flags: Array<'gpu'|'webgpu'|`model:${string}`|'licence:paid'>; preview: string /* catalogue/<cat>/<name>.webm */; }
-export const catalogue: CatalogueRegistry;                 // Map<PresetId, PresetDef>, frozen at module load
-export function getPreset(id: string): PresetDef | undefined;
-export function listPresets(filter?: { category?: Category; priority?: ('p0'|'p1'|'p2')[]; tier?: 'T0'|'T1'|'T2' }): PresetDef[];
-export function searchPresets(query: string, lang: 'en'|'id', category?: Category): PresetDef[];   // labels + tags (DESIGN_CATALOGUE §13)
-export function presetParamsJsonSchema(id: PresetId): JsonSchema;   // z.toJSONSchema, for the inspector fallback form
-export function compileDefaults(category: Category, presetId: PresetId): Record<string, unknown>;  // Compile table input (AI_WORKFLOW §7)
-
 // formats  (ported formats.ts, extended to 7 ratios + custom)
 export type Ratio = '16:9'|'9:16'|'1:1'|'4:5'|'5:4'|'4:3'|'3:4'|'custom';  export type Resolution = '720p'|'1080p'|'2k'|'2160p';
 export function resolveDimensions(ratio: Ratio, resolution: Resolution, custom?: { w: number; h: number }): { width: number; height: number };  // PERFORMANCE.md §3 table, even px, clamps
@@ -251,14 +262,38 @@ export function calculateMetadata(input: { props: EngineInputProps }): { width: 
    // uses resolveDimensions + deriveTiming; identical in Player and renderer (ADR-001 "one code path")
 
 // text
-export function fitText(text: string, o: FitOptions): FitResult;            // ported unchanged
-export function fitTextSafe(text: string, o: FitOptions & { fontFamily: string; weight: number }): FitResult;  // @remotion/layout-utils when `document` exists, estimator otherwise
+export function fitTextSafe(text: string, o: FitOptions & { fontFamily: string; weight: number }): FitResult;  // @remotion/layout-utils when `document` exists, else shared/text/fit estimator
 export function formatNumber(value: number, locale: 'id'|'en', opts?: NumberFormatOptions): string;
+```
+
+### 3.3a `packages/catalogue`
+
+Purpose: the closed Design Catalogue as **data** (DESIGN_CATALOGUE.md rows in code): preset ids, EN/ID labels and tags, Zod param schemas, defaults, Property Class, priority, flags, preview asset path, and the Compile defaults table. No React, no Remotion. It is the one module every other layer reads to enumerate presets (DESIGN_CATALOGUE.md §1 rule 3), and it is what lets `composition-model` and `agents` validate and compile presets without depending on `engine` (ADR-013). A lint compares its rows with DESIGN_CATALOGUE.md and `engine/presets/index.ts` (every id implemented, no extra implementation).
+
+```
+packages/catalogue/src/
+  index.ts        registry + query functions
+  types.ts        PresetDef, Category, PropertyClass, Flag
+  transition.ts, caption.ts, background.ts, motion.ts, shape.ts, easing.ts, effect.ts, audio.ts, text.ts, theme.ts   one file per category
+  compile-defaults.ts   category → default op args per preset (AI_WORKFLOW.md §7 "one table in code, tested per preset")
+```
+
+```ts
+export interface PresetDef<P = unknown> { id: PresetId; category: Category; label: { en: string; id: string }; tags: string[]; params: z.ZodType<P>; defaults: P;
+  propertyClass: 'scalar'|'list'|'exclusive-group'; priority: 'p0'|'p1'|'p2'; flags: Array<'gpu'|'webgpu'|`model:${string}`|'licence:paid'>; preview: string /* catalogue/<cat>/<name>.webm */; }
+export const catalogue: CatalogueRegistry;                 // ReadonlyMap<PresetId, PresetDef>, frozen at module load
+export const CATALOGUE_VERSION: string;                    // bumped with every row change; part of the API ETag
+export function getPreset(id: string): PresetDef | undefined;
+export function listPresets(filter?: { category?: Category; priority?: ('p0'|'p1'|'p2')[]; tier?: 'T0'|'T1'|'T2' }): PresetDef[];
+export function searchPresets(query: string, lang: 'en'|'id', category?: Category): PresetDef[];   // labels + tags (DESIGN_CATALOGUE §13)
+export function presetParamsJsonSchema(id: PresetId): JsonSchema;   // z.toJSONSchema, for the inspector fallback form and GET /catalogue
+export function compileDefaults(category: Category, presetId: PresetId): Record<string, unknown>;  // Compile table input (AI_WORKFLOW §7)
+export function validateParams(id: PresetId, params: unknown): Result<Record<string, unknown>>;    // used by CM-007 and intent validation (EM-2101/2102)
 ```
 
 ### 3.4 `packages/agents`
 
-Purpose: the deterministic intent pipeline (steps 2–8 of AI_WORKFLOW.md §2), the provider adapters, the tool registry with permissions, and the prompt loader. No Express, no SQLite; the service injects repositories through `ctx`.
+Purpose: the deterministic intent pipeline (steps 2–8 of AI_WORKFLOW.md §2), the provider adapters, the tool registry with permissions, and the prompt loader. No Express, no SQLite, no `engine` import (presets come from `packages/catalogue`); the service injects repositories through `ctx`. Cut indexes in `ElementRef` and `propertyKey` are 0-based (`cut:0.transition`); the Editor displays them 1-based (AI_WORKFLOW.md §3).
 
 ```ts
 // schemas.ts  (AI_WORKFLOW.md §3 verbatim)
@@ -314,7 +349,7 @@ Purpose: the only stateful process. Module folders mirror ARCHITECTURE.md §4.
 
 ```
 apps/service/src/
-  main.ts                     stdin handshake {token, port, dataDir, dbKey}, open DB, migrations, failInterrupted(), licence, tier, browserReady() in background, listen 127.0.0.1, print "ready <port>"
+  main.ts                     bootstrap message {token, port, dataDir, dbKey} received on Electron `parentPort` (dev: EM_* env), open DB, migrations, failInterrupted(), licence, tier, browserReady() in background, listen 127.0.0.1, post `{type:'ready', port}` on parentPort (dev: log line)
   config.ts                   resolved paths (ARCHITECTURE §8), EM_* dev overrides (TRD §4)
   http/  app.ts (createApp), guards.ts (Host/Origin/token), sse.ts (openSse + SseHub), errors.ts (EmError → envelope), route.ts (async wrapper), routes/*.ts (one file per API group)
   db/    open.ts (PRAGMA key/cipher), migrations/NNN_*.sql, repositories/*.ts (one per table), tx.ts
@@ -324,7 +359,7 @@ apps/service/src/
   agents/   runs.ts, conversations.ts, usage.ts, egress.ts (Private Mode gate)
   ingest/   pipeline.ts (probe → transcode → proxy → thumbs → filmstrip → waveform → hash), ffprobe.ts, ffmpeg.ts, limits.ts
   render/   queue.ts (ported RenderQueue), bundle.ts (prebuilt serveUrl), browser.ts (ported), stills.ts (ported), preflight.ts, validateOutput.ts (ffprobe), profiles.ts (PERFORMANCE §2 → renderMedia options)
-  media/    server.ts         GET /media/:assetId/:variant with Range; path confinement
+  media/    server.ts, grants.ts   GET /media/:grant/:assetId/:variant with Range; media grants per preview session / Render Job (SEC-010); DB-looked-up paths only
   models/   manager.ts        ModelManager host; generator-jobs.ts
   hardware/ monitor.ts        cheap meter (2 s), systeminformation (≥ 30 s), tier.ts
   license/  verify.ts, fingerprint.ts, state.ts     (bytecode-protected module in production builds)
@@ -374,13 +409,13 @@ Exports: none consumed by other packages. Every interactive element carries `dat
 
 ```
 apps/desktop/src/
-  main/index.ts        single-instance lock, safeStorage keyring (wrap/unwrap Database Key), free loopback port 47600–47699, spawn service with stdin handshake, restart backoff 1 s/3 s/9 s (EM-8001/8002), window, app:// protocol for apps/ui/dist, close flow (EM-8304), tray, updater
+  main/index.ts        single-instance lock, safeStorage keyring (wrap/unwrap Database Key), random free loopback port 47600–47699 (SEC-008), `utilityProcess.fork(service.cjs)` + bootstrap `postMessage({token, port, dataDir, dbKeyHex})` (SEC-002), wait for `{type:'ready'}`, restart backoff 1 s/3 s/9 s (EM-8001/8002), window, app:// protocol for apps/ui/dist, close flow (EM-8304), tray, updater
   main/ipc.ts          handlers: pickFiles(filters) → paths; pickFolder; revealPath(path); openExternal(storeUrl); getBootstrap() → {port, token}
   preload/index.ts     contextBridge.exposeInMainWorld('expertmotion', { getBootstrap, pickFiles, pickFolder, revealPath, openExternal, onServiceState })
   main/license/        bytecode-protected (ADR-007): nothing else lives here; verification itself is in apps/service/license (also bytecode)
 ```
 
-`window.expertmotion` is the only bridge; `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` (ARCHITECTURE.md §3).
+`window.expertmotion` is the only bridge; `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` (ARCHITECTURE.md §3). The Service is an Electron utility process, not a Node child: the `RunAsNode` fuse is disabled (SEC-028), so `service.cjs` runs on the Electron binary with the same ABI as the Shell, and the bootstrap never touches argv, env or a file (SEC-002).
 
 ## 4. Module boundaries and data contracts
 
@@ -400,9 +435,10 @@ apps/desktop/src/
 | **API DTOs** | service ↔ ui | API_SPECIFICATION.md | JSON over loopback HTTP | Zod at the route boundary; generated TS types in `shared/dto` |
 | **SSE events** | service → ui | API_SPECIFICATION.md §7 | `GET /events`, `GET /renders/:id/events` | `seq` monotonic per connection |
 | **Shell bootstrap** | desktop → ui | this document §3.8 | preload `getBootstrap()` | — |
-| **Service handshake** | desktop → service | ARCHITECTURE.md §5 | one JSON line on stdin `{token, port, dataDir, dbKeyHex}`; `ready <port>` on stdout | Zod in `main.ts` |
+| **Service bootstrap** | desktop → service | ARCHITECTURE.md §5, SEC-002 | `utilityProcess` `postMessage({type:'bootstrap', token, port, dataDir, dbKeyHex})`; Service answers `{type:'ready', port}` or `{type:'fatal', code}` on `parentPort` | Zod in `main.ts` |
+| **Media grant** | service → ui (preview) / service → Engine (render) | API_SPECIFICATION.md §2.2, SEC-010 | path segment of `/media/<grant>/…`; preview grant returned by `POST /projects/:id/open`, render grant created per Render Job and revoked at its end | grant table in memory; unknown or revoked → 404 |
 | **Asset facts** | service → composition-model, agents | DATABASE_SCHEMA.md `assets` | `AssetFacts { id, kind, durationMs, width, height, fps, hasAudio, status }` | CM-001/002 |
-| **Catalogue** | engine/catalogue → agents, service, ui | DESIGN_CATALOGUE.md | module import; `GET /catalogue` adds tier/model availability | registry frozen; lint against DESIGN_CATALOGUE rows |
+| **Catalogue** | `packages/catalogue` → composition-model, agents, engine, service, ui | DESIGN_CATALOGUE.md | module import; `GET /catalogue` adds tier/model availability | registry frozen; lint against DESIGN_CATALOGUE rows and `engine/presets/index.ts` |
 
 Rules that follow from the table:
 
@@ -426,8 +462,8 @@ Legend: **keep** = logic retained, **rename** = identifier or file renamed, **re
 | `util.ts` (42) `HttpError`, `newId`, `sha1`, `sanitizeFilename`, `timestamp`, `errorMessage`, `truncate` | `packages/shared/src/{errors,ids}.ts` | `sanitizeFilename` (unchanged; extension strip list extended to gif/png/wav/mp3), `timestamp`, `errorMessage`, `truncate` | `HttpError(status, message, details, code)` → `EmError(code, message, {status, details, path})` with mandatory `EM-` code; `newId(prefix)` → ULID `newId()` + `shortId()` for logs; `sha1` → `sha256Canonical` | — |
 | `app.ts` (668) `openSse` (l.153–168), Host guard (l.279–283), Origin guard (l.285–291), `express.json({limit:'2mb'})`, `route()` wrapper, `validated()` | `http/sse.ts`, `http/guards.ts`, `http/route.ts` | `openSse`: headers (`text/event-stream`, `no-cache, no-transform`, `keep-alive`, `X-Accel-Buffering: no`), `retry: 2000`, `: ping` every 15 s, `send(event, data)`, close on `req.close`; Host allow-list (403), Origin check on non-safe methods (403), JSON limit 2 MB; `route()` async wrapper | `openSse` gains `id:` lines with a per-connection `seq`, a 500-event ring buffer in `SseHub` for `Last-Event-ID` replay, and the `?token=` check; guards gain the Service Token bearer check (401 `EM-8004`) and map to `EM-8005`; allow-lists built from the runtime port, not `STUDIO_*`; `/renders/:id/events` and `/events` retained (API_SPECIFICATION §6.11, §7) | all template routes (`/compositions`, `/presets`, `/schema`, `/validate`, `/stills`), `VERSION` constant, `ValidationFailed` (replaced by `EmError` `EM-9002`/`EM-2102`), `cors` package (replaced by explicit Origin middleware; CORS headers only in dev for the Vite origin) |
 | `db.ts` (335) `failInterruptedJobs`, `saveJob` upsert, `getSettings`/`saveSettings` | `db/repositories/renderJobs.ts`, `settings/service.ts` | the patterns: mark `queued`/`rendering` → `failed` at startup (`EM-3203`), upsert by id, settings defaults merged on read | table set replaced by DATABASE_SCHEMA.md §3; raw `better-sqlite3` → `better-sqlite3-multiple-ciphers` with `PRAGMA key` | `renders`, `presets` tables, `Preset` CRUD, `Origin`, `jobByOutputPath` |
-| `config.ts` (53) | `config.ts` | `HOST = '127.0.0.1'`; allow-list idea | values come from the stdin handshake (port, dataDir) with `EM_*` dev overrides (TRD.md §4); paths follow ARCHITECTURE.md §8, never repo-relative | `REPO_ROOT`, `VIDEO_DIR`, `ENTRY_POINT`, `WATCH_PATHS`, `BUNDLES_DIR`, `STUDIO_PORT`/`DASHBOARD_PORT`, `RENDER_CONCURRENCY` env (now a Performance Profile policy), `VIDEO_EXTENSIONS` (now `ingest/limits.ts` with PRD-005 lists) |
-| `index.ts` (39) | `main.ts` | startup order (fail interrupted jobs → warm browser in background → listen loopback), `EADDRINUSE` handling, SIGTERM graceful close with 1.5 s fallback | adds stdin handshake, DB open/migrate, licence + tier detection, `ready` line; `console.log` → structured logger | banner text |
+| `config.ts` (53) | `config.ts` | `HOST = '127.0.0.1'`; allow-list idea | values come from the `parentPort` bootstrap message (port, dataDir) with `EM_*` dev overrides (TRD.md §4; dev ports 4110/4120); paths follow ARCHITECTURE.md §8, never repo-relative | `REPO_ROOT`, `VIDEO_DIR`, `ENTRY_POINT`, `WATCH_PATHS`, `BUNDLES_DIR`, `STUDIO_PORT`/`DASHBOARD_PORT`, `RENDER_CONCURRENCY` env (now a Performance Profile policy), `VIDEO_EXTENSIONS` (now `ingest/limits.ts` with PRD-005 lists) |
+| `index.ts` (39) | `main.ts` | startup order (fail interrupted jobs → warm browser in background → listen loopback), `EADDRINUSE` handling (→ `{type:'fatal'}` so the Shell picks another port, SEC-008), graceful close with 1.5 s fallback | adds the `parentPort` bootstrap, DB open/migrate, licence + tier detection, `ready` message; `console.log` → structured logger | banner text |
 
 ### 5.2 `packages/video/src` → `packages/engine/src` (and `packages/composition-model`)
 
@@ -435,13 +471,13 @@ Legend: **keep** = logic retained, **rename** = identifier or file renamed, **re
 |---|---|---|---|---|
 | `formats.ts` (80) `FORMAT_KEYS`, `FormatKey`, `SafeArea`, `FormatDef`, `formats`, `DEFAULT_FORMAT`, `isFormatKey`, `detectFormat`, `FPS` | `formats.ts` | `SafeArea`, nearest-aspect search in `detectFormat`, the 9:16 safe margins (`top 190, right 120, bottom 340, left 72` at 1080 wide) and the 72/96 px margins for other shapes | keys `vertical/landscape/square/portrait` → `Ratio` (`'16:9'…'3:4'|'custom'`); `formats[key].width/height` → `resolveDimensions(ratio, resolution, custom)` implementing the PERFORMANCE.md §3 table (even px, custom clamp 1:3…3:1, ≥ 240); `detectFormat` → `detectRatio` over the seven ratios; `isFormatKey` → `isRatio`; `label`/`use` → i18n keys | `FPS = 30` (fps is `ProjectSettings.fps`), `DEFAULT_FORMAT` (default is Project Settings) |
 | `layout.tsx` (68) `useLayout`, `Layout`, `SceneDurationProvider`, `useSceneDuration`, `blockHeight` | `layout.tsx` | `u = min(width,height)/1080`, safe area scaled from the preset, `contentW/H`, `isLandscape`, `blockHeight` | `key` → `ratio`; `SceneDurationProvider`/`useSceneDuration` → `ElementDurationProvider`/`useElementDuration` (frames of the enclosing `<Sequence>`) | `barH` and `box` (brand bar) |
-| `fit.ts` (78) `fitText`, `estimateLines`, `fitSingleLine`, `FitOptions`, `FitResult` | `text/fit.ts` | all, unchanged (deterministic, DOM-free; used by the Layout Sub-agent and CM-008 in the headless Local Service) | add `fitTextSafe()` that calls `@remotion/layout-utils` `fitText`/`measureText` when `typeof document !== 'undefined'` (Player, renderer) and falls back to the estimator headless | — |
+| `fit.ts` (78) `fitText`, `estimateLines`, `fitSingleLine`, `FitOptions`, `FitResult` | `packages/shared/src/text/fit.ts` (estimator) + `packages/engine/src/text/fitTextSafe.ts` (wrapper) | all, unchanged (deterministic, DOM-free; used by the Layout Sub-agent and CM-008 in `composition-model`, which must not import `engine`) | `fitTextSafe()` in the engine calls `@remotion/layout-utils` `fitText`/`measureText` when `typeof document !== 'undefined'` (Player, renderer) and falls back to the shared estimator headless | — |
 | `format-number.ts` (67) `formatId`, `scaleFor`, `formatValue`, `formatAxis`, `NumberFormatOptions` | `text/format-number.ts` | compact scale logic, tabular output | `formatId` → `formatNumber(value, locale, opts)` with `locale: 'id'|'en'` from `ProjectSettings.language`; ribu/juta/miliar/triliun only for `id`, K/M/B/T for `en` | id-ID as the implicit default |
 | `fonts.ts` (35) `loadBrandFonts`, `headingFont`, `monoFont` | `fonts.ts` | `loadFont({family, url: staticFile('fonts/…'), weight, format: 'woff2'})` pattern, idempotent `started` flag, warn-not-throw | `loadBrandFonts()` → `loadFonts(fontPairId)`; faces table from DESIGN_CATALOGUE §10 fonts (Inter, Plus Jakarta Sans, Archivo, JetBrains Mono); `headingFont`/`monoFont` → `useTheme().fonts.heading/body/mono` | `brand` import |
 | `components/KineticText.tsx` `KineticText`, `stripMarks`, `tokenize` | `components/KineticText.tsx` | `*word*` highlight tokenizer, per-word `spring` with `delay + i × stagger`, props `text, fontSize, fontWeight, delay, stagger, lineHeight, textAlign, fontFamily` | defaults `color = brand.colors.text` → `useTheme().colours.text`, `fontFamily = headingFont` → theme heading; highlight colour → `theme.colours.accent`; `textAlign` gains `'right'`; registered as `preset:texteffect.kinetic` | `brand`, `fonts` imports |
 | `components/AnimatedNumber.tsx` `AnimatedNumber` | `components/AnimatedNumber.tsx` | `value × progress` count-up, `fontVariantNumeric: tabular-nums` | `monoFont` → theme mono; `formatValue` → `formatNumber(…, locale)`; registered as `preset:texteffect.counter` (P1) | — |
 | `components/BarChart.tsx`, `LineChart.tsx`, `chart-types.ts` (`ChartPoint`, `ChartProps`, `clamp`, `defaultHighlight`) | `components/charts/` | animation and layout logic | `brand.colors.*` → theme tokens (`accent`, `muted`, `grid`, `up`, `down`); not registered in the P0 catalogue (reserved for a P2 `preset:overlay.chart` row) | `format` id-ID default |
-| `schemas.ts` (167) `computeMetadata`, `getJsonSchema`, React-free registry convention | `metadata.ts` (engine), `packages/composition-model` | the convention (React-free module shared by server and UI) and the `calculateMetadata` from props idea | `computeMetadata(id, props)` → `calculateMetadata({props})` reading the model; `getJsonSchema` → `presetParamsJsonSchema` via `z.toJSONSchema` | `TEMPLATE_IDS`, `templates[]`, `getTemplate`, `requireTemplate`, `secondsToFrames` (ms-based `framesOf` instead) |
+| `schemas.ts` (167) `computeMetadata`, `getJsonSchema`, React-free registry convention | `metadata.ts` (engine), `packages/catalogue` | the convention (React-free registry module shared by server and UI, now a whole package) and the `calculateMetadata` from props idea | `computeMetadata(id, props)` → `calculateMetadata({props})` reading the model; `getJsonSchema` → `presetParamsJsonSchema` (catalogue) via `z.toJSONSchema` | `TEMPLATE_IDS`, `templates[]`, `getTemplate`, `requireTemplate`, `secondsToFrames` (ms-based `framesOf` instead) |
 | `validation.ts` (177) `ValidationIssue {path, message}`, `formatPath`, `formatIssues` | `packages/shared/src/result.ts`, `packages/composition-model/src/validate.ts` | the issue shape with `path` strings and `formatIssues` for logs | `ValidationIssue` → `Issue` with `code` and `severity` | `validateTemplateProps`, evidence-first warnings |
 | `Root.tsx` (97), `entry.ts` (4) | `Root.tsx`, `entry.ts` | `registerRoot`, `<Composition calculateMetadata>` pattern | one composition `ExpertmotionTimeline`; `defaultProps` = empty model | six `<Composition>` entries, `<Folder>` grouping |
 | `test/validation.test.ts` (22 cases via `tsx`) | `packages/composition-model/test/*.test.ts` | case style (fixture → expected issues) | runner → Vitest | all evidence/template cases |
@@ -463,7 +499,7 @@ Legend: **keep** = logic retained, **rename** = identifier or file renamed, **re
 | Source | Decision |
 |---|---|
 | `apps/mcp/*` | removed (ADR-015); an MCP façade is a P2 option over the same Tools |
-| `scripts/dev-capped.sh`, `scripts/print-mcp-config.mjs` | removed as-is; a Linux-only `tools/dev/capped.sh` (systemd-run cgroup wrapper) may be re-created for headless tests on the shared server (TRD.md §5) |
+| `scripts/dev-capped.sh`, `scripts/print-mcp-config.mjs` | not copied; `dev:capped` is re-implemented as Expertmotion's own `scripts/dev-capped.sh` (systemd-run cgroup wrapper, ports 4110/4120); the MCP config printer is removed |
 | `packages/video/sample-props.json`, `public/logo.png` | removed |
 
 ### 5.5 Drop list (with reasons)
@@ -475,9 +511,9 @@ Legend: **keep** = logic retained, **rename** = identifier or file renamed, **re
 | The six compositions `Explainer`, `HookIntro`, `DataExplainer`, `KeyFact`, `Contrast`, `ReflectiveOutro` (+ `registry.tsx`, `scene-view.tsx`, `defaults.ts` CONTOH content) | Replaced by the single document-driven `ExpertmotionTimeline` (ADR-001). Fixed templates with props cannot express an arbitrary Clip sequence, and their Indonesian sample content belongs to the predecessor brand. |
 | Indonesian number formatting as the default (`formatId`, `formatValue` id-ID) | Kept as a capability, but the locale now follows `ProjectSettings.language`; an English project must not show "1.234,5". |
 | `apps/mcp` (`render_video`, `create_preview`, `userApproved` gating) | ADR-015: agents call typed in-process Tools; Remotion's own MCP is deprecated. The approval gate survives as **Execute** (AI-004). |
-| `scripts/dev-capped.sh` as-is | It hard-codes the Studio workspace names, ports 4100/5173 and `STUDIO_*` env. The constraint it encodes (900 MB soft / 1.2 GB hard on the shared server) stays in TRD.md §5 as a rule, not a script. |
+| `scripts/dev-capped.sh` as-is | It hard-codes the Studio workspace names, ports 4100/5173 and `STUDIO_*` env. The cgroup pattern is re-created as Expertmotion's own `scripts/dev-capped.sh` behind `npm run dev:capped` with ports 4110/4120 and `EM_*` variables (DEVELOPMENT_WORKFLOW.md §4); the constraint itself (900 MB soft / 1.2 GB hard) is a rule in TRD.md §5. |
 | `apps/server` bundle watcher (`chokidar`) and runtime `@remotion/bundler` | The Engine bundle is prebuilt at package time (ADR-001, ADR-004); watching sources at runtime is a development-only concern handled by `remotion studio` and Vite. |
-| `STUDIO_*` environment variables, repo-relative `data/` and `output/` paths | Replaced by the stdin handshake and the app-data layout (ARCHITECTURE.md §8); `EM_*` dev variables in TRD.md §4. |
+| `STUDIO_*` environment variables, repo-relative `data/` and `output/` paths | Replaced by the `utilityProcess` bootstrap message and the app-data layout (ARCHITECTURE.md §8); `EM_*` dev variables in TRD.md §4. |
 | `presets` table and Presets page | A "preset" in the Studio was a saved props set for a template. In Expertmotion the word means Design Preset (closed catalogue); saved Creator favourites are a P2 idea with a different name. |
 | `renders.origin` (`dashboard`/`claude`) | There is no external caller; the Creator is the only origin. Provenance of a change is the Intent Queue (`EditIntent.source`). |
 
@@ -486,7 +522,7 @@ Legend: **keep** = logic retained, **rename** = identifier or file renamed, **re
 | Artefact | Built by | Contents | Integrity |
 |---|---|---|---|
 | **Editor bundle** `apps/ui/dist/` | Vite 6 (`vite build`), Tailwind v4 | `index.html`, hashed JS/CSS, fonts (UI), catalogue loops copied from `resources/catalogue/loops/` | served over `app://` by the Shell; CSP `default-src 'self'; connect-src http://127.0.0.1:*; media-src http://127.0.0.1:* 'self'` |
-| **Service bundle** `apps/service/dist/service.mjs` (+ `node_modules` externals for native modules) | esbuild, `--platform=node --format=esm --minify --sourcemap=false` | Local Service; `license/` and `prompts/` as V8 bytecode (`.jsc`) loaded by a tiny loader | `asar` integrity fuse; `prompts.enc` decrypted in memory (ADR-007) |
+| **Service bundle** `apps/service/dist/service.cjs` (+ `node_modules` externals for native modules) | esbuild, `--platform=node --format=cjs --minify --sourcemap=false` | Local Service entry for `utilityProcess.fork`; `license/` and `prompts/` as V8 bytecode (`.jsc`) loaded by a tiny loader | `asar` integrity fuse; `prompts.enc` decrypted in memory (ADR-007) |
 | **Engine bundle** `resources/engine/bundle/` | `packages/engine/scripts/build-bundle.ts` → `@remotion/bundler.bundle()` | webpack output + `public/` (fonts, sfx) + `manifest.json {remotionVersion, bundleVersion (sha256 of files), builtAt}` | hash listed in SBOM; `EngineBundle` verifies `manifest.json` at startup (EM-3003) |
 | **Catalogue loops** `resources/catalogue/loops/<category>/<name>.webm` | `packages/engine/scripts/build-loops.ts` (`renderMedia`, vp9, 2 s, 480 px, ≤ 40 MB total) | one loop per preset row in DESIGN_CATALOGUE.md; `index.json` with sizes | build fails if a preset lacks a loop (EM-3302 would otherwise show at runtime) |
 | **Golden frames** `test/golden/<preset>/<ratio>.png` | `scripts/golden-frames.ts` (`renderStill`) | one still per preset × 7 ratios | compared in TEST_PLAN parity tests (≤ 1 % diff) |
@@ -497,7 +533,7 @@ Legend: **keep** = logic retained, **rename** = identifier or file renamed, **re
 | **SBOM + notices** `release/sbom.cdx.json`, `THIRD_PARTY_NOTICES.txt` | `tools/release/sbom.mjs` (CycloneDX) + licence checker | npm tree + binaries + fonts + (later) models | gate: no GPL in bundled JS (BRD-019), no `licence:paid` preset (BRD-017) |
 | **Licence CLI** `tools/license-cli` | `tsc` | Operator-only; never shipped | — |
 
-Build order: `shared → composition-model → engine (lib) → agents, models → engine bundle + loops → service → ui → desktop → installer`. `npm run build` at the root runs it; `npm run build:p0` skips Engine Binaries.
+Build order: `shared → catalogue → composition-model → engine (lib) → agents, models → build:engine (bundle + loops + golden frames) → service → ui → build:desktop (electron-builder)`. `npm run build:desktop` runs the whole chain on Windows; `npm run build:engine` alone refreshes the Engine artefacts.
 
 ## 7. The P0 vertical slice (first implementation target)
 
@@ -505,9 +541,9 @@ Build order: `shared → composition-model → engine (lib) → agents, models �
 
 ### 7.1 Scenario
 
-1. Launch (dev: `npm run dev` starts the Local Service and the Vite Editor; Shell optional until Stage 3 packaging).
+1. Launch (dev: `npm run dev`, or `npm run dev:capped` on the Linux server, starts the Local Service on `EM_PORT` 4110 and the Vite Editor on `EM_UI_PORT` 4120; the Shell is optional until Stage 3 packaging, where `utilityProcess.fork` replaces the dev launcher).
 2. `POST /projects {name, settings: {fps: 30, ratio: '9:16', resolution: '1080p'}}` → project with an empty head version.
-3. Import one MP4 via the Asset Panel (`POST /projects/:id/assets {paths:[…]}` from the Shell dialog, or multipart in the browser) → `ingest.progress` → `ingest.done` with proxy and thumbnail.
+3. `POST /projects/:id/open` → head version + a preview media grant; import one MP4 via the Asset Panel (`POST /projects/:id/assets {paths:[…]}` from the Shell dialog, or multipart in the browser) → `ingest.progress` → `ingest.done`; the Player loads `/media/<grant>/<assetId>/proxy`.
 4. Sequence Badge 1 and 2 on the same Asset is not possible (one badge per Asset), so the slice inserts the Asset, then inserts it again (`POST /projects/:id/assets/insert` twice) → two `op:clip.insert` versions.
 5. Design ▸ Transitions ▸ Fade click → `POST /projects/:id/intents` (Design Pick `preset:transition.fade`, target `selection` = none → Target Resolution "all Cuts") → `intent.updated`.
 6. `POST /projects/:id/plans {intentIds}` → `needsInterpretation = false` → `compilePlan` → `plan.ready` (origin `compile`) → applied immediately per AI-004 (Compile path still creates the plan row and a version; UI shows "Applied directly").
@@ -521,11 +557,12 @@ Build order: `shared → composition-model → engine (lib) → agents, models �
 |---|---|
 | `packages/shared` | `ids.ts`, `errors.ts`, `result.ts` |
 | `packages/composition-model` | `schema.ts` (full schema, required by Zod parse), `apply/clip.insert.ts`, `apply/transition.set.ts`, `validate.ts` (CM-001…005, CM-011), `timing.ts`, `hash.ts`, `diff.ts` |
-| `packages/engine` | `formats.ts`, `metadata.ts`, `layout.tsx`, `theme.tsx` (default palette only), `fonts.ts`, `timeline/ExpertmotionTimeline.tsx`, `timeline/VideoTrack.tsx` (`<TransitionSeries>` + `@remotion/media` `<Video>`), `presets/transition/fade.tsx`, `catalogue/transition.ts` (fade + none rows), `Root.tsx`, `entry.ts`, `scripts/build-bundle.ts` |
+| `packages/catalogue` | `types.ts`, `index.ts`, `transition.ts` (fade + none rows), `compile-defaults.ts` (transition) |
+| `packages/engine` | `formats.ts`, `metadata.ts`, `layout.tsx`, `theme.tsx` (default palette only), `fonts.ts`, `timeline/ExpertmotionTimeline.tsx`, `timeline/VideoTrack.tsx` (`<TransitionSeries>` + `@remotion/media` `<Video>`), `presets/transition/fade.tsx`, `presets/index.ts`, `Root.tsx`, `entry.ts`, `scripts/build-bundle.ts` |
 | `packages/agents` | `schemas.ts`, `intents/capture.ts`, `intents/resolveTargets.ts` (transition row only), `intents/reduceQueue.ts` (exclusive-group), `intents/compile.ts` (transition category), `intents/validatePlan.ts` |
-| `apps/service` | `main.ts`, `config.ts`, `http/{app,guards,sse,errors,route}.ts`, `routes/{health,projects,assets,media,composition,intents,plans,renders,outputs,events}.ts`, `db/{open,tx}.ts`, migrations `001_init.sql`, repositories `projects, assets, compositionVersions, editIntents, editPlans, operationsHistory, renderJobs, outputs`, `ingest/{pipeline,ffprobe,ffmpeg,limits}.ts`, `render/{queue,bundle,browser,stills,preflight,validateOutput,profiles}.ts`, `media/server.ts`, `composition/service.ts`, `intents/service.ts`, `plans/service.ts`, `diagnostics/logger.ts` |
+| `apps/service` | `main.ts`, `config.ts`, `http/{app,guards,sse,errors,route}.ts`, `routes/{health,projects,assets,media,composition,intents,plans,renders,outputs,events}.ts`, `db/{open,tx}.ts`, migrations `001_init.sql`, repositories `projects, assets, compositionVersions, editIntents, editPlans, operationsHistory, renderJobs, outputs`, `ingest/{pipeline,ffprobe,ffmpeg,limits}.ts`, `render/{queue,bundle,browser,stills,preflight,validateOutput,profiles}.ts`, `media/{server,grants}.ts`, `composition/service.ts`, `intents/service.ts`, `plans/service.ts`, `diagnostics/logger.ts` |
 | `apps/ui` | `api/{client,events}.ts`, `state/{service,project}.tsx`, `header/` (File ▸ New, Export only), `library/assets/*`, `library/catalogue/CatalogueCard.tsx` (transitions tab only), `stage/Player.tsx`, `stage/Timeline.tsx` (video track + transition), `agent-panel/editor/IntentQueue.tsx`, `agent-panel/output/OutputSettings.tsx` (ratio + resolution + profile), `screens/export/*`, `components/ui.tsx` |
-| `apps/desktop` | Stage 3: `main/index.ts` (spawn, token, window), `preload/index.ts` (`getBootstrap`, `pickFiles`, `revealPath`); not needed to run the slice in a browser |
+| `apps/desktop` | Stage 3: `main/index.ts` (`utilityProcess.fork`, bootstrap `postMessage`, token, window), `preload/index.ts` (`getBootstrap`, `pickFiles`, `revealPath`); not needed to run the slice in a browser |
 | `test` | `fixtures/media/clip-5s-1080p30.mp4` (CC0), `golden/transition.fade/*.png`, `e2e/p0-slice.spec.ts` |
 
 Explicitly **not** in the slice: agents runtime, providers, Brainstorming, captions, text, audio, licence, Model Manager, hardware tiers beyond a stub `T0`, undo/redo UI, backup/restore. Each is added as its own increment against the same API.
@@ -553,17 +590,17 @@ Explicitly **not** in the slice: agents runtime, providers, Brainstorming, capti
 | PRD-006 | asset preview, metadata, Sequence Badges, Insert | `apps/ui/library/assets`, `apps/service/routes/assets` | `packages/composition-model` (`op:clip.insert`) |
 | PRD-007 | Composition Model, Tracks, read-only Timeline View | `packages/composition-model`, `apps/ui/stage/Timeline.tsx` | `apps/service/composition` |
 | PRD-008 | Output Settings (ratios, resolutions, fps, profiles) | `packages/engine/formats`, `apps/ui/agent-panel/output` | `apps/service/render/profiles.ts` |
-| PRD-009 | Player preview with controls and states | `apps/ui/stage/Player.tsx`, `packages/engine` | `apps/service/media` (proxy URLs) |
+| PRD-009 | Player preview with controls and states | `apps/ui/stage/Player.tsx`, `packages/engine` | `apps/service/media` (proxy URLs with the preview grant) |
 | PRD-010 | one external provider (OpenRouter), validation, models, budget | `packages/agents/providers`, `apps/service/settings` | `apps/ui/screens/providers` |
 | PRD-011 | two agents, independent Model Assignment, visible usage | `packages/agents/runtime`, `apps/service/agents` | `apps/ui/agent-panel` |
-| PRD-012 | Edit Intents, Intent Queue, Compile, Edit Plans, Execute gate | `packages/agents/intents`, `packages/composition-model` | `apps/service/{intents,plans,composition}`, `apps/ui/agent-panel/editor` |
-| PRD-013 | `ExpertmotionTimeline` + P0 catalogue | `packages/engine` | `packages/engine/catalogue`, `test/golden` |
+| PRD-012 | Edit Intents, Intent Queue, Compile, Edit Plans, Execute gate | `packages/agents/intents`, `packages/composition-model`, `packages/catalogue` (Compile defaults) | `apps/service/{intents,plans,composition}`, `apps/ui/agent-panel/editor` |
+| PRD-013 | `ExpertmotionTimeline` + P0 catalogue | `packages/engine`, `packages/catalogue` | `test/golden` |
 | PRD-014 | render/export MP4 (+GIF, PNG), progress, ETA, cancel, preflight | `apps/service/render` | `apps/ui/screens/export`, `packages/engine` (bundle) |
 | PRD-015 | recoverable errors, render failure never crashes | `packages/shared/errors`, `apps/service/http/errors.ts`, `apps/service/render/queue.ts` | `apps/ui/components` (error cards) |
-| PRD-016 | Service Token, Host/Origin, path restrictions, Electron hardening, encrypted credentials, signed installer | `apps/service/http/guards.ts`, `apps/service/media`, `apps/desktop`, `apps/service/settings` | `tools/release` (signing) |
+| PRD-016 | Service Token, Host/Origin, path restrictions, media grants, Electron hardening, encrypted credentials, signed installer | `apps/service/http/guards.ts`, `apps/service/media/{server,grants}.ts`, `apps/desktop`, `apps/service/settings` | `tools/release` (signing) |
 | PRD-017 | offline Ed25519 licence, Trial Mode | `apps/service/license`, `tools/license-cli` | `packages/engine/components/Watermark.tsx`, `apps/service/render/preflight.ts` (720p cap) |
 | PRD-018 | onboarding wizard, tour | `apps/ui/screens/onboarding` | `apps/service/settings` |
-| PRD-019 | Hardware Monitor, tiers | `apps/service/hardware` | `apps/ui/screens/hardware`, `packages/engine/catalogue` (flags) |
+| PRD-019 | Hardware Monitor, tiers | `apps/service/hardware` | `apps/ui/screens/hardware`, `packages/catalogue` (flags) |
 | PRD-020 | Private Mode blocks all outbound calls | `apps/service/agents/egress.ts`, `apps/service/settings` | `packages/agents/providers` (`Egress`), `packages/models` (downloads), `apps/desktop` (updater gate) |
 | PRD-021 | continuity docs | `docs/`, `process.md`, `memory.md` | — |
 
@@ -575,5 +612,6 @@ P1/P2 items map to `packages/models` + `apps/service/models` (PRD-031, 033, 051,
 |---|---|---|---|
 | 1 | Exact npm name of the Windows FFmpeg compositor package (ASSESSMENT.md §4 marks it unverified) | Engine lead | Stage 2 PoC |
 | 2 | Whether `apps/ui` imports `packages/engine` source (Vite transpiles TSX) or `dist/`; source is faster for development, `dist/` guarantees Player = render code | Principal architect | Stage 3 start |
-| 3 | `apps/service` as esbuild single file vs. plain `tsc` output with `node_modules` in the ASAR; single file is smaller and harder to read (ADR-007) but complicates native module externals | Service lead | Stage 3 |
+| 3 | `apps/service` as an esbuild single `service.cjs` vs. plain `tsc` output with `node_modules` in the ASAR; single file is smaller and harder to read (ADR-007) but complicates native module externals under `utilityProcess` | Service lead | Stage 3 |
+| 5 | Engine bundle location: ARCHITECTURE.md §7 says `resources/engine/`, DEVELOPMENT_WORKFLOW.md `build:engine` says `packages/engine/dist/bundle/`; this document follows ARCHITECTURE (`resources/engine/bundle/`) and the release script copies from wherever `build:engine` writes | Principal architect | Stage 3 |
 | 4 | Catalogue loops: build on the Operator's Windows machine or in CI; the Linux dev server cannot run the full loop build within its memory cap | Operator | Stage 2 |

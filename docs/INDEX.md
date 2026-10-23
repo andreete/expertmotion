@@ -26,51 +26,51 @@ This index is the map of the documentation. Status values: `planned`, `draft`, `
 | Document | Purpose | Owner of | ID prefix | Status |
 |---|---|---|---|---|
 | MASTER_PROJECT_PROMPT.md | The brief | — | — | baseline |
-| GLOSSARY.md | Canonical vocabulary | terms | — | baseline (frozen) |
+| GLOSSARY.md | Canonical vocabulary (frozen; controlled additions logged in ADR-018) | terms | — | baseline (frozen) |
 | ASSESSMENT.md | Deliverable A: repo, mockup, PDF, Remotion, feasibility, licensing, gaps | findings | — | baseline |
 | PRD.md | Product requirements, personas, MVP scope P0/P1/P2, metrics | product scope | PRD- | baseline |
-| BRD.md | Business model, licensing path, costs, compliance, KPIs | business rules, compliance | BRD- | planned |
-| FRD.md | Functional requirements per command and element | FR list | FR- | planned |
-| SRS.md | Software requirements, NFRs, interfaces | NFR list | NFR- | planned |
-| UXRD.md | UX requirements, personas, JTBD | UX list | UX- | planned |
-| USER_FLOWS.md | End-to-end flows with states | flows | — | planned |
-| EDITOR_INTERACTION_MODEL.md | Ten-point interaction spec per significant action | interactions | — | planned |
-| UI_UX_SPECIFICATION.md | Screens, components, tokens, copy | design system | — | planned |
+| BRD.md | Business model, licensing path, costs, compliance, KPIs | business rules, compliance | BRD-, K- | baseline |
+| FRD.md | Functional requirements per command and element | FR list | FR- | baseline |
+| SRS.md | Software requirements, NFRs, interfaces | NFR list | NFR- | baseline |
+| UXRD.md | UX requirements, personas, JTBD | UX list | UX- | baseline |
+| USER_FLOWS.md | End-to-end flows with states | flows | — | baseline |
+| EDITOR_INTERACTION_MODEL.md | Ten-point interaction spec per significant action | interactions | IX- | baseline |
+| UI_UX_SPECIFICATION.md | Screens, components, tokens, copy | design system | — | baseline |
 | ELEMENT_IDS.md | UI element IDs and wireframe | element IDs | el: | baseline |
-| ACCESSIBILITY_AND_I18N.md | Keyboard, contrast, i18n keys | i18n scheme | — | planned |
-| ONBOARDING_TOUR.md | First-run tour copy (EN/ID) | tour | — | planned |
+| ACCESSIBILITY_AND_I18N.md | Keyboard, contrast, i18n keys | i18n scheme | — | baseline |
+| ONBOARDING_TOUR.md | First-run tour copy (EN/ID) | tour | — | baseline |
 | ARCHITECTURE.md | C4, processes, data flow, shell comparison | architecture | — | baseline |
-| BLUEPRINT.md | Repo layout, packages, port list | module boundaries | — | planned |
-| TRD.md | Stack, versions, dependencies, budgets | stack | — | planned |
-| API_SPECIFICATION.md | Local Service REST + SSE contract | routes, events | — | planned |
-| DATABASE_SCHEMA.md | SQLite DDL, Composition Model JSON Schema, migrations, encryption | schema | — | planned |
+| BLUEPRINT.md | Repo layout, packages, port list | module boundaries | — | baseline |
+| TRD.md | Stack, versions, dependencies, budgets | stack | TR- | baseline |
+| API_SPECIFICATION.md | Local Service REST + SSE contract | routes, events | R- | baseline |
+| DATABASE_SCHEMA.md | SQLite DDL, Composition Model JSON Schema, migrations, encryption | schema | CM- | baseline |
 | PERFORMANCE.md | Hardware tiers, Performance Profiles, ratio × resolution table, budgets | profiles, pixel table | — | baseline |
-| ASSET_INGESTION.md | Import pipeline | ingestion rules | — | planned |
+| ASSET_INGESTION.md | Import pipeline | ingestion rules | — | baseline |
 | AI_WORKFLOW.md | Edit-intent pipeline, schemas, op vocabulary, locking, tools | intents, plans, ops | AI- | baseline |
-| AGENT_DESIGN.md | Agents, permissions, runtime sub-agents, repo-side subagents | agent roles | — | planned |
-| ../SYSTEM_PROMPT.md | Versioned runtime prompts | prompts | — | planned |
+| AGENT_DESIGN.md | Agents, permissions, runtime sub-agents, repo-side subagents | agent roles | AGD- | baseline |
+| ../SYSTEM_PROMPT.md | Versioned runtime prompts (v1.0.0) | prompts | — | baseline |
 | DESIGN_CATALOGUE.md | Closed preset registry | preset IDs | preset: | baseline |
-| REMOTION_CAPABILITY_MAP.md | Feature → Remotion API mapping with sources | mapping | — | planned |
-| LOCAL_AI_MODELS.md | Model registry, licences, tiers, download policy | model registry | — | planned |
-| MCP_AND_TOOLING.md | MCP evaluation, tool layer | tooling decision | — | planned |
-| GOLDEN_SCENARIOS.md | 20 end-to-end scenarios + fixtures | scenarios | — | planned |
-| SECURITY.md | Security requirements and controls | SEC list | SEC- | planned |
-| THREAT_MODEL.md | STRIDE, boundaries, not-protected list | threats | — | planned |
-| VULNERABILITY_CHECKLIST.md | Per-release checklist | checklist | — | planned |
-| LICENSE_OPERATIONS.md | Licence key format and runbook, trial | licence ops | — | planned |
-| DEPLOYMENT_AND_PACKAGING.md | Electron build, signing, installer, updater | packaging | — | planned |
-| ROADMAP.md | Stages 0–7, milestones | roadmap | — | planned |
-| STAGE_MANAGEMENT.md | Gates, criteria, roles, releases | gates | — | planned |
-| POC_PLAN.md | Deliverable D experiments | POC list | POC- | planned |
-| DEVELOPMENT_WORKFLOW.md | Branching, reviews, handover | workflow | — | planned |
-| DEFINITION_OF_DONE.md | DoD per artefact | DoD | — | planned |
-| QA_PROCESS.md | QA approach, triage | QA process | — | planned |
-| TEST_PLAN.md | Test cases and matrices | QA list | QA- | planned |
-| ERROR_CATALOGUE.md | Error codes and copy | error codes | EM- | planned |
+| REMOTION_CAPABILITY_MAP.md | Feature → Remotion API mapping with sources | mapping | — | baseline |
+| LOCAL_AI_MODELS.md | Model registry, licences, tiers, download policy | model registry | — | baseline |
+| MCP_AND_TOOLING.md | MCP evaluation, tool layer | tooling decision | — | baseline |
+| GOLDEN_SCENARIOS.md | 20 end-to-end scenarios + fixtures | scenarios | GS- | baseline |
+| SECURITY.md | Security requirements and controls | SEC list | SEC- | baseline |
+| THREAT_MODEL.md | STRIDE, boundaries, not-protected list | threats | — | baseline |
+| VULNERABILITY_CHECKLIST.md | Per-release checklist | checklist | — | baseline |
+| LICENSE_OPERATIONS.md | Licence key format and runbook, trial | licence ops | LIC- | baseline |
+| DEPLOYMENT_AND_PACKAGING.md | Electron build, signing, installer, updater | packaging | — | baseline |
+| ROADMAP.md | Stages 0–7, milestones | roadmap | — | baseline |
+| STAGE_MANAGEMENT.md | Gates, criteria, roles, releases | gates | — | baseline |
+| POC_PLAN.md | Deliverable D experiments | POC list | POC- | baseline |
+| DEVELOPMENT_WORKFLOW.md | Branching, reviews, handover | workflow | — | baseline |
+| DEFINITION_OF_DONE.md | DoD per artefact | DoD | — | baseline |
+| QA_PROCESS.md | QA approach, triage | QA process | — | baseline |
+| TEST_PLAN.md | Test cases and matrices | QA list | QA- | baseline |
+| ERROR_CATALOGUE.md | Error codes and copy | error codes | EM- | baseline |
 | DECISIONS.md | ADRs | decisions | ADR- | baseline |
-| RISKS_AND_ASSUMPTIONS.md | Risks, assumptions | risks | RISK- | planned |
-| AGENT_SKILLS.md | Development skills | skills | — | planned |
-| HOOKS_AND_GUARDRAILS.md | Hooks and policy checks | hooks | — | planned |
+| RISKS_AND_ASSUMPTIONS.md | Risks, assumptions | risks | RISK-, ASM- | baseline |
+| AGENT_SKILLS.md | Development skills | skills | — | baseline |
+| HOOKS_AND_GUARDRAILS.md | Hooks and policy checks | hooks | HG- | baseline |
 
 ## Traceability matrices (filled during the consistency pass)
 

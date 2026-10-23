@@ -154,3 +154,11 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Problem**: Remotion is free for individuals and companies ≤ 3 people; companies of 4+ need a Company License (Automators: $0.01/render, $100/month minimum). Public docs do not define how renders on an end user's own PC are metered. From Remotion 5.0 render reporting is mandatory for the Automators licence (voluntary below 5.0, optional for Creators; Remotion states telemetry never blocks a render), which would conflict with Private Mode if Expertmotion ever falls under Automators.
 - **Selected**: proceed on the free licence while the Operator's company is ≤ 3 people; the BRD requires written confirmation from Remotion before commercial launch; the Engine passes `licenseKey` when a Company License exists; Private Mode behaviour with telemetry is documented as an open question.
 - **Consequences**: `BRD.md`, `RISKS_AND_ASSUMPTIONS.md` (RISK-001).
+
+## ADR-018 Glossary change log (controlled additions after the freeze)
+
+- **Status**: accepted
+- **Problem**: the glossary was frozen after the core documents, but the parallel writing of 40 documents surfaced terms and prefixes that every document needs.
+- **Rule**: additions only (no renames, no meaning changes), each logged here; editing requires `GLOSSARY_CHANGE=1` (HG-005).
+- **2026-10-24 additions**: terms *Machine Code*, *keyId (kid)*, *Cut index* (0-based in data, 1-based in UI); *Asset* now includes subtitle files (SRT/VTT); *Provider Connection* includes a custom OpenAI-compatible https base URL; *Resolution* notes the stored lowercase values; *Intent Queue* notes the `removed` status; identifier prefixes `GS-`, `ASM-`, `LIC-`, `AGD-`, `TR-`, `HG-`, `IX-`, `CM-`, `K-`, `R-`; copy rule: friendly "kamu" in Creator-facing Indonesian copy, "Anda" only in legal/licence texts.
+- **Consequences**: documents written before these additions were aligned in the consistency pass of 2026-10-24.
