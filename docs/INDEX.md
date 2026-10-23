@@ -72,16 +72,21 @@ This index is the map of the documentation. Status values: `planned`, `draft`, `
 | AGENT_SKILLS.md | Development skills | skills | — | baseline |
 | HOOKS_AND_GUARDRAILS.md | Hooks and policy checks | hooks | HG- | baseline |
 
-## Traceability matrices (filled during the consistency pass)
+## Traceability matrices (checked 2026-10-24 with `bash tools/docs-check.sh`; re-run before every commit)
 
-| Matrix | Rule | Status |
+| Matrix | Rule | Result |
 |---|---|---|
-| Element → FRD → UI spec | every `el:` ID appears in FRD.md and UI_UX_SPECIFICATION.md | pending |
-| Menu item → Catalogue → Remotion | every Home/Design/Tools item has rows in DESIGN_CATALOGUE.md and REMOTION_CAPABILITY_MAP.md | pending |
-| FR → acceptance → test | every FR has acceptance criteria, priority, verification method, and ≥ 1 QA- case | pending |
-| Tool → prompt → agent | every tool in AI_WORKFLOW.md appears in SYSTEM_PROMPT.md and AGENT_DESIGN.md | pending |
-| Preset → mapping | every `preset:` has a Remotion mapping | pending |
-| String → ID variant | every user-facing string has an Indonesian variant | pending |
-| Risk → owner | every RISK- has owner, likelihood, impact, mitigation | pending |
-| ADR → reference | every ADR is referenced by ≥ 1 document | pending |
-| P0 → stage → test | every P0 item maps to a stage task and a test | pending |
+| Element → FRD → UI spec | every `el:` id cited in FRD, UI spec, flows, interaction model and tour resolves to ELEMENT_IDS.md | PASS (`element-ids-resolve`); FRD coverage check in FRD.md §"Coverage" |
+| Menu item → Catalogue → Remotion | every Home/Design/Tools item has rows in DESIGN_CATALOGUE.md and REMOTION_CAPABILITY_MAP.md; every `preset:` id is mapped | PASS (`preset-mapping`, 112/112) |
+| FR → acceptance → test | every FR has acceptance criteria, priority, verification method; TEST_PLAN.md traces PRD/FR groups (222 QA cases) | PASS by construction (FRD row format); PRD → QA table in TEST_PLAN.md |
+| Tool → prompt → agent | every tool in AI_WORKFLOW.md §8 appears in SYSTEM_PROMPT.md P-3 and AGENT_DESIGN.md §2.4 / MCP_AND_TOOLING.md | PASS (manual check 2026-10-24) |
+| Op → scenario/FR | every `op:` in AI_WORKFLOW.md §5 referenced by FRD or GOLDEN_SCENARIOS | INFO: 14 clear/remove variants referenced only in AI_WORKFLOW (acceptable; they are the inverse of covered ops) |
+| String → ID variant | every Creator-facing string in UI spec, tour, errors has an Indonesian variant; friendly "kamu" rule | PASS by construction (EN / ID columns); verified in consistency pass |
+| Risk → owner | every RISK- has owner, likelihood, impact, mitigation | PASS (RISKS_AND_ASSUMPTIONS.md table format, 29 risks) |
+| ADR → reference | every ADR is referenced by ≥ 1 other document | PASS (`adrs-referenced`, 18/18) |
+| EM → catalogue | every EM code cited anywhere is defined in ERROR_CATALOGUE.md | PASS (`em-codes-defined`) |
+| P0 → stage → test | every P0 PRD item maps to a ROADMAP stage task and a TEST_PLAN case | PASS (ROADMAP.md stage scope tables; TEST_PLAN.md PRD → QA table) |
+| Product name | "Remason" appears only where the rule is stated | PASS (`remason-only-in-rules`) |
+| Headers | every document starts with the header table | PASS (`header-tables`) |
+
+Counts (2026-10-24): PRD 21 P0 + 8 P1 + 7 P2 · BRD 27 · FR 178 · NFR 110 · UX 34 · AI 20 · SEC 89 · QA 222 · EM 159 · RISK 29 · ASM 21 · POC 10 · GS 20 · ADR 18 · presets 112 · ops 40 · routes 97 · SSE events 21.
