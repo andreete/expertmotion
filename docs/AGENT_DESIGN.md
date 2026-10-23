@@ -49,7 +49,7 @@ Does: produce one `EditPlan` JSON; use `composition.validateOps` to dry-run befo
 
 Does not: write code; reference files; add unrequested elements; change Output Settings unless asked; call `render.start`.
 
-Tools: Brainstorming set + `composition.validateOps`, `assets.probe`, `catalogue.search`.
+Tools: the Brainstorming set (`composition.get`, `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate`) + `composition.validateOps`, `assets.probe`.
 
 Output contract: `EditPlan` (AI_WORKFLOW §3) only. Any prose must go in `goal`/`expectedDiff`/`risks[].message`.
 

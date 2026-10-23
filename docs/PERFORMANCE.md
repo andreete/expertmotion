@@ -15,7 +15,7 @@ Detected at startup by the Hardware Monitor and re-checked on demand. The tier d
 
 | Tier | Detection rule | Defaults |
 |---|---|---|
-| **T0** CPU-only | no discrete GPU, or GPU without usable VRAM info, or VRAM < 4 GB | Profile Standard; `gl: 'swangle'` for WebGL effects; 2K/4K disabled with reason "needs a GPU tier"; local models: whisper small/medium, Piper voices, SD 1.5 (slow) |
+| **T0** CPU-only | no discrete GPU, or GPU without usable VRAM info, or VRAM < 4 GB | Profile Standard; `gl: 'swangle'` for WebGL effects; 2K/4K disabled with the EM-3105 reason ("needs a graphics card with at least 4 GB"); local models: whisper small/medium, Piper voices, SD 1.5 (slow) |
 | **T1** GPU ≥ 4 GB | discrete or integrated GPU with ≥ 4 GB VRAM reported | Profile Accelerated available; `gl: 'angle'`; 2K enabled, 4K enabled with warning; whisper large-v3-turbo; SD 1.5 for thumbnails (FLUX.1-schnell q4 needs ≈ 7 GB + encoders → T2); ACE-Step small |
 | **T2** GPU ≥ 8 GB | ≥ 8 GB VRAM | Profile Turbo available; `hardwareAcceleration: 'if-possible'` (NVENC on NVIDIA driver ≥ 525); all presets; FLUX.1-schnell; ACE-Step full |
 
@@ -106,6 +106,7 @@ Development-server note: on the shared 1.9 GB Linux server only headless parts m
 | Duration | 1 s … 30 min; transitions overlap already subtracted | EM-3104 |
 | Assets | all referenced assets present and probed | EM-1301 |
 | Chrome/FFmpeg | engine binaries present and executable | EM-3001 |
+| Resolution vs tier | selected Resolution allowed for the current Hardware Tier (UI already disables higher ones; preflight re-checks after a tier change) | EM-3105 (info; offers the highest allowed preset) |
 | Licence | Trial Mode → force 720p + watermark; show notice | EM-5001 (notice) |
 
 ## 8. Known slow paths and mitigations (from Remotion docs and the book §8.6)

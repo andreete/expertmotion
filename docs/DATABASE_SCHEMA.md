@@ -326,8 +326,8 @@ export const ProjectSettings = z.object({
 export const Theme = z.object({
   paletteId: PresetId,                        // preset:palette.*
   fontPairId: PresetId,                       // preset:fontpair.*
-  defaultEasingId: PresetId,                  // preset:easing.*
-  textDefaults: z.object({ fontSize: z.number(), weight: z.number(), colour: Hex, align: z.enum(['left','center','right']), opacity: z.number().min(0).max(1) }),
+  defaultEasingId: PresetId,                  // preset:easing.* (op:theme.set)
+  textDefaults: z.object({ fontFamily: z.string().optional(), fontSize: z.number(), weight: z.number(), colour: Hex, align: z.enum(['left','center','right']), opacity: z.number().min(0).max(1) }), // op:theme.setTextDefaults
 });
 
 const Position = z.object({ x: z.number(), y: z.number() });      // in u (layout units), origin centre of frame
@@ -398,7 +398,7 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 | CM-007 | preset ids exist in the Design Catalogue, params pass the preset schema, hardware flags satisfied or warned | block / warn |
 | CM-008 | text fits: `fitText` result ≥ minimum size (34u) at the current ratio | warn |
 | CM-009 | caption pages ordered, non-overlapping, within duration | warn → trim |
-| CM-010 | `settings.resolution` allowed for the current Hardware Tier | warn (render blocks) |
+| CM-010 | `settings.resolution` allowed for the current Hardware Tier | warn (UI disables higher presets; Export preflight reports EM-3105 and offers the highest allowed preset) |
 | CM-011 | ids unique across all elements | block |
 
 ### 4.5 Versioning and hashing

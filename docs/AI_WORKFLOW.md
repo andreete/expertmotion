@@ -45,7 +45,9 @@
 // Identifiers
 const PresetId = z.string().regex(/^preset:[a-z]+\.[a-z0-9-]+$/);      // from DESIGN_CATALOGUE.md
 const OpName   = z.string().regex(/^op:[a-z]+\.[a-zA-Z]+$/);           // from §5
-const ElementRef = z.object({ kind: z.enum(['clip','cut','text','caption','audio','shape','background','effect','project','selection','playhead']), id: z.string().optional(), index: z.number().int().optional() });
+const ElementRef = z.object({ kind: z.enum(['sequence','clip','cut','text','caption','audio','shape','background','effect','project','selection','playhead']), id: z.string().optional(), index: z.number().int().optional() });
+// Cuts are addressed by 0-based index (cut 0 = between video[0] and video[1]); the UI displays them 1-based ("cut 1").
+// Property keys use the 0-based form: "cut:0.transition".
 
 // Edit Intent (step 2)
 export const EditIntent = z.object({
@@ -58,7 +60,8 @@ export const EditIntent = z.object({
   params: z.record(z.unknown()).default({}),
   target: ElementRef,                   // as given by the UI (may be 'selection' or 'playhead')
   resolvedTargets: z.array(ElementRef).default([]), // after Target Resolution
-  propertyKey: z.string(),              // e.g. "cut:3.transition", "project.captionStyle", "clip:abc.effects"
+  propertyKey: z.string(),              // e.g. "cut:2.transition" (0-based), "project.captionStyle", "clip:abc.effects", "theme.textDefaults.fontSize"
+  parentIntentId: z.string().optional(),// set on per-target children expanded from a multi-target pick (see §6 expansion rule)
   propertyClass: z.enum(['scalar','list','exclusive-group']),
   needsInterpretation: z.boolean(),     // false => Compile path
   instruction: z.string().optional(),   // free text from chat/brainstorm, if any
@@ -120,9 +123,9 @@ Applied when `target.kind` is `selection` or `playhead`, or when a category need
 
 | Category | Creator selected a Timeline Element | Nothing selected | Multiple selected |
 |---|---|---|---|
-| transition | the Cut adjacent (after) the selected Clip; if a Cut is selected, that Cut | **all Cuts** in the Sequence | each selected Clip's following Cut |
+| transition | the Cut adjacent (after) the selected Clip; if a Cut is selected, that Cut | **all Cuts** in the Sequence (expanded into one child intent per Cut, see §6) | each selected Clip's following Cut |
 | motion, effect | selected Clip or Text Layer | Clip under the playhead; if none, **reject** with `EM-2201` "Select a clip or move the playhead onto one" | each selected element |
-| text (font, size, colour, align, variant, effect) | selected Text Layer | sets the **Theme default for new text** and shows "applies to new text"; if a Text Layer exists under the playhead, offer "apply to this text" | each selected Text Layer |
+| text (font, size, colour, align, variant, effect) | selected Text Layer | sets the **Theme default for new text** via `op:theme.setTextDefaults` (propertyKey `theme.textDefaults.<field>`) and shows "applies to new text"; if a Text Layer exists under the playhead, offer "apply to this text" | each selected Text Layer |
 | caption (style) | — | **project** (one caption style per project) | — |
 | background | — | **project** background layer | — |
 | audio (bed, ducking, fade) | selected Audio Layer | project audio bed | each selected Audio Layer |
@@ -172,7 +175,8 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:audio.addLayer` | absolute | `{assetId, atMs, volume, fadeInMs?, fadeOutMs?}` | list | voice, sfx |
 | `op:audio.setDucking` | audio | `{presetId, params?}` | exclusive-group | |
 | `op:audio.remove` | audio | `{}` | — | |
-| `op:theme.set` | project | `{paletteId?, fontPairId?}` | scalar per field | |
+| `op:theme.set` | project | `{paletteId?, fontPairId?, defaultEasingId?}` | scalar per field | |
+| `op:theme.setTextDefaults` | project | `{fontFamily?, fontSize?, weight?, colour?, align?, opacity?}` | scalar per field | Theme defaults for new Text Layers; propertyKey `theme.textDefaults.<field>` |
 | `op:output.setRatio` | project | `{ratio}` | scalar | 16:9 … custom |
 | `op:output.setResolution` | project | `{preset}` | scalar | gated by tier |
 | `op:project.setFps` | project | `{fps}` | scalar | re-derives frames |
@@ -188,6 +192,10 @@ Ops never reference file paths; they reference `assetId`/`jobId`. Ops never cont
 | scalar | new intent supersedes the old (`status: superseded`, `supersedes: [old]`); old stays visible struck through with **Restore** | "Font size 72 (replaced 64)" |
 | list | both kept; duplicates by `presetId` on the same target are merged (params of the newest win) | "Effects: Vignette, Film grain" |
 | exclusive-group | same as scalar within the group (one transition per Cut, one caption style per project) | "Transition on cut 2: Slide (replaced Fade)" |
+
+**Expansion rule (multi-target picks).** When Target Resolution yields N targets (for example "all Cuts"), the pick is stored as one parent intent (displayed as one queue item, "Fade → all 3 cuts") plus N child intents with `parentIntentId` and per-target `propertyKey` (`cut:0.transition`, `cut:1.transition`, …). Supersession works on the children: a later pick for one Cut supersedes only that child ("Fade → cuts 1, 3 · cut 2 replaced by Slide"). A parent is `superseded` only when all its children are.
+
+**Mixed queues.** Compile-able intents are compiled and applied immediately (AI-004) and their keys locked; when the Editor Agent is invoked for the remaining interpretive intents (including a Brainstorming hand-off that mixes both kinds), it receives the already-applied state and the Locked Keys, so one plan covers only what still needs interpretation.
 
 Conflict matrix for the brief's example "two operations modify the same clip boundary":
 
@@ -249,7 +257,7 @@ Tools called by the model are read-only or produce proposals; all mutations happ
 
 ## 9. Brainstorming → Editor hand-off
 
-The Brainstorming Agent's output schema includes an optional `proposedIntents: EditIntent[]` (source `brainstorm`, `needsInterpretation` true or false). The Editor shows a handoff card; on "Send to Editor Agent" the intents enter the Intent Queue. The Brainstorming Agent has no mutation tools and no `composition.validateOps`; it has `composition.get` (summary), `assets.list`, `catalogue.search`, `hardware.profile`.
+The Brainstorming Agent's output schema includes an optional `proposedIntents: EditIntent[]` (source `brainstorm`, `needsInterpretation` true or false). The Editor shows a handoff card; on "Send to Editor Agent" the intents enter the Intent Queue. The Brainstorming Agent has no mutation tools and no `composition.validateOps`; its set is `composition.get` (summary), `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate` (same list as §8 and AGENT_DESIGN.md §2.1).
 
 ## 10. Context management (brief §8.1)
 
@@ -275,7 +283,7 @@ The Brainstorming Agent's output schema includes an optional `proposedIntents: E
 | `touchesLockedKeys` non-empty | one re-prompt listing the keys; then drop those ops with notice |
 | Execute fails mid-transaction | SQLite rollback; `ExecutionResult.rollback.performed = true`; version unchanged |
 | Service restart during agent run | run marked `cancelled`; Plan Card shows "interrupted, re-run" |
-| Private Mode on | agent composer disabled with inline notice; deterministic picks keep working |
+| Private Mode on | agent composer disabled with inline notice (`EM-4401`); any egress attempt is refused by the single egress module (`EM-8202`); deterministic picks keep working |
 
 ## 13. Evaluation
 
@@ -290,7 +298,7 @@ Golden scenarios (GOLDEN_SCENARIOS.md) run against (a) the Compile path (pure un
 | AI-011 | Compile path covers every P0 preset without provider calls | unit tests per preset |
 | AI-012 | Plans are Zod-validated and dry-run before Execute is enabled | integration test |
 | AI-013 | Stale plans cannot execute | test: mutate head then Execute → 409 |
-| AI-014 | Locked Keys are never modified by agent ops | golden scenarios 11–14 |
+| AI-014 | Locked Keys are never modified by agent ops | golden scenarios GS-09, GS-11 |
 | AI-015 | Each agent has an independent Model Assignment and usage display | UI test |
 | AI-016 | Budget limits enforced | unit |
 | AI-017 | Private Mode blocks provider calls at the egress module | network test |

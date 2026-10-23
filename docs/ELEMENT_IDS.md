@@ -111,7 +111,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `lib.text.align` | (added per brief) | Left / centre / right. |
 | `lib.text.effect` | Home ▸ Text Effect | Text animation presets (rough-notation, kinetic). |
 | `lib.text.variant` | Home ▸ Text Style | Title / Subtitle / Lower third / Callout variants (`preset:text.*`). |
-| `lib.text.add` | Home ▸ Add Text | Adds a Text Layer at the playhead with current picks. |
+| `lib.text.add` | Home ▸ Add Text | Opens `lib.text.add.input` (text entry + variant) and adds a Text Layer at the playhead with current picks on confirm (`lib.text.add.confirm`). |
 | `lib.text.opacity` | Home ▸ Opacity | Opacity for the selected element. |
 | `lib.text.ratio` | Home ▸ Ratio Setting | Shortcut to `agent.output.ratio.*`. |
 | `lib.text.videosize` | Home ▸ Video Size | Shortcut to `agent.output.resolution.*`. |
@@ -124,6 +124,8 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `lib.assets.card.meta` | (tooltip) | Resolution, fps, duration, audio, size. |
 | `lib.assets.card.badge.sequence` | (added) | Sequence Badge number; click cycles / drag to reorder. |
 | `lib.assets.card.select` | (checkbox) | Select for Insert. |
+| `lib.assets.card.action.usecaptions` | (menu, subtitle assets) | Use this SRT/VTT asset as the project captions (`op:caption.importSrt`). |
+| `lib.assets.card.action.remove` | (menu) | Remove asset (confirmation if used by a Clip). |
 | `lib.assets.card.state.ingesting` | (state) | Probe/transcode/proxy progress. |
 | `lib.assets.card.state.unsupported` | (state) | Unsupported file with reason (`EM-1xxx`). |
 | `lib.assets.insert` | Insert | Inserts selected Assets in Sequence Badge order. Disabled when nothing selected. |
@@ -167,6 +169,8 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `agent.editor.thread` / `.message` | messages | As above. |
 | `agent.editor.intentqueue` | (added) | Intent Queue list; `.item`, `.item.superseded`, `.item.restore`, `.item.remove`, `.clear`. |
 | `agent.editor.plancard` | (added) | Plan Card; `.goal`, `.step`, `.step.tool`, `.step.diff`, `.risk`, `.notes`, `.baseversion`, `.baseversion.stale`. |
+| `agent.editor.plan` | (added) | "Plan" button: asks the Editor Agent to plan the queued intents (also triggered by composer send and by hand-off when auto-plan is on). |
+| `agent.editor.plancard.replan` | (added) | Re-plan a stale or invalid plan against the current version. |
 | `agent.editor.execute` | Execute | Executes the current Edit Plan. Disabled when no plan, stale, or validation failed. |
 | `agent.editor.cancel` | (added) | Cancels a running plan or agent request. |
 | `agent.editor.composer` / `.send` / `.attach` | input, send | Composer for direct instructions to the Editor Agent. |
