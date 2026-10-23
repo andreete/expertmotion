@@ -26,9 +26,9 @@ This index is the map of the documentation. Status values: `planned`, `draft`, `
 | Document | Purpose | Owner of | ID prefix | Status |
 |---|---|---|---|---|
 | MASTER_PROJECT_PROMPT.md | The brief | — | — | baseline |
-| GLOSSARY.md | Canonical vocabulary | terms | — | draft |
-| ASSESSMENT.md | Deliverable A: repo, mockup, PDF, Remotion, feasibility, licensing, gaps | findings | — | planned |
-| PRD.md | Product requirements, personas, MVP scope P0/P1/P2, metrics | product scope | PRD- | planned |
+| GLOSSARY.md | Canonical vocabulary | terms | — | baseline (frozen) |
+| ASSESSMENT.md | Deliverable A: repo, mockup, PDF, Remotion, feasibility, licensing, gaps | findings | — | baseline |
+| PRD.md | Product requirements, personas, MVP scope P0/P1/P2, metrics | product scope | PRD- | baseline |
 | BRD.md | Business model, licensing path, costs, compliance, KPIs | business rules, compliance | BRD- | planned |
 | FRD.md | Functional requirements per command and element | FR list | FR- | planned |
 | SRS.md | Software requirements, NFRs, interfaces | NFR list | NFR- | planned |
@@ -36,20 +36,20 @@ This index is the map of the documentation. Status values: `planned`, `draft`, `
 | USER_FLOWS.md | End-to-end flows with states | flows | — | planned |
 | EDITOR_INTERACTION_MODEL.md | Ten-point interaction spec per significant action | interactions | — | planned |
 | UI_UX_SPECIFICATION.md | Screens, components, tokens, copy | design system | — | planned |
-| ELEMENT_IDS.md | UI element IDs and wireframe | element IDs | el: | draft |
+| ELEMENT_IDS.md | UI element IDs and wireframe | element IDs | el: | baseline |
 | ACCESSIBILITY_AND_I18N.md | Keyboard, contrast, i18n keys | i18n scheme | — | planned |
 | ONBOARDING_TOUR.md | First-run tour copy (EN/ID) | tour | — | planned |
-| ARCHITECTURE.md | C4, processes, data flow, shell comparison | architecture | — | planned |
+| ARCHITECTURE.md | C4, processes, data flow, shell comparison | architecture | — | baseline |
 | BLUEPRINT.md | Repo layout, packages, port list | module boundaries | — | planned |
 | TRD.md | Stack, versions, dependencies, budgets | stack | — | planned |
 | API_SPECIFICATION.md | Local Service REST + SSE contract | routes, events | — | planned |
 | DATABASE_SCHEMA.md | SQLite DDL, Composition Model JSON Schema, migrations, encryption | schema | — | planned |
-| PERFORMANCE.md | Hardware tiers, Performance Profiles, ratio × resolution table, budgets | profiles, pixel table | — | planned |
+| PERFORMANCE.md | Hardware tiers, Performance Profiles, ratio × resolution table, budgets | profiles, pixel table | — | baseline |
 | ASSET_INGESTION.md | Import pipeline | ingestion rules | — | planned |
-| AI_WORKFLOW.md | Edit-intent pipeline, schemas, op vocabulary, locking, tools | intents, plans, ops | AI- | planned |
+| AI_WORKFLOW.md | Edit-intent pipeline, schemas, op vocabulary, locking, tools | intents, plans, ops | AI- | baseline |
 | AGENT_DESIGN.md | Agents, permissions, runtime sub-agents, repo-side subagents | agent roles | — | planned |
 | ../SYSTEM_PROMPT.md | Versioned runtime prompts | prompts | — | planned |
-| DESIGN_CATALOGUE.md | Closed preset registry | preset IDs | preset: | planned |
+| DESIGN_CATALOGUE.md | Closed preset registry | preset IDs | preset: | baseline |
 | REMOTION_CAPABILITY_MAP.md | Feature → Remotion API mapping with sources | mapping | — | planned |
 | LOCAL_AI_MODELS.md | Model registry, licences, tiers, download policy | model registry | — | planned |
 | MCP_AND_TOOLING.md | MCP evaluation, tool layer | tooling decision | — | planned |
@@ -67,7 +67,7 @@ This index is the map of the documentation. Status values: `planned`, `draft`, `
 | QA_PROCESS.md | QA approach, triage | QA process | — | planned |
 | TEST_PLAN.md | Test cases and matrices | QA list | QA- | planned |
 | ERROR_CATALOGUE.md | Error codes and copy | error codes | EM- | planned |
-| DECISIONS.md | ADRs | decisions | ADR- | draft |
+| DECISIONS.md | ADRs | decisions | ADR- | baseline |
 | RISKS_AND_ASSUMPTIONS.md | Risks, assumptions | risks | RISK- | planned |
 | AGENT_SKILLS.md | Development skills | skills | — | planned |
 | HOOKS_AND_GUARDRAILS.md | Hooks and policy checks | hooks | — | planned |

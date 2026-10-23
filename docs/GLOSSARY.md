@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Frozen after the core documents (PRD, ARCHITECTURE, AI_WORKFLOW, DESIGN_CATALOGUE, PERFORMANCE) were written |
+| Status | **Frozen** (2026-10-24, after PRD, ARCHITECTURE, AI_WORKFLOW, DESIGN_CATALOGUE, PERFORMANCE). New terms: add here first, then use. |
 | Owner | Documentation lead |
 | Last updated | 2026-10-24 |
 | Depends on | MASTER_PROJECT_PROMPT.md |
