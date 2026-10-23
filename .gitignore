@@ -6,3 +6,4 @@ out/
 resources/
 coverage/
 *.tsbuildinfo
+poc/slice-v0/out/

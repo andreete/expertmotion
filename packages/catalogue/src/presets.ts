@@ -148,10 +148,10 @@ export const textEffects = define('texteffect', { colour: optionalHex() }, [
 ]);
 
 export const fonts = define('font', {}, [
-  { name: 'inter', en: 'Inter', id: 'Inter', p: 'p0', data: { family: 'Inter', file: 'fonts/Inter-Variable.woff2' }, preview: false },
-  { name: 'plus-jakarta-sans', en: 'Plus Jakarta Sans', id: 'Plus Jakarta Sans', p: 'p0', data: { family: 'Plus Jakarta Sans', file: 'fonts/PlusJakartaSans-Variable.woff2' }, preview: false },
-  { name: 'archivo', en: 'Archivo', id: 'Archivo', p: 'p0', data: { family: 'Archivo', file: 'fonts/Archivo-Variable.woff2' }, preview: false },
-  { name: 'jetbrains-mono', en: 'JetBrains Mono', id: 'JetBrains Mono', p: 'p0', data: { family: 'JetBrains Mono', file: 'fonts/JetBrainsMono-Variable.woff2' }, preview: false },
+  { name: 'inter', en: 'Inter', id: 'Inter', p: 'p0', data: { family: 'Inter', fileStem: 'fonts/inter-latin', weights: [400, 500, 600, 700, 800] }, preview: false },
+  { name: 'plus-jakarta-sans', en: 'Plus Jakarta Sans', id: 'Plus Jakarta Sans', p: 'p0', data: { family: 'Plus Jakarta Sans', fileStem: 'fonts/plus-jakarta-sans-latin', weights: [400, 500, 600, 700, 800] }, preview: false },
+  { name: 'archivo', en: 'Archivo', id: 'Archivo', p: 'p0', data: { family: 'Archivo', fileStem: 'fonts/archivo-latin', weights: [400, 500, 600, 700, 800] }, preview: false },
+  { name: 'jetbrains-mono', en: 'JetBrains Mono', id: 'JetBrains Mono', p: 'p0', data: { family: 'JetBrains Mono', fileStem: 'fonts/jetbrains-mono-latin', weights: [400, 500, 600, 700, 800] }, preview: false },
 ]);
 
 // Book §4.4 palettes: background, text, accent 1, accent 2 (contrast-checked in the book).
