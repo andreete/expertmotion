@@ -18,7 +18,7 @@ Experthinker Studio is the predecessor: an npm-workspaces monorepo (~7.7k lines 
 |---|---|---|
 | `packages/video` | Remotion 4.0.535 project | `brand.ts`, `formats.ts` (vertical/landscape/square/portrait + safe areas, `detectFormat`), `layout.tsx` (`useLayout`, unit `u = min(w,h)/1080`), `fit.ts` (`fitText` without DOM), `schemas.ts` (React-free registry, `computeMetadata`, `getJsonSchema` via Zod 4.5.4), `registry.tsx`, `validation.ts`; components `KineticText`, `AnimatedNumber`, `BarChart`, `LineChart`, `SceneShell`, `SourceTag`, `Logo`; compositions Explainer, HookIntro, DataExplainer, KeyFact, Contrast, ReflectiveOutro; 22 tests via `tsx`. |
 | `apps/server` | Express 4 + better-sqlite3 12 | `queue.ts` (RenderQueue: enqueue/cancel/ETA/throttled progress/auto-thumbnail), `bundler.ts` (BundleManager with chokidar watch, keeps last good bundle), `browser.ts` (`browserReady` warm-up), `stills.ts` (`renderStillCached`), `app.ts` (routes, `openSse` SSE helper, Host/Origin guards), `db.ts` (tables `renders`, `presets`, `settings`), `config.ts` (`STUDIO_PORT` default 4000, `RENDER_CONCURRENCY`). |
-| `apps/dashboard` | Vite 6 + React 19 + Tailwind v4 + `@remotion/player` | `store.tsx` (SSE store), `components/SchemaForm.tsx` (JSON-Schema form with `oneOf` scene lists), `components/ui.tsx`, `pages/Editor.tsx` (Player wrapper sized from metadata, safe-area overlay). |
+| `apps/dashboard` | Vite 6 + React 19 + Tailwind v4 + `@remotion/player` | `store.tsx` (SSE store), `components/SchemaForm.tsx` (JSON-Schema form with `oneOf` scene lists), `components/ui.tsx`, `pages/Editor.tsx` (contains an unexported `Preview` component: Player wrapper sized from metadata with a safe-area overlay; only `EditorPage` is exported). |
 | `apps/mcp` | stdio MCP server (SDK 1.32) | thin HTTP client of the API; `render_video` gated by `userApproved`. |
 | `scripts/` | `dev-capped.sh` (systemd cgroup memory cap), `print-mcp-config.mjs` | server-specific. |
 
@@ -117,7 +117,7 @@ Signing: Windows EV certificates no longer grant immediate SmartScreen reputatio
 |---|---|---|---|---|---|
 | STT (captions) | whisper.cpp (ggml large-v3 / medium / small) | yes, WER ≈ 7.4 % (CV17, large-v3) | MIT (engine), model OpenAI MIT | prebuilt binary | ship own signed binaries |
 | STT | sherpa-onnx (`sherpa-onnx-node`) | Indonesian k2 models exist | Apache-2.0 | npm native | also does TTS |
-| TTS | Piper `id_ID-news_tts-medium` on sherpa-onnx | yes (news voice) | engine piper1-gpl **GPL-3**; voice card to check | ONNX via sherpa-onnx | only offline Indonesian option found |
+| TTS | Piper `id_ID-news_tts-medium` on sherpa-onnx | yes (news voice) | sherpa-onnx Apache-2.0; espeak-ng phonemizer inside it **GPL-3** (piper1-gpl also GPL-3); voice MODEL_CARD cites a dataset with unclear licence **[UNVERIFIED redistribution]** | ONNX via sherpa-onnx | only offline Indonesian option found; see LOCAL_AI_MODELS.md |
 | TTS | Kokoro-82M | no | Apache-2.0 | ONNX | English only |
 | TTS | F5-TTS, XTTS-v2, Fish/OpenAudio S1, OmniVoice | varies | non-commercial | Python | excluded |
 | TTS | Chatterbox (MIT), Qwen3-TTS (Apache-2.0), MeloTTS (MIT), Orpheus | no Indonesian listed | permissive | Python | watch list |

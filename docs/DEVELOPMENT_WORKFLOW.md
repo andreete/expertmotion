@@ -59,7 +59,7 @@ Dependency direction (enforced by ESLint `import/no-restricted-paths`): `shared`
 | `test` | Vitest unit + integration (fake Engine, fake provider) | both |
 | `test:e2e` | Playwright against `dev` (browser mode) or against the Electron build (`--electron`) | browser mode on Linux through an SSH tunnel; Electron mode on Windows |
 | `test:golden` | `renderStill` fixtures × 7 ratios, pixel diff ≤ 1 % (`--update` to re-baseline, review required) | Linux at reduced resolution and concurrency 1 under the cap; Windows full |
-| `eval:agents` | golden scenarios on the fake provider; `--live --model <id>` for live runs with the test key (GOLDEN_SCENARIOS.md §4.3 calls the live variant `golden:live`; one name is fixed in the consistency pass) | both (live needs network and a key) |
+| `eval:agents` | golden scenarios on the fake provider; `--live --model <id>` for live runs with the test key (the only name; GOLDEN_SCENARIOS.md §4.3 uses it) | both (live needs network and a key) |
 | `build:engine` | `bundle()` the Remotion project to `packages/engine/dist/bundle/` and build catalogue loops to `packages/engine/dist/catalogue/` (≤ 40 MB) | Windows (loops); bundle only also works on Linux |
 | `build:service` | esbuild/tsup bundle of the Service for packaging | both |
 | `build:ui` | Vite production build | both |

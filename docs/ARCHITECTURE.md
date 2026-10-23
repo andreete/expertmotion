@@ -93,7 +93,7 @@ flowchart TB
 |---|---|---|
 | `http` | apps/service | Express app, auth middleware (Service Token, Host/Origin), `openSse`, error mapping to `EM-` codes |
 | `db` | apps/service | migrations, repositories per table, transactions |
-| `composition` | packages/composition-model | Zod schema of the Composition Model, `applyOps(model, ops) → model`, `validate(model) → issues`, `deriveTiming(model, fps)`, version hashing |
+| `composition` | packages/composition-model | Zod schema of the Composition Model, pure `applyOperations(model, ops) → model` (wrapped by the service-level tool `composition.applyOps({planId})` from AI_WORKFLOW §8), `validate(model) → issues`, `deriveTiming(model, fps)`, version hashing |
 | `catalogue` | packages/catalogue (React-free data: preset ids, labels, param Zod schemas, defaults, flags, Compile defaults) | Design Catalogue registry; `packages/engine` holds the React implementations keyed by preset id, so composition-model and agents can depend on the registry without a cycle |
 | `intents` | packages/agents | Intent schema, Target Resolution, Property Classes, Intent Queue reducer, Compile, Rewrite, Locked Keys |
 | `agents` | packages/agents | provider adapters (Vercel AI SDK), Brainstorming/Editor runners, tool registry with permissions, usage recording, context windowing |
@@ -109,7 +109,7 @@ flowchart TB
 1. `Expertmotion.exe` starts → Shell acquires single-instance lock → reads/creates the wrapped Database Key via `safeStorage` → generates a 256-bit Service Token → picks a free loopback port (prefers 47600–47699; never a fixed well-known port) → starts the Local Service with Electron `utilityProcess.fork` (the `RunAsNode` fuse is off, so a plain Node child is not available) and passes `{token, port, dataDir, dbKey}` over the `parentPort`/`postMessage` channel (never argv or env, so they do not appear in process listings; SEC-002).
 2. Local Service opens the encrypted DB, runs migrations, marks interrupted render jobs failed and interrupted agent runs cancelled, loads the licence state, detects the Hardware Tier, warms the browser (`ensureBrowser`) in the background, and reports `ready` over the parent port.
 3. Shell loads the Editor (`app://` scheme in production, Vite dev server in development) and injects `{port, token}` via preload (`contextBridge`).
-4. Editor opens `EventSource('/api/events')` with the token in the query string (EventSource cannot set headers; the token is single-use-per-launch and loopback only) and uses `Authorization: Bearer <token>` on fetch.
+4. Editor opens `EventSource('/api/v1/events')` (all routes live under `/api/v1`, see API_SPECIFICATION.md) with the token in the query string (EventSource cannot set headers; the token is single-use-per-launch and loopback only) and uses `Authorization: Bearer <token>` on fetch.
 5. On window close: Shell asks the Service to checkpoint; waits ≤ 5 s for running renders to cancel (prompting the Creator if one is running); SIGTERM; exit.
 6. Crash of the Service: Shell restarts it (backoff 1 s, 3 s, 9 s), Editor shows `sys.offline` and reconnects; render jobs are marked failed by the Service on restart.
 
@@ -124,11 +124,11 @@ sequenceDiagram
   participant IC as Intent Compiler
   participant EA as Editor Agent (LLM)
   participant CM as Composition Model
-  UI->>S: POST /projects/:id/intents {pick}
+  UI->>S: POST /api/v1/projects/:id/intents {pick}
   S->>IC: validate against Design Catalogue, Target Resolution, Property Class
   IC-->>S: Intent (queued | superseded others)
   S-->>UI: SSE intent.updated (Intent Queue)
-  UI->>S: POST /projects/:id/plans {intentIds, instruction?}
+  UI->>S: POST /api/v1/projects/:id/plans {intentIds, instruction?}
   alt all intents fully specified
     S->>IC: Compile → Operations
   else needs interpretation
@@ -137,7 +137,7 @@ sequenceDiagram
     S->>IC: validate plan (schema, capability, Locked Keys, baseVersion)
   end
   S-->>UI: SSE plan.ready {plan, risks}
-  UI->>S: POST /plans/:id/execute
+  UI->>S: POST /api/v1/plans/:id/execute
   S->>CM: transaction: applyOps(baseVersion) → validate → new version
   S-->>UI: SSE composition.updated {version, diff}
   UI->>UI: Player + Timeline View refresh
@@ -151,7 +151,7 @@ sequenceDiagram
   participant S as Local Service
   participant R as Render queue
   participant E as Engine (Remotion + Chrome + FFmpeg)
-  UI->>S: POST /renders {versionId, outputProfile, performanceProfile}
+  UI->>S: POST /api/v1/renders {versionId, outputProfile, performanceProfile}
   S->>S: preflight (disk, RAM, dimensions, assets, licence)
   S->>R: enqueue
   R->>E: selectComposition(serveUrl, inputProps=model) → renderMedia(...)
@@ -188,7 +188,7 @@ sequenceDiagram
   settings.json             non-secret UI preferences (theme, window bounds)
 ```
 
-The Database Key never touches disk unwrapped; it lives wrapped in `settings.json`'s sibling `keyring.bin` via `safeStorage` (DPAPI, current Windows user).
+The Database Key never touches disk unwrapped; it lives wrapped in `data\keyring.bin` via `safeStorage` (DPAPI, current Windows user).
 
 ## 9. Cross-cutting concerns
 
@@ -197,7 +197,7 @@ The Database Key never touches disk unwrapped; it lives wrapped in `settings.jso
 | Errors | every failure maps to an `EM-xxxx` code with EN/ID copy and a recovery action; stack traces only in logs/diagnostics |
 | Logging | structured JSON lines; secrets redacted by pattern (`sk-`, `Bearer`, provider key shapes); 7-day rotation |
 | Versioning | Composition Versions are immutable and hashed; plans reference `baseVersion`; undo/redo move the project head pointer |
-| Concurrency | one render at a time per project (queue); one agent run per agent per project (409 on conflict); ingest parallelism 2 |
+| Concurrency | one render at a time **globally** (queue; EM-3208 when busy); one agent run per agent per project (409 on conflict); ingest parallelism 2 |
 | Memory | Performance Profile ceilings; render concurrency; Chrome killed on cancel; `mediaCacheSizeInBytes` per profile |
 | Offline | everything except providers/downloads/updates; Private Mode enforces it at the HTTP client layer (single egress module) |
 | i18n | i18n keys; EN default; ID variants for content/errors/tour |

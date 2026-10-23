@@ -65,7 +65,8 @@ export const EditIntent = z.object({
   propertyClass: z.enum(['scalar','list','exclusive-group']),
   needsInterpretation: z.boolean(),     // false => Compile path
   instruction: z.string().optional(),   // free text from chat/brainstorm, if any
-  status: z.enum(['queued','superseded','compiled','planned','executed','rejected','removed','restored']), // removed = Creator removed it from the queue
+  status: z.enum(['queued','superseded','compiled','planned','executed','rejected','removed']), // removed = Creator removed it from the queue; Restore sets a superseded intent back to 'queued' and stamps restoredAt
+  restoredAt: z.string().datetime().optional(),
   supersedes: z.array(z.string()).default([]),
   baseVersion: z.string(),              // Composition Version hash at capture time
 });

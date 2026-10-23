@@ -52,7 +52,7 @@ Every document in this repository uses the terms below exactly as written here (
 |---|---|
 | **Project** | A Creator's saved work: settings, Assets, Sequences, Composition Model versions, intents, plans, conversations, render jobs. Stored in the local database plus a media folder. |
 | **Project Settings** | Name, frame rate (24/25/30/50/60), default Aspect Ratio and Resolution, duration policy, output folder. |
-| **Asset** | An imported media file (video, image, audio) with probe metadata, proxy, thumbnail and waveform, stored on the filesystem and indexed in the database. |
+| **Asset** | An imported file (video, image, audio, or subtitle SRT/VTT) with probe metadata and, for media, proxy, thumbnail and waveform, stored on the filesystem and indexed in the database. |
 | **Sequence** | An ordered list of Clips in a Project. MVP has exactly one Sequence per Project. |
 | **Composition Model** | The versioned JSON document that fully describes what the Engine renders: Project Settings, Tracks, Timeline Elements, transitions, captions, effects, audio, theme. Schema owned by `DATABASE_SCHEMA.md`. Times are in milliseconds. |
 | **Composition Version** | An immutable snapshot of the Composition Model created by every successful Execute, Insert, or deterministic pick. Undo/redo and rollback move between versions. |
@@ -64,7 +64,7 @@ Every document in this repository uses the terms below exactly as written here (
 | **Theme** | Project-wide palette, fonts and spacing used by presets. |
 | **Output Profile** | Aspect Ratio + Resolution + frame rate + codec settings used for a render. Exact pixel table in `PERFORMANCE.md`. |
 | **Aspect Ratio** | One of 16:9, 9:16, 1:1, 4:5, 5:4, 4:3, 3:4, Custom (width:height). |
-| **Resolution** | One of 720p, 1080p, 2K, 2160p (exact pixels depend on the Aspect Ratio). "Draft" is the proxy preview quality, not an export preset. |
+| **Resolution** | One of 720p, 1080p, 2K, 2160p (exact pixels depend on the Aspect Ratio; stored lowercase as `720p|1080p|2k|2160p`). "Draft" is the proxy preview quality, not an export preset. |
 | **Performance Profile** | Standard, Accelerated or Turbo. A documented resource policy (render concurrency, preview scale, hardware acceleration, memory ceiling), not a frame rate and not a promise of faster hardware. |
 | **Render Job** | One request to render a Composition Version with an Output Profile to a file, with progress, ETA, cancellation and status (`queued`, `rendering`, `done`, `failed`, `cancelled`). |
 | **Output** | A rendered file (video, GIF, still, audio) with its metadata and thumbnail. |
@@ -89,7 +89,7 @@ Every document in this repository uses the terms below exactly as written here (
 | **Editor Agent** | The worker agent in the Editor Chat. Reads the Intent Queue, context and capabilities, produces Edit Plans, and after Execute drives Operations through tools. |
 | **Runtime Sub-agent** | A deterministic worker invoked by Edit Plan steps: Ingest, Caption, Audio, Layout, Thumbnail, QA-check. Not an LLM unless stated. |
 | **Tool** | A narrow, typed Local Service API callable by agents (for example `composition.applyOps`). Never a shell or filesystem. |
-| **Provider Connection** | A configured external LLM provider (OpenRouter, OpenAI, Anthropic, Google Gemini) with an encrypted credential, validated status and the list of available models. |
+| **Provider Connection** | A configured external LLM provider (OpenRouter, OpenAI, Anthropic, Google Gemini, or a custom OpenAI-compatible https base URL) with an encrypted credential, validated status and the list of available models. |
 | **Model Assignment** | Which model (from which Provider Connection) each agent uses. Independent per agent. |
 | **Capability Table** | Per-model facts the app relies on: context length, tool calling, structured output, streaming, price per token if known. |
 | **Usage Record** | Tokens and, where the provider reports it, cost for one agent run. Costs are labelled "approximate" unless the provider returns them. |

@@ -10,7 +10,7 @@
 | Owner of | the 20 Golden Scenarios, the fixture set, the base states B0–B3, the scenario execution harness contract (`test/fixtures/plans/GS-xx.json`) |
 | ID range | GS-01 … GS-20 (scenario ids; variants are `GS-xxb`). Note: the `GS-` prefix is not yet listed in GLOSSARY.md "Identifier prefixes"; GLOSSARY.md defines the term Golden Scenario and names this file |
 
-Each scenario is both an **acceptance test** (PRD-012 "Golden scenarios 1–10 pass"; AI-014 "golden scenarios 11–14") and an **agent eval** (AI_WORKFLOW §13). Everything the Creator sees is given in English with an Indonesian variant (EN / ID). Terms follow GLOSSARY.md; element ids follow ELEMENT_IDS.md; `op:` names and args follow AI_WORKFLOW §5 exactly; `preset:` ids follow DESIGN_CATALOGUE.md.
+Each scenario is both an **acceptance test** (PRD-012 "Golden scenarios GS-01…GS-20 pass"; AI-014 Locked Keys verified by GS-09 and GS-11) and an **agent eval** (AI_WORKFLOW §13). Everything the Creator sees is given in English with an Indonesian variant (EN / ID). Terms follow GLOSSARY.md; element ids follow ELEMENT_IDS.md; `op:` names and args follow AI_WORKFLOW §5 exactly; `preset:` ids follow DESIGN_CATALOGUE.md.
 
 ## 1. Conventions used in every scenario
 
@@ -973,7 +973,7 @@ Fixture format:
 
 | Item | Specification |
 |---|---|
-| Command | `npm run golden:live -- --model openrouter/<id> --scenarios GS-08,GS-09,GS-10,GS-11,GS-12,GS-17,GS-18,GS-20 --repeat 5` (Operator's key via environment; never committed) |
+| Command | `npm run eval:agents -- --live --model openrouter/<id> --scenarios GS-08,GS-09,GS-10,GS-11,GS-12,GS-17,GS-18,GS-20 --repeat 5` (Operator's key via environment; never committed) |
 | What differs | the real provider answers; assertions on **exact** ops are relaxed to **semantic** checks per scenario (e.g. GS-09: exactly one `op:transition.set`, target `cut:1`, preset `wipe`, direction `from-left`; GS-20 run 1: no audio op, one caption op with a P0 preset) |
 | Report | `reports/golden-live-<date>-<model>.json`: per scenario `validFirstAttempt`, `lockedKeyViolationsCaught`, `unvalidatedMutations`, `providerCalls`, `costUsd`, `latencyMs` |
 | Where | Operator's PC or CI with network; never on the shared development server during business hours |

@@ -73,7 +73,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.menu.file.import` | Import | Opens OS file picker into the Asset Panel. |
 | `hdr.menu.file.export` | Export | Opens Export dialog (`scr.export`). |
 | `hdr.menu.file.settings` | Setting: Frame, FPS, Duration | Project Settings dialog (`scr.project.settings`). |
-| `hdr.menu.file.recover` | (added per brief) | Recovery dialog listing checkpoints (`scr.project.recover`). |
+| `hdr.menu.file.recover` | (added per brief) | Recovery dialog listing checkpoints (`scr.project.recover`). A badge on this item shows when a checkpoint newer than the saved state exists. |
 | `hdr.menu.home` | Home | Switches Library Panel to Home mode (`lib.text.*`). |
 | `hdr.menu.design` | Design | Switches Library Panel to Design mode (`lib.catalogue.*`). |
 | `hdr.menu.tools` | Tools | Switches Library Panel to Tools mode (`lib.generator.*`). |
@@ -83,7 +83,8 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.action.hardware` | display icon | Hardware Monitor popover (`scr.hardware`). |
 | `hdr.action.save` | save icon | Same as `hdr.menu.file.save`. |
 | `hdr.action.backup` | cloud-upload icon (repurposed) | Backup Project to a local zip. |
-| `hdr.action.restore` | cloud-sync icon (repurposed) | Restore Project from a zip. Badge shows when a newer checkpoint exists. |
+| `hdr.action.restore` | cloud-sync icon (repurposed) | Restore Project from a zip (`scr.backup.restore`). |
+| `hdr.action.undo` / `hdr.action.redo` | (added) | Move the project head between Composition Versions (Ctrl+Z / Ctrl+Y). |
 | `hdr.action.models` | grid icon | Opens Model Manager (`scr.models`). |
 | `hdr.action.purchase` | Purchase | Opens Licence screen (`scr.license`). Hidden when licensed. |
 | `hdr.action.license` | avatar | Licence status popover (trial / licensed / expired updates). |
@@ -180,7 +181,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `agent.output.profile.help` | ⓘ | Tooltip explaining profiles honestly. |
 | `agent.output.ratio.help` / `agent.output.private.help` | ⓘ | Tooltips for Video Dimensions (pixel table) and Private Mode (what is blocked). |
 | `agent.output.ratio.16x9` / `.9x16` / `.1x1` / `.4x5` / `.5x4` / `.4x3` / `.3x4` / `.custom` | Video Dimensions | Aspect Ratio selector; shows orientation icon and pixel label for the current Resolution. |
-| `agent.output.ratio.auto` | Auto | Pick ratio from the first inserted Clip. |
+| `agent.output.ratio.auto` | Auto | Sticky toggle: ratio follows the first inserted Clip; a manual ratio pick turns it off. |
 | `agent.output.resolution.720p` / `.1080p` / `.2k` / `.2160p` | 480p/HD/2K/4K buttons | Resolution selector; `.disabled` with reason below the Hardware Tier threshold. |
 | `agent.output.private` | Private Mode toggle | Blocks all outbound calls. |
 | `agent.output.reset` | Reset to Defaults | Resets Output Settings (confirmation). |
@@ -194,7 +195,10 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `scr.providers` | Provider Connections: `.list`, `.add`, `.provider.select`, `.key.input`, `.validate`, `.models.list`, `.assign.brainstorm`, `.assign.editor`, `.budget.project`, `.budget.month`, `.test`, `.save`. |
 | `scr.models` | Model Manager: `.list`, `.row`, `.row.install`, `.row.remove`, `.row.progress`, `.tier`. |
 | `scr.hardware` | Hardware Monitor popover: `.cpu`, `.ram`, `.procmem`, `.disk`, `.gpu`, `.workload`. |
-| `scr.project.new` / `.open` / `.settings` / `.recover` | Project dialogs; settings has `.name`, `.fps`, `.ratio`, `.resolution`, `.duration.policy`, `.output.folder`. |
+| `scr.project.new` / `.open` / `.settings` / `.recover` | Project dialogs; open has `.list`, `.delete` (confirmation); settings has `.name`, `.fps`, `.ratio`, `.resolution`, `.duration.policy`, `.output.folder`; recover has `.list`, `.restore`. |
+| `scr.ratio.custom` | Custom ratio dialog: `.width`, `.height`, `.preview`, `.apply` (clamped 1:3 … 3:1). |
+| `scr.backup` | Backup/Restore dialogs: `.backup.passphrase`, `.backup.plain` (warning), `.backup.start`, `.restore.file`, `.restore.passphrase`, `.restore.start`, `.progress`. |
+| `scr.history` | Version history list (`.list`, `.item`, `.item.restore`) reached from Edit ▸ History or the Plan Card. |
 | `scr.export` | Export dialog: `.profile.summary`, `.codec`, `.quality`, `.filename`, `.folder`, `.preflight` (disk/RAM/dimension checks), `.start`, `.progress`, `.eta`, `.cancel`, `.open.folder`, `.done`. |
 | `scr.generate.voice` / `.music` / `.thumbnail` / `.captions` / `.hashtags` | Generator forms with `.input`, `.language`, `.model`, `.run`, `.progress`, `.result`, `.insert`. |
 | `scr.diagnostics` | Logs, versions, hardware, "copy diagnostics bundle". |

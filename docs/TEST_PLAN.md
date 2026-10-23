@@ -341,7 +341,7 @@ Each case runs the ways GOLDEN_SCENARIOS.md §4 assigns to it: (a) Compile path 
 | QA-219 | GS-18 Budget exceeded → EM-4201 | `GS-18/` | (b) | warning at 80 %; EM-4201 at limit; existing plan still executable | int | P0 | L |
 | QA-220 | GS-19 Superseded intent restored | `GS-19/` | (a) | Restore re-queues the old intent, supersedes the newer; versions and Locked Keys follow | unit + int | P0 | L |
 | QA-221 | GS-20 English: "make the captions pop and add soft music bed, duck under my voice" | `GS-20/` | (b), (c) | plan with `op:caption.setStyle` (pop is P1 → capability check routes to a P0 style or flags the gap per fixture), `op:audio.addBed`, `op:audio.setDucking` `preset:audio.duck-voice`; executed version equals fixture | int | P0 | L |
-| QA-222 | Live aggregate | `OPENROUTER_TEST_KEY`; one mid-tier model | 1. Live run (`eval:agents --live`, called `golden:live` in GOLDEN_SCENARIOS.md §4.3) over the LLM scenarios GS-08, 09, 10, 11, 12, 17, 18, 20, 5 repeats each. | ≥ 90 % first-attempt valid plans (PRD §5); results table in GOLDEN_SCENARIOS.md updated with model, date, rate; 0 unvalidated mutations | manual (scripted) | P0 | L |
+| QA-222 | Live aggregate | `OPENROUTER_TEST_KEY`; one mid-tier model | 1. Live run (`npm run eval:agents -- --live`) over the LLM scenarios GS-08, 09, 10, 11, 12, 17, 18, 20, 5 repeats each. | ≥ 90 % first-attempt valid plans (PRD §5); results table in GOLDEN_SCENARIOS.md updated with model, date, rate; 0 unvalidated mutations | manual (scripted) | P0 | L |
 
 ## 21. Summary and traceability
 

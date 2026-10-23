@@ -281,7 +281,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 |---|---|
 | 1 | `agent.editor.intentqueue.item.restore` on a struck-through item; `.item.remove` on a queued item; `.clear` clears all queued (not executed) items. |
 | 2 | Restore: item moves to the top unstruck, the item it replaces becomes struck; Remove: item slides out (200 ms) with a 5 s toast Undo; Clear: confirmation naming the count ("Clear 4 queued picks?" / "Hapus 4 pilihan antre?"). |
-| 3 | Restore creates a new intent copying the old (`status: restored`, `supersedes: [current]`); Remove sets the intent `rejected` with reason `creator-removed` (see Notes); Clear = Remove for each. |
+| 3 | Restore sets the superseded intent back to `queued` (stamping `restoredAt`) and marks the newer intent `superseded` in turn; Remove sets the intent `removed`; Clear = Remove for each queued/superseded item. |
 | 4 | Restore: Compile (or Editor Agent if it needed interpretation). |
 | 5 | Versions per Compile; a `valid` plan that referenced a removed intent becomes `stale` ("re-plan"). |
 | 6–7 | Compile results refresh as IX-02. |
