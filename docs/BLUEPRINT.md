@@ -17,7 +17,7 @@ Expertmotion is one installed Windows application (`Expertmotion.exe`) made of t
 
 | Part | Process | Code | Talks to |
 |---|---|---|---|
-| Desktop Shell | Electron main | `apps/desktop` | spawns the Local Service; hosts the Editor in a `BrowserWindow`; native dialogs, `safeStorage`, updater, tray |
+| Desktop Shell | Electron main | `apps/desktop` | forks the Local Service as an Electron utility process; hosts the Editor in a `BrowserWindow`; native dialogs, `safeStorage`, updater, tray |
 | Local Service | Electron `utilityProcess` (Electron's embedded Node; the `RunAsNode` fuse is off, so no plain Node child exists) | `apps/service` + `packages/*` | encrypted SQLite, filesystem, Engine, LLM providers (only when configured, never in Private Mode) |
 | Editor | React in the Electron renderer (or a browser in development) | `apps/ui` | Local Service only, over `http://127.0.0.1:<port>/api/v1` with the Service Token |
 | Engine | prebuilt Remotion bundle + Chrome Headless Shell + FFmpeg | `packages/engine` (bundle) + `resources/engine/` | driven by `@remotion/renderer` from the Local Service; the same `ExpertmotionTimeline` component is imported by the Editor's Player |
@@ -32,11 +32,11 @@ Edit Intent ─────── packages/agents/intents: EditIntent (Zod), cat
    │
    ├─ fully specified ──► Compile ──────────────────────────────┐
    │                                                            ▼
-   └─ needs interpretation ──► Rewrite envelope ──► Editor Agent ──► Edit Plan (Zod) ──► validate + dry-run applyOps
+   └─ needs interpretation ──► Rewrite envelope ──► Editor Agent ──► Edit Plan (Zod) ──► validate + dry-run applyOperations
                                                                                                │
                                                                         Creator presses Execute│
                                                                                                ▼
-Composition Model ── packages/composition-model: applyOps in one SQLite transaction, validate, new Composition Version, checkpoint
+Composition Model ── packages/composition-model: applyOperations in one SQLite transaction, validate, new Composition Version, checkpoint
    │
    ▼
 Remotion Adapter ── packages/engine: ExpertmotionTimeline, calculateMetadata (ms → frames, ratio × resolution → px), presets
@@ -76,7 +76,7 @@ expertmotion/
     service/                   Local Service (Express + SSE, SQLite, render queue, ingest, agents runtime host)
     ui/                        Editor (React 19 + Vite 6 + Tailwind v4 + @remotion/player)
   packages/
-    composition-model/         Zod schema, applyOps, validate, deriveTiming, diff, hashing, migrations   (React-free)
+    composition-model/         Zod schema, applyOperations, validate, deriveTiming, diff, hashing, migrations   (React-free)
     catalogue/                 Design Catalogue registry: preset ids, labels, Zod param schemas, defaults, flags, Compile defaults (React-free)
     engine/                    Remotion: ExpertmotionTimeline, preset React implementations keyed by preset id, Root.tsx, formats, build script
     agents/                    schemas, intents compiler, rewrite, provider adapters, tool registry, prompts loader (React-free)
@@ -162,7 +162,7 @@ export class EmError extends Error {
 }
 export function errorMessage(err: unknown): string;            // ported (util.ts)
 export function truncate(s: string, max?: number): string;     // ported (util.ts)
-export const HTTP_STATUS_BY_RANGE: Record<'EM-1'|'EM-2'|…, number>; // default mapping, overridable per code (API_SPECIFICATION §2.5)
+export const HTTP_STATUS_BY_RANGE: Record<'EM-1'|'EM-2'|…, number>; // default mapping, overridable per code (API_SPECIFICATION §2.6)
 
 // result.ts
 export type Issue = { code: string; path: string; message: string; severity: 'info'|'warn'|'block' };   // CM-xxx, AI validation, preset params
@@ -187,7 +187,7 @@ export { CompositionModel, ProjectSettings, Theme, Clip, Transition, Motion, Eff
 export type CompositionModelT = z.infer<typeof CompositionModel>;
 
 export function createEmptyModel(projectId: string, settings: ProjectSettingsT, theme?: ThemeT): CompositionModelT;
-export function applyOps(model: CompositionModelT, ops: Operation[], ctx: ApplyContext): Result<{ model: CompositionModelT; diff: ElementDiff[] }>;
+export function applyOperations(model: CompositionModelT, ops: Operation[], ctx: ApplyContext): Result<{ model: CompositionModelT; diff: ElementDiff[] }>;
    // ApplyContext = { assets: AssetFacts[]; tier: 'T0'|'T1'|'T2'; catalogue: CatalogueRegistry; newId: () => string }
    // pure: never mutates `model`; stops at the first blocking Issue (step index in Issue.path = "steps[n].ops[m]")
 export function validate(model: CompositionModelT, ctx: ValidateContext): Issue[];   // CM-001 … CM-011 (DATABASE_SCHEMA §4.4)
@@ -199,10 +199,11 @@ export function diffModels(a: CompositionModelT, b: CompositionModelT): ElementD
 export function lockedKeysOf(ops: Operation[]): string[];       // propertyKey derivation for Locked Keys (AI_WORKFLOW §6)
 export function migrateModel(json: unknown): Result<CompositionModelT>;   // schemaVersion 1 → current, lazy (DATABASE_SCHEMA §5)
 export function summarizeForAgent(model: CompositionModelT, assets: AssetFacts[], maxTokens: number): CompactComposition;  // Rewrite envelope block
-export const OPERATIONS: Record<OpName, { argsSchema: z.ZodTypeAny; target: TargetKind[]; propertyClass: PropertyClass | null; destructive: boolean }>;  // AI_WORKFLOW §5 table in code
+export const OPERATIONS: Record<OpName, { argsSchema: z.ZodTypeAny; target: TargetKind[]; propertyClass: PropertyClass | null; destructive: boolean }>;  // AI_WORKFLOW §5 table in code, incl. op:theme.setTextDefaults (Theme defaults for new Text Layers, propertyKey theme.textDefaults.<field>)
+   // TargetKind = ElementRef.kind: 'sequence'|'clip'|'cut'|'text'|'caption'|'audio'|'shape'|'background'|'effect'|'project'|'selection'|'playhead'; cut indexes are 0-based (cut 0 = between video[0] and video[1])
 ```
 
-`applyOps` is the only function that changes a model; `apps/service` wraps it in a SQLite transaction (DATABASE_SCHEMA.md §2) and never edits `model_json` by hand.
+`applyOperations` is the only function that changes a model (the service-side **tool** `composition.applyOps({planId})` of AI_WORKFLOW.md §8 is its transactional wrapper, a different layer with a deliberately different name); `apps/service` wraps it in a SQLite transaction (DATABASE_SCHEMA.md §2) and never edits `model_json` by hand.
 
 ### 3.3 `packages/engine`
 
@@ -304,13 +305,14 @@ export function captureIntent(input: DesignPickInput | ChatIntentInput, ctx: Int
 export function validateIntent(intent: EditIntent, ctx: IntentContext): Result<EditIntent>;                        // step 4 (catalogue, params, flags)
 export function resolveTargets(intent: EditIntent, model: CompositionModelT, selection: ElementRef[], playheadMs: number): Result<ElementRef[]>;  // AI_WORKFLOW §4 table; EM-2201 when rejecting
 export function reduceQueue(queue: EditIntent[], incoming: EditIntent): { queue: EditIntent[]; superseded: string[]; rejected: string[] };     // Property Class rules (§6)
+export function restoreIntent(queue: EditIntent[], intentId: string, now: string): { queue: EditIntent[]; superseded: string[] };              // superseded → queued with restoredAt stamped; the newer intent becomes superseded
 export function needsInterpretation(intent: EditIntent): boolean;                                                  // §7 decision
 export function compileIntent(intent: EditIntent, ctx: CompileContext): Operation[];                               // Compile (no LLM), one table per category
 export function compilePlan(intents: EditIntent[], baseVersion: string, ctx: CompileContext): EditPlan;            // origin 'compile'
 export function lockedKeys(queue: EditIntent[]): string[];                                                         // compiled/executed propertyKeys
 export function buildRewriteEnvelope(args: { project: ProjectFacts; model: CompositionModelT; assets: AssetFacts[]; intents: EditIntent[]; lockedKeys: string[];
     creatorMessage?: string; creatorNotes?: string; tier: HardwareTier; capabilities: Capabilities }): RewriteEnvelope;  // AI_WORKFLOW §7 JSON
-export function validatePlan(plan: unknown, ctx: PlanContext): Result<EditPlan>;   // Zod, op vocabulary, Locked Keys, baseVersion, dry-run applyOps on a copy (step 8)
+export function validatePlan(plan: unknown, ctx: PlanContext): Result<EditPlan>;   // Zod, op vocabulary, Locked Keys, baseVersion, dry-run applyOperations on a copy (step 8)
 export function summarizeThread(messages: Message[]): ThreadSummary;              // deterministic (AI_WORKFLOW §10)
 
 // providers/
@@ -353,7 +355,7 @@ apps/service/src/
   config.ts                   resolved paths (ARCHITECTURE §8), EM_* dev overrides (TRD §4)
   http/  app.ts (createApp), guards.ts (Host/Origin/token), sse.ts (openSse + SseHub), errors.ts (EmError → envelope), route.ts (async wrapper), routes/*.ts (one file per API group)
   db/    open.ts (PRAGMA key/cipher), migrations/NNN_*.sql, repositories/*.ts (one per table), tx.ts
-  composition/ service.ts     head/version access, executePlan(planId) = transaction{applyOps → validate → version row → ops history → head → checkpoint}
+  composition/ service.ts     head/version access, executePlan(planId) = tool composition.applyOps = transaction{applyOperations → validate → version row → ops history → head → checkpoint}
   intents/  service.ts        wraps packages/agents/intents with repositories; emits intent.updated
   plans/    service.ts        compile-or-agent, validate, stale detection, idempotent execute (EM-2308)
   agents/   runs.ts, conversations.ts, usage.ts, egress.ts (Private Mode gate)
@@ -425,7 +427,7 @@ apps/desktop/src/
 | **Composition Version** | service → ui | DATABASE_SCHEMA.md §3 `composition_versions` | DTO `{id, hash, parentId, cause, durationMs, createdAt, model?}` | repository |
 | **Edit Intent** | ui / Brainstorming Agent → `agents/intents` → DB → ui (Intent Queue) | AI_WORKFLOW.md §3 `EditIntent` | `POST /projects/:id/intents` body (DesignPickInput subset), SSE `intent.updated` | `captureIntent` + `validateIntent` |
 | **Edit Plan** | Compile or Editor Agent → `validatePlan` → DB → ui (Plan Card) | AI_WORKFLOW.md §3 `EditPlan` | `POST /projects/:id/plans`, SSE `plan.ready` / `plan.invalid` | `validatePlan` (schema + dry-run) |
-| **Operation** | Compile / Editor Agent → `applyOps` | AI_WORKFLOW.md §3, §5 | inside `EditPlan.steps[].ops`; `operations_history.op_json` | `OPERATIONS[op].argsSchema` |
+| **Operation** | Compile / Editor Agent → `applyOperations` | AI_WORKFLOW.md §3, §5 | inside `EditPlan.steps[].ops`; `operations_history.op_json` | `OPERATIONS[op].argsSchema` |
 | **ExecutionResult** | `composition/service.executePlan` → ui, Editor Agent thread | AI_WORKFLOW.md §3 | `POST /plans/:id/execute` response, SSE `composition.updated` | — |
 | **Rewrite envelope** | `buildRewriteEnvelope` → provider | AI_WORKFLOW.md §7 | provider request (JSON) | size ≤ 60 % context (AI_WORKFLOW §10) |
 | **Tool call** | model → `ToolRegistry.call` | AI_WORKFLOW.md §8, AGENT_DESIGN.md §2.4 | in-process | Zod input; permission table |
@@ -443,7 +445,7 @@ apps/desktop/src/
 Rules that follow from the table:
 
 1. The Editor never constructs an `Operation`; it sends Design Picks and Insert requests, and reads back versions.
-2. The service never serialises a model that `validate()` marks `block`; a blocked `applyOps` rolls back the transaction (ExecutionResult.rollback).
+2. The service never serialises a model that `validate()` marks `block`; a blocked `applyOperations` rolls back the transaction (ExecutionResult.rollback).
 3. `baseVersion` travels with every plan; `POST /plans/:id/execute` compares it with `projects.head_version_id` and answers `409 EM-2301` when stale (AI-013).
 4. Everything crossing a process boundary is validated with Zod at the receiving side; TypeScript types are derived from the Zod schema, never written twice.
 
@@ -571,7 +573,7 @@ Explicitly **not** in the slice: agents runtime, providers, Brainstorming, capti
 
 | Check | Evidence |
 |---|---|
-| `validate(model)` and `applyOps` unit tests for `clip.insert` and `transition.set` pass with ≥ 90 % line coverage of the touched files | Vitest report |
+| `validate(model)` and `applyOperations` unit tests for `clip.insert` and `transition.set` pass with ≥ 90 % line coverage of the touched files | Vitest report |
 | Compile path produces an `EditPlan` for `preset:transition.fade` with zero provider calls | unit test with a throwing `Egress` |
 | Player frame at the Cut midpoint and `renderStill` of the same frame differ ≤ 1 % | parity script (POC-002) |
 | Output ffprobe: 1080×1920, 30 fps, duration = expected ± 1 frame, `validated = 1` | e2e assertion |

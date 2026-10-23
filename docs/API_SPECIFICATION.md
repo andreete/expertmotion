@@ -5,9 +5,9 @@
 | Status | baseline |
 | Owner | Local Service lead |
 | Last updated | 2026-10-24 |
-| Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 005, 006, 010, 014, 015), ARCHITECTURE.md §4–§7, BLUEPRINT.md §3–§4, DATABASE_SCHEMA.md (tables, Composition Model), AI_WORKFLOW.md §3, §5, §6, §8, §12, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md §2, §3, §7, ERROR_CATALOGUE.md, SECURITY.md (SEC-), TRD.md §3.2 |
+| Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 005, 006, 010, 013, 014, 015), ARCHITECTURE.md §4–§7, BLUEPRINT.md §3–§4, SECURITY.md (SEC-002, SEC-008, SEC-010), DATABASE_SCHEMA.md (tables, Composition Model), AI_WORKFLOW.md §3, §5, §6, §8, §12, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md §2, §3, §7, ERROR_CATALOGUE.md, SECURITY.md (SEC-), TRD.md §3.2 |
 | Used by | apps/ui (client), apps/service (routes), apps/desktop (lifecycle calls), TEST_PLAN.md (contract tests), FRD.md (FR- acceptance), MCP_AND_TOOLING.md |
-| Owner of | route table, request/response DTOs named here, HTTP status ↔ `EM-` mapping, pagination, idempotency, SSE event names and payloads, reconnection semantics |
+| Owner of | route table, request/response DTOs named here, HTTP status ↔ `EM-` mapping, pagination, idempotency, media grant lifecycle (API side; control in SEC-010), SSE event names and payloads, reconnection semantics |
 
 Schemas owned elsewhere are referenced by their Zod names: `CompositionModel`, `ProjectSettings`, `Theme` (DATABASE_SCHEMA.md §4); `EditIntent`, `EditPlan`, `Operation`, `ExecutionResult`, `ElementRef`, `PresetId`, `OpName` (AI_WORKFLOW.md §3); `BrainstormTurn` (AGENT_DESIGN.md §2.1). DTOs defined in this document live in `apps/service/src/http/dto.ts` and are re-exported as types from `@expertmotion/shared/dto`.
 
@@ -15,7 +15,7 @@ Schemas owned elsewhere are referenced by their Zod names: `CompositionModel`, `
 
 | Item | Rule |
 |---|---|
-| Base URL | `http://127.0.0.1:<port>/api/v1` (`<port>` from the Shell bootstrap, 47600–47699 in production; `EM_PORT` in development). Media files are served from `http://127.0.0.1:<port>/media/…` (outside `/api/v1`, §6.5). |
+| Base URL | `http://127.0.0.1:<port>/api/v1`. `<port>` is chosen by the Desktop Shell at random among free ports in 47600–47699 (SEC-008) and handed to the Editor through the preload bootstrap; in development it is `EM_PORT` (fixed 4110 on the shared Linux server, with the Vite Editor on 4120). Media files are served from `http://127.0.0.1:<port>/media/<grant>/…` (outside `/api/v1`, §2.2 and §6.5). |
 | Transport | HTTP/1.1 over loopback only; no TLS (loopback, token-authenticated, ADR-005). |
 | Content types | Requests: `application/json; charset=utf-8` (≤ 2 MB), `multipart/form-data` for browser-dev uploads only. Responses: `application/json`, `text/event-stream` (SSE), `video/*`, `image/*`, `audio/*`, `application/json` (waveform), `application/zip` (backup, diagnostics). |
 | Encoding | UTF-8; ids are ULIDs; timestamps ISO-8601 UTC; durations integer milliseconds; money `number` USD with `approximate: boolean`. |
@@ -24,7 +24,7 @@ Schemas owned elsewhere are referenced by their Zod names: `CompositionModel`, `
 | Time limits | no request blocks > 30 s (TR-027); long work is a job (`202 Accepted` + SSE). |
 | Pagination | list routes accept `?limit=` (default 50, max 200) and `?cursor=` (opaque, from the previous `nextCursor`); response `Page<T> = { items: T[]; nextCursor: string | null; total?: number }`. Ordered newest-first unless stated. |
 | Idempotency | `POST /plans/:planId/execute` and `POST /renders` accept `Idempotency-Key: <string ≤ 128>`. A repeat with the same key (and same project) within 24 h returns the first response with status `200` and `notice: 'EM-2308'` in the body. Execute is additionally idempotent on `planId` itself (AI_WORKFLOW.md §6): an executed plan returns its stored `ExecutionResult`. |
-| Concurrency | `409` when a resource is busy or stale (§2.5). Clients retry on `EM-2309`, `EM-6004` after 500 ms, never on `EM-2301` (re-plan instead). |
+| Concurrency | `409` when a resource is busy or stale (§2.6). Clients retry on `EM-2309`, `EM-6004` after 500 ms, never on `EM-2301` (re-plan instead). |
 | Caching | `Cache-Control: no-store` on `/api/v1/*`; media routes `Cache-Control: private, max-age=31536000, immutable` (ids are unique per file). |
 
 ## 2. Authentication and request guards
@@ -34,16 +34,32 @@ Schemas owned elsewhere are referenced by their Zod names: `CompositionModel`, `
 | Rule | Detail |
 |---|---|
 | Header | `Authorization: Bearer <ServiceToken>` on every `/api/v1/*` request except `GET /api/v1/health` (which answers a reduced body without a token, §6.1). |
-| EventSource | `GET /api/v1/events?token=<ServiceToken>` and `GET /api/v1/renders/:jobId/events?token=…` accept the query parameter because `EventSource` cannot set headers. The token is per launch and loopback-only; the Service never logs query strings of these routes. |
+| Exceptions | Exactly two, both documented in ADR-005 and both loopback-only and read-only: (1) **EventSource**: `GET /api/v1/events?token=<ServiceToken>` and `GET /api/v1/renders/:jobId/events?token=…` accept the Service Token in the query string because `EventSource` cannot set headers; the Service never logs the query string of these routes (SEC-100 redacts `token=`). (2) **Media grants**: `GET /media/<grant>/…` carries a media grant token in the path because Chrome Headless Shell and the Player fetch media with plain URLs (§2.2, SEC-010). No other route accepts credentials outside the header. |
 | Source of the token | Desktop Shell → preload `window.expertmotion.getBootstrap()` → `{port, token}`. Development: `EM_TOKEN` (TRD.md §4). |
 | Missing or wrong token | `401` `EM-8004` with `WWW-Authenticate: Bearer realm="expertmotion"`; the body never says which of the two it was. |
 | Rotation | one token per Service lifetime; a Service restart issues a new one and the Editor re-bootstraps (the Shell pushes it through `onServiceState`). |
 
-### 2.2 Shell-only routes
+### 2.2 Media grants (SEC-010)
+
+A **media grant** is a random 256-bit token (base64url, 43 chars) that authorises read access to the media variants of **one project** for **one purpose**. It is the only credential ever placed in a URL path.
+
+| Property | Preview grant | Render grant |
+|---|---|---|
+| Purpose | Player and Catalogue live preview in the Editor | Chrome Headless Shell during one Render Job (and `renderStill` for its thumbnail) |
+| Issued by | `POST /projects/:id/open` (R-016, returned as `mediaGrant`) or explicitly `POST /projects/:id/media-grants` (R-042) | the render queue when the job leaves `queued`; never returned over the API |
+| Scope | `{ projectId, kind: 'preview' }`: every asset of that project, all variants | `{ projectId, kind: 'render', jobId }`: assets referenced by the job's Composition Version only |
+| Lifetime | sliding 12 h from last use (`EM_MEDIA_GRANT_TTL_H`); renewed by every R-016; revoked by R-043, by a Service restart, by Private Mode changes (no: Private Mode does not affect loopback media), and when the project is soft-deleted | from job start to the final `render.done|failed|cancelled` event, then revoked immediately (VC-12: a request with a finished job's grant → `404`) |
+| Storage | in memory only (`media/grants.ts`), never in the database or logs (`grant=` redacted, SEC-100) | same |
+| Validation | grant exists and is not expired → scope matches `assetId`'s project (and job's asset set for render grants) → variant exists → path looked up in the DB (never derived from the request) | same |
+| Failure | `404 EM-9003` for unknown, expired, revoked or out-of-scope grants (no distinction is disclosed); `400` for malformed ids (ULID/base64url regex) | same |
+
+URL shape: `http://127.0.0.1:<port>/media/<grant>/<assetId>/<variant>` and `http://127.0.0.1:<port>/media/<grant>/outputs/<outputId>/<file|thumb>`. The Service builds these URLs itself when it assembles `EngineInputProps.assets` for a render; the Editor builds them from `AssetDto.media` availability flags and the current preview grant (`mediaUrl(grant, assetId, variant)` helper in `apps/ui/src/api/client.ts`). A client whose grant expired receives `404` from the Player's media loads and simply calls R-042 to obtain a new one.
+
+### 2.3 Shell-only routes
 
 `POST /service/shutdown` and the `paths[]` form of `POST /projects/:id/assets` are **trusted-caller** routes: they require the header `X-Expertmotion-Caller: shell` in addition to the token. In production the Editor's preload sets this header only for calls that originate from a Shell dialog result (the path list comes from `pickFiles`); in browser development the header is accepted when `EM_TOKEN` is set. This is a labelling control, not a second secret; the real protection is path canonicalisation and the allowed-roots check (TR-081).
 
-### 2.3 Host and Origin
+### 2.4 Host and Origin
 
 | Check | Allowed | Otherwise |
 |---|---|---|
@@ -53,7 +69,7 @@ Schemas owned elsewhere are referenced by their Zod names: `CompositionModel`, `
 | Cookies | none are set or read | — |
 | CORS preflight | answered only for `EM_UI_ORIGIN` in development; production has no cross-origin caller | — |
 
-### 2.4 Request limits
+### 2.5 Request limits
 
 | Limit | Value | Error |
 |---|---|---|
@@ -64,7 +80,7 @@ Schemas owned elsewhere are referenced by their Zod names: `CompositionModel`, `
 | SSE connections per token | 8 | `429` `EM-9005` (closes the oldest) |
 | Requests per second (burst) | 50 | `429` `EM-9005` |
 
-### 2.5 Error envelope and status mapping
+### 2.6 Error envelope and status mapping
 
 ```json
 { "error": { "code": "EM-2301", "message": "The composition changed after this plan was made. Ask the Editor Agent to plan again; nothing was applied.",
@@ -119,8 +135,8 @@ export const VersionDto = z.object({ id: Id, projectId: Id, parentId: Id.nullabl
 export const AssetDto = z.object({ id: Id, projectId: Id, kind: z.enum(['video','image','audio','subtitle']), name: z.string(), bytes: z.number().int(), sha256: z.string(),
   status: z.enum(['ingesting','ready','failed']), progress: z.number().min(0).max(1), errorCode: z.string().nullable(),
   durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), fps: z.number().nullable(), hasAudio: z.boolean().nullable(),
-  sequenceBadge: z.number().int().nullable(), media: z.object({ original: z.string(), playable: z.string().nullable(), proxy: z.string().nullable(), thumb: z.string().nullable(),
-  filmstrip: z.string().nullable(), waveform: z.string().nullable() }),                 // absolute loopback URLs (§6.5)
+  sequenceBadge: z.number().int().nullable(), media: z.object({ original: z.literal(true), playable: z.boolean(), proxy: z.boolean(), thumb: z.boolean(),
+  filmstrip: z.boolean(), waveform: z.boolean() }),                                     // which variants exist; URL = /media/<grant>/<assetId>/<variant> (§2.2)
   probe: z.record(z.unknown()).optional(), createdAt: Iso, updatedAt: Iso });
 export const RenderJobDto = z.object({ id: Id, projectId: Id, versionId: Id, outputProfile: OutputProfile, performanceProfile: PerformanceProfile,
   status: z.enum(['queued','rendering','done','failed','cancelled']), progress: z.number().min(0).max(1), renderedFrames: z.number().int().nullable(), totalFrames: z.number().int().nullable(),
@@ -128,7 +144,8 @@ export const RenderJobDto = z.object({ id: Id, projectId: Id, versionId: Id, out
   createdAt: Iso, startedAt: Iso.nullable(), finishedAt: Iso.nullable() });
 export const OutputDto = z.object({ id: Id, projectId: Id, renderJobId: Id, kind: z.enum(['video','gif','still','audio']), fileName: z.string(), bytes: z.number().int(),
   width: z.number().int().nullable(), height: z.number().int().nullable(), fps: z.number().nullable(), durationMs: z.number().int().nullable(), validated: z.boolean(), watermarked: z.boolean(),
-  url: z.string(), thumbUrl: z.string().nullable(), createdAt: Iso });
+  path: z.string() /* absolute, for Reveal */, media: z.object({ file: z.literal(true), thumb: z.boolean() }) /* URL = /media/<grant>/outputs/<outputId>/<file|thumb> */, createdAt: Iso });
+export const MediaGrantDto = z.object({ grant: z.string().regex(/^[A-Za-z0-9_-]{43}$/), projectId: Id, kind: z.literal('preview'), expiresAt: Iso, baseUrl: z.string().url() /* http://127.0.0.1:<port>/media/<grant> */ });
 export const IntentQueueDto = z.object({ projectId: Id, headHash: z.string(), items: z.array(EditIntent), lockedKeys: z.array(z.string()) });
 export const PlanDto = EditPlan;                                                         // AI_WORKFLOW.md §3, plus server-set `id`, `status`, `validation`
 export const CheckpointDto = z.object({ id: Id, projectId: Id, versionId: Id, reason: z.enum(['autosave','pre-execute','pre-render','manual']), createdAt: Iso, durationMs: z.number().int() });
@@ -161,7 +178,7 @@ export const GeneratorJobDto = z.object({ id: Id, projectId: Id, kind: z.enum(['
 
 ## 4. Route table (summary)
 
-Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **–** = none (loopback + Host guard only). Rows carry a stable id `R-nnn` used by the generated contract tests (TR-122).
+Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **grant** = media grant in the path (§2.2), **–** = none (loopback + Host guard only). Rows carry a stable id `R-nnn` used by the generated contract tests (TR-122).
 
 | Id | Method | Path | Auth | Purpose | § |
 |---|---|---|---|---|---|
@@ -189,8 +206,10 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **–
 | R-034 | PUT | `/projects/:id/assets/:assetId/sequence-badge` | T | set or clear the Sequence Badge | 6.4 |
 | R-035 | POST | `/projects/:id/assets/insert` | T | Insert ordered selection → ops → version | 6.4 |
 | R-036 | POST | `/projects/:id/assets/:assetId/relocate` | T+S | point a missing asset at a new path (EM-1301 recovery) | 6.4 |
-| R-040 | GET | `/media/:assetId/:variant` | – | original, playable, proxy, thumb, filmstrip, waveform (Range) | 6.5 |
-| R-041 | GET | `/media/outputs/:outputId/:variant` | – | `file`, `thumb` of a rendered Output | 6.5 |
+| R-040 | GET | `/media/:grant/:assetId/:variant` | grant | original, playable, proxy, thumb, filmstrip, waveform (Range) | 6.5 |
+| R-041 | GET | `/media/:grant/outputs/:outputId/:variant` | grant | `file`, `thumb` of a rendered Output | 6.5 |
+| R-042 | POST | `/projects/:id/media-grants` | T | issue (or renew) the preview media grant for a project | 6.5 |
+| R-043 | DELETE | `/media-grants/:grant` | T | revoke a preview grant | 6.5 |
 | R-050 | GET | `/projects/:id/composition` | T | head Composition Version with model | 6.6 |
 | R-051 | GET | `/projects/:id/composition/versions` | T | version history | 6.6 |
 | R-052 | GET | `/projects/:id/composition/versions/:versionId` | T | one version | 6.6 |
@@ -261,7 +280,7 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **–
 | R-181 | GET | `/diagnostics/logs` | T | tail of the service log (redacted) | 6.18 |
 | R-190 | GET | `/events` | T (query) | global SSE stream | 7 |
 
-95 routes.
+97 routes.
 
 ## 5. Route detail conventions
 
@@ -315,7 +334,7 @@ POST /api/v1/projects
 
 **R-015 `DELETE /projects/:id`** — soft delete (`deleted_at`), media kept 30 days. Response `204`. Errors: `409 EM-2309` when a render or agent run for the project is active.
 
-**R-016 `POST /projects/:id/open`** — marks `openedAt`, runs `migrateModel` lazily (new version `cause:'system'` if migrated), returns `{ project: ProjectDto, head: VersionDto (with model), checkpointNewerThanSave: CheckpointDto | null, intentQueue: IntentQueueDto, latestPlan: PlanDto | null, renderJobs: RenderJobDto[] }` — one call restores the Editor state. Errors: `404 EM-6101`, `422 EM-2001` when the stored model fails validation (the response then carries the last good checkpoint in `recovered`).
+**R-016 `POST /projects/:id/open`** — marks `openedAt`, runs `migrateModel` lazily (new version `cause:'system'` if migrated), returns `{ project: ProjectDto, head: VersionDto (with model), mediaGrant: MediaGrantDto, checkpointNewerThanSave: CheckpointDto | null, intentQueue: IntentQueueDto, latestPlan: PlanDto | null, renderJobs: RenderJobDto[] }` — one call restores the Editor state and hands out the preview media grant (§2.2). Errors: `404 EM-6101`, `422 EM-2001` when the stored model fails validation (the response then carries the last good checkpoint in `recovered`).
 
 **R-017 `GET /projects/:id/settings`** — response `ProjectSettings`.
 
@@ -350,7 +369,7 @@ Each path is canonicalised and must be inside the user profile, removable drives
 POST /api/v1/projects/01JAZK…/assets
 X-Expertmotion-Caller: shell
 { "paths": ["C:\\Users\\septi\\Videos\\kopi-1.mp4", "C:\\Users\\septi\\Videos\\kopi-2.mov"] }
-→ 202 { "items":[{"id":"01JAZM…A","kind":"video","name":"kopi-1.mp4","status":"ingesting","progress":0,"sequenceBadge":null,"media":{"original":"http://127.0.0.1:47612/media/01JAZM…A/original","playable":null,"proxy":null,"thumb":null,"filmstrip":null,"waveform":null},…},
+→ 202 { "items":[{"id":"01JAZM…A","kind":"video","name":"kopi-1.mp4","status":"ingesting","progress":0,"sequenceBadge":null,"media":{"original":true,"playable":false,"proxy":false,"thumb":false,"filmstrip":false,"waveform":false},…},
                  {"id":"01JAZM…B","kind":"video","name":"kopi-2.mov","status":"ingesting",…}], "notices":[] }
 ```
 
@@ -372,11 +391,15 @@ Builds one `op:clip.insert` per video/image asset (images get `durationMs` 5000 
 
 **R-036 `POST /projects/:id/assets/:assetId/relocate`** — T+S. Body `{ path: string }`. The new file must hash to the stored `sha256` (`422 EM-1302` otherwise, then re-ingested as a new asset when `body.reingest = true`). Response `AssetDto`.
 
-### 6.5 Media serving
+### 6.5 Media serving and media grants
 
-Routes live at `http://127.0.0.1:<port>/media/…` (no `/api/v1`, no token: Chrome Headless Shell and the Player fetch them with plain URLs; protection is the loopback bind, the Host guard, and 26-character random ids that are never listed without a token). Every URL in `AssetDto.media` and `OutputDto.url` is absolute and built by the Service.
+Routes live at `http://127.0.0.1:<port>/media/<grant>/…` (no `/api/v1`, no Bearer header: Chrome Headless Shell and the Player fetch them with plain URLs). Protection is the loopback bind, the Host guard, the per-session or per-job media grant in the path (§2.2, SEC-010), DB-only path lookup, and read-only semantics (`GET`/`HEAD` only; every other method → `405`). The Editor assembles URLs as `${mediaGrant.baseUrl}/${assetId}/${variant}`; the Service assembles them for renders.
 
-**R-040 `GET /media/:assetId/:variant`** — `variant ∈ original | playable | proxy | thumb | filmstrip | waveform`.
+**R-042 `POST /projects/:id/media-grants`** — body `{}`. Issues a new preview grant for the project and revokes the caller's previous preview grant for the same project (one active preview grant per project per Service lifetime is enough: the Editor is the only consumer). Response `201 MediaGrantDto`. Errors: `404 EM-6101`. R-016 calls this internally and returns the same object.
+
+**R-043 `DELETE /media-grants/:grant`** — revokes a preview grant (render grants cannot be addressed over the API). Response `204`; `204` also for unknown grants (idempotent, no disclosure).
+
+**R-040 `GET /media/:grant/:assetId/:variant`** — `variant ∈ original | playable | proxy | thumb | filmstrip | waveform`.
 
 | Variant | Content | Notes |
 |---|---|---|
@@ -387,9 +410,15 @@ Routes live at `http://127.0.0.1:<port>/media/…` (no `/api/v1`, no token: Chro
 | `filmstrip` | JPEG sprite (N frames) | `image/jpeg`; `X-Filmstrip-Frames: N` |
 | `waveform` | `{ sampleRate, peaks: number[] }` | `application/json` |
 
-Errors: `404 EM-9003` unknown id or variant not produced, `404 EM-1301` file missing on disk (DB row exists), `409 EM-6004` while the variant is still being written. Headers: `Content-Type` from the stored probe, `Cache-Control: private, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`.
+Errors: `404 EM-9003` unknown/expired/revoked/out-of-scope grant, unknown id, or variant not produced (one answer for all, SEC-010), `404 EM-1301` file missing on disk (DB row exists, grant valid), `409 EM-6004` while the variant is still being written, `400 EM-9002` malformed grant or id. Headers: `Content-Type` from the stored probe, `Cache-Control: private, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`, `Cross-Origin-Resource-Policy: same-site`.
 
-**R-041 `GET /media/outputs/:outputId/:variant`** — `variant ∈ file | thumb`. Same rules; `file` honours `Range`. Used by the Export dialog's done state and the Outputs list.
+```http
+GET /media/Qm9vdHN0cmFwLWdyYW50LWV4YW1wbGUtNDNjaGFyc19fX18/01JAZM…A/proxy
+Range: bytes=0-1048575
+→ 206 Partial Content   Content-Type: video/mp4   Content-Range: bytes 0-1048575/18340211
+```
+
+**R-041 `GET /media/:grant/outputs/:outputId/:variant`** — `variant ∈ file | thumb`. Same rules; the grant must be a preview grant of the output's project; `file` honours `Range`. Used by the Export dialog's done state and the Outputs list.
 
 ### 6.6 Composition
 
@@ -403,7 +432,7 @@ Errors: `404 EM-9003` unknown id or variant not produced, `404 EM-1301` file mis
 
 **R-055 `GET /projects/:id/composition/diff?from=<versionId|hash>&to=<versionId|hash>`** — response `{ from, to, diff: ExecutionResult.shape.diff, ops: Operation[] (operations_history between the two when linear) }`. Errors: `404 EM-2401`.
 
-**R-056 `POST /projects/:id/composition/validate`** — body `{ baseVersion: z.string() (hash), ops: z.array(Operation).max(200) }`. Pure dry run of `applyOps` + `validate` (the `composition.validateOps` tool over HTTP, for the inspector's "Details" param sheet). Response `{ ok: boolean, issues: Issue[], predictedDiff, predictedDurationMs }`. Never mutates; `409 EM-2301` when `baseVersion` is not the head (the result would be meaningless).
+**R-056 `POST /projects/:id/composition/validate`** — body `{ baseVersion: z.string() (hash), ops: z.array(Operation).max(200) }`. Pure dry run of `applyOperations` + `validate` (the `composition.validateOps` tool over HTTP, for the inspector's "Details" param sheet). Response `{ ok: boolean, issues: Issue[], predictedDiff, predictedDurationMs }`. Never mutates; `409 EM-2301` when `baseVersion` is not the head (the result would be meaningless).
 
 ### 6.7 Intents
 
@@ -414,7 +443,7 @@ export const DesignPickInput = z.object({
   source: z.enum(['ui','chat']),                                   // 'brainstorm' arrives only via R-082; 'system' is server-only
   category: EditIntent.shape.category,
   presetId: PresetId.optional(), params: z.record(z.unknown()).default({}),
-  target: ElementRef,                                              // {kind:'selection'} or {kind:'playhead'} lets the server resolve
+  target: ElementRef,                                              // kind ∈ sequence|clip|cut|text|caption|audio|shape|background|effect|project|selection|playhead; {kind:'selection'}/{kind:'playhead'} let the server resolve; cut indexes are 0-based
   selection: z.array(ElementRef).default([]), playheadMs: z.number().int().min(0).default(0),
   instruction: z.string().max(2000).optional(),                    // chat text → needsInterpretation
   baseVersion: z.string(),                                         // head hash the UI saw; mismatch → 409
@@ -422,7 +451,7 @@ export const DesignPickInput = z.object({
 });
 ```
 
-Pipeline steps 2–7 (AI_WORKFLOW.md §2): capture, catalogue validation (`422 EM-2101`, `400 EM-2102`, `422 EM-2103` warn, `EM-2104`, `EM-2105`), Target Resolution (`422 EM-2201`, `EM-2202`), queue reduction (supersede/merge), then: if `needsInterpretation` is false and `plan='auto'`, the intent is compiled and applied immediately (new version, intent `status:'executed'`, plan row `origin:'compile'`); otherwise it stays `queued` and, when `settings.autoPlan` is on, a plan run starts (R-070 semantics) and `planId` is returned. Response `201 { intent: EditIntent, queue: IntentQueueDto, superseded: string[], appliedVersion: VersionDto | null, planId: Id | null, notices: [{code}] }` (`EM-2403` when a text style applied to Theme defaults). Errors: `409 EM-2301` when `baseVersion` is not the head. Events: `intent.updated`; `composition.updated` when applied; `plan.ready`/`plan.invalid` when a plan was started.
+Pipeline steps 2–7 (AI_WORKFLOW.md §2): capture, catalogue validation (`422 EM-2101`, `400 EM-2102`, `422 EM-2103` warn, `EM-2104`, `EM-2105`), Target Resolution (`422 EM-2201`, `EM-2202`), queue reduction (supersede/merge), then: if `needsInterpretation` is false and `plan='auto'`, the intent is compiled and applied immediately (new version, intent `status:'executed'`, plan row `origin:'compile'`); otherwise it stays `queued` and, when `settings.autoPlan` is on, a plan run starts (R-070 semantics) and `planId` is returned. Response `201 { intent: EditIntent, queue: IntentQueueDto, superseded: string[], appliedVersion: VersionDto | null, planId: Id | null, notices: [{code}] }` (`EM-2403` when a text pick with nothing selected compiled to `op:theme.setTextDefaults`, i.e. applied to the Theme defaults for new text). Errors: `409 EM-2301` when `baseVersion` is not the head. Events: `intent.updated`; `composition.updated` when applied; `plan.ready`/`plan.invalid` when a plan was started.
 
 ```http
 POST /api/v1/projects/01JAZK…/intents
@@ -436,7 +465,7 @@ POST /api/v1/projects/01JAZK…/intents
 
 **R-061 `GET /projects/:id/intents`** — query `status?` (comma list), `limit` (default 100). Response `IntentQueueDto` (all non-removed intents incl. `superseded`, newest first; `lockedKeys` computed from `compiled|executed` intents).
 
-**R-062 `POST /projects/:id/intents/:intentId/restore`** — re-queues a `superseded` intent; the intent that superseded it becomes `superseded` in turn (exclusive-group/scalar). If the restored intent compiles directly and `settings.autoPlan`, it is applied. Response as R-060. Errors: `409 EM-2309`, `422 EM-2203` target gone.
+**R-062 `POST /projects/:id/intents/:intentId/restore`** — sets a `superseded` intent back to `status: 'queued'` and stamps `restoredAt`; the intent that superseded it becomes `superseded` in turn (exclusive-group/scalar). There is no separate `restored` status. If the restored intent compiles directly and `settings.autoPlan`, it is applied. Response as R-060. Errors: `409 EM-2309`, `422 EM-2203` target gone.
 
 **R-063 `DELETE /projects/:id/intents/:intentId`** — removes a `queued` or `superseded` intent (executed ones are history and cannot be removed; `422 EM-9002` with `details.reason:'executed'`). Response `IntentQueueDto`. Any `valid` plan becomes `stale`. Events: `intent.updated`, `plan.invalid`.
 
@@ -541,7 +570,7 @@ export const RenderCreateInput = z.object({ projectId: Id, versionId: Id.optiona
 
 Runs the Export preflight (PERFORMANCE.md §7) and an estimate (frames × measured ms/frame for the tier, bitrate heuristic). Response `{ ok: boolean, dimensions: {width, height}, totalFrames, durationMs, estimate: { seconds: number | null, bytes: number | null, confidence: 'low'|'medium'|'high' }, checks: Array<{ check: 'disk'|'memory'|'dimensions'|'duration'|'assets'|'engine'|'licence', ok: boolean, code?: string, details? }>, effectiveProfile: OutputProfile /* after Trial cap */, watermark: boolean, warnings: Issue[] }`. Never `4xx` for a failed check (the Export dialog renders the list); `404 EM-6101|EM-2401` only.
 
-**R-111 `POST /renders`** — header `Idempotency-Key` recommended. Body `RenderCreateInput`. Re-runs preflight (blocking checks → `422` with the first failing code: `EM-3101`, `EM-3102`, `EM-3103`, `EM-3104`, `EM-1301`; `503 EM-3001` engine missing; `403 EM-8302` folder not allowed; `422 EM-3206` folder not writable), writes a pre-render checkpoint, enqueues. Trial Mode: profile capped to 720p and `watermark:true` with `notices:['EM-5001']`. Response `202 RenderJobDto` (`status:'queued'`; `notices:['EM-3208']` when another job is rendering). Events: `render.queued`, then `render.progress`…, `render.done|failed|cancelled`.
+**R-111 `POST /renders`** — header `Idempotency-Key` recommended. Body `RenderCreateInput`. Re-runs preflight (blocking checks → `422` with the first failing code: `EM-3101`, `EM-3102`, `EM-3103`, `EM-3104`, `EM-1301`; `503 EM-3001` engine missing; `403 EM-8302` folder not allowed; `422 EM-3206` folder not writable), writes a pre-render checkpoint, enqueues. When the job starts, the queue issues a render media grant scoped to the job's assets and revokes it on the final event (§2.2). Trial Mode: profile capped to 720p and `watermark:true` with `notices:['EM-5001']`. Response `202 RenderJobDto` (`status:'queued'`; `notices:['EM-3208']` when another job is rendering). Events: `render.queued`, then `render.progress`…, `render.done|failed|cancelled`.
 
 ```http
 POST /api/v1/renders
@@ -725,7 +754,7 @@ data: {"seq":419,"at":"2026-10-24T03:05:12.410Z","projectId":"01JAZK…","jobId"
 
 | # | Point | Owner | Resolve by |
 |---|---|---|---|
-| 1 | Whether media routes should additionally require a short-lived per-asset signature in the URL (`?sig=`) instead of relying on unguessable ids; cost: Player URLs must be refreshed | Security reviewer | Stage 3 (SECURITY.md) |
+| 1 | Preview grant lifetime: a sliding 12 h TTL vs. explicit revocation on project close (would need a `POST /projects/:id/close` route); the TTL is simpler and the Editor transparently re-issues via R-042 | Security reviewer | Stage 3 (SECURITY.md) |
 | 2 | Generator events as `service.notice {kind:'generator'}` vs dedicated `generator.*` events; dedicated events are cleaner but widen the closed table before P1 | Local Service lead | Stage 5 |
 | 3 | `GET /catalogue` from the Service vs the Editor importing the registry directly and asking only for availability; the former keeps one source of truth across processes | Principal architect | Stage 3 |
 | 4 | Multipart upload limits in browser development vs the Shell path hand-off; multipart may be removed entirely once the Electron e2e harness exists | Service lead | Stage 4 |

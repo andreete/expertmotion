@@ -45,7 +45,7 @@ Output contract (Zod `BrainstormTurn`): `{ reply: string, questions?: string[], 
 
 Inputs (always the Rewrite envelope from AI_WORKFLOW §7): queued Edit Intents with resolved targets, Creator message, Creator notes, compact Composition Model, assets, Locked Keys, capabilities (ops + preset ids + limits), Output Settings, Hardware Tier.
 
-Does: produce one `EditPlan` JSON; use `composition.validateOps` to dry-run before answering (recommended, max 3 calls); keep plans minimal (only what the intents and message ask); respect Locked Keys absolutely; ask one clarifying question instead of guessing when an intent is ambiguous (returned as a plan with zero steps and `risks[{code:'needs-input'}]`); write `expectedDiff` in the Creator's language.
+Does: produce one `EditPlan` JSON; use `composition.validateOps` to dry-run before answering (recommended, max 3 calls); keep plans minimal (only what the intents and message ask); respect Locked Keys absolutely; ask one clarifying question instead of guessing when an intent is ambiguous: plan the other intents and attach `risks[{code:'needs-input', severity:'warn'}]` for the ambiguous one; a zero-step plan with a `block` risk only when nothing can be planned (SYSTEM_PROMPT.md P-2 rule 6, v1.0.1); write `expectedDiff` in the Creator's language.
 
 Does not: write code; reference files; add unrequested elements; change Output Settings unless asked; call `render.start`.
 

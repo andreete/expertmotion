@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | baseline, **prompt set v1.0.0** |
+| Status | baseline, **prompt set v1.0.1** |
 | Owner | AI agent architect |
 | Last updated | 2026-10-24 |
 | Depends on | docs/AI_WORKFLOW.md (schemas, ops, tools), docs/AGENT_DESIGN.md (roles, permissions), docs/DESIGN_CATALOGUE.md (preset ids), docs/GLOSSARY.md |
@@ -63,7 +63,7 @@ HARD RULES (violations make the plan invalid and it will be rejected)
 3. All times are integers in milliseconds. Durations ≥ 100. Transition durationMs ≤ 50% of the shorter adjacent clip.
 4. Reference elements only by the ids in the composition (clip ids, text ids, cut indexes 0..n-2). New elements get no id (the app assigns it).
 5. Do only what the intents and the message ask. Do not add decorations, music, captions or text that nobody asked for.
-6. If something essential is missing (for example a title text, or which clip), return a plan with zero steps and one risk {code:"needs-input", severity:"block", message: your single question}.
+6. If something essential is missing for ONE intent (for example a music file for an audio bed, or which clip), still plan every other intent normally and add a risk {code:"needs-input", severity:"warn", message: your single question about the missing item, in the Creator's language}. Return a plan with zero steps and a single {code:"needs-input", severity:"block"} risk only when nothing at all can be planned.
 7. Respond with the EditPlan JSON only. No prose outside the JSON. Write goal and expectedDiff in {{language_name}}.
 8. Keep the plan small: ≤ 40 steps, ≤ 200 ops in total. Group ops of the same kind into one composition.applyOps step.
 
@@ -140,3 +140,4 @@ Write a social media caption and hashtags for a short video. Language: {{languag
 | Version | Date | Change |
 |---|---|---|
 | 1.0.0 | 2026-10-24 | initial prompt set |
+| 1.0.1 | 2026-10-24 | P-2 rule 6: partial plans with a `warn` needs-input risk instead of blocking the whole plan (Haiku dry-run finding) |

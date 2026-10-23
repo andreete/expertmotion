@@ -20,13 +20,13 @@ Each scenario is both an **acceptance test** (PRD-012 "Golden scenarios GS-01…
 | Clip ids | assigned at Insert in track order: `c1`, `c2`, `c3`, … Text layers `t1`, `t2`; audio layers `a1`; overlay `o1`. |
 | Cut ids | `cut:<cutIndex>` with `cutIndex` **0-based** as in `Transition.cutIndex` (DATABASE_SCHEMA §4.1). `cut:0` is between `c1` and `c2`. The Intent Queue **displays** cuts 1-based ("cut 1 of 2"). |
 | Property keys | `cut:0.transition`, `clip:c2.effects`, `clip:c2.motion`, `text:t1.style.fontSize`, `project.captionStyle`, `project.captionPages`, `project.background`, `project.ratio`, `project.resolution`, `theme.textDefaults.fontSize`, `theme.textDefaults.colour`, `sequence.clips`, `project.audioBed`. |
-| Multi-target intents | A pick whose Target Resolution yields N targets is **one** Intent Queue item with N `resolvedTargets`; conflict resolution (AI_WORKFLOW §6) runs on the expanded keys (`cut:0.transition`, `cut:1.transition`). A later intent may take over a subset of those keys; the older item then shows "cut 1 replaced by Slide" and keeps its other targets. **[GAP-1]** AI_WORKFLOW §6 does not yet state this per-target expansion rule. |
+| Multi-target intents | A pick whose Target Resolution yields N targets is stored as **one parent intent** (displayed as one Intent Queue item, N `resolvedTargets`) plus N **child intents** carrying `parentIntentId` and a per-target `propertyKey` (`cut:0.transition`, `cut:1.transition`). Conflict resolution (AI_WORKFLOW §6 expansion rule) runs on the children: a later intent supersedes only the child whose key it takes over; the parent item then shows "cut 1 replaced by Slide" and keeps its other targets; the parent is `superseded` only when all its children are. Scenario tables list the parent first and its children indented as `1a`, `1b`, …. |
 | Version labels | `vB1`, `vB2`, … are symbolic labels for Composition Version hashes (real values are sha256 of canonical JSON). `+1` means "one new version after the base". |
 | New element references inside a plan | An op that must reference an element added by an earlier op in the same plan uses `target: {kind, index}` (position in its track after the earlier op is applied), because ids are assigned by the runner. |
 | Fault injection | Test-only environment variables read by the Local Service in test builds only: `EM_TEST_DISK_FREE_MB`, `EM_TEST_CRASH_AFTER_OP`, `EM_TEST_TIER`, `EM_TEST_KILL_CHROME_AT_PERCENT`. They are compiled out of release builds (a packaging test asserts the strings are absent). |
 | Render settings column | Standard render for the 16:9 bases: ratio 16:9, 1080p (1920×1080), 30 fps, H.264 CRF 18, AAC, `imageFormat: jpeg`, Performance Profile Standard (concurrency 1), `gl` per tier (PERFORMANCE §2). Scenarios state only what differs. |
 | Provider | Unless stated, the Model Assignment for both agents is the **fake provider** (`FakeProviderAdapter`, MCP_AND_TOOLING §5.1) with model id `fake-mid` (`toolCalling: true`, `contextLength: 128000`), replaying `test/fixtures/plans/GS-xx.json`. |
-| Error codes | All codes are cited from ERROR_CATALOGUE.md (its copy is authoritative; copy quoted here is abbreviated). Codes marked *(proposed)* exist only in MCP_AND_TOOLING.md §3.3.1 and await the catalogue (see §5). |
+| Error codes | All codes are cited from ERROR_CATALOGUE.md (its copy is authoritative; copy quoted here is abbreviated). The tool-layer codes EM-4501…4507 and the egress code EM-8203 were proposed in MCP_AND_TOOLING.md §3.3.1 and are adopted in the catalogue (see §5). |
 
 ### 1.1 Fixtures
 
@@ -168,9 +168,11 @@ Queue item copy: "Insert 3 clips · applied directly" / "Sisipkan 3 klip · lang
 
 | # | category | presetId / params | target (as given) | resolvedTargets | propertyKey | propertyClass | needsInterpretation | status |
 |---|---|---|---|---|---|---|---|---|
-| 1 | transition | `preset:transition.fade`, `{durationMs: 500, timing: 'linear'}` (catalogue defaults) | `{kind: 'selection'}` | `[{kind:'cut', index: 0}, {kind:'cut', index: 1}]` | `cut:*.transition` (expands to `cut:0.transition`, `cut:1.transition`) | exclusive-group | false | compiled |
+| 1 (parent) | transition | `preset:transition.fade`, `{durationMs: 500, timing: 'linear'}` (catalogue defaults) | `{kind: 'selection'}` | `[{kind:'cut', index: 0}, {kind:'cut', index: 1}]` | `cut:*.transition` (display only; the keys live on the children) | exclusive-group | false | compiled |
+| 1a (child, `parentIntentId: <1>`) | transition | same | `{kind:'cut', index: 0}` | `[{kind:'cut', index: 0}]` | `cut:0.transition` | exclusive-group | false | compiled |
+| 1b (child, `parentIntentId: <1>`) | transition | same | `{kind:'cut', index: 1}` | `[{kind:'cut', index: 1}]` | `cut:1.transition` | exclusive-group | false | compiled |
 
-Queue copy: "Transition · Fade → all 2 cuts · applied directly" / "Transisi · Pudar → semua 2 potongan · langsung diterapkan".
+The queue shows one item (the parent, AI_WORKFLOW §6 expansion rule); the children are not listed separately. Queue copy: "Transition · Fade → all 2 cuts · applied directly" / "Transisi · Pudar → semua 2 potongan · langsung diterapkan" (cut indexes are 0-based in data, 1-based in copy).
 
 **Expected path**: Compile.
 
@@ -191,7 +193,7 @@ Queue copy: "Transition · Fade → all 2 cuts · applied directly" / "Transisi 
 
 **Edge handling**: with a single Clip (no Cuts) the pick is rejected at step 4 with EM-2202 and no intent is queued (**[GAP-2]**: the EM-2202 copy "No clips yet / Insert at least one asset…" addresses zero clips; a one-clip project needs "Add a second clip first" / "Tambahkan klip kedua dulu" wording or its own code).
 
-**Pass criteria**: two `stage.timeline.element.transition` elements; duration label "00:18.00"; `lib.catalogue.card.selected` on Fade; golden still at 4 750 ms (middle of cut 0) shows a 50 % blend of `c1` and `c2` (pixel diff ≤ 1 % against the reference frame); no provider call.
+**Pass criteria**: two `stage.timeline.element.transition` elements; duration label "00:18.00"; `lib.catalogue.card.selected` on Fade; golden still at 4 750 ms (middle of cut 0) shows a 50 % blend of `c1` and `c2` (pixel diff ≤ 1 % against the reference frame); no provider call; the `edit_intents` rows are one parent and two children with `parentIntentId` set.
 
 ### GS-03 Slide on one selected Clip supersedes Fade on that Cut only
 
@@ -209,8 +211,12 @@ Queue copy: "Transition · Fade → all 2 cuts · applied directly" / "Transisi 
 
 | # | category | presetId / params | target (as given) | resolvedTargets | propertyKey | propertyClass | needsInterpretation | status |
 |---|---|---|---|---|---|---|---|---|
-| 1 (GS-02) | transition | fade | selection | cut:0, cut:1 | `cut:*.transition` | exclusive-group | false | compiled; display "cut 1 replaced by Slide" / "potongan 1 diganti oleh Geser" |
-| 2 | transition | `preset:transition.slide`, `{direction: 'from-right', durationMs: 500, timing: 'linear'}` | `{kind: 'clip', id: 'c1'}` | `[{kind: 'cut', index: 0}]` (the Cut **after** the selected Clip) | `cut:0.transition` | exclusive-group | false | compiled; `supersedes: [<intent 1>]` scoped to `cut:0.transition` |
+| 1 (GS-02 parent) | transition | fade | selection | cut:0, cut:1 | `cut:*.transition` | exclusive-group | false | compiled (**not** superseded: child 1b still stands); display "Fade → cuts 1, 2 · cut 1 replaced by Slide" / "Pudar → potongan 1, 2 · potongan 1 diganti oleh Geser" |
+| 1a (child of 1) | transition | fade | cut:0 | `[cut:0]` | `cut:0.transition` | exclusive-group | false | **superseded** (by 2) |
+| 1b (child of 1) | transition | fade | cut:1 | `[cut:1]` | `cut:1.transition` | exclusive-group | false | compiled (unchanged) |
+| 2 | transition | `preset:transition.slide`, `{direction: 'from-right', durationMs: 500, timing: 'linear'}` | `{kind: 'clip', id: 'c1'}` | `[{kind: 'cut', index: 0}]` (the Cut **after** the selected Clip) | `cut:0.transition` | exclusive-group | false | compiled; `supersedes: [<child 1a>]` |
+
+Partial supersession (AI_WORKFLOW §6 expansion rule): only child 1a is superseded; the parent stays `compiled` and keeps `cut:1.transition`. Had the Creator also replaced cut 2, child 1b and then the parent would become `superseded`.
 
 **Expected path**: Compile.
 
@@ -231,7 +237,7 @@ Queue copy: "Transition · Fade → all 2 cuts · applied directly" / "Transisi 
 
 **Edge handling**: selecting `c3` (last Clip, no following Cut) and picking a transition → rejected "This clip has no cut after it; select an earlier clip" / "Klip ini tidak memiliki potongan setelahnya; pilih klip sebelumnya" (no catalogue code yet; same **[GAP-2]**), no intent. Selecting a `stage.timeline.element.transition` directly targets that Cut.
 
-**Pass criteria**: `cut:1` still fade; Intent Queue shows both items, item 1 not struck through (it still owns `cut:1.transition`) but annotated; Player still shows a fade at 12 500 ms and a slide at 4 750 ms.
+**Pass criteria**: `cut:1` still fade; Intent Queue shows both items, item 1 (parent) not struck through (its child 1b still owns `cut:1.transition`) but annotated; child 1a is `superseded` with `supersededBy: <2>`; Player still shows a fade at 12 500 ms and a slide at 4 750 ms.
 
 ### GS-04 Text Panel: font size then colour with nothing selected (Theme default)
 
@@ -262,11 +268,11 @@ Both items carry the note "applies to new text" / "berlaku untuk teks baru" (AI_
 ```json
 { "origin": "compile", "baseVersion": "vB2+1", "goal": "Set default text colour to #E8913A",
   "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "Theme: default text colour #F4EFE6 → #E8913A (new text only)",
-    "ops": [ { "op": "op:theme.set", "target": { "kind": "project" }, "args": { "textDefaults": { "colour": "#E8913A" } } } ] } ],
+    "ops": [ { "op": "op:theme.setTextDefaults", "target": { "kind": "project" }, "args": { "colour": "#E8913A" } } ] } ],
   "touchesLockedKeys": [], "risks": [], "status": "executed" }
 ```
 
-**[GAP-3]** `op:theme.set` in AI_WORKFLOW §5 only lists `{paletteId?, fontPairId?}`; the Theme default path of §4 needs a `textDefaults` field on `op:theme.set` (used here) or a dedicated op. The Compile table must be amended before this scenario can pass.
+The op is `op:theme.setTextDefaults {fontFamily?, fontSize?, weight?, colour?, align?, opacity?}` (AI_WORKFLOW §5), one field per pick; the first pick emits `{ "op": "op:theme.setTextDefaults", "target": { "kind": "project" }, "args": { "fontSize": 72 } }`.
 
 **Expected Composition diff**: `theme.textDefaults.fontSize 64 → 72`, then `theme.textDefaults.colour #F4EFE6 → #E8913A`. No Timeline Element changes; duration **18 000 ms**. Versions `vB2+1`, `vB2+2`.
 
@@ -477,7 +483,7 @@ Rewrite envelope: `lockedKeys: ["cut:0.transition", "sequence.clips"]`, `creator
   "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "potongan 2: Push cut → Wipe (dari kiri) 500 ms; durasi 0:18.1 → 0:18.0",
     "ops": [ { "op": "op:transition.set", "intentId": "<intent 1>", "target": { "kind": "cut", "index": 1 }, "args": { "presetId": "preset:transition.wipe", "durationMs": 500, "timing": "linear", "params": { "direction": "from-left" } } } ] } ],
   "touchesLockedKeys": [],
-  "risks": [ { "code": "LOCKED-SKIPPED", "message": "Potongan 1 (Geser) Anda pilih sendiri, jadi tidak diubah. Pilih Sapu di katalog untuk menggantinya.", "severity": "info" } ],
+  "risks": [ { "code": "LOCKED-SKIPPED", "message": "Potongan 1 (Geser) kamu pilih sendiri, jadi tidak diubah. Pilih Sapu di katalog untuk menggantinya.", "severity": "info" } ],
   "status": "valid" }
 ```
 
@@ -832,7 +838,7 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
 
 | # | category | presetId / params | target (as given) | resolvedTargets | propertyKey | propertyClass | needsInterpretation | status |
 |---|---|---|---|---|---|---|---|---|
-| 1 | text | `{fontSize: 72}` | selection | `[project]` | `theme.textDefaults.fontSize` | scalar | false | compiled → superseded (by 2) → **restored** (compiled again) |
+| 1 | text | `{fontSize: 72}` | selection | `[project]` | `theme.textDefaults.fontSize` | scalar | false | compiled → superseded (by 2) → Restore sets `queued` and stamps `restoredAt` → **compiled** again (there is no `restored` status, AI_WORKFLOW §3) |
 | 2 | text | `{fontSize: 96}` | selection | `[project]` | `theme.textDefaults.fontSize` | scalar | false | compiled, `supersedes: [1]` → **superseded** (by the restore of 1) |
 
 **Expected path**: Compile ×3 (72, 96, 72 again). Each creates a Composition Version (`cause: 'compile'`, `'compile'`, `'restore'`).
@@ -842,17 +848,15 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
 ```json
 { "origin": "compile", "baseVersion": "vB2+2", "goal": "Restore default font size 72",
   "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "Theme: default font size 96 → 72 (new text only)",
-    "ops": [ { "op": "op:theme.set", "target": { "kind": "project" }, "args": { "textDefaults": { "fontSize": 72 } } } ] } ],
+    "ops": [ { "op": "op:theme.setTextDefaults", "target": { "kind": "project" }, "args": { "fontSize": 72 } } ] } ],
   "touchesLockedKeys": [], "risks": [], "status": "executed" }
 ```
-
-(Same **[GAP-3]** as GS-04 on `op:theme.set` args.)
 
 **Expected Composition diff**: `theme.textDefaults.fontSize 64 → 72 → 96 → 72`. Three versions `vB2+1..+3`; duration **18 000 ms** unchanged.
 
 **Expected render settings**: standard. Not rendered.
 
-**Edge handling**: restoring an intent whose target no longer exists (Clip removed) → "Cannot restore: the clip no longer exists" / "Tidak bisa dipulihkan: klip sudah tidak ada", status stays `superseded`. `agent.editor.intentqueue.item.remove` sets status `removed` (AI_WORKFLOW §3); `agent.editor.intentqueue.clear` removes only `superseded`, `rejected` and `removed` items, never `compiled`/`executed` ones (history lives in versions).
+**Edge handling**: restoring an intent whose target no longer exists (Clip removed) → "Cannot restore: the clip no longer exists" / "Tidak bisa dipulihkan: klip sudah tidak ada", status stays `superseded` and `restoredAt` is not stamped. `agent.editor.intentqueue.item.remove` sets status `removed` (AI_WORKFLOW §3); `agent.editor.intentqueue.clear` removes only `superseded`, `rejected` and `removed` items, never `compiled`/`executed` ones (history lives in versions).
 
 **Pass criteria**: three versions with the listed causes; item statuses exactly as in the table; `Ctrl+Z` after step 3 moves the head to the 96 version (undo = version move, DATABASE_SCHEMA §4.5) and the queue display updates accordingly; no provider call.
 
@@ -893,9 +897,9 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
   "status": "valid" }
 ```
 
-ID variants of the two risks: "'Caption Pop' belum tersedia di versi Expertmotion ini; Kotak dengan ukuran lebih besar adalah yang terdekat saat ini." (EM-9004 copy) / "Belum ada musik di proyek ini. Impor file audio (MP3/WAV) lalu minta lagi; musik akan dipasang pelan dan meredam saat suara Anda terdengar."
+ID variants of the two risks: "'Caption Pop' belum tersedia di versi Expertmotion ini; Kotak dengan ukuran lebih besar adalah yang terdekat saat ini." (EM-9004 copy) / "Belum ada musik di proyek ini. Impor file audio (MP3/WAV) lalu minta lagi; musik akan dipasang pelan dan meredam saat suaramu terdengar."
 
-The agent is expected to call `catalogue.search {query: "pop", category: "caption"}` (returns `[]` in MVP because P1 presets are absent from the capabilities block) and `assets.list` (no audio) before answering; it must **not** emit `op:audio.addBed` without an `assetId` (Zod would reject it in the dry run: EM-4503 *(proposed, MCP_AND_TOOLING §3.3.1)*, surfaced as EM-2303 "Plan is not valid" if uncorrected).
+The agent is expected to call `catalogue.search {query: "pop", category: "caption"}` (returns `[]` in MVP because P1 presets are absent from the capabilities block) and `assets.list` (no audio) before answering; it must **not** emit `op:audio.addBed` without an `assetId` (Zod would reject it in the dry run: EM-4503, surfaced as EM-2303 "Plan is not valid" if uncorrected).
 
 **Expected Edit Plan — run 2**
 
@@ -994,7 +998,7 @@ A release candidate ships only when (a) and (b) are green on Windows CI and the 
 
 ## 5. Error codes referenced
 
-All defined codes are owned by ERROR_CATALOGUE.md; the two rows marked *proposed* come from MCP_AND_TOOLING.md §3.3.1 and are not yet in the catalogue.
+All codes are owned by ERROR_CATALOGUE.md (159 codes, final); every row below exists there with the meaning given. EM-4503 originated in MCP_AND_TOOLING.md §3.3.1 and is adopted.
 
 | Code | Severity | Meaning here | Scenarios |
 |---|---|---|---|
@@ -1020,7 +1024,7 @@ All defined codes are owned by ERROR_CATALOGUE.md; the two rows marked *proposed
 | EM-4202 | warn | 80 % of budget used | GS-18 |
 | EM-4301 | error | model answer unusable after two tries | GS-12 |
 | EM-4401 | info | agents off in Private Mode | GS-16 |
-| EM-4503 *(proposed)* | error | invalid tool input after two corrections | GS-20 |
+| EM-4503 | error | invalid tool input after two corrections | GS-20 |
 | EM-7006 | info | model download paused (Private Mode) | GS-16 |
 | EM-8202 | info | egress blocked by Private Mode | GS-16 |
 | EM-9004 | info | feature coming in a later version | GS-20 |
@@ -1029,13 +1033,13 @@ All defined codes are owned by ERROR_CATALOGUE.md; the two rows marked *proposed
 
 | Ref | Gap | Owning document |
 |---|---|---|
-| GAP-1 | Per-target expansion and partial supersession of multi-target intents (GS-02 → GS-03) | AI_WORKFLOW.md §6 |
+| GAP-1 | **Settled**: AI_WORKFLOW.md §6 expansion rule (one parent intent + per-target children with `parentIntentId`; partial supersession on the children); GS-02 and GS-03 updated | AI_WORKFLOW.md §6 |
 | GAP-2 | Code and copy for a transition pick when no Cut applies (one clip, or last clip selected); EM-2202 covers only "no clips yet" | AI_WORKFLOW.md §4, ERROR_CATALOGUE.md |
-| GAP-3 | `op:theme.set` lacks `textDefaults`; the Theme-default text path of §4 has no op (GS-04, GS-19) | AI_WORKFLOW.md §5 |
+| GAP-3 | **Settled**: `op:theme.setTextDefaults {fontFamily?, fontSize?, weight?, colour?, align?, opacity?}` added to AI_WORKFLOW.md §5 (propertyKey `theme.textDefaults.<field>`); GS-04 and GS-19 use it | AI_WORKFLOW.md §5 |
 | GAP-4 | Element ids used by the scenarios but absent from ELEMENT_IDS.md: `lib.text.add.input`, `lib.assets.card.action.captions`, `agent.editor.plancard.replan` | ELEMENT_IDS.md |
 | GAP-5 | Planning rule for a hand-off mixing Compile-able and interpretive intents (GS-08) | AI_WORKFLOW.md §7, §9 |
 | GAP-6 | Tier-gated resolution has no preflight row; EM-3105 is `info`, the blocking case at render has no `error` code (GS-13c) | PERFORMANCE.md §7, ERROR_CATALOGUE.md |
-| GAP-7 | `ElementRef.kind` has no `sequence` value although `op:clip.insert` targets "sequence" (GS-01 uses `project`) | AI_WORKFLOW.md §3, §5 |
+| GAP-7 | **Settled**: `ElementRef.kind` now includes `sequence` (AI_WORKFLOW.md §3); `op:clip.insert` targets `{kind: 'sequence'}` | AI_WORKFLOW.md §3, §5 |
 
 ## 7. Traceability
 

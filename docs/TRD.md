@@ -5,7 +5,7 @@
 | Status | baseline (versions marked "pin at Stage n" are fixed at that Roadmap Stage gate and recorded here) |
 | Owner | Principal architect |
 | Last updated | 2026-10-24 |
-| Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 004, 005, 006, 007, 008, 010, 012, 014, 017), ARCHITECTURE.md, BLUEPRINT.md, PERFORMANCE.md, DATABASE_SCHEMA.md, AI_WORKFLOW.md, ASSESSMENT.md §1, §4, §5, §8, §9 |
+| Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 004, 005, 006, 007, 008, 010, 012, 013, 014, 017), ARCHITECTURE.md §4, §5, §7, BLUEPRINT.md, SECURITY.md (SEC-002, SEC-008, SEC-010, SEC-028), DEVELOPMENT_WORKFLOW.md, PERFORMANCE.md, DATABASE_SCHEMA.md, AI_WORKFLOW.md, ASSESSMENT.md §1, §4, §5, §8, §9 |
 | Used by | SRS.md (NFR derivation), DEPLOYMENT_AND_PACKAGING.md, DEVELOPMENT_WORKFLOW.md, DEFINITION_OF_DONE.md, TEST_PLAN.md, SECURITY.md, POC_PLAN.md |
 | Owner of | the stack and pinned versions, dependency policy, TR-xxx technical requirements, development environment variables, development-server constraints, compatibility matrix, coding standards, logging and diagnostics format |
 | ID range | TR-001 … TR-199 |
@@ -20,7 +20,7 @@ Rule: every runtime dependency is pinned to an exact version in `package.json` (
 
 | Component | Version to use | Notes |
 |---|---|---|
-| Node.js (development, tooling, CI) | **22.x LTS** (≥ 22.13; pin the minor in `.nvmrc` / `engines`) | Remotion requires 20.19+/22.13+/24+ (book §2.1, ASSESSMENT.md §4). Production never ships a separate Node: the Local Service runs on the Node embedded in Electron (`ELECTRON_RUN_AS_NODE=1`). |
+| Node.js (development, tooling, CI) | **22.x LTS** (≥ 22.13; pin the minor in `.nvmrc` / `engines`) | Remotion requires 20.19+/22.13+/24+ (book §2.1, ASSESSMENT.md §4). Production never ships a separate Node: the Local Service runs as an Electron `utilityProcess` on the Node embedded in Electron (the `RunAsNode` fuse is off, SEC-028, so `ELECTRON_RUN_AS_NODE` is unavailable by design). |
 | Electron | **latest stable at Stage 3 start, then pinned exactly** (`electron@<major.minor.patch>`) | The Electron major fixes the Chromium version (preview parity), the embedded Node version and the **native-module ABI**. All native modules (`better-sqlite3-multiple-ciphers`) must be built or prebuilt for that exact Electron ABI (`electron-rebuild` or `prebuild-install --runtime=electron --target=<version>`); the same modules are built for plain Node 22 in development, so two builds exist in `node_modules` only when `npm run rebuild:electron` is run. Upgrading Electron therefore means: re-run prebuild checks, re-run the V8 bytecode build (bytecode is version-locked, ADR-007), re-run the parity test (POC-002). |
 | Chromium (Editor renderer) | the one embedded in the pinned Electron | not installed separately |
 | Chrome Headless Shell (renderer) | the version `@remotion/renderer` pins for the chosen Remotion version (`node_modules/.remotion/chrome-headless-shell/win64/VERSION`) | copied into `resources/engine/chrome/` at package time; never downloaded at runtime in production (ADR-008, EM-3001) |
@@ -89,15 +89,15 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 
 | ID | Requirement | Priority | Verification | Traces |
 |---|---|---|---|---|
-| TR-001 | The Local Service runs as a child process of the Desktop Shell on Electron's embedded Node (`ELECTRON_RUN_AS_NODE=1`, `utilityProcess` or `child_process.fork` of the packaged `service.mjs`); no separate Node binary is installed or downloaded. | Must | clean-VM test lists only `Expertmotion.exe` processes + Chrome Headless Shell + ffmpeg during render | PRD-001, ADR-004 |
-| TR-002 | The Shell passes `{token, port, dataDir, dbKeyHex}` to the Service as one JSON line on stdin and reads `ready <port>` from stdout; nothing secret appears in argv or the environment. | Must | process listing during run shows no token; unit test of the handshake parser | ARCHITECTURE.md §5, SEC- |
-| TR-003 | The Service binds only `127.0.0.1` on a free port chosen from 47600–47699 (production) or `EM_PORT` (development); binding `0.0.0.0`, `::` or a hostname is impossible by construction (the host is a constant). | Must | `netstat` in TEST_PLAN; code review | ADR-005 |
+| TR-001 | The Local Service runs as an Electron **utility process** started by the Desktop Shell with `utilityProcess.fork(service.cjs)` (SEC-033); the `RunAsNode` fuse is disabled (SEC-028), so no plain Node child and no separate Node binary exist. | Must | clean-VM test lists only `Expertmotion.exe` processes + Chrome Headless Shell + ffmpeg during render; fuse check in VULNERABILITY_CHECKLIST | PRD-001, ADR-004 |
+| TR-002 | The Shell passes `{type:'bootstrap', token, port, dataDir, dbKeyHex}` to the Service with `utilityProcess.postMessage` and the Service receives it on `parentPort` (`process.parentPort.once('message')`), answering `{type:'ready', port}` or `{type:'fatal', code}`; nothing secret appears in argv, the environment, stdin or any file (SEC-002, SEC-043). In development without a Shell, `EM_*` variables substitute (§4). | Must | process listing and `/proc`-style inspection during run show no token; unit test of the bootstrap parser | ARCHITECTURE.md §5, SEC-002 |
+| TR-003 | The Service binds only `127.0.0.1` on the port the Shell chose at random among free ports in 47600–47699 (SEC-008; on `EADDRINUSE` the Service reports `fatal` and the Shell retries with another port, max 10) or on `EM_PORT` in development (4110 on the shared Linux server); binding `0.0.0.0`, `::` or a hostname is impossible by construction (the host is a constant). | Must | `netstat` in TEST_PLAN; code review | ADR-005, SEC-008 |
 | TR-004 | The Shell restarts a crashed Service with backoff 1 s, 3 s, 9 s and gives up after 3 attempts (EM-8002); the Editor shows `sys.offline` within 2 s and reconnects automatically. | Must | kill the service in e2e; observe banner and recovery | UX-032, EM-8001/8002/8003 |
 | TR-005 | On startup the Service marks interrupted work: `render_jobs` `queued|rendering` → `failed` (EM-3203), `agent_runs` `running` → `cancelled` (EM-4304), ingesting assets → `failed` (EM-1201); partial output files are deleted. | Must | integration test with a pre-seeded DB | DATABASE_SCHEMA.md §7 |
-| TR-006 | Graceful shutdown: on SIGTERM or `POST /service/shutdown`, the Service checkpoints every open project, cancels running renders (Chrome killed), closes the DB and exits within 5 s; the Shell force-kills after 5 s. | Must | e2e timing | ARCHITECTURE.md §5 |
+| TR-006 | Graceful shutdown: on a `{type:'shutdown'}` parent-port message or `POST /service/shutdown`, the Service checkpoints every open project, cancels running renders (Chrome killed), closes the DB and exits within 5 s; the Shell force-kills after 5 s. | Must | e2e timing | ARCHITECTURE.md §5 |
 | TR-007 | The Service never spawns a shell (`shell: true`) and never builds a command line from model output or Creator text; every child process (`ffmpeg`, `ffprobe`, Engine Binaries) is spawned with an argv array and a fixed executable path inside the install directory. | Must | code review + grep gate (`spawn(` without `shell`) | AI-020, SEC- |
 | TR-008 | The Editor runs in the Electron renderer with `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, a CSP that allows `connect-src` and `media-src` only to `http://127.0.0.1:*` and `'self'`, and exactly one preload bridge (`window.expertmotion`). | Must | VULNERABILITY_CHECKLIST | ARCHITECTURE.md §3, SEC- |
-| TR-009 | The Editor is a plain web app: `npm run dev` serves it from Vite on `127.0.0.1:5173` (or `EM_UI_PORT`) against a Local Service started with `EM_TOKEN`, so development needs no Electron on Linux. | Must | dev workflow test on the shared server | ADR-004 consequence, ADR-005 |
+| TR-009 | The Editor is a plain web app: `npm run dev` (or `npm run dev:capped` on the shared server) serves it from Vite on `127.0.0.1:4120` (`EM_UI_PORT`) against a Local Service on `127.0.0.1:4110` (`EM_PORT`) started with `EM_TOKEN`, so development needs no Electron on Linux. | Must | dev workflow test on the shared server | ADR-004 consequence, ADR-005 |
 | TR-010 | A single application instance is enforced (`app.requestSingleInstanceLock`); a second launch focuses the existing window (EM-8301) and forwards opened file paths. | Should | manual test | ELEMENT_IDS `sys.*` |
 
 ### 3.2 API
@@ -105,10 +105,10 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 | ID | Requirement | Priority | Verification | Traces |
 |---|---|---|---|---|
 | TR-020 | The Local Service exposes REST + SSE under `/api/v1` exactly as API_SPECIFICATION.md defines; every route is declared with a Zod request schema and a Zod response schema from which the Editor's DTO types are generated (`packages/shared/dto`). | Must | contract tests generated from the route table | API_SPECIFICATION.md |
-| TR-021 | Every request except `GET /api/v1/health` and `GET /media/*` requires `Authorization: Bearer <Service Token>`; `GET /api/v1/events` accepts the token in `?token=` because `EventSource` cannot set headers; a wrong or missing token answers `401 EM-8004` without revealing which. | Must | API tests | ADR-005, SEC- |
+| TR-021 | Every `/api/v1/*` request except `GET /api/v1/health` requires `Authorization: Bearer <Service Token>`. Exactly two documented exceptions exist (ADR-005): (a) `GET /api/v1/events` and `GET /api/v1/renders/:jobId/events` accept the Service Token in `?token=` because `EventSource` cannot set headers; (b) `GET /media/<grant>/…` carries a per-preview-session or per-Render-Job **media grant** in the path because Chrome Headless Shell and the Player cannot add headers (SEC-010). A wrong or missing token answers `401 EM-8004` without revealing which; an unknown or revoked grant answers `404 EM-9003`. | Must | API tests incl. revoked-grant test (VC-12) | ADR-005, SEC-010 |
 | TR-022 | Host and Origin guards: `Host` must be `127.0.0.1:<port>` or `localhost:<port>`; non-safe methods with an `Origin` header accept only `app://expertmotion` (production) or the Vite dev origin; otherwise `403 EM-8005`. No cookies are ever set (no CSRF surface). | Must | API tests incl. DNS-rebinding style `Host` | ADR-005 |
 | TR-023 | JSON bodies are limited to 2 MB (`413 EM-8006`), multipart uploads to the per-kind limits in ASSET_INGESTION.md, SSE connections to 8 per token; all limits are constants in `apps/service/src/config.ts`. | Must | API tests | PERFORMANCE.md |
-| TR-024 | Every error response uses the envelope `{error: {code: 'EM-xxxx', message, details?, path?}}` with the HTTP status mapping of API_SPECIFICATION.md §2.5; unknown exceptions become `500 EM-9001` and are logged with a stack trace. | Must | API tests; grep for `res.status(…).json` outside `http/errors.ts` must be empty | ERROR_CATALOGUE.md |
+| TR-024 | Every error response uses the envelope `{error: {code: 'EM-xxxx', message, details?, path?}}` with the HTTP status mapping of API_SPECIFICATION.md §2.6; unknown exceptions become `500 EM-9001` and are logged with a stack trace. | Must | API tests; grep for `res.status(…).json` outside `http/errors.ts` must be empty | ERROR_CATALOGUE.md |
 | TR-025 | `POST /plans/:id/execute` and `POST /renders` are idempotent: a repeated request with the same `Idempotency-Key` (or, for Execute, the same `planId`) returns the first result with `200` and `EM-2308` in `details.notice`. | Must | API tests | AI_WORKFLOW.md §6 |
 | TR-026 | SSE: `retry: 2000`, heartbeat `: ping` every 15 s, every event carries `id: <seq>` and the payload field `seq`; the server keeps the last 500 events per connection scope so `Last-Event-ID` replays missed events after a reconnect. | Must | SSE tests with a forced disconnect | API_SPECIFICATION.md §7 |
 | TR-027 | Long operations (ingest, plan, agent run, render, model download, backup) are jobs: `202 Accepted` with an id, progress over SSE, cancel endpoint; no HTTP request blocks longer than 30 s. | Must | API tests | brief §7.3 |
@@ -118,7 +118,7 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 | ID | Requirement | Priority | Verification | Traces |
 |---|---|---|---|---|
 | TR-030 | All structured data is in one SQLite database opened with `better-sqlite3-multiple-ciphers`, `PRAGMA cipher = 'chacha20'`, `PRAGMA key = "x'<hex>'"`, WAL mode, `foreign_keys = ON`, `busy_timeout = 5000`; the DDL is DATABASE_SCHEMA.md §3. | Must | open the DB file with plain sqlite3 → fails; schema diff test | ADR-006, PRD-004 |
-| TR-031 | The Database Key is a random 256-bit value generated on first run, wrapped with `safeStorage.encryptString` (DPAPI) by the Shell and stored as `keyring.bin`; the Service receives the unwrapped key over stdin and holds it only in memory. Provider secrets are additionally encrypted with AES-256-GCM under an HKDF-derived key (label `provider-secrets`). | Must | code review; unit tests for wrap/unwrap and HKDF vectors | DATABASE_SCHEMA.md §1 |
+| TR-031 | The Database Key is a random 256-bit value generated on first run, wrapped with `safeStorage.encryptString` (DPAPI) by the Shell and stored as `keyring.bin`; the Service receives the unwrapped key in the `parentPort` bootstrap message and holds it only in memory. Provider secrets are additionally encrypted with AES-256-GCM under an HKDF-derived key (label `provider-secrets`). | Must | code review; unit tests for wrap/unwrap and HKDF vectors | DATABASE_SCHEMA.md §1 |
 | TR-032 | Media bytes never enter the database; originals, playable transcodes, proxies, thumbnails, filmstrips and waveforms live under `%APPDATA%\Expertmotion\media\<projectId>\<assetId>\`, referenced by relative paths. | Must | schema review; disk inspection | brief §11 |
 | TR-033 | Every change to the Composition Model is one SQLite transaction that writes the `composition_versions` row, the `operations_history` rows and `projects.head_version_id` together; a failure anywhere rolls everything back (`ExecutionResult.rollback.performed = true`). | Must | fault-injection test (throw after the version insert) | DATABASE_SCHEMA.md §2, AI-004 |
 | TR-034 | JSON columns are Zod-validated before write and on read (`migrateModel` for older `schemaVersion`); `CHECK(json_valid())` exists on every JSON column. | Must | schema test | DATABASE_SCHEMA.md §2 |
@@ -140,7 +140,7 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 | TR-046 | Render options are derived only from the Performance Profile table (PERFORMANCE.md §2): `concurrency`, `chromiumOptions.gl`, `hardwareAcceleration`, `offthreadVideoCacheSizeInBytes`, `mediaCacheSizeInBytes`, `disallowParallelEncoding`, `imageFormat`; no other code sets these. | Must | unit test of `profiles.ts`; grep gate | ADR-010 |
 | TR-047 | One Render Job executes at a time (global queue); cancellation kills Chrome via `makeCancelSignal` and deletes the partial file within 2 s; a stall of 120 s without progress fails the job (EM-3207). | Must | e2e cancel + stall tests | PRD-014 |
 | TR-048 | Output validation: after `renderMedia`, ffprobe must report the expected width, height, fps (± 0.01), duration (± 1 frame) and an audio stream when the model has audible audio; otherwise the job fails with EM-3205 and the file is kept in `outputs\_failed\` for diagnostics. | Must | render tests with each ratio × resolution of the P0 matrix | brief §10 "Output validation" |
-| TR-049 | Assets are served to Chrome and to the Player over loopback HTTP (`GET /media/:assetId/:variant`) with `Range` support and unguessable ids; `file://` is not used (revisit per ARCHITECTURE.md §11.2). | Must | render test with a 200 MB source | ARCHITECTURE.md §7 |
+| TR-049 | Assets are served to Chrome Headless Shell and to the Player over loopback HTTP at `GET /media/<grant>/<assetId>/<variant>` with `Range` support; the grant is issued by the Service per preview session (returned by `POST /projects/:id/open`) or per Render Job (created at job start, revoked at job end), paths are looked up in the database only (SEC-010), and `file://` is not used (revisit per ARCHITECTURE.md §11.2). | Must | render test with a 200 MB source; revoked-grant test after `render.done` | ARCHITECTURE.md §7, SEC-010 |
 | TR-050 | Fonts come only from `packages/engine/public/fonts/*.woff2` via `@remotion/fonts` `loadFont` + `staticFile`; `@remotion/google-fonts` and any `https://fonts.*` URL are forbidden in the engine graph. | Must | grep gate; offline render | DESIGN_CATALOGUE.md §10 |
 | TR-051 | Preview parity: for every P0 preset and each of the 7 ratios, a Player screenshot and `renderStill` of the same frame differ by ≤ 1 % of pixels (perceptual diff); failures block the release. | Must | TEST_PLAN golden frames | PRD §5, POC-002 |
 | TR-052 | Memory discipline in the Engine: no module-level caches of decoded media or models; `premountFor` ≤ 2 s; effects limited per element (CM-006); catalogue cards use prerendered loops, never live Players (ADR-011). | Must | code review; PERFORMANCE.md §5 budgets | ADR-011 |
@@ -151,7 +151,7 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 | ID | Requirement | Priority | Verification | Traces |
 |---|---|---|---|---|
 | TR-060 | Every provider response is parsed with Zod (`EditPlan`, `BrainstormTurn`); parse failure re-prompts with the Zod error at most twice, then EM-4301; no partially parsed output is ever used. | Must | fake-provider tests with malformed replies | AI-005 |
-| TR-061 | Tools are registered in `packages/agents/runtime/ToolRegistry` with Zod input/output schemas and a permission table (AGENT_DESIGN.md §2.4); the registry type has no way to register a tool that executes shell, filesystem or network actions. | Must | registry unit test (attempt to register a forbidden tool fails to compile/throws) | AI-006, AI-020 |
+| TR-061 | Tools are registered in `packages/agents/runtime/ToolRegistry` (`composition.applyOps({planId})` is the Execute-only transactional tool wrapping the pure `applyOperations(model, ops)` of `packages/composition-model`) with Zod input/output schemas and a permission table (AGENT_DESIGN.md §2.4); the registry type has no way to register a tool that executes shell, filesystem or network actions. | Must | registry unit test (attempt to register a forbidden tool fails to compile/throws) | AI-006, AI-020 |
 | TR-062 | All outbound HTTP from the Service goes through one `Egress` module; Private Mode makes it throw EM-8202 before any socket is opened; provider adapters, model downloads and the updater receive their `fetch` from `Egress`. | Must | network capture with Private Mode on shows zero outbound connections | PRD-020, AI-017 |
 | TR-063 | Provider timeouts: 30 s to first token, 120 s total; one retry with backoff; 429 honours `Retry-After` up to 20 s once; every call records a `usage_records` row. | Must | fake-provider timing tests | AI_WORKFLOW.md §12 |
 | TR-064 | Model Assignment is per agent; the Providers screen refuses models without JSON output capability and warns below 32k context (Capability Table from the provider's model list, cached in `provider_connections.models_json`). | Must | unit + UI test | AGD-004, AI-015 |
@@ -218,10 +218,11 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 
 | ID | Requirement | Priority | Verification |
 |---|---|---|---|
-| TR-130 | TypeScript `strict` with `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `verbatimModuleSyntax`; `any` is forbidden (`@typescript-eslint/no-explicit-any: error`); `unknown` + Zod at every boundary (HTTP, DB JSON, provider output, IPC, stdin handshake, files). | Must | lint + `tsc -b` |
+| TR-130 | TypeScript `strict` with `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `verbatimModuleSyntax`; `any` is forbidden (`@typescript-eslint/no-explicit-any: error`); `unknown` + Zod at every boundary (HTTP, DB JSON, provider output, IPC, `parentPort` bootstrap message, files). | Must | lint + `tsc -b` |
 | TR-131 | Types are derived from Zod schemas (`z.infer`), never duplicated by hand; a schema lives in exactly one package (ownership table in BLUEPRINT.md §4). | Must | review |
 | TR-132 | `packages/composition-model` and `packages/agents/src/intents` are pure: no I/O, no `Date.now()`/`Math.random()` without injection (`ctx.now`, `ctx.newId`), no global state; functions return new objects and never mutate inputs (`readonly` types, `Object.freeze` in tests). | Must | lint rules (`no-restricted-imports` for `node:*`), mutation tests |
-| TR-133 | ESM everywhere (`"type": "module"`), named exports only, no default exports except React lazy components; import boundaries per BLUEPRINT.md §2.1 enforced by ESLint. | Must | lint |
+| TR-133 | ESM source everywhere (`"type": "module"`), named exports only, no default exports except React lazy components; the service's production entry is bundled to CommonJS (`service.cjs`) for `utilityProcess.fork` and the bytecode loader; import boundaries per BLUEPRINT.md §2.1 enforced by ESLint. | Must | lint |
+| TR-139 | Package layering is acyclic: `shared → catalogue → composition-model → {engine, agents} → apps`. `packages/catalogue` (React-free preset registry: ids, EN/ID labels, tags, Zod param schemas, defaults, flags, Compile defaults) is the only module that enumerates presets; `composition-model` and `agents` import `catalogue` and never `engine`; `engine` imports `catalogue` and `composition-model` and holds only the React implementations keyed by preset id; a lint fails when a catalogue id lacks an engine component or vice versa. | Must | ESLint `no-restricted-paths`, catalogue ↔ presets lint |
 | TR-134 | Errors: throw `EmError` with an `EM-` code at the point where the failure is understood; never throw strings; never catch-and-ignore without a logged reason; `console.*` is forbidden in `apps/service` and `packages/*` (use the `Logger`). | Must | lint (`no-console`), review |
 | TR-135 | React: function components, hooks, no class components; state that mirrors the Local Service is fed only by API responses and SSE (no optimistic Composition Model edits); every interactive element has `data-el`. | Must | review, UI lint for `data-el` |
 | TR-136 | Formatting by Prettier (project config), lint by ESLint 9 flat config, pre-commit hook runs `lint-staged` (format + lint + `tsc -b` for touched packages); CI runs `npm run typecheck && npm test && npm run lint`. | Must | CI |
@@ -230,23 +231,24 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 
 ## 4. Environment variables and configuration keys (development)
 
-Production receives its configuration from the stdin handshake (TR-002) and the `settings` table; environment variables are **development only** and are ignored when the handshake is present, except `EM_LOG_LEVEL`.
+Production receives its configuration from the `utilityProcess` bootstrap message (TR-002) and the `settings` table; environment variables are **development only** and are ignored when a bootstrap message is present, except `EM_LOG_LEVEL`. (DEVELOPMENT_WORKFLOW.md currently spells some of these `EXPERTMOTION_*`; the `EM_*` names below are the ones the code reads, and the two documents must be aligned at Stage 3.)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `EM_PORT` | `4100` on the shared Linux server (ports 3000/4000 belong to another tenant), otherwise `47600` | Local Service port when no handshake is present |
+| `EM_PORT` | `4110` (fixed, on the shared Linux server and in every dev setup; the predecessor already uses 4100/5173 and the other tenant 3000/4000). Production never uses it: the Shell picks a random free port in 47600–47699 | Local Service port when no bootstrap message is present |
 | `EM_DATA_DIR` | `./.em-data` (git-ignored) in development; `%APPDATA%\Expertmotion` in production | root of `data\`, `media\`, `outputs\`, `models\`, `logs\` |
-| `EM_TOKEN` | none (the Service generates one and prints it once when absent) | **dev-only** fixed Service Token so the Vite Editor and curl can authenticate; refused when a handshake is present |
+| `EM_TOKEN` | none (the Service generates one and prints it once when absent) | **dev-only** fixed Service Token so the Vite Editor and curl can authenticate; refused when a bootstrap message is present |
 | `EM_DB_KEY_HEX` | none (dev: derived from a file `.em-data/dev.key` created on first run) | **dev-only** Database Key; never set in production |
 | `EM_PRIVATE_MODE` | unset | `1` forces Private Mode on at startup regardless of settings (tests, air-gapped development) |
 | `EM_ENGINE_BUNDLE_DIR` | `resources/engine/bundle` | folder passed as `serveUrl`; `npm run build:engine` fills it |
 | `EM_BROWSER_EXECUTABLE` | bundled path; dev: Remotion's downloaded Headless Shell | override for development only |
 | `EM_ALLOW_BROWSER_DOWNLOAD` | `0` | `1` lets `ensureBrowser` download in development (never set in production) |
-| `EM_UI_PORT` | `5173` | Vite dev server port; also the allowed dev Origin |
-| `EM_UI_ORIGIN` | `http://127.0.0.1:5173` | extra allowed Origin in development |
+| `EM_UI_PORT` | `4120` | Vite dev server port; also the allowed dev Origin |
+| `EM_UI_ORIGIN` | `http://127.0.0.1:4120` | extra allowed Origin in development (also `http://localhost:4120`) |
 | `EM_LOG_LEVEL` | `info` | `debug` enables verbose logs (also honoured in production via the Shell's `--log-level` flag) |
 | `EM_LOG_PATHS` | `0` | `1` logs raw file paths instead of hashes (development) |
 | `EM_RENDER_CONCURRENCY_MAX` | unset | caps `renderMedia.concurrency` for every profile (set `1` on the shared server) |
+| `EM_MEDIA_GRANT_TTL_H` | `12` | sliding lifetime of preview media grants in development/tests (production uses the same default) |
 | `EM_MEMORY_CEILING_MB` | unset | lets the preflight treat this as total RAM (shared server: `900`) |
 | `EM_FAKE_PROVIDER` | unset | `replay:<dir>` uses recorded provider replies; `throw` makes any provider call fail (tests) |
 | `EM_FAKE_RENDER` | unset | `1` replaces `RenderAdapter` with a fake that writes a tiny valid MP4 from `test/fixtures` (service tests on Linux) |
@@ -260,8 +262,9 @@ Facts (ASSESSMENT.md §1, CLAUDE.md of the predecessor): Ubuntu 24.04, 1.9 GB RA
 | Rule | Detail |
 |---|---|
 | Headless only | `packages/*` unit tests, `apps/service` integration tests with `EM_FAKE_RENDER=1`, `apps/ui` Vitest component tests, Vite build, small `renderStill` smoke tests (≤ 720p, 1 frame). No Electron (cannot run or build without a display), no `renderMedia` of more than 5 s, no catalogue-loop build, no Playwright Electron. |
-| Memory cap | Run everything under a systemd user cgroup equivalent to the predecessor's `dev:capped`: `MemoryHigh=900M`, `MemoryMax=1200M`, `MemorySwapMax=256M`, `NODE_OPTIONS=--max-old-space-size=512`. Keep `EM_RENDER_CONCURRENCY_MAX=1`, `EM_MEMORY_CEILING_MB=900`. Measure `memory.current` before and after any new long-running test. |
-| Ports | `EM_PORT=4100`, `EM_UI_PORT=5173`; never 3000 or 4000; the Service still binds `127.0.0.1` only. |
+| Memory cap | Run everything under the systemd user cgroup via `npm run dev:capped` (and `verify.sh` for tests): `MemoryHigh=900M`, `MemoryMax=1200M`, `MemorySwapMax=256M`, `NODE_OPTIONS=--max-old-space-size=512`. Keep `EM_RENDER_CONCURRENCY_MAX=1`, `EM_MEMORY_CEILING_MB=900`. Measure `memory.current` before and after any new long-running test. |
+| Scripts | `dev`, `dev:capped`, `typecheck`, `test`, `test:e2e` (browser mode through the tunnel), `eval:agents` (fake provider; `--live --model <id>` only with the test key), `lint`, `format` run here; `build:engine` and `build:desktop` run on Windows only. |
+| Ports | `EM_PORT=4110` (Service), `EM_UI_PORT=4120` (Vite); never 3000 or 4000 (other tenant) and not 4100/5173 (the predecessor's Studio still runs there); the Service still binds `127.0.0.1` only; browser access through `ssh -L 4120:127.0.0.1:4120 -L 4110:127.0.0.1:4110`. |
 | Single Chrome | at most one Chrome Headless Shell process (`concurrency: 1`); kill it after each test file (`afterAll`). |
 | No long-lived caches | no in-memory bundle, media or model caches in tests; stills cache on disk only. |
 | Windows machine or CI | required from Stage 2 (BRD-016) for: Electron packaging, full renders, catalogue loops, Playwright Electron, parity tests, hardware tier tests. |
@@ -277,7 +280,7 @@ Facts (ASSESSMENT.md §1, CLAUDE.md of the predecessor): Ubuntu 24.04, 1.9 GB RA
 | Ubuntu 22.04+ x64 (glibc ≥ 2.35) | not supported (PRD-055); development of headless parts only | `safeStorage` may fall back to `basic_text` → must be detected (ASSESSMENT.md §6) |
 | GPU | none (T0, `swangle`), ≥ 4 GB (T1, `angle`), ≥ 8 GB (T2, NVENC with driver ≥ 525) | WebGPU effects when Chrome Headless Shell supports them on the target |
 | Display | 1280×720 minimum, 1024 px wide degraded (UX-050) | — |
-| Browsers (development only) | Chromium-based browser matching the Electron Chromium major for the Vite Editor | — |
+| Browsers (development only) | Chromium-based browser matching the Electron Chromium major for the Vite Editor at `http://127.0.0.1:4120` | — |
 
 ## 7. Requirement traceability
 
@@ -294,4 +297,4 @@ Facts (ASSESSMENT.md §1, CLAUDE.md of the predecessor): Ubuntu 24.04, 1.9 GB RA
 | Logging | TR-100…104 | PRD-015, BRD-013, ERROR_CATALOGUE.md §5 |
 | i18n | TR-110…113 | ADR-012, BRD-014, UX-040…042 |
 | Testing | TR-120…126 | brief §19, PRD §7 |
-| Standards | TR-130…138 | DEFINITION_OF_DONE.md |
+| Standards | TR-130…139 | DEFINITION_OF_DONE.md, ADR-013 |

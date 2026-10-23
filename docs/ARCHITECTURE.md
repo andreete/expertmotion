@@ -110,7 +110,7 @@ flowchart TB
 2. Local Service opens the encrypted DB, runs migrations, marks interrupted render jobs failed and interrupted agent runs cancelled, loads the licence state, detects the Hardware Tier, warms the browser (`ensureBrowser`) in the background, and reports `ready` over the parent port.
 3. Shell loads the Editor (`app://` scheme in production, Vite dev server in development) and injects `{port, token}` via preload (`contextBridge`).
 4. Editor opens `EventSource('/api/v1/events')` (all routes live under `/api/v1`, see API_SPECIFICATION.md) with the token in the query string (EventSource cannot set headers; the token is single-use-per-launch and loopback only) and uses `Authorization: Bearer <token>` on fetch.
-5. On window close: Shell asks the Service to checkpoint; waits ≤ 5 s for running renders to cancel (prompting the Creator if one is running); SIGTERM; exit.
+5. On window close: Shell asks the Service to checkpoint; waits ≤ 5 s for running renders to cancel (prompting the Creator if one is running); sends `{type:'shutdown'}` over the parent port (fallback: kills the utility process after 10 s); exit.
 6. Crash of the Service: Shell restarts it (backoff 1 s, 3 s, 9 s), Editor shows `sys.offline` and reconnects; render jobs are marked failed by the Service on restart.
 
 ## 6. Data flow: key sequences
@@ -167,7 +167,7 @@ sequenceDiagram
 ## 7. Remotion Adapter
 
 - One composition `ExpertmotionTimeline` registered in the Engine's `Root.tsx` with `calculateMetadata` deriving `width`, `height`, `fps`, `durationInFrames` from the Composition Model (ratio × resolution table, fps setting, Σ clips − Σ transition overlaps).
-- `inputProps` = the Composition Model version (JSON, ≤ 2 MB) plus resolved asset URLs. Assets are served to Chrome Headless Shell by the Local Service at `/media/:assetId/...`; this is the **one documented exception** to the Service Token rule (ADR-005) because Chrome cannot add headers: the URLs carry a random media grant token in the path that is scoped to the current preview session or render job (issued and revoked by the Local Service; SEC-010), ids are unguessable ULIDs, the listener is loopback-only and read-only, and `Range` requests are supported. The Player uses the same URLs.
+- `inputProps` = the Composition Model version (JSON, ≤ 2 MB) plus resolved asset URLs. Assets are served to Chrome Headless Shell by the Local Service at `/media/<grant>/<assetId>/<variant>` (API_SPECIFICATION.md §2.2, R-040…R-043); this is the **one documented exception** to the Service Token rule (ADR-005) because Chrome cannot add headers: the URLs carry a random media grant token in the path that is scoped to the current preview session or render job (issued and revoked by the Local Service; SEC-010), ids are unguessable ULIDs, the listener is loopback-only and read-only, and `Range` requests are supported. The Player uses the same URLs.
 - Tracks render as stacked `AbsoluteFill`s; Clips use `<TransitionSeries>` on the video track; overlays/text/captions/audio use `<Sequence from durationInFrames>`; every preset is a React component keyed by `presetId` with a Zod params schema from the Design Catalogue.
 - The bundle is built at package time (`bundle()` → `resources/engine/`) and served with `serveUrl` pointing at the bundle folder. No webpack at runtime.
 - Preview: `@remotion/player` imports the same `ExpertmotionTimeline` component from `packages/engine`, so the Editor and the renderer share code; Draft mode swaps proxy URLs via a `quality` input prop.
