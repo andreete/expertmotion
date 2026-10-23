@@ -75,7 +75,7 @@ Every document in this repository uses the terms below exactly as written here (
 |---|---|
 | **Design Pick** | A Creator's UI action that expresses a preference: clicking a Catalogue Card, choosing a font size, toggling a ratio. Captured as an Edit Intent. |
 | **Edit Intent** | A typed object describing what the Creator wants, with source (`ui`, `brainstorm`, `chat`), target reference, property key, property class, value, and status. Schema owned by `AI_WORKFLOW.md`. |
-| **Intent Queue** | The visible, ordered list of pending Edit Intents for a Project. Superseded intents stay visible (struck through) and can be restored. |
+| **Intent Queue** | The visible, ordered list of pending Edit Intents for a Project. Superseded intents stay visible (struck through) and can be restored; intents the Creator removes get status `removed` and leave the list. |
 | **Target Resolution** | The deterministic rule that decides which Timeline Element(s) an Edit Intent applies to when the Creator did not select one (table in `AI_WORKFLOW.md`). |
 | **Property Class** | `scalar` (a later value supersedes the earlier one), `list` (values accumulate, deduplicated by presetId), `exclusive-group` (exactly one value per target). |
 | **Locked Key** | A `target.property` key already decided by a compiled Edit Intent. The validator rejects any LLM-authored Operation that touches a Locked Key. |

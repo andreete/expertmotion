@@ -1,0 +1,731 @@
+# API Specification: the Local Service contract (REST + SSE)
+
+| Field | Value |
+|---|---|
+| Status | baseline |
+| Owner | Local Service lead |
+| Last updated | 2026-10-24 |
+| Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 005, 006, 010, 014, 015), ARCHITECTURE.md §4–§7, BLUEPRINT.md §3–§4, DATABASE_SCHEMA.md (tables, Composition Model), AI_WORKFLOW.md §3, §5, §6, §8, §12, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md §2, §3, §7, ERROR_CATALOGUE.md, SECURITY.md (SEC-), TRD.md §3.2 |
+| Used by | apps/ui (client), apps/service (routes), apps/desktop (lifecycle calls), TEST_PLAN.md (contract tests), FRD.md (FR- acceptance), MCP_AND_TOOLING.md |
+| Owner of | route table, request/response DTOs named here, HTTP status ↔ `EM-` mapping, pagination, idempotency, SSE event names and payloads, reconnection semantics |
+
+Schemas owned elsewhere are referenced by their Zod names: `CompositionModel`, `ProjectSettings`, `Theme` (DATABASE_SCHEMA.md §4); `EditIntent`, `EditPlan`, `Operation`, `ExecutionResult`, `ElementRef`, `PresetId`, `OpName` (AI_WORKFLOW.md §3); `BrainstormTurn` (AGENT_DESIGN.md §2.1). DTOs defined in this document live in `apps/service/src/http/dto.ts` and are re-exported as types from `@expertmotion/shared/dto`.
+
+## 1. Conventions
+
+| Item | Rule |
+|---|---|
+| Base URL | `http://127.0.0.1:<port>/api/v1` (`<port>` from the Shell bootstrap, 47600–47699 in production; `EM_PORT` in development). Media files are served from `http://127.0.0.1:<port>/media/…` (outside `/api/v1`, §6.5). |
+| Transport | HTTP/1.1 over loopback only; no TLS (loopback, token-authenticated, ADR-005). |
+| Content types | Requests: `application/json; charset=utf-8` (≤ 2 MB), `multipart/form-data` for browser-dev uploads only. Responses: `application/json`, `text/event-stream` (SSE), `video/*`, `image/*`, `audio/*`, `application/json` (waveform), `application/zip` (backup, diagnostics). |
+| Encoding | UTF-8; ids are ULIDs; timestamps ISO-8601 UTC; durations integer milliseconds; money `number` USD with `approximate: boolean`. |
+| Field naming | `camelCase` in JSON (DB `snake_case` is mapped in repositories). |
+| Versioning | path version `/api/v1`. Additive changes (new optional fields, new routes, new SSE events) do not bump the version; removing or changing a field does (`/api/v2` alongside `/api/v1` for one release). The Editor and the Service ship together, so the version is a safety net, not a compatibility programme. Every response carries `X-Expertmotion-Version: <app semver>`. |
+| Time limits | no request blocks > 30 s (TR-027); long work is a job (`202 Accepted` + SSE). |
+| Pagination | list routes accept `?limit=` (default 50, max 200) and `?cursor=` (opaque, from the previous `nextCursor`); response `Page<T> = { items: T[]; nextCursor: string | null; total?: number }`. Ordered newest-first unless stated. |
+| Idempotency | `POST /plans/:planId/execute` and `POST /renders` accept `Idempotency-Key: <string ≤ 128>`. A repeat with the same key (and same project) within 24 h returns the first response with status `200` and `notice: 'EM-2308'` in the body. Execute is additionally idempotent on `planId` itself (AI_WORKFLOW.md §6): an executed plan returns its stored `ExecutionResult`. |
+| Concurrency | `409` when a resource is busy or stale (§2.5). Clients retry on `EM-2309`, `EM-6004` after 500 ms, never on `EM-2301` (re-plan instead). |
+| Caching | `Cache-Control: no-store` on `/api/v1/*`; media routes `Cache-Control: private, max-age=31536000, immutable` (ids are unique per file). |
+
+## 2. Authentication and request guards
+
+### 2.1 Service Token
+
+| Rule | Detail |
+|---|---|
+| Header | `Authorization: Bearer <ServiceToken>` on every `/api/v1/*` request except `GET /api/v1/health` (which answers a reduced body without a token, §6.1). |
+| EventSource | `GET /api/v1/events?token=<ServiceToken>` and `GET /api/v1/renders/:jobId/events?token=…` accept the query parameter because `EventSource` cannot set headers. The token is per launch and loopback-only; the Service never logs query strings of these routes. |
+| Source of the token | Desktop Shell → preload `window.expertmotion.getBootstrap()` → `{port, token}`. Development: `EM_TOKEN` (TRD.md §4). |
+| Missing or wrong token | `401` `EM-8004` with `WWW-Authenticate: Bearer realm="expertmotion"`; the body never says which of the two it was. |
+| Rotation | one token per Service lifetime; a Service restart issues a new one and the Editor re-bootstraps (the Shell pushes it through `onServiceState`). |
+
+### 2.2 Shell-only routes
+
+`POST /service/shutdown` and the `paths[]` form of `POST /projects/:id/assets` are **trusted-caller** routes: they require the header `X-Expertmotion-Caller: shell` in addition to the token. In production the Editor's preload sets this header only for calls that originate from a Shell dialog result (the path list comes from `pickFiles`); in browser development the header is accepted when `EM_TOKEN` is set. This is a labelling control, not a second secret; the real protection is path canonicalisation and the allowed-roots check (TR-081).
+
+### 2.3 Host and Origin
+
+| Check | Allowed | Otherwise |
+|---|---|---|
+| `Host` | `127.0.0.1:<port>`, `localhost:<port>` | `403` `EM-8005` |
+| `Origin` (on `POST`, `PUT`, `PATCH`, `DELETE`) | absent (same-origin fetch from `app://`, curl), `app://expertmotion`, or `EM_UI_ORIGIN` in development | `403` `EM-8005` |
+| `Sec-Fetch-Site` | if present: `same-origin`, `none`; `cross-site` is refused | `403` `EM-8005` |
+| Cookies | none are set or read | — |
+| CORS preflight | answered only for `EM_UI_ORIGIN` in development; production has no cross-origin caller | — |
+
+### 2.4 Request limits
+
+| Limit | Value | Error |
+|---|---|---|
+| JSON body | 2 MB | `413` `EM-8006` |
+| Multipart file (dev) | per kind, ASSET_INGESTION.md (video 4 GB, image 100 MB, audio 500 MB, subtitle 2 MB) | `413` `EM-1002` |
+| `paths[]` per import | 50 | `413` `EM-1010` |
+| Ops per plan / steps per plan | 200 / 40 | `422` `EM-2304` |
+| SSE connections per token | 8 | `429` `EM-9005` (closes the oldest) |
+| Requests per second (burst) | 50 | `429` `EM-9005` |
+
+### 2.5 Error envelope and status mapping
+
+```json
+{ "error": { "code": "EM-2301", "message": "The composition changed after this plan was made. Ask the Editor Agent to plan again; nothing was applied.",
+             "details": { "baseVersion": "a1f3…", "headVersion": "9c0e…" }, "path": "body.baseVersion" } }
+```
+
+`message` is the English body copy of ERROR_CATALOGUE.md (the Editor re-renders by `code` with the UI language). `details` is code-specific and documented in ERROR_CATALOGUE.md "Log fields"; it never contains stack traces, SQL, file paths of the installation or provider payloads. `path` is a JSON pointer-like location for validation errors (`body.settings.fps`, `query.limit`).
+
+| HTTP | Meaning | Typical codes |
+|---|---|---|
+| 400 | request does not parse or fails the Zod request schema; a parameter is outside its range | `EM-9002` (schema), `EM-2102` (preset param range), `EM-2402` (custom ratio) |
+| 401 | Service Token missing or wrong | `EM-8004` |
+| 403 | Host/Origin refused; path outside allowed roots; Shell-only route without the caller header | `EM-8005`, `EM-8302`, `EM-1007` |
+| 404 | resource does not exist (or is soft-deleted) | `EM-9003` (generic), `EM-6101` (project), `EM-2401` (version), `EM-1301` (asset file missing on disk, on media routes) |
+| 409 | state conflict: stale plan, busy resource, duplicate name, already running | `EM-2301`, `EM-2309`, `EM-4305`, `EM-6004`, `EM-6103`, `EM-6303`, `EM-7104` |
+| 413 | too large | `EM-8006`, `EM-1002`, `EM-1008`, `EM-1010` |
+| 422 | well-formed but semantically rejected (validation of the Composition Model, intents, plans, preflight, licence keys, provider keys) | `EM-2001`, `EM-2002`, `EM-2101`, `EM-2104`, `EM-2105`, `EM-2201`, `EM-2202`, `EM-2302`, `EM-2303`, `EM-2304`, `EM-2306`, `EM-3101`…`EM-3106`, `EM-1001`, `EM-1003`, `EM-1009`, `EM-4002`, `EM-4004`, `EM-5002`…`EM-5008`, `EM-7004`, `EM-7105`, `EM-7106` |
+| 423 | locked by Private Mode (any outbound action) or agents unavailable | `EM-8202`, `EM-4401` |
+| 429 | rate or connection limit | `EM-9005` |
+| 500 | unexpected failure (logged with stack, Creator sees "Something went wrong") | `EM-9001` |
+| 502 | provider returned an error | `EM-4103`, `EM-4104` |
+| 503 | storage unavailable, offline, engine missing | `EM-6001`, `EM-6002`, `EM-6005`, `EM-8201`, `EM-3001`, `EM-4003` |
+| 504 | provider or operation timeout | `EM-4101`, `EM-9005` (operation) |
+
+Successful responses: `200` (read/synchronous write), `201` (created, with `Location`), `202` (job accepted; body has the job), `204` (deleted). Warnings that do not fail a request appear as `warnings: Issue[]` in the body (`Issue` from `@expertmotion/shared`: `{code, path, message, severity}`).
+
+## 3. Common DTOs (Zod, `http/dto.ts`)
+
+```ts
+const Id = z.string().ulid();
+const Iso = z.string().datetime();
+export const Page = <T extends z.ZodTypeAny>(item: T) => z.object({ items: z.array(item), nextCursor: z.string().nullable(), total: z.number().int().optional() });
+
+export const Ratio = z.enum(['16:9','9:16','1:1','4:5','5:4','4:3','3:4','custom']);     // GLOSSARY Aspect Ratio
+export const Resolution = z.enum(['720p','1080p','2k','2160p']);
+export const Fps = z.union([z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]);
+export const PerformanceProfile = z.enum(['standard','accelerated','turbo']);           // PERFORMANCE.md §2
+export const OutputProfile = z.object({                                                 // GLOSSARY Output Profile; pixels from PERFORMANCE.md §3
+  ratio: Ratio, customRatio: z.object({ w: z.number().int().min(1), h: z.number().int().min(1) }).optional(),
+  resolution: Resolution, fps: Fps,
+  format: z.enum(['mp4','webm','gif','png','wav']),                                     // outputs.kind: video | video(alpha) | gif | still | audio
+  codec: z.enum(['h264','vp9','gif','png','pcm']).optional(),                           // derived from format when absent
+  crf: z.number().int().min(1).max(51).optional(),                                      // ignored with hardware acceleration
+  alpha: z.boolean().default(false),                                                    // webm + png frames only
+  stillAtMs: z.number().int().min(0).optional(),                                        // format png
+});
+
+export const ProjectDto = z.object({ id: Id, name: z.string(), settings: ProjectSettings, language: z.enum(['id','en']), headVersionId: Id.nullable(),
+  headHash: z.string().nullable(), durationMs: z.number().int(), assetCount: z.number().int(), createdAt: Iso, updatedAt: Iso, openedAt: Iso.nullable(), dirty: z.boolean() });
+export const VersionDto = z.object({ id: Id, projectId: Id, parentId: Id.nullable(), hash: z.string(), cause: z.enum(['insert','compile','execute','undo','redo','restore','system']),
+  planId: Id.nullable(), durationMs: z.number().int(), createdAt: Iso, model: CompositionModel.optional() });
+export const AssetDto = z.object({ id: Id, projectId: Id, kind: z.enum(['video','image','audio','subtitle']), name: z.string(), bytes: z.number().int(), sha256: z.string(),
+  status: z.enum(['ingesting','ready','failed']), progress: z.number().min(0).max(1), errorCode: z.string().nullable(),
+  durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), fps: z.number().nullable(), hasAudio: z.boolean().nullable(),
+  sequenceBadge: z.number().int().nullable(), media: z.object({ original: z.string(), playable: z.string().nullable(), proxy: z.string().nullable(), thumb: z.string().nullable(),
+  filmstrip: z.string().nullable(), waveform: z.string().nullable() }),                 // absolute loopback URLs (§6.5)
+  probe: z.record(z.unknown()).optional(), createdAt: Iso, updatedAt: Iso });
+export const RenderJobDto = z.object({ id: Id, projectId: Id, versionId: Id, outputProfile: OutputProfile, performanceProfile: PerformanceProfile,
+  status: z.enum(['queued','rendering','done','failed','cancelled']), progress: z.number().min(0).max(1), renderedFrames: z.number().int().nullable(), totalFrames: z.number().int().nullable(),
+  etaMs: z.number().int().nullable(), outputId: Id.nullable(), errorCode: z.string().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(),
+  createdAt: Iso, startedAt: Iso.nullable(), finishedAt: Iso.nullable() });
+export const OutputDto = z.object({ id: Id, projectId: Id, renderJobId: Id, kind: z.enum(['video','gif','still','audio']), fileName: z.string(), bytes: z.number().int(),
+  width: z.number().int().nullable(), height: z.number().int().nullable(), fps: z.number().nullable(), durationMs: z.number().int().nullable(), validated: z.boolean(), watermarked: z.boolean(),
+  url: z.string(), thumbUrl: z.string().nullable(), createdAt: Iso });
+export const IntentQueueDto = z.object({ projectId: Id, headHash: z.string(), items: z.array(EditIntent), lockedKeys: z.array(z.string()) });
+export const PlanDto = EditPlan;                                                         // AI_WORKFLOW.md §3, plus server-set `id`, `status`, `validation`
+export const CheckpointDto = z.object({ id: Id, projectId: Id, versionId: Id, reason: z.enum(['autosave','pre-execute','pre-render','manual']), createdAt: Iso, durationMs: z.number().int() });
+export const ConnectionDto = z.object({ id: Id, provider: z.enum(['openrouter','openai','anthropic','google','custom']), label: z.string(), baseUrl: z.string().url().nullable(),
+  secretHint: z.string(), status: z.enum(['unvalidated','valid','invalid']), validatedAt: Iso.nullable(), modelsFetchedAt: Iso.nullable(), budgetMonthUsd: z.number().nullable(), createdAt: Iso, updatedAt: Iso });
+export const CapabilityRow = z.object({ modelId: z.string(), label: z.string(), contextLength: z.number().int().nullable(), toolCalling: z.boolean(), structuredOutput: z.boolean(),
+  streaming: z.boolean(), imageInput: z.boolean(), pricePerMInput: z.number().nullable(), pricePerMOutput: z.number().nullable() });   // GLOSSARY Capability Table
+export const AssignmentDto = z.object({ agent: z.enum(['brainstorm','editor']), connectionId: Id, modelId: z.string(), settings: z.object({ temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().int().optional(), effort: z.enum(['low','medium','high']).optional() }) });
+export const AgentRunDto = z.object({ id: Id, projectId: Id, agent: z.enum(['brainstorm','editor']), status: z.enum(['running','done','failed','cancelled']), modelId: z.string(),
+  connectionId: Id.nullable(), planId: Id.nullable(), errorCode: z.string().nullable(), usage: z.object({ inputTokens: z.number().int(), outputTokens: z.number().int(), costUsd: z.number().nullable(),
+  approximate: z.boolean(), contextLength: z.number().int().nullable() }).nullable(), startedAt: Iso, finishedAt: Iso.nullable() });
+export const MessageDto = z.object({ id: Id, role: z.enum(['user','assistant','system','tool']), blocks: z.array(z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string() }), z.object({ type: z.literal('tool_call'), name: z.string(), input: z.unknown() }), z.object({ type: z.literal('tool_result'), name: z.string(), output: z.unknown() }),
+  z.object({ type: z.literal('proposed_intents'), intents: z.array(EditIntent), handoffState: z.enum(['pending','sent','dismissed']) }),
+  z.object({ type: z.literal('attachment'), assetId: Id.optional(), mime: z.string(), name: z.string() }) ])), agentRunId: Id.nullable(), createdAt: Iso });
+export const HardwareProfileDto = z.object({ tier: z.enum(['T0','T1','T2']), cpuModel: z.string().nullable(), cpuThreads: z.number().int(), ramTotalMb: z.number().int(), gpuVendor: z.string().nullable(),
+  gpuModel: z.string().nullable(), vramMb: z.number().int().nullable(), nvenc: z.boolean(), detectedAt: Iso, warnings: z.array(z.string()) });
+export const HardwareTickDto = z.object({ at: Iso, cpuPercent: z.number(), ramFreeMb: z.number().int(), ramTotalMb: z.number().int(), processMb: z.number().int(), chromeMb: z.number().int().nullable(),
+  diskFreeMb: z.number().int().nullable(), gpuPercent: z.number().nullable(), workload: z.object({ rendering: z.boolean(), ingesting: z.number().int(), downloading: z.number().int(), agentRuns: z.number().int() }) });
+export const LicenseDto = z.object({ status: z.enum(['trial','active','revoked','invalid']), tier: z.string().nullable(), licenseeHash: z.string().nullable(), updatesUntil: Iso.nullable(),
+  updatesEligible: z.boolean(), machineCode: z.string(), limits: z.object({ watermark: z.boolean(), maxResolution: Resolution }) });
+export const SettingsDto = z.object({ privateMode: z.boolean(), outputFolder: z.string(), autoPlan: z.boolean(), uiLanguage: z.enum(['en','id']), theme: z.enum(['dark','light','system']),
+  defaultPerformanceProfile: PerformanceProfile, defaultRatio: Ratio, defaultResolution: Resolution, defaultFps: Fps, checkUpdates: z.boolean(), diagnosticsIncludeStructure: z.boolean() });
+export const ModelStateDto = z.object({ key: z.string(), engine: z.string(), version: z.string(), task: z.enum(['stt','tts','image','music']), label: z.string(), licence: z.object({ name: z.string(), url: z.string() }),
+  tiers: z.array(z.enum(['T0','T1','T2'])), bytesTotal: z.number().int(), bytesDone: z.number().int(), status: z.enum(['not-installed','downloading','verifying','installed','failed']), errorCode: z.string().nullable(), installedAt: Iso.nullable() });
+export const GeneratorJobDto = z.object({ id: Id, projectId: Id, kind: z.enum(['voice','music','thumbnail','captions','hashtags']), status: z.enum(['queued','running','done','failed','cancelled']),
+  progress: z.number(), modelKey: z.string().nullable(), resultAssetId: Id.nullable(), result: z.record(z.unknown()).nullable(), errorCode: z.string().nullable(), createdAt: Iso, startedAt: Iso.nullable(), finishedAt: Iso.nullable() });
+```
+
+## 4. Route table (summary)
+
+Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **–** = none (loopback + Host guard only). Rows carry a stable id `R-nnn` used by the generated contract tests (TR-122).
+
+| Id | Method | Path | Auth | Purpose | § |
+|---|---|---|---|---|---|
+| R-001 | GET | `/health` | – / T | liveness, mode, version, tier, licence, Private Mode | 6.1 |
+| R-002 | POST | `/service/shutdown` | T+S | checkpoint all, cancel renders, exit | 6.1 |
+| R-010 | GET | `/projects` | T | list projects | 6.2 |
+| R-011 | POST | `/projects` | T | create project | 6.2 |
+| R-012 | GET | `/projects/recent` | T | recent projects (max 10) | 6.2 |
+| R-013 | GET | `/projects/:id` | T | get project | 6.2 |
+| R-014 | PATCH | `/projects/:id` | T | rename, language | 6.2 |
+| R-015 | DELETE | `/projects/:id` | T | soft delete (30-day purge) | 6.2 |
+| R-016 | POST | `/projects/:id/open` | T | mark opened, lazily migrate, return head | 6.2 |
+| R-017 | GET | `/projects/:id/settings` | T | Project Settings | 6.2 |
+| R-018 | PUT | `/projects/:id/settings` | T | Project Settings (creates a version when the model changes) | 6.2 |
+| R-019 | POST | `/projects/:id/duplicate` | T | copy project (Save As) | 6.2 |
+| R-020 | POST | `/projects/:id/backup` | T | write backup zip | 6.2 |
+| R-021 | POST | `/projects/restore` | T+S | import backup zip as a new project | 6.2 |
+| R-022 | GET | `/projects/:id/checkpoints` | T | list checkpoints | 6.3 |
+| R-023 | POST | `/projects/:id/checkpoints` | T | manual checkpoint (Save) | 6.3 |
+| R-024 | POST | `/projects/:id/checkpoints/:checkpointId/restore` | T | restore as a new version | 6.3 |
+| R-030 | POST | `/projects/:id/assets` | T+S / T | import by paths (Shell) or multipart (dev) | 6.4 |
+| R-031 | GET | `/projects/:id/assets` | T | list assets | 6.4 |
+| R-032 | GET | `/projects/:id/assets/:assetId` | T | get asset | 6.4 |
+| R-033 | DELETE | `/projects/:id/assets/:assetId` | T | delete asset (and dependent clips, with confirmation flag) | 6.4 |
+| R-034 | PUT | `/projects/:id/assets/:assetId/sequence-badge` | T | set or clear the Sequence Badge | 6.4 |
+| R-035 | POST | `/projects/:id/assets/insert` | T | Insert ordered selection → ops → version | 6.4 |
+| R-036 | POST | `/projects/:id/assets/:assetId/relocate` | T+S | point a missing asset at a new path (EM-1301 recovery) | 6.4 |
+| R-040 | GET | `/media/:assetId/:variant` | – | original, playable, proxy, thumb, filmstrip, waveform (Range) | 6.5 |
+| R-041 | GET | `/media/outputs/:outputId/:variant` | – | `file`, `thumb` of a rendered Output | 6.5 |
+| R-050 | GET | `/projects/:id/composition` | T | head Composition Version with model | 6.6 |
+| R-051 | GET | `/projects/:id/composition/versions` | T | version history | 6.6 |
+| R-052 | GET | `/projects/:id/composition/versions/:versionId` | T | one version | 6.6 |
+| R-053 | POST | `/projects/:id/composition/undo` | T | move head to parent | 6.6 |
+| R-054 | POST | `/projects/:id/composition/redo` | T | move head forward | 6.6 |
+| R-055 | GET | `/projects/:id/composition/diff` | T | diff between two versions | 6.6 |
+| R-056 | POST | `/projects/:id/composition/validate` | T | dry-run ops against a version | 6.6 |
+| R-060 | POST | `/projects/:id/intents` | T | create Edit Intent from a Design Pick or chat | 6.7 |
+| R-061 | GET | `/projects/:id/intents` | T | Intent Queue | 6.7 |
+| R-062 | POST | `/projects/:id/intents/:intentId/restore` | T | restore a superseded intent | 6.7 |
+| R-063 | DELETE | `/projects/:id/intents/:intentId` | T | remove a queued intent | 6.7 |
+| R-064 | DELETE | `/projects/:id/intents` | T | clear queued intents | 6.7 |
+| R-070 | POST | `/projects/:id/plans` | T | create plan: Compile or Editor Agent | 6.8 |
+| R-071 | GET | `/projects/:id/plans` | T | list plans | 6.8 |
+| R-072 | GET | `/plans/:planId` | T | get plan | 6.8 |
+| R-073 | POST | `/plans/:planId/execute` | T | Execute (idempotent) | 6.8 |
+| R-074 | POST | `/plans/:planId/cancel` | T | cancel planning run or discard plan | 6.8 |
+| R-075 | PATCH | `/plans/:planId/notes` | T | Creator notes on the Plan Card | 6.8 |
+| R-080 | GET | `/projects/:id/conversations/:agent` | T | thread (paged) | 6.9 |
+| R-081 | POST | `/projects/:id/conversations/:agent/messages` | T | send a message → run | 6.9 |
+| R-082 | POST | `/projects/:id/conversations/brainstorm/handoff` | T | send proposed intents to the Intent Queue | 6.9 |
+| R-083 | DELETE | `/projects/:id/conversations/:agent` | T | clear thread | 6.9 |
+| R-084 | GET | `/agent-runs/:runId` | T | run status | 6.9 |
+| R-085 | POST | `/agent-runs/:runId/cancel` | T | cancel run | 6.9 |
+| R-086 | GET | `/projects/:id/usage` | T | usage summary | 6.9 |
+| R-090 | GET | `/providers/connections` | T | list connections | 6.10 |
+| R-091 | POST | `/providers/connections` | T | add connection | 6.10 |
+| R-092 | PATCH | `/providers/connections/:connId` | T | label, key, budget, baseUrl | 6.10 |
+| R-093 | DELETE | `/providers/connections/:connId` | T | remove connection | 6.10 |
+| R-094 | POST | `/providers/connections/:connId/validate` | T | validate key (outbound) | 6.10 |
+| R-095 | GET | `/providers/connections/:connId/models` | T | cached Capability Table | 6.10 |
+| R-096 | POST | `/providers/connections/:connId/models/refresh` | T | refresh models (outbound) | 6.10 |
+| R-097 | GET | `/providers/assignments` | T | Model Assignments | 6.10 |
+| R-098 | PUT | `/providers/assignments` | T | set Model Assignments | 6.10 |
+| R-099 | GET | `/providers/budget` | T | budgets and month-to-date spend | 6.10 |
+| R-100 | PUT | `/providers/budget` | T | set budgets | 6.10 |
+| R-110 | POST | `/renders/estimate` | T | estimate seconds, bytes, warnings; preflight result | 6.11 |
+| R-111 | POST | `/renders` | T | create Render Job (idempotent) | 6.11 |
+| R-112 | GET | `/renders` | T | list jobs | 6.11 |
+| R-113 | GET | `/renders/:jobId` | T | job | 6.11 |
+| R-114 | POST | `/renders/:jobId/cancel` | T | cancel job | 6.11 |
+| R-115 | GET | `/renders/:jobId/events` | T (query) | SSE for one job | 6.11 |
+| R-116 | GET | `/projects/:id/outputs` | T | list outputs | 6.11 |
+| R-117 | GET | `/outputs/:outputId` | T | output | 6.11 |
+| R-118 | DELETE | `/outputs/:outputId` | T | delete file + row | 6.11 |
+| R-119 | POST | `/outputs/:outputId/reveal` | T | absolute path for the Shell to open in Explorer | 6.11 |
+| R-120 | GET | `/catalogue` | T | presets with availability for this machine | 6.12 |
+| R-121 | GET | `/catalogue/search` | T | search presets | 6.12 |
+| R-130 | POST | `/projects/:id/generators/:kind` | T | create generator job (P1/P2) | 6.13 |
+| R-131 | GET | `/projects/:id/generator-jobs` | T | list jobs | 6.13 |
+| R-132 | GET | `/generator-jobs/:jobId` | T | job | 6.13 |
+| R-133 | POST | `/generator-jobs/:jobId/cancel` | T | cancel | 6.13 |
+| R-140 | GET | `/models` | T | Model Manager list | 6.14 |
+| R-141 | GET | `/models/:key` | T | one model with progress | 6.14 |
+| R-142 | POST | `/models/:key/install` | T | start download (outbound) | 6.14 |
+| R-143 | POST | `/models/:key/cancel` | T | cancel download | 6.14 |
+| R-144 | DELETE | `/models/:key` | T | remove weights | 6.14 |
+| R-150 | GET | `/hardware/profile` | T | tier and static facts | 6.15 |
+| R-151 | POST | `/hardware/profile/refresh` | T | re-detect | 6.15 |
+| R-152 | GET | `/hardware/live` | T | latest cheap-meter tick | 6.15 |
+| R-160 | GET | `/license` | T | licence status | 6.16 |
+| R-161 | POST | `/license/activate` | T | verify and store key | 6.16 |
+| R-162 | POST | `/license/deactivate` | T | remove key (Trial Mode) | 6.16 |
+| R-170 | GET | `/settings` | T | settings | 6.17 |
+| R-171 | PUT | `/settings` | T | settings incl. Private Mode | 6.17 |
+| R-172 | POST | `/settings/caches/clear` | T | delete proxies/thumbs/stills caches | 6.17 |
+| R-180 | POST | `/diagnostics/bundle` | T | build diagnostics zip | 6.18 |
+| R-181 | GET | `/diagnostics/logs` | T | tail of the service log (redacted) | 6.18 |
+| R-190 | GET | `/events` | T (query) | global SSE stream | 7 |
+
+95 routes.
+
+## 5. Route detail conventions
+
+Each route below lists: request (params, query, body as Zod or a field table), response, errors (beyond the universal `400 EM-9002`, `401 EM-8004`, `403 EM-8005`, `429`, `500 EM-9001`), SSE events emitted, and one example. Examples omit the `Authorization` header for brevity; it is always present.
+
+## 6. Routes
+
+### 6.1 Health and service
+
+**R-001 `GET /health`** — auth optional.
+
+| Response (no token) | Response (token) |
+|---|---|
+| `{ status: 'ok', version: '1.0.0', mode: 'production'|'development', uptimeMs }` | adds `{ tier: 'T0'|'T1'|'T2', licence: LicenseDto.pick(status, tier, updatesEligible), privateMode: boolean, engine: { bundleVersion, remotionVersion, browserReady: boolean, ffmpeg: boolean }, db: { schemaVersion, ok: boolean }, workload: { rendering, ingesting, agentRuns, downloading }, seq: number }` |
+
+Errors: `503 EM-6001|EM-6002` when the DB is not open (the Shell shows the fatal dialog). `seq` is the current global SSE sequence so a client can detect missed events before opening the stream.
+
+```http
+GET /api/v1/health
+→ 200 { "status":"ok","version":"1.0.0","mode":"production","uptimeMs":5120,"tier":"T0","licence":{"status":"trial","tier":null,"updatesEligible":false},
+        "privateMode":false,"engine":{"bundleVersion":"6b1d…","remotionVersion":"4.0.535","browserReady":true,"ffmpeg":true},"db":{"schemaVersion":1,"ok":true},
+        "workload":{"rendering":false,"ingesting":0,"agentRuns":0,"downloading":0},"seq":418 }
+```
+
+**R-002 `POST /service/shutdown`** — T+S. Body `{ reason: 'window-closed'|'update'|'uninstall', timeoutMs?: 1000..10000 }`. Checkpoints every dirty project (reason `manual`), cancels running Render Jobs and agent runs, emits `service.notice {kind:'shutting-down'}`, answers `202 { acceptedAt }`, then exits. Errors: `409 EM-8304` when a render is running and `body.force !== true` (the Shell asks the Creator first).
+
+### 6.2 Projects
+
+**R-010 `GET /projects`** — query `limit`, `cursor`, `includeDeleted=false`. Response `Page<ProjectDto>` ordered by `updatedAt` desc.
+
+**R-011 `POST /projects`** — body:
+
+```ts
+z.object({ name: z.string().min(1).max(120), settings: ProjectSettings.partial().optional(), language: z.enum(['id','en']).default('id'), theme: Theme.partial().optional() })
+```
+
+Creates the project, an empty Composition Model (`createEmptyModel`) as version 1 (`cause: 'system'`), and the media folder. Response `201 ProjectDto` + `Location: /api/v1/projects/<id>`. Errors: `409 EM-6103` duplicate name, `503 EM-6005` disk full. Events: `composition.updated`.
+
+```http
+POST /api/v1/projects
+{ "name":"Promo Kopi Agustus","settings":{"fps":30,"ratio":"9:16","resolution":"1080p"} }
+→ 201 { "id":"01JAZK…","name":"Promo Kopi Agustus","settings":{"fps":30,"ratio":"9:16","customRatio":null,"resolution":"1080p","autoRatio":false,"language":"id"},
+        "language":"id","headVersionId":"01JAZK…V1","headHash":"3f9a…","durationMs":1000,"assetCount":0,"createdAt":"2026-10-24T03:00:00Z","updatedAt":"…","openedAt":null,"dirty":false }
+```
+
+**R-012 `GET /projects/recent`** — response `{ items: ProjectDto[] }` (≤ 10, by `openedAt`), skipping projects whose media folder is missing (flagged `warnings: ['EM-6102']` per item instead of omitted).
+
+**R-013 `GET /projects/:id`** — response `ProjectDto`. Errors: `404 EM-6101`.
+
+**R-014 `PATCH /projects/:id`** — body `{ name?: string, language?: 'id'|'en' }`. Response `ProjectDto`. Errors: `404 EM-6101`, `409 EM-6103`.
+
+**R-015 `DELETE /projects/:id`** — soft delete (`deleted_at`), media kept 30 days. Response `204`. Errors: `409 EM-2309` when a render or agent run for the project is active.
+
+**R-016 `POST /projects/:id/open`** — marks `openedAt`, runs `migrateModel` lazily (new version `cause:'system'` if migrated), returns `{ project: ProjectDto, head: VersionDto (with model), checkpointNewerThanSave: CheckpointDto | null, intentQueue: IntentQueueDto, latestPlan: PlanDto | null, renderJobs: RenderJobDto[] }` — one call restores the Editor state. Errors: `404 EM-6101`, `422 EM-2001` when the stored model fails validation (the response then carries the last good checkpoint in `recovered`).
+
+**R-017 `GET /projects/:id/settings`** — response `ProjectSettings`.
+
+**R-018 `PUT /projects/:id/settings`** — body `ProjectSettings`. Changes to `fps`, `ratio`, `customRatio`, `resolution`, `autoRatio` are compiled into `op:project.setFps`, `op:output.setRatio`, `op:output.setResolution` and applied as a Compile-path version (recorded as a `system`-source EditIntent so UX-010 holds). Response `{ settings, version: VersionDto | null, warnings }`. Errors: `400 EM-2402` (custom ratio bounds), `422 EM-3105` resolution not allowed on this tier (the setting is stored, rendering blocks). Events: `intent.updated`, `composition.updated`.
+
+**R-019 `POST /projects/:id/duplicate`** — body `{ name: string, copyMedia: boolean = true }`. Response `201 ProjectDto` (new ids; media hard-linked or copied). Errors: `409 EM-6103`, `503 EM-6005`.
+
+**R-020 `POST /projects/:id/backup`** — body `{ folder: string, passphrase?: string (min 8), includeOutputs: boolean = false }`. Job: `202 { jobId }`; progress on `service.notice {kind:'backup', jobId, percent}`; result `service.notice {kind:'backup', jobId, done: true, path}`. Errors: `403 EM-8302` folder outside allowed roots, `422 EM-6304` not enough space, `EM-6301` write failure (via notice).
+
+**R-021 `POST /projects/restore`** — T+S. Body `{ path: string, passphrase?: string, onConflict: 'copy'|'replace' = 'copy' }`. Response `202 { jobId }`; completion `service.notice {kind:'restore', jobId, projectId}`. Errors: `422 EM-6302` invalid backup, `409 EM-6303` project exists and `onConflict` not set.
+
+### 6.3 Checkpoints
+
+**R-022 `GET /projects/:id/checkpoints`** — response `{ items: CheckpointDto[] }` newest first (≤ 20). Empty list carries `notice: 'EM-6202'`.
+
+**R-023 `POST /projects/:id/checkpoints`** — body `{ reason: 'manual' }`. Writes the head model to `checkpoints/<projectId>/<hash>.json`, clears `dirty`. Response `201 CheckpointDto`. Errors: `503 EM-6005`, `EM-6104`.
+
+**R-024 `POST /projects/:id/checkpoints/:checkpointId/restore`** — creates a new version from the checkpoint file (`cause:'restore'`), never overwrites history. Response `{ version: VersionDto }`. Errors: `404 EM-9003`, `422 EM-6201` damaged file. Events: `composition.updated`.
+
+### 6.4 Assets
+
+**R-030 `POST /projects/:id/assets`** — two request forms:
+
+| Form | Auth | Body | Use |
+|---|---|---|---|
+| JSON | T+S | `{ paths: z.array(z.string().min(1)).min(1).max(50), copy: z.boolean().default(true) }` | production: paths returned by the Shell's `pickFiles`/drop handler |
+| `multipart/form-data` | T | one or more `file` parts, each with the original filename | browser development only; refused in production (`403 EM-8005`) |
+
+Each path is canonicalised and must be inside the user profile, removable drives or the drop-source list (`403 EM-1007`); extension and magic bytes must match PRD-005 kinds (`422 EM-1001`); size limits (`413 EM-1002`), image dimensions (`413 EM-1008`). Duplicates by sha256 within the project are not re-added (`notice: 'EM-1006'`, existing asset returned). Response `202 { items: AssetDto[] (status 'ingesting'), notices: [{code, assetId?}] }`. Events: `ingest.progress`, `ingest.done`, `ingest.failed` per asset.
+
+```http
+POST /api/v1/projects/01JAZK…/assets
+X-Expertmotion-Caller: shell
+{ "paths": ["C:\\Users\\septi\\Videos\\kopi-1.mp4", "C:\\Users\\septi\\Videos\\kopi-2.mov"] }
+→ 202 { "items":[{"id":"01JAZM…A","kind":"video","name":"kopi-1.mp4","status":"ingesting","progress":0,"sequenceBadge":null,"media":{"original":"http://127.0.0.1:47612/media/01JAZM…A/original","playable":null,"proxy":null,"thumb":null,"filmstrip":null,"waveform":null},…},
+                 {"id":"01JAZM…B","kind":"video","name":"kopi-2.mov","status":"ingesting",…}], "notices":[] }
+```
+
+**R-031 `GET /projects/:id/assets`** — query `kind?`, `status?`, `limit`, `cursor`. Response `Page<AssetDto>` ordered by `createdAt` asc (import order).
+
+**R-032 `GET /projects/:id/assets/:assetId`** — query `probe=true` adds the full ffprobe JSON. Response `AssetDto`. Errors: `404 EM-9003`.
+
+**R-033 `DELETE /projects/:id/assets/:assetId`** — query `confirm=true` required when Clips or layers reference the asset; without it the response is `409 { error: { code: 'EM-1101', details: { clips: n } } }`. With it, dependent elements are removed via `op:clip.remove`/`op:audio.remove`/overlay removal in one version (`cause:'system'`). Response `204` or `{ version: VersionDto }`. Events: `composition.updated`.
+
+**R-034 `PUT /projects/:id/assets/:assetId/sequence-badge`** — body `{ badge: z.number().int().min(1).max(200).nullable() }`. Badges are unique per project: assigning an existing number shifts the others up. Response `{ items: AssetDto[] }` (all assets whose badge changed).
+
+**R-035 `POST /projects/:id/assets/insert`** — body:
+
+```ts
+z.object({ assetIds: z.array(Id).min(1).max(50), order: z.enum(['badge','given']).default('badge'), atIndex: z.number().int().min(0).optional(), asOverlay: z.boolean().default(false) })
+```
+
+Builds one `op:clip.insert` per video/image asset (images get `durationMs` 5000 by default; `asOverlay` places images on the overlay track), `op:audio.addLayer` for audio assets, in Sequence Badge order (unbadged assets after badged, by import order). Applies them as a Compile-path version (`cause:'insert'`), records a `system`-source EditIntent per asset, clears the used badges, and, when `settings.autoRatio` and this is the first Clip, sets the ratio by `detectRatio`. Response `{ version: VersionDto, ops: Operation[], warnings }`. Errors: `422 EM-1301` asset not `ready`, `422 EM-2002` duration out of range. Events: `intent.updated`, `composition.updated`.
+
+**R-036 `POST /projects/:id/assets/:assetId/relocate`** — T+S. Body `{ path: string }`. The new file must hash to the stored `sha256` (`422 EM-1302` otherwise, then re-ingested as a new asset when `body.reingest = true`). Response `AssetDto`.
+
+### 6.5 Media serving
+
+Routes live at `http://127.0.0.1:<port>/media/…` (no `/api/v1`, no token: Chrome Headless Shell and the Player fetch them with plain URLs; protection is the loopback bind, the Host guard, and 26-character random ids that are never listed without a token). Every URL in `AssetDto.media` and `OutputDto.url` is absolute and built by the Service.
+
+**R-040 `GET /media/:assetId/:variant`** — `variant ∈ original | playable | proxy | thumb | filmstrip | waveform`.
+
+| Variant | Content | Notes |
+|---|---|---|
+| `original` | the imported file | `Accept-Ranges: bytes`, `206` for `Range` |
+| `playable` | H.264/AAC MP4 transcode when the original is not browser-playable (HEVC MOV, MKV, …), otherwise the original | Range |
+| `proxy` | 720p-row H.264 proxy (Draft quality) | Range |
+| `thumb` | JPEG poster | `image/jpeg` |
+| `filmstrip` | JPEG sprite (N frames) | `image/jpeg`; `X-Filmstrip-Frames: N` |
+| `waveform` | `{ sampleRate, peaks: number[] }` | `application/json` |
+
+Errors: `404 EM-9003` unknown id or variant not produced, `404 EM-1301` file missing on disk (DB row exists), `409 EM-6004` while the variant is still being written. Headers: `Content-Type` from the stored probe, `Cache-Control: private, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`.
+
+**R-041 `GET /media/outputs/:outputId/:variant`** — `variant ∈ file | thumb`. Same rules; `file` honours `Range`. Used by the Export dialog's done state and the Outputs list.
+
+### 6.6 Composition
+
+**R-050 `GET /projects/:id/composition`** — query `model=true` (default) includes `CompositionModel`. Response `{ head: VersionDto, canUndo: boolean, canRedo: boolean, timing: { durationMs, cutStartMs: number[] }, issues: Issue[] }` (issues from `validate(model)`; blocks are impossible here because blocked models are never stored). Errors: `404 EM-6101`.
+
+**R-051 `GET /projects/:id/composition/versions`** — query `limit`, `cursor`. Response `Page<VersionDto>` without `model`.
+
+**R-052 `GET /projects/:id/composition/versions/:versionId`** — response `VersionDto` with `model`. Errors: `404 EM-2401`.
+
+**R-053 `POST /projects/:id/composition/undo`** / **R-054 `…/redo`** — body `{}`. Undo moves the head to `parentId` and records a `cause:'undo'` version; redo moves to the most recent child that the undo came from (the redo stack is kept in memory per project and cleared by any other mutation). Response `{ head: VersionDto, canUndo, canRedo }`. Errors: `409 EM-2309` another mutation in flight, `422 EM-2401` nothing to undo/redo (details `{reason:'at-root'|'no-redo'}`). Queued plans become `stale` (`plan.invalid` with `EM-2301`). Events: `composition.updated`.
+
+**R-055 `GET /projects/:id/composition/diff?from=<versionId|hash>&to=<versionId|hash>`** — response `{ from, to, diff: ExecutionResult.shape.diff, ops: Operation[] (operations_history between the two when linear) }`. Errors: `404 EM-2401`.
+
+**R-056 `POST /projects/:id/composition/validate`** — body `{ baseVersion: z.string() (hash), ops: z.array(Operation).max(200) }`. Pure dry run of `applyOps` + `validate` (the `composition.validateOps` tool over HTTP, for the inspector's "Details" param sheet). Response `{ ok: boolean, issues: Issue[], predictedDiff, predictedDurationMs }`. Never mutates; `409 EM-2301` when `baseVersion` is not the head (the result would be meaningless).
+
+### 6.7 Intents
+
+**R-060 `POST /projects/:id/intents`** — body `DesignPickInput`:
+
+```ts
+export const DesignPickInput = z.object({
+  source: z.enum(['ui','chat']),                                   // 'brainstorm' arrives only via R-082; 'system' is server-only
+  category: EditIntent.shape.category,
+  presetId: PresetId.optional(), params: z.record(z.unknown()).default({}),
+  target: ElementRef,                                              // {kind:'selection'} or {kind:'playhead'} lets the server resolve
+  selection: z.array(ElementRef).default([]), playheadMs: z.number().int().min(0).default(0),
+  instruction: z.string().max(2000).optional(),                    // chat text → needsInterpretation
+  baseVersion: z.string(),                                         // head hash the UI saw; mismatch → 409
+  plan: z.enum(['auto','none']).default('auto'),                   // auto: compile immediately or start a plan when autoPlan is on
+});
+```
+
+Pipeline steps 2–7 (AI_WORKFLOW.md §2): capture, catalogue validation (`422 EM-2101`, `400 EM-2102`, `422 EM-2103` warn, `EM-2104`, `EM-2105`), Target Resolution (`422 EM-2201`, `EM-2202`), queue reduction (supersede/merge), then: if `needsInterpretation` is false and `plan='auto'`, the intent is compiled and applied immediately (new version, intent `status:'executed'`, plan row `origin:'compile'`); otherwise it stays `queued` and, when `settings.autoPlan` is on, a plan run starts (R-070 semantics) and `planId` is returned. Response `201 { intent: EditIntent, queue: IntentQueueDto, superseded: string[], appliedVersion: VersionDto | null, planId: Id | null, notices: [{code}] }` (`EM-2403` when a text style applied to Theme defaults). Errors: `409 EM-2301` when `baseVersion` is not the head. Events: `intent.updated`; `composition.updated` when applied; `plan.ready`/`plan.invalid` when a plan was started.
+
+```http
+POST /api/v1/projects/01JAZK…/intents
+{ "source":"ui","category":"transition","presetId":"preset:transition.fade","params":{},"target":{"kind":"selection"},"selection":[],"playheadMs":0,"baseVersion":"3f9a…","plan":"auto" }
+→ 201 { "intent":{"id":"01JAZN…","projectId":"01JAZK…","source":"ui","category":"transition","presetId":"preset:transition.fade","params":{},"target":{"kind":"selection"},
+          "resolvedTargets":[{"kind":"cut","index":0},{"kind":"cut","index":1}],"propertyKey":"cut:*.transition","propertyClass":"exclusive-group","needsInterpretation":false,
+          "status":"executed","supersedes":[],"baseVersion":"3f9a…","createdAt":"…"},
+        "queue":{"projectId":"01JAZK…","headHash":"b77c…","items":[…],"lockedKeys":["cut:0.transition","cut:1.transition"]},
+        "superseded":[], "appliedVersion":{"id":"01JAZN…V","hash":"b77c…","cause":"compile","durationMs":13000,…}, "planId":"01JAZN…P", "notices":[] }
+```
+
+**R-061 `GET /projects/:id/intents`** — query `status?` (comma list), `limit` (default 100). Response `IntentQueueDto` (all non-removed intents incl. `superseded`, newest first; `lockedKeys` computed from `compiled|executed` intents).
+
+**R-062 `POST /projects/:id/intents/:intentId/restore`** — re-queues a `superseded` intent; the intent that superseded it becomes `superseded` in turn (exclusive-group/scalar). If the restored intent compiles directly and `settings.autoPlan`, it is applied. Response as R-060. Errors: `409 EM-2309`, `422 EM-2203` target gone.
+
+**R-063 `DELETE /projects/:id/intents/:intentId`** — removes a `queued` or `superseded` intent (executed ones are history and cannot be removed; `422 EM-9002` with `details.reason:'executed'`). Response `IntentQueueDto`. Any `valid` plan becomes `stale`. Events: `intent.updated`, `plan.invalid`.
+
+**R-064 `DELETE /projects/:id/intents`** — query `status=queued` (default; `superseded` also allowed). Response `IntentQueueDto`. Events: `intent.updated`.
+
+### 6.8 Plans
+
+**R-070 `POST /projects/:id/plans`** — body:
+
+```ts
+export const PlanCreateInput = z.object({ intentIds: z.array(Id).default([]) /* empty = all queued */, message: z.string().max(4000).optional(), baseVersion: z.string(), mode: z.enum(['auto','compile-only','agent']).default('auto') });
+```
+
+Decision (AI_WORKFLOW.md §7): if every selected intent has `needsInterpretation=false` and no `message` → Compile (`origin:'compile'`, synchronous, `status:'valid'`; applied immediately only through R-060's auto path — a plan created here waits for Execute so the Creator can review a multi-intent batch). Otherwise → Rewrite envelope → Editor Agent run (`202`, `status:'draft'`, `agentRunId`), result validated (`validatePlan`) → `plan.ready` (`valid`) or `plan.invalid` (`invalid` with `validation[]`, `touchesLockedKeys`). Response `201 PlanDto` (compile) or `202 { plan: PlanDto (draft), runId }` (agent). Errors: `409 EM-2301` base mismatch, `409 EM-4305` an Editor Agent run is active, `423 EM-4401` Private Mode (agent path only; compile still works), `422 EM-4007` no model assigned, `422 EM-4201` budget, `422 EM-2202` no clips, `503 EM-4001` no provider (agent path). Events: `agent.run.started/delta/done/failed`, `plan.ready`, `plan.invalid`.
+
+**R-071 `GET /projects/:id/plans`** — query `status?`, `limit`. Response `Page<PlanDto>` without `steps[].ops` (use R-072).
+
+**R-072 `GET /plans/:planId`** — response `PlanDto` with full steps, plus `{ stale: boolean, headHash }`. Errors: `404 EM-9003`.
+
+**R-073 `POST /plans/:planId/execute`** — header `Idempotency-Key` optional. Body `{ confirmDestructive: z.boolean().default(false) }` (required `true` when a step contains `op:clip.remove`, `op:caption.clear`, `op:background.clear`; otherwise `422 EM-9002` with `details.destructive: [ops]`, UX-015). Executes all steps in one transaction (AI-004), runs post-validation, writes a pre-execute checkpoint first. Response `200 ExecutionResult` (`ok:false` carries `error.code` such as `EM-2307`, `EM-2306`, `EM-2002`, with `rollback.performed:true`; the HTTP status is still `200` because the request itself succeeded and the result is the Creator-facing report). Errors: `409 EM-2301` stale (`plan.status` set to `stale`), `409 EM-2309` another Execute in flight, `422 EM-2302` plan touches Locked Keys, `422 EM-2303` plan invalid, `404 EM-9003`. Repeat: `200` with the stored result and `notice:'EM-2308'`. Events: `composition.updated`, `intent.updated` (intents → `executed`), `plan.ready` (status `executed`).
+
+```http
+POST /api/v1/plans/01JAZP…/execute
+Idempotency-Key: 7c1b…
+{ "confirmDestructive": false }
+→ 200 { "planId":"01JAZP…","ok":true,"fromVersion":"b77c…","toVersion":"e012…","appliedOps":3,
+        "diff":[{"elementId":"t1","change":"added","fields":["text","timing","position"]},{"elementId":"cut:0","change":"modified","fields":["transition"]}],
+        "durationMs":41 }
+```
+
+**R-074 `POST /plans/:planId/cancel`** — cancels a running agent run (plan → `cancelled`, run → `cancelled`, `EM-4303` notice) or discards a `valid|invalid|stale` plan. Response `PlanDto`. Errors: `409 EM-2309` while executing.
+
+**R-075 `PATCH /plans/:planId/notes`** — body `{ notes: z.string().max(1000) }` (never parsed; forwarded as `creatorNotes` next turn). Response `PlanDto`.
+
+### 6.9 Agents (conversations and runs)
+
+`:agent ∈ brainstorm | editor`.
+
+**R-080 `GET /projects/:id/conversations/:agent`** — query `limit` (default 50), `cursor`. Response `{ conversationId, agent, summary: ThreadSummary | null, assignment: AssignmentDto | null, contextUsage: { usedTokens, contextLength } | null, messages: Page<MessageDto> }` (messages oldest first within the page). Creates the conversation row on first access.
+
+**R-081 `POST /projects/:id/conversations/:agent/messages`** — body:
+
+```ts
+z.object({ text: z.string().min(1).max(8000), attachments: z.array(z.object({ assetId: Id })).max(4).default([]), intentIds: z.array(Id).optional() /* editor: scope to these intents */, baseVersion: z.string() })
+```
+
+Stores the user message, starts an agent run (`agent_runs`), answers `202 { message: MessageDto, runId }`. Brainstorming: the run ends with an assistant `MessageDto` whose blocks may include `proposed_intents` (handoff card). Editor: the run produces a plan exactly like R-070 agent mode (the response also carries `planId`). Errors: `423 EM-4401` Private Mode, `409 EM-4305` run active, `422 EM-4007` no model, `422 EM-4306` message too long for the model's context, `422 EM-4307` attachment image to a text-only model, `422 EM-4201` budget, `503 EM-4001` no provider, `409 EM-2301` (editor). Events: `agent.run.started`, `agent.run.delta` (streamed text), `agent.run.done`, `agent.run.failed`, then `plan.ready|plan.invalid` (editor).
+
+```http
+POST /api/v1/projects/01JAZK…/conversations/editor/messages
+{ "text":"buat judul pembuka yang kuat, nuansa energik", "attachments":[], "baseVersion":"e012…" }
+→ 202 { "message":{"id":"01JAZQ…M","role":"user","blocks":[{"type":"text","text":"buat judul pembuka yang kuat, nuansa energik"}],"agentRunId":"01JAZQ…R","createdAt":"…"}, "runId":"01JAZQ…R", "planId":"01JAZQ…P" }
+```
+
+**R-082 `POST /projects/:id/conversations/brainstorm/handoff`** — body `{ messageId: Id, intentIds: z.array(Id).optional() /* subset */, baseVersion: z.string() }`. Validates the `proposed_intents` like UI picks (steps 2–5), enqueues them with `source:'brainstorm'`, marks the block `handoffState:'sent'`. Response `{ queue: IntentQueueDto, accepted: Id[], rejected: [{id, code}], planId: Id | null }`. Errors: `409 EM-2301`, `404 EM-9003`. Events: `intent.updated`.
+
+**R-083 `DELETE /projects/:id/conversations/:agent`** — clears messages (keeps usage records). Response `204`. Errors: `409 EM-4305`.
+
+**R-084 `GET /agent-runs/:runId`** — response `AgentRunDto`. Errors: `404 EM-9003`.
+
+**R-085 `POST /agent-runs/:runId/cancel`** — aborts the provider stream; run → `cancelled`; a draft plan → `cancelled`. Response `AgentRunDto`. Idempotent on finished runs (`200`, unchanged).
+
+**R-086 `GET /projects/:id/usage`** — query `month=YYYY-MM` (default current). Response `{ project: { inputTokens, outputTokens, costUsd, approximate, runs }, byAgent: Record<'brainstorm'|'editor', same>, byModel: Array<{connectionId, modelId, …}>, budget: { projectLimitUsd: number|null, monthLimitUsd: number|null, spentMonthUsd, warn80: boolean, exceeded: boolean } }`.
+
+### 6.10 Providers
+
+**R-090 `GET /providers/connections`** — response `{ items: ConnectionDto[] }` (secrets never returned; `secretHint` only).
+
+**R-091 `POST /providers/connections`** — body:
+
+```ts
+z.object({ provider: ConnectionDto.shape.provider, label: z.string().min(1).max(60), secret: z.string().min(8).max(512), baseUrl: z.string().url().startsWith('https://').optional() /* custom only */, budgetMonthUsd: z.number().positive().nullable().default(null), validateNow: z.boolean().default(true) })
+```
+
+Encrypts the secret (AES-256-GCM, TRD TR-031), stores `status:'unvalidated'`, then when `validateNow` and not Private Mode runs R-094 inline (≤ 15 s) and R-096 in the background. Response `201 ConnectionDto`. Errors: `422 EM-4402` secure storage unavailable, `422 EM-4002` key rejected (connection still stored as `invalid`), `423 EM-8202` Private Mode with `validateNow` (stored unvalidated, `notices:['EM-8202']`, status `201`).
+
+**R-092 `PATCH /providers/connections/:connId`** — body `{ label?, secret?, baseUrl?, budgetMonthUsd? }`; a new secret resets `status` to `unvalidated`. Response `ConnectionDto`.
+
+**R-093 `DELETE /providers/connections/:connId`** — refuses while an assignment uses it unless `?force=true` (then assignments are cleared, `EM-4007` applies). Response `204`. Errors: `409 EM-2309` (details `{assignments:['editor']}`).
+
+**R-094 `POST /providers/connections/:connId/validate`** — outbound. Response `{ status: 'valid'|'invalid', validatedAt, errorCode? }`. Errors: `423 EM-8202`, `503 EM-4003`, `504 EM-4101`, `422 EM-4002`. Events: `settings.changed {scope:'providers'}`.
+
+**R-095 `GET /providers/connections/:connId/models`** — response `{ items: CapabilityRow[], fetchedAt: Iso | null, stale: boolean (> 7 days) }` from the cache; empty with `notice:'EM-4006'` if never fetched.
+
+**R-096 `POST /providers/connections/:connId/models/refresh`** — outbound (OpenRouter `GET /api/v1/models` with `supported_parameters`; other providers per adapter). Response `{ items: CapabilityRow[], fetchedAt }`. Errors: `423 EM-8202`, `503 EM-4003`, `502 EM-4006`.
+
+**R-097 `GET /providers/assignments`** — response `{ brainstorm: AssignmentDto | null, editor: AssignmentDto | null, defaultConnectionId: Id | null }`.
+
+**R-098 `PUT /providers/assignments`** — body `{ brainstorm?: AssignmentDto | null, editor?: AssignmentDto | null, defaultConnectionId?: Id | null }`. Refuses models whose `CapabilityRow.structuredOutput` is false (`422 EM-9002`, `details.reason:'no-json-output'`, AGD-004); returns `warnings` for context < 32k (`EM-4005` when tool calling is missing → JSON mode). Response as R-097 + `warnings`. Events: `settings.changed {scope:'assignments'}`.
+
+**R-099 `GET /providers/budget`** — response `{ connections: Array<{connectionId, budgetMonthUsd, spentMonthUsd, approximate}>, projects: Array<{projectId, limitUsd, spentUsd}>, month }`.
+
+**R-100 `PUT /providers/budget`** — body `{ connections?: Array<{connectionId, budgetMonthUsd: number|null}>, projects?: Array<{projectId, limitUsd: number|null}> }`. Response as R-099. Events: `settings.changed {scope:'budget'}`.
+
+### 6.11 Render and outputs
+
+**R-110 `POST /renders/estimate`** — body:
+
+```ts
+export const RenderCreateInput = z.object({ projectId: Id, versionId: Id.optional() /* default head */, outputProfile: OutputProfile, performanceProfile: PerformanceProfile, fileName: z.string().max(80).optional(), folder: z.string().optional() /* default settings.outputFolder */ });
+```
+
+Runs the Export preflight (PERFORMANCE.md §7) and an estimate (frames × measured ms/frame for the tier, bitrate heuristic). Response `{ ok: boolean, dimensions: {width, height}, totalFrames, durationMs, estimate: { seconds: number | null, bytes: number | null, confidence: 'low'|'medium'|'high' }, checks: Array<{ check: 'disk'|'memory'|'dimensions'|'duration'|'assets'|'engine'|'licence', ok: boolean, code?: string, details? }>, effectiveProfile: OutputProfile /* after Trial cap */, watermark: boolean, warnings: Issue[] }`. Never `4xx` for a failed check (the Export dialog renders the list); `404 EM-6101|EM-2401` only.
+
+**R-111 `POST /renders`** — header `Idempotency-Key` recommended. Body `RenderCreateInput`. Re-runs preflight (blocking checks → `422` with the first failing code: `EM-3101`, `EM-3102`, `EM-3103`, `EM-3104`, `EM-1301`; `503 EM-3001` engine missing; `403 EM-8302` folder not allowed; `422 EM-3206` folder not writable), writes a pre-render checkpoint, enqueues. Trial Mode: profile capped to 720p and `watermark:true` with `notices:['EM-5001']`. Response `202 RenderJobDto` (`status:'queued'`; `notices:['EM-3208']` when another job is rendering). Events: `render.queued`, then `render.progress`…, `render.done|failed|cancelled`.
+
+```http
+POST /api/v1/renders
+Idempotency-Key: export-01JAZK-e012-1
+{ "projectId":"01JAZK…","outputProfile":{"ratio":"9:16","resolution":"1080p","fps":30,"format":"mp4","codec":"h264","crf":18,"alpha":false},"performanceProfile":"standard","fileName":"promo-kopi" }
+→ 202 { "id":"01JAZR…J","projectId":"01JAZK…","versionId":"01JAZQ…V","outputProfile":{…},"performanceProfile":"standard","status":"queued","progress":0,"renderedFrames":null,
+        "totalFrames":405,"etaMs":null,"outputId":null,"errorCode":null,"width":1080,"height":1920,"createdAt":"…","startedAt":null,"finishedAt":null }
+```
+
+**R-112 `GET /renders`** — query `projectId?`, `status?`, `limit`, `cursor`. Response `Page<RenderJobDto>`.
+
+**R-113 `GET /renders/:jobId`** — response `RenderJobDto`. Errors: `404 EM-9003`.
+
+**R-114 `POST /renders/:jobId/cancel`** — cancels queued or rendering (Chrome killed, partial file removed, `EM-3202` notice). Response `RenderJobDto`; `200` unchanged for finished jobs. Events: `render.cancelled`.
+
+**R-115 `GET /renders/:jobId/events?token=…`** — SSE for one job: emits the current state immediately, then `render.progress`/`render.done|failed|cancelled`, and closes after the final event (ported predecessor behaviour). `404 EM-9003` before the stream opens.
+
+**R-116 `GET /projects/:id/outputs`** — response `Page<OutputDto>` newest first.
+
+**R-117 `GET /outputs/:outputId`** — response `OutputDto`. Errors: `404 EM-9003`.
+
+**R-118 `DELETE /outputs/:outputId`** — deletes the file and thumbnail; row removed. Response `204`. Errors: `404`, `409 EM-6004` file locked.
+
+**R-119 `POST /outputs/:outputId/reveal`** — response `{ path: string, folder: string }` (absolute); the Editor passes `folder`/`path` to `window.expertmotion.revealPath()`; the Service never launches Explorer (`EM-8303` is raised by the Shell when that fails). Errors: `404 EM-1301` file gone.
+
+### 6.12 Catalogue
+
+**R-120 `GET /catalogue`** — query `category?`, `priority?` (default `p0` in v1.0 builds; `p0,p1` later). Response:
+
+```ts
+z.object({ items: z.array(z.object({ id: PresetId, category, label: { en, id }, tags: z.array(z.string()), propertyClass, priority, flags: z.array(z.string()), preview: z.string() /* app:// or dev URL of the loop */,
+  paramsSchema: z.record(z.unknown()) /* JSON Schema */, defaults: z.record(z.unknown()), availability: z.object({ ok: z.boolean(), reason: z.enum(['gpu','webgpu','model-missing','licence']).optional(), code: z.string().optional() /* EM-2103, EM-2104, EM-7001 */ }) })),
+  catalogueVersion: z.string() })
+```
+
+Served from `packages/engine/catalogue` plus per-machine availability (tier, installed models). `ETag` = `catalogueVersion + tier + installedModelsHash`; `304` on `If-None-Match`.
+
+**R-121 `GET /catalogue/search?q=&category=&lang=`** — response `{ items: [...as above, score] }` ordered by score (`searchPresets`). Empty `q` → suggested queries list in `suggestions: string[]`.
+
+### 6.13 Generators (P1/P2)
+
+`:kind ∈ voice | music | thumbnail | captions | hashtags`. In v1.0 (P0) every call answers `422 EM-9004` with `details.feature`.
+
+**R-130 `POST /projects/:id/generators/:kind`** — body per kind:
+
+| kind | Body | Engine | Result |
+|---|---|---|---|
+| `captions` | `{ assetId: Id, language: 'id'|'en', modelKey?: string }` | whisper.cpp (`model:whisper`) | `result.pages: CaptionPage[]` + proposed intent `op:caption.setPages` |
+| `voice` | `{ text: z.string().min(1).max(2000), voiceId: string, language: 'id'|'en', atMs?: number }` | sherpa-onnx + Piper | `resultAssetId` (audio) + proposed `op:audio.addLayer` |
+| `music` | `{ prompt: string, durationMs: 5000..300000, style?: string }` | ACE-Step (T1/T2) or loop library (T0) | `resultAssetId` + proposed `op:audio.addBed` |
+| `thumbnail` | `{ frameMs?: number, titleText?: string, prompt?: string, size?: {w,h} }` | `renderStill` / sd.cpp | `resultAssetId` (image) |
+| `hashtags` | `{ language: 'id'|'en', platform: 'tiktok'|'instagram'|'youtube', count: 5..30 }` | connected LLM (ADR-009) | `result.caption, result.hashtags[]` |
+
+Response `202 GeneratorJobDto`. Errors: `422 EM-7001` model not installed (details `{modelKey, bytes}`), `422 EM-7004|7105|7106`, `423 EM-8202` (hashtags), `409 EM-7104`. Events: `generator.progress|done|failed` (carried as `service.notice {kind:'generator', …}` to keep the SSE table closed; see §7).
+
+**R-131 `GET /projects/:id/generator-jobs`** — `Page<GeneratorJobDto>`. **R-132 `GET /generator-jobs/:jobId`** — `GeneratorJobDto`. **R-133 `POST /generator-jobs/:jobId/cancel`** — kills the engine process; `GeneratorJobDto`.
+
+### 6.14 Models (Model Manager)
+
+**R-140 `GET /models`** — response `{ items: ModelStateDto[], tier, totalInstalledBytes, diskFreeBytes }`.
+
+**R-141 `GET /models/:key`** — `ModelStateDto` (with live `bytesDone`). Errors: `404 EM-9003`.
+
+**R-142 `POST /models/:key/install`** — outbound, resumable, hash-verified. Response `202 ModelStateDto` (`downloading`). Errors: `423 EM-8202` (or `EM-7006` notice when offline), `422 EM-7004` disk, `409 EM-7104`. Events: `model.progress`, `model.installed`, `model.failed` (`EM-7002`, `EM-7003`).
+
+**R-143 `POST /models/:key/cancel`** — keeps the partial file for resume. Response `ModelStateDto` (`not-installed`, `bytesDone` kept).
+
+**R-144 `DELETE /models/:key`** — removes weights and partials. Response `204`. Errors: `409 EM-7104` in use.
+
+### 6.15 Hardware
+
+**R-150 `GET /hardware/profile`** — response `HardwareProfileDto` (cached from startup; `systeminformation`). **R-151 `POST /hardware/profile/refresh`** — re-detects (rate-limited to once per 30 s; `429 EM-9005` otherwise). Response `HardwareProfileDto`. Events: `settings.changed {scope:'hardware'}` when the tier changes.
+
+**R-152 `GET /hardware/live`** — the latest cheap-meter sample. Response `HardwareTickDto`. The Hardware Monitor popover uses `hardware.tick` over SSE while open and this route for its first paint.
+
+### 6.16 Licence
+
+**R-160 `GET /license`** — response `LicenseDto` (`machineCode` is the Creator-facing short form of the Machine Fingerprint for purchase, LICENSE_OPERATIONS.md).
+
+**R-161 `POST /license/activate`** — body `{ key: z.string().min(40).max(4096) }`. Offline Ed25519 verification, fingerprint match, revocation list, `updatesUntil` vs build date, clock check. Response `LicenseDto`. Errors: `422 EM-5006` format, `EM-5002` signature, `EM-5003` other machine, `EM-5004` revoked, `EM-5008` transfer limit; `200` with `warnings:['EM-5005']` when the build postdates `updatesUntil` (key stored, status `active`, `updatesEligible:false`); `422 EM-5007` clock moved backwards. Events: `license.changed`.
+
+**R-162 `POST /license/deactivate`** — body `{ confirm: true }`. Returns to Trial Mode (`EM-5001`). Response `LicenseDto`. Events: `license.changed`.
+
+### 6.17 Settings
+
+**R-170 `GET /settings`** — response `SettingsDto`.
+
+**R-171 `PUT /settings`** — body `SettingsDto.partial()`. Turning `privateMode` on aborts in-flight provider calls and model downloads (`EM-8202` notices) and emits `settings.changed {scope:'privateMode', privateMode:true}` to every client; `outputFolder` is canonicalised and checked (`403 EM-8302`). Response `SettingsDto`. Events: `settings.changed`.
+
+**R-172 `POST /settings/caches/clear`** — body `{ scope: z.array(z.enum(['proxies','thumbs','stills','filmstrips','waveforms'])).default(['proxies','thumbs','stills','filmstrips','waveforms']) }`. Regenerable files only; assets keep `status:'ready'` and variants are rebuilt lazily. Response `{ freedBytes }`. Errors: `409 EM-2309` while rendering.
+
+### 6.18 Diagnostics
+
+**R-180 `POST /diagnostics/bundle`** — body `{ includeStructure: z.boolean().default(false) }`. Builds the zip described in TRD.md TR-103 into `logs\diagnostics-<ts>.zip`. Response `{ path, bytes, contents: string[] }`. Errors: `500 EM-9006`.
+
+**R-181 `GET /diagnostics/logs?lines=200&level=warn`** — response `{ lines: string[] }` (JSON lines, redacted, max 2000).
+
+## 7. Server-Sent Events
+
+### 7.1 Streams
+
+| Stream | Route | Scope |
+|---|---|---|
+| Global | `GET /api/v1/events?token=…&projectId=<id>` | every event; `projectId` filters project-scoped events to one project (global events always pass) |
+| Per render job | `GET /api/v1/renders/:jobId/events?token=…` | `render.*` for one job; closes after the final event |
+
+### 7.2 Wire format
+
+```
+retry: 2000
+
+id: 419
+event: render.progress
+data: {"seq":419,"at":"2026-10-24T03:05:12.410Z","projectId":"01JAZK…","jobId":"01JAZR…J","progress":0.42,"renderedFrames":170,"totalFrames":405,"etaMs":31000}
+
+: ping
+```
+
+| Rule | Detail |
+|---|---|
+| Headers | `Content-Type: text/event-stream`, `Cache-Control: no-cache, no-transform`, `Connection: keep-alive`, `X-Accel-Buffering: no` (ported `openSse`) |
+| `retry: 2000` | first line of every stream; the browser waits 2 s before reconnecting |
+| Heartbeat | `: ping` comment every 15 s; the Editor treats 35 s of silence as a dead connection and reconnects (`sys.offline` after the third failure, UX-032) |
+| `seq` | one monotonic counter per Service lifetime, shared by both streams; sent as the SSE `id:` and inside `data.seq`; resets to 1 when the Service restarts (clients detect `seq < lastSeen` and do a full refresh via R-016) |
+| Replay | on reconnect the browser sends `Last-Event-ID`; the Service replays events with `seq > lastEventId` from a 500-event ring buffer (filtered by `projectId` when given); if the gap exceeds the buffer, the first event is `service.notice {kind:'resync', from, to}` and the client reloads state with R-016 and R-112 |
+| Dedupe | clients keep `lastSeq` and drop any event with `seq ≤ lastSeq` |
+| Payload envelope | every `data` has `seq`, `at`, and `projectId` when project-scoped; event-specific fields follow |
+| Ordering | events for one project are emitted in causal order (`intent.updated` before `composition.updated` before `plan.*`) |
+| Size | payloads ≤ 64 KB; `composition.updated` carries the version header and diff, never the model (clients fetch R-050) |
+
+### 7.3 Event table
+
+| Event | Payload (besides `seq`, `at`, `projectId?`) | When emitted |
+|---|---|---|
+| `intent.updated` | `{ queue: IntentQueueDto, changed: Id[], reason: 'created'|'superseded'|'restored'|'removed'|'cleared'|'compiled'|'executed'|'rejected' }` | any change to the Intent Queue (R-060…R-064, R-082, Insert, Execute) |
+| `plan.ready` | `{ plan: PlanDto (without ops), runId?: Id }` | a plan reached `valid` (compile or agent) or changed status to `executing|executed` |
+| `plan.invalid` | `{ planId, status: 'invalid'|'stale'|'failed'|'cancelled', code: 'EM-2301'|'EM-2302'|'EM-2303'|'EM-2304'|'EM-4301'|'EM-4303', validation: Issue[], touchesLockedKeys: string[] }` | validation failed, base moved, run failed or cancelled |
+| `composition.updated` | `{ version: VersionDto (no model), previousHash, diff: ExecutionResult.diff, cause, canUndo, canRedo, durationMs, issues: Issue[] }` | a new head version exists (Insert, Compile, Execute, undo, redo, restore, settings, asset removal) |
+| `render.queued` | `{ job: RenderJobDto }` | R-111 accepted |
+| `render.progress` | `{ jobId, progress, renderedFrames, totalFrames, etaMs: number|null, stage: 'preparing'|'rendering'|'encoding'|'validating' }` | ≤ 4× per second per job (ported 250 ms throttle); `etaMs` null until ≥ 5 % and 3 samples |
+| `render.done` | `{ jobId, output: OutputDto, notices: string[] }` | ffprobe validation passed, row written |
+| `render.failed` | `{ jobId, code: 'EM-3201'|'EM-3203'|'EM-3204'|'EM-3205'|'EM-3207'|'EM-3002', percent }` | job failed; partial file removed (kept under `_failed\` for EM-3205) |
+| `render.cancelled` | `{ jobId, percent }` | R-114 or shutdown |
+| `ingest.progress` | `{ assetId, stage: 'probe'|'transcode'|'proxy'|'thumbs'|'filmstrip'|'waveform'|'hash', progress }` | per asset, ≤ 4× per second |
+| `ingest.done` | `{ asset: AssetDto }` | asset `ready`; `media.*` URLs populated |
+| `ingest.failed` | `{ assetId, code: 'EM-1001'|'EM-1003'|'EM-1004'|'EM-1005'|'EM-1008'|'EM-1009'|'EM-1201', name }` | ingest error (`EM-1005` leaves the asset `ready` with a missing variant) |
+| `agent.run.started` | `{ run: AgentRunDto, agent, modelId, planId? }` | R-070 (agent mode), R-081 |
+| `agent.run.delta` | `{ runId, agent, delta: string, toolCall?: { name, input } }` | streamed assistant text or a tool call (for "Asking <model>…" and transparency, UX-016) |
+| `agent.run.done` | `{ run: AgentRunDto, message: MessageDto, usage, contextUsage: { usedTokens, contextLength } }` | provider stream finished and output validated |
+| `agent.run.failed` | `{ runId, agent, code: 'EM-4101'|'EM-4102'|'EM-4103'|'EM-4104'|'EM-4301'|'EM-4303'|'EM-4304'|'EM-4201'|'EM-8202', retryable: boolean }` | run failed, cancelled or interrupted |
+| `model.progress` | `{ key, bytesDone, bytesTotal, status: 'downloading'|'verifying' }` | ≤ 2× per second |
+| `model.installed` | `{ model: ModelStateDto }` | hash verified, manifest written |
+| `model.failed` | `{ key, code: 'EM-7002'|'EM-7003'|'EM-7004'|'EM-7108' }` | download or verification failed |
+| `hardware.tick` | `HardwareTickDto` | every 2 s **only while at least one client subscribed with `?hardware=1`** (the Hardware Monitor popover); otherwise suppressed to save bandwidth |
+| `license.changed` | `{ licence: LicenseDto }` | R-161, R-162, revocation detected at startup |
+| `settings.changed` | `{ scope: 'settings'|'privateMode'|'providers'|'assignments'|'budget'|'hardware', settings?: SettingsDto, privateMode?: boolean }` | any settings/provider mutation; Private Mode changes always include `privateMode` |
+| `service.notice` | `{ kind: 'shutting-down'|'resync'|'backup'|'restore'|'generator'|'update'|'offline'|'low-disk'|'low-memory'|'checkpoint', code?: string, …kind-specific }` | lifecycle and cross-cutting notices: `EM-8003` after restart, `EM-6402` low disk, `EM-8305` low memory, `EM-8105` update available, backup/restore/generator job progress (`{jobId, percent, done, projectId}`), autosave status (`EM-6203`) |
+
+`hardware.tick` subscription: `GET /events?token=…&hardware=1`; a client without the flag never receives ticks. All other events are always delivered (subject to `projectId` filtering).
+
+### 7.4 Client reconnection algorithm (reference for `apps/ui/src/api/events.ts`)
+
+1. Open `EventSource(base + '/events?token=' + token + (projectId ? '&projectId=' + projectId : ''))`; store `lastSeq` in memory (and `sessionStorage` for a reload).
+2. On each event: if `data.seq <= lastSeq` → drop; else dispatch and set `lastSeq`.
+3. On `error`: the browser auto-reconnects after `retry` (2 s) sending `Last-Event-ID`; count attempts; after 3 consecutive failures within 30 s show `sys.offline` (`EM-8001`) and poll `GET /health` every 2 s (no token needed) until `status:'ok'`.
+4. On reconnect: if the first event is `service.notice {kind:'resync'}` or `health.seq < lastSeq` (Service restarted) → call R-016 for the open project and R-112 for jobs, then continue.
+5. On `settings.changed {scope:'privateMode'}` or `license.changed` → update global state immediately (banner, composer state, export limits).
+
+## 8. Examples of composed flows
+
+| Flow | Calls (in order) | Events observed |
+|---|---|---|
+| F1 First project to first export (P0 slice, BLUEPRINT.md §7) | R-011 → R-030 → R-035 ×2 → R-060 (fade) → R-110 → R-111 | `composition.updated`, `ingest.progress/done`, `composition.updated` ×2, `intent.updated` + `composition.updated` + `plan.ready`, `render.queued` → `render.progress`… → `render.done` |
+| F2 Chat-driven title | R-081 (editor, text) → (wait) → R-072 → R-073 | `agent.run.started/delta/done`, `plan.ready`, `composition.updated`, `intent.updated` |
+| F3 Brainstorm hand-off | R-081 (brainstorm) → R-082 → R-070 → R-073 | `agent.run.*`, `intent.updated`, `agent.run.*`, `plan.ready`, `composition.updated` |
+| F4 Stale plan | R-070 → R-053 (undo) → R-073 | `plan.ready`, `composition.updated` + `plan.invalid {EM-2301}`, then `409 EM-2301` |
+| F5 Private Mode on | R-171 `{privateMode:true}` → R-081 | `settings.changed {privateMode:true}`; R-081 → `423 EM-4401` |
+| F6 Crash during render | (Service restarts) → R-016 → R-112 | `service.notice {EM-8003}`, job `failed EM-3203` in the list |
+
+## 9. Open points
+
+| # | Point | Owner | Resolve by |
+|---|---|---|---|
+| 1 | Whether media routes should additionally require a short-lived per-asset signature in the URL (`?sig=`) instead of relying on unguessable ids; cost: Player URLs must be refreshed | Security reviewer | Stage 3 (SECURITY.md) |
+| 2 | Generator events as `service.notice {kind:'generator'}` vs dedicated `generator.*` events; dedicated events are cleaner but widen the closed table before P1 | Local Service lead | Stage 5 |
+| 3 | `GET /catalogue` from the Service vs the Editor importing the registry directly and asking only for availability; the former keeps one source of truth across processes | Principal architect | Stage 3 |
+| 4 | Multipart upload limits in browser development vs the Shell path hand-off; multipart may be removed entirely once the Electron e2e harness exists | Service lead | Stage 4 |

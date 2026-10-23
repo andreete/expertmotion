@@ -96,7 +96,7 @@ A generated UI, untested code change, or successful compilation alone does not p
 |---|---|
 | D-PROMPT-1 | Prompt version bumped (`<agent>@<n>`) with a dated change note; `agent_runs` records the version. |
 | D-PROMPT-2 | All 20 golden scenarios re-run on the fake provider (recorded responses re-validated against the new envelope) and on at least one live mid-tier model; pass rate recorded in GOLDEN_SCENARIOS.md results table with model id and date; no regression below the previous rate without an Operator decision. |
-| D-PROMPT-3 | Locked Key violation scenarios (GS-11…GS-14 group) still at 100 % caught. |
+| D-PROMPT-3 | Locked Key violation scenarios (GS-09, GS-11 with randomised violating ops) still at 100 % caught. |
 | D-PROMPT-4 | Prompt contains no secrets, no product-internal paths and no forbidden words in Creator-visible replies; Indonesian reply behaviour (UX-042) re-checked. |
 | D-PROMPT-5 | Context budget unchanged or re-measured (system prompt tokens listed in the change note). |
 | D-PROMPT-6 | AGENT_DESIGN.md permission table still matches the tools the prompt describes (traceability "Tool → prompt → agent"). |

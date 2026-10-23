@@ -5,7 +5,7 @@
 | Status | baseline (targets marked "to confirm" are re-measured in the Stage 2 PoC, PERFORMANCE.md §5) |
 | Owner | Requirements engineer + principal architect |
 | Last updated | 2026-10-24 |
-| Depends on | GLOSSARY.md, PRD.md, FRD.md, ARCHITECTURE.md, PERFORMANCE.md, AI_WORKFLOW.md, DECISIONS.md, ELEMENT_IDS.md, ERROR_CATALOGUE.md, MASTER_PROJECT_PROMPT.md §4, §9, §11–§16, §19 |
+| Depends on | GLOSSARY.md, PRD.md, FRD.md, ARCHITECTURE.md, PERFORMANCE.md, AI_WORKFLOW.md, DECISIONS.md, ELEMENT_IDS.md, ERROR_CATALOGUE.md, SECURITY.md, DATABASE_SCHEMA.md, MASTER_PROJECT_PROMPT.md §4, §9, §11–§16, §19 |
 | Used by | TRD.md, API_SPECIFICATION.md, DATABASE_SCHEMA.md, SECURITY.md, TEST_PLAN.md, DEPLOYMENT_AND_PACKAGING.md, ACCESSIBILITY_AND_I18N.md, DEFINITION_OF_DONE.md |
 | Owner of | every `NFR-` id, its metric, target and measurement method |
 | ID range | NFR-001 … NFR-199 (blocks per category in §5.0) |
@@ -37,9 +37,9 @@ All product terms: GLOSSARY.md. Identifier prefixes (`PRD-`, `FR-`, `NFR-`, `AI-
 | PERFORMANCE.md | budgets, tiers, profiles, pixel table, preflight |
 | AI_WORKFLOW.md | schemas, limits (≤ 40 steps, ≤ 200 ops), failure handling |
 | ERROR_CATALOGUE.md | EM codes |
-| SECURITY.md (planned) | SEC- controls referenced by §5.4 |
+| SECURITY.md | SEC-001…SEC-096 controls referenced by §5.4 |
 | API_SPECIFICATION.md (planned) | Local Service routes and SSE events |
-| DATABASE_SCHEMA.md (planned) | DDL, Composition Model JSON Schema, migrations |
+| DATABASE_SCHEMA.md | DDL, Composition Model JSON Schema (`schemaVersion`), version hashing (§4.5), checkpoints, backup format (§7), retention (§8) |
 
 ### 1.5 Overview
 
@@ -243,22 +243,22 @@ Controls are specified as `SEC-` items in SECURITY.md; this section states the r
 
 | ID | Statement | Metric | Target | Measurement | Priority | Related |
 |---|---|---|---|---|---|---|
-| NFR-040 | Every Local Service request shall require the per-launch Service Token; requests without or with a wrong token are rejected. | % of routes enforcing the token; rejection status | 100 %; 401 → EM-8004 | int (route enumeration test) | M / P0 | ADR-005, SECURITY.md SEC- (token) |
-| NFR-041 | Requests whose `Host` or `Origin` is not on the allow-list shall be rejected; no cookies are used (no CSRF surface). | % of routes; status | 100 %; 403 → EM-8005 | int | M / P0 | ADR-005, SEC- (origin) |
-| NFR-042 | Project data and provider credentials shall be encrypted at rest: database with ChaCha20-Poly1305 under a 256-bit Database Key wrapped by DPAPI; credentials additionally field-level encrypted. | plaintext recoverable from disk without the Windows user context | none (verified by attempting to open the DB and grep media of secrets) | audit, vm | M / P0 | ADR-006, FR-118, FR-176, PRD-004 |
-| NFR-043 | Secrets (provider keys, Service Token, Database Key, licence key) shall never appear in logs, SSE events, UI, diagnostics bundles, crash dumps or process listings. | occurrences found by pattern scan | 0 | int (redaction tests), audit | M / P0 | FR-112, FR-150, ARCHITECTURE §9 |
-| NFR-044 | The Electron renderer shall be hardened: `contextIsolation`, `sandbox`, no `nodeIntegration`, CSP without `unsafe-eval`, navigation and `window.open` blocked, ASAR integrity fuses, no production source maps. | checklist items passing | 100 % of VULNERABILITY_CHECKLIST.md Electron items | audit | M / P0 | ADR-004, ADR-007, PRD-016 |
-| NFR-045 | Installer and updates shall be code-signed and verified before execution; an unsigned or tampered update is discarded. | signature checks | 100 %; tampered package → EM-8103 | int, vm | M / P0 | FR-152, ADR-007 |
-| NFR-046 | Filesystem access by the Local Service shall be restricted to app data, the Project output folder and Creator-chosen allowed locations; imported files are validated by content (probe), not by extension alone; path traversal is rejected. | fuzz cases rejected | 100 % of traversal/symlink/UNC cases → EM-1007 / EM-8302 | int (fuzz) | M / P0 | FR-041, FR-137, SEC- (paths) |
-| NFR-047 | No Tool callable by a model shall execute shell commands, access the filesystem or the network; all mutations go through Execute. | registry audit; attempted misuse | 0 such tools; 0 mutations outside Execute | unit (registry test), audit | M / P0 | AI-006, AI-020, FR-080 |
-| NFR-048 | Request bodies and uploads shall be size-limited and rate-limited per route. | limits | JSON ≤ 2 MB (EM-8006); media per FRD §5 table; ≤ 50 requests/s per client | int | M / P0 | FR-041 |
-| NFR-049 | Dependencies shall be integrity-pinned (lockfile, hashes) and scanned for known vulnerabilities before release. | high/critical findings open at release | 0 | audit (CI) | M / P0 | ADR-007, PRD §7 |
+| NFR-040 | Every Local Service request shall require the per-launch Service Token; requests without or with a wrong token are rejected. | % of routes enforcing the token; rejection status | 100 %; 401 → EM-8004 | int (route enumeration test) | M / P0 | ADR-005, SEC-001…SEC-005 |
+| NFR-041 | Requests whose `Host` or `Origin` is not on the allow-list shall be rejected; no cookies are used (no CSRF surface). | % of routes; status | 100 %; 403 → EM-8005 | int | M / P0 | ADR-005, SEC-006, SEC-012 |
+| NFR-042 | Project data and provider credentials shall be encrypted at rest: database with ChaCha20-Poly1305 under a 256-bit Database Key wrapped by DPAPI; credentials additionally field-level encrypted. | plaintext recoverable from disk without the Windows user context | none (verified by attempting to open the DB and grep media of secrets) | audit, vm | M / P0 | ADR-006, FR-118, FR-176, PRD-004, SEC-040, SEC-041, SEC-050 |
+| NFR-043 | Secrets (provider keys, Service Token, Database Key, licence key) shall never appear in logs, SSE events, UI, diagnostics bundles, crash dumps or process listings. | occurrences found by pattern scan | 0 | int (redaction tests), audit | M / P0 | FR-112, FR-150, ARCHITECTURE §9, SEC-013, SEC-042, SEC-043 |
+| NFR-044 | The Electron renderer shall be hardened: `contextIsolation`, `sandbox`, no `nodeIntegration`, CSP without `unsafe-eval`, navigation and `window.open` blocked, ASAR integrity fuses, no production source maps. | checklist items passing | 100 % of VULNERABILITY_CHECKLIST.md Electron items | audit | M / P0 | ADR-004, ADR-007, PRD-016, SEC-020…SEC-033 |
+| NFR-045 | Installer and updates shall be code-signed and verified before execution; an unsigned or tampered update is discarded. | signature checks | 100 %; tampered package → EM-8103 | int, vm | M / P0 | FR-152, ADR-007, SEC-090…SEC-096 |
+| NFR-046 | Filesystem access by the Local Service shall be restricted to app data, the Project output folder and Creator-chosen allowed locations; imported files are validated by content (probe), not by extension alone; path traversal is rejected. | fuzz cases rejected | 100 % of traversal/symlink/UNC cases → EM-1007 / EM-8302 | int (fuzz) | M / P0 | FR-041, FR-137, SEC-010, SEC-051, SEC-067 |
+| NFR-047 | No Tool callable by a model shall execute shell commands, access the filesystem or the network; all mutations go through Execute. | registry audit; attempted misuse | 0 such tools; 0 mutations outside Execute | unit (registry test), audit | M / P0 | AI-006, AI-020, FR-080, SEC-088; tool-layer failures surface as EM-4501…EM-4507 |
+| NFR-048 | Request bodies and uploads shall be size-limited and rate-limited per route. | limits | JSON ≤ 2 MB, Composition Model routes ≤ 4 MB (EM-8006); media per FRD §5 table; expensive routes rate-limited per SEC-011 | int | M / P0 | FR-041, SEC-009, SEC-011 |
+| NFR-049 | Dependencies shall be integrity-pinned (lockfile, hashes) and scanned for known vulnerabilities before release. | high/critical findings open at release | 0 | audit (CI) | M / P0 | ADR-007, PRD §7, VULNERABILITY_CHECKLIST.md |
 
 ### 5.5 Privacy (NFR-050 … NFR-059)
 
 | ID | Statement | Metric | Target | Measurement | Priority | Related |
 |---|---|---|---|---|---|---|
-| NFR-050 | Expertmotion shall send no telemetry or analytics to the Operator or third parties; diagnostics leave the machine only when the Creator copies the bundle. | outbound destinations observed in normal use | only configured provider hosts, model hosts, update feed | netcap | M / P0 | PRD §4.4, FR-150 |
+| NFR-050 | Expertmotion shall send no telemetry or analytics to the Operator or third parties; diagnostics leave the machine only when the Creator copies the bundle. | outbound destinations observed in normal use | only allow-listed provider hosts, model hosts and the pinned update feed (SEC-071, SEC-082, SEC-096); anything else → EM-8203 | netcap | M / P0 | PRD §4.4, FR-150, FR-158 |
 | NFR-051 | What is transmitted to an LLM provider (system prompt, compact project state, intents, Creator messages, attachments, Capability probes) shall be disclosed in the Providers screen and in Help before the first connection is saved. | disclosure present and accurate | yes; audited against the actual envelope schema | audit, e2e | M / P0 | FR-111, AI_WORKFLOW §7, brief §4.1 |
 | NFR-052 | Hardware readings, usage records and logs shall stay local. | outbound transmissions of these data | 0 | netcap | M / P0 | FR-127, PERFORMANCE §6 |
 | NFR-053 | Private Mode shall produce zero outbound connections from all Expertmotion processes, including Engine Binaries and the Desktop Shell. | outbound connections during a 10 min full-workflow session with Private Mode on | 0 | netcap, vm | M / P0 | FR-156…FR-163, PRD-020, AI-017 |
@@ -349,7 +349,7 @@ Limits are enforced with the EM code named; above the limit the application refu
 |---|---|---|---|---|---|---|
 | NFR-120 | Retention periods shall be enforced by a housekeeping job at start. | items kept beyond their period | checkpoints 20/Project; logs 7 d; replaced-project checkpoints 7 d; uninserted generator results 7 d; Usage Records 12 mo; Outputs, Projects, conversations until deleted by the Creator | int | M / P0 | FR-175 |
 | NFR-121 | Uninstall shall remove the application but keep `%APPDATA%\Expertmotion` (projects, media, outputs, models) unless the Creator ticks "also delete my projects and models"; the choice and its consequence are stated in the uninstaller. | behaviour | as stated | vm | M / P0 | brief §12, DEPLOYMENT_AND_PACKAGING.md |
-| NFR-122 | Backup zips shall be self-describing and restorable on any Expertmotion of the same or newer version. | manifest fields; restore success | app version, schema version, Project id, Asset hashes/sizes; 100 % on same/newer | int | M / P0 | FR-017, FR-018, FR-177 |
+| NFR-122 | Backup zips shall be self-describing, encrypted with a Creator passphrase by default (SEC-052), and restorable as a new Project on any Expertmotion of the same or newer version. | manifest fields; restore success | app version, schema version, Project id, Asset hashes/sizes; 100 % on same/newer; restore never overwrites | int | M / P0 | FR-017, FR-018, FR-177, DATABASE_SCHEMA §7 |
 | NFR-123 | Deleting a Project shall remove its database rows, media and checkpoints within 10 s and report reclaimed space; Outputs are kept unless chosen. | completeness; time | 0 orphan files; ≤ 10 s | int | M / P0 | FR-178 |
 | NFR-124 | Disk usage of the data folder shall be visible per Project and in total. | UI presence | Open dialog and Hardware Monitor | e2e | S / P0 | FR-178, FR-127 |
 

@@ -24,7 +24,7 @@ Read this before any work. Update it after architecture decisions, milestones, f
 | 010 | Performance Profiles are resource policies; fps is a project setting; ratios 16:9, 9:16, 1:1, 4:5, 5:4, 4:3, 3:4, Custom; resolutions 720p/1080p/2K/2160p | accepted |
 | 011 | Prerendered catalogue loops + one live Player | accepted |
 | 012 | English UI with i18n keys; Indonesian UI later; id/en content | accepted |
-| 013 | New monorepo `/home/andre/expertmotion`; port selected modules from `/home/andre/experthinker-studio` | accepted |
+| 013 | New monorepo `/home/andre/expertmotion` (apps/desktop, apps/service, apps/ui, packages/composition-model, packages/catalogue, packages/engine, packages/agents, packages/models, packages/shared); port selected modules from `/home/andre/experthinker-studio` | accepted |
 | 014 | Offline Ed25519 licence bound to Machine Fingerprint; Trial Mode | accepted |
 | 015 | No MCP in MVP; typed in-process Tools | accepted |
 | 016 | Priorities per brief §17: Tools in P1 (voice, captions) and P2 (music, thumbnails) | provisional (reconciliation flagged) |

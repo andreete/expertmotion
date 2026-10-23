@@ -94,7 +94,7 @@ flowchart TB
 | `http` | apps/service | Express app, auth middleware (Service Token, Host/Origin), `openSse`, error mapping to `EM-` codes |
 | `db` | apps/service | migrations, repositories per table, transactions |
 | `composition` | packages/composition-model | Zod schema of the Composition Model, `applyOps(model, ops) → model`, `validate(model) → issues`, `deriveTiming(model, fps)`, version hashing |
-| `catalogue` | packages/engine (data) | Design Catalogue registry: preset id → params schema, defaults, implementation ref |
+| `catalogue` | packages/catalogue (React-free data: preset ids, labels, param Zod schemas, defaults, flags, Compile defaults) | Design Catalogue registry; `packages/engine` holds the React implementations keyed by preset id, so composition-model and agents can depend on the registry without a cycle |
 | `intents` | packages/agents | Intent schema, Target Resolution, Property Classes, Intent Queue reducer, Compile, Rewrite, Locked Keys |
 | `agents` | packages/agents | provider adapters (Vercel AI SDK), Brainstorming/Editor runners, tool registry with permissions, usage recording, context windowing |
 | `ingest` | apps/service | probe (ffprobe), transcode, proxy, thumbnails, waveform, hash; job events |

@@ -409,7 +409,7 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 
 - Files `apps/service/src/db/migrations/NNN_name.sql` applied in a transaction at startup; `schema_migrations` records them. Down migrations are not supported; forward-only with a pre-migration backup copy of the DB file (`expertmotion.db.bak-<version>`).
 - Composition Model `schemaVersion` migrations are code (`migrateModel(v1 → v2)`) run lazily when a version is loaded; a migrated model gets a new version row with `cause = 'system'`.
-- Any schema change requires: ADR note, migration file, Zod update, test fixture update (DEFINITION_OF_DONE.md).
+- Any schema change requires: ADR note, migration file, Zod update, `migrateModel` step with a golden fixture (old JSON → expected new JSON), test fixture update (DEFINITION_OF_DONE.md D-OP, STAGE_MANAGEMENT.md §9).
 
 ## 6. Backup, restore, portability
 

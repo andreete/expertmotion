@@ -16,7 +16,7 @@ This document tells a developer or coding agent how to work in `/home/andre/expe
 | Item | Decision | Why |
 |---|---|---|
 | Node | **22 LTS** (`.nvmrc` = `22`; `engines.node: ">=22.13 <23"`) | Remotion requires Node 20.19+/22.13+/24+ (ASSESSMENT.md §4); Electron bundles its own Node for the Shell, but `apps/service` runs as a plain Node child process, so one version is pinned for both development and the bundled runtime. |
-| Package manager | **npm workspaces** (`package-lock.json` committed, `npm ci` in verification) | The predecessor (Experthinker Studio) uses npm workspaces and its ported modules carry npm-shaped scripts; electron-builder and Remotion's Electron template document npm; one fewer global tool for the Operator and for CI; pnpm's symlinked `node_modules` complicates electron-builder's dependency packing and native module rebuilds. pnpm's disk savings do not matter at this repository size. Revisit (ADR) only if install time or hoisting bugs become a measured problem. |
+| Package manager | **npm workspaces** (`package-lock.json` committed, `npm ci` in verification) | The predecessor repository (`/home/andre/experthinker-studio`) uses npm workspaces and its ported modules carry npm-shaped scripts; electron-builder and Remotion's Electron template document npm; one fewer global tool for the Operator and for CI; pnpm's symlinked `node_modules` complicates electron-builder's dependency packing and native module rebuilds. pnpm's disk savings do not matter at this repository size. Revisit (ADR) only if install time or hoisting bugs become a measured problem. |
 | TypeScript | 5.x, `strict: true`, `noUncheckedIndexedAccess: true`, `exactOptionalPropertyTypes: true`, project references per workspace | — |
 | Test runners | Vitest (unit, integration), Playwright (e2e against Editor + Service), custom `golden-frames` script (renderStill + pixelmatch) | — |
 | Lint / format | ESLint (typescript-eslint strict, `no-explicit-any`, import rules), Prettier | — |
@@ -59,7 +59,7 @@ Dependency direction (enforced by ESLint `import/no-restricted-paths`): `shared`
 | `test` | Vitest unit + integration (fake Engine, fake provider) | both |
 | `test:e2e` | Playwright against `dev` (browser mode) or against the Electron build (`--electron`) | browser mode on Linux through an SSH tunnel; Electron mode on Windows |
 | `test:golden` | `renderStill` fixtures × 7 ratios, pixel diff ≤ 1 % (`--update` to re-baseline, review required) | Linux at reduced resolution and concurrency 1 under the cap; Windows full |
-| `eval:agents` | golden scenarios on the fake provider; `--live --model <id>` for live runs with the test key | both (live needs network and a key) |
+| `eval:agents` | golden scenarios on the fake provider; `--live --model <id>` for live runs with the test key (GOLDEN_SCENARIOS.md §4.3 calls the live variant `golden:live`; one name is fixed in the consistency pass) | both (live needs network and a key) |
 | `build:engine` | `bundle()` the Remotion project to `packages/engine/dist/bundle/` and build catalogue loops to `packages/engine/dist/catalogue/` (≤ 40 MB) | Windows (loops); bundle only also works on Linux |
 | `build:service` | esbuild/tsup bundle of the Service for packaging | both |
 | `build:ui` | Vite production build | both |
@@ -78,7 +78,7 @@ Script names are contracts: `AGENTS.md`, hooks and the gates refer to them; rena
 | Tests under the cap | `systemd-run --user --scope -p MemoryHigh=900M -p MemoryMax=1200M npm run test` (the `verify.sh` wrapper does this automatically when it detects `systemd-run` and a user session) |
 | Measure | before and after any render or heavy test: `cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice/<unit>.scope/memory.current` (the `dev-capped.sh` prints the exact path); record the peak in the `process.md` entry |
 | Render limits | `concurrency: 1`; one Render Job at a time; ≤ 720p; ≤ 5 s; `imageFormat: jpeg`; never two Chrome Headless Shell instances; no in-memory caches of bundles or outputs beyond the single prebuilt bundle path |
-| Ports | **never 3000 or 4000** (other tenant); the predecessor Studio uses 4100 and 5173; Expertmotion development uses `EXPERTMOTION_PORT=4110` (Service) and `EXPERTMOTION_UI_PORT=4120` (Vite); anything else in 4100–4199 only. Production Shell picks a free port in 47600–47699 (ARCHITECTURE.md §5), never used in development on this server. |
+| Ports | **never 3000 or 4000** (other tenant); the predecessor repository uses 4100 and 5173; Expertmotion development uses `EXPERTMOTION_PORT=4110` (Service) and `EXPERTMOTION_UI_PORT=4120` (Vite); anything else in 4100–4199 only. Production Shell picks a free port in 47600–47699 (ARCHITECTURE.md §5), never used in development on this server. |
 | Electron | cannot run or build here (no display, insufficient RAM): `apps/desktop` is type-checked only; its tests run on Windows |
 | Browser access | `ssh -L 4120:127.0.0.1:4120 -L 4110:127.0.0.1:4110 <server>` then open `http://127.0.0.1:4120`; the Service's Host/Origin allow-list includes `127.0.0.1:4120` in development only |
 | Fixtures | media fixtures ≤ 2 s, ≤ 720p, ≤ 2 MB each, committed under `fixtures/media/` with licence notes; large fixtures are generated by FFmpeg at test time (colour bars, tone) |

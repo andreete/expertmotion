@@ -57,7 +57,7 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Status**: accepted
 - **Problem**: localhost binding alone is not sufficient protection (§12); other local processes and web pages can reach `127.0.0.1`.
 - **Alternatives**: Electron IPC only (no HTTP); HTTP without auth; HTTP with per-launch token.
-- **Selected**: Express on `127.0.0.1` with a random per-launch Service Token injected by the Desktop Shell, Host/Origin allow-list, token in a header (no cookies, so no CSRF), path-restricted file access, JSON size limits. SSE for progress. Kept as HTTP (not IPC-only) so the Editor can run in a browser during development.
+- **Selected**: Express on `127.0.0.1` with a random per-launch Service Token injected by the Desktop Shell, Host/Origin allow-list, token in a header (no cookies, so no CSRF), path-restricted file access, JSON size limits. SSE for progress. Kept as HTTP (not IPC-only) so the Editor can run in a browser during development. Two documented exceptions to "token in a header": the `EventSource` connection carries the Service Token in the query string (browsers cannot set headers on SSE), and media URLs for Chrome Headless Shell and the Player carry a per-session media grant token in the path (`/media/<grant>/<assetId>/…`, SEC-010); both are loopback-only and read-only.
 - **Trade-offs**: token plumbing in dev mode; one open port.
 - **Consequences**: `API_SPECIFICATION.md` documents the header; `SECURITY.md` and `VULNERABILITY_CHECKLIST.md` test it.
 
@@ -123,7 +123,7 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 
 - **Status**: accepted (Operator decision 2026-10-24)
 - **Problem**: Overhaul in place would break the running Studio; starting from zero wastes verified code.
-- **Selected**: new repo with `apps/desktop`, `apps/service`, `apps/ui`, `packages/composition-model`, `packages/engine`, `packages/agents`, `packages/models`, `packages/shared`; port render queue, bundle manager (prebuilt path), browser warm-up, stills cache, SSE helper, formats/safe areas, layout unit, `fitText`, Player wrapper, SSE store, UI kit, SchemaForm (inspector fallback). Drop brand, evidence-first rules, six templates, MCP tools.
+- **Selected**: new repo with `apps/desktop`, `apps/service`, `apps/ui`, `packages/composition-model`, `packages/catalogue` (React-free preset registry, added to break the engine ↔ model ↔ agents cycle), `packages/engine`, `packages/agents`, `packages/models`, `packages/shared`; port render queue, bundle manager (prebuilt path), browser warm-up, stills cache, SSE helper, formats/safe areas, layout unit, `fitText`, Player wrapper, SSE store, UI kit, SchemaForm (inspector fallback). Drop brand, evidence-first rules, six templates, MCP tools.
 - **Consequences**: `BLUEPRINT.md` has the file-by-file port list.
 
 ## ADR-014 Offline Ed25519 licence bound to a Machine Fingerprint; Trial Mode
