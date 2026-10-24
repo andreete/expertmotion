@@ -4,12 +4,29 @@ Append an entry after every meaningful work unit. Newest entry first. Each entry
 
 ## Current state (keep this block up to date)
 
-- **Current stage**: Stage 2 (technical proof of concept) **started 2026-10-24** on the Operator's instruction; Linux-runnable proofs done (POC-010 pass at curl level, POC-005 DB half pass, POC-004 offline half pass). The Windows proofs (POC-001/002/003/006/007/009, 008 performance, 005 steps 3–4) are **not run**: they need a Windows machine or CI (`poc/WINDOWS_RUNBOOK.md`).
-- **Current objective**: finish Stage 2 on Windows; run POC-004 live with a provider key; run POC-010 with a real browser. Stage 2 exit criteria: `docs/STAGE_MANAGEMENT.md`, `docs/POC_PLAN.md` §1.
-- **Blockers**: (1) Windows machine/CI access for the Electron proofs; (2) an OpenRouter test key (kept outside the repo) for POC-004 live; (3) a laptop browser for the POC-010 attacker page. Provisional ADRs 008/009/016 are treated as accepted until the Operator says otherwise (AGENTS.md rule 12). Remotion licence confirmation (BRD-010) is a launch blocker, not a Stage 2 blocker.
-- **Next actionable tasks**: see Entry 3 below.
+- **Current stage**: Stage 3 (foundation, P0 code) **in progress since 2026-10-24**, run in parallel with the Windows-only Stage 2 proofs, which the Operator will test manually later ("pengetesan di windows secara manual di belakang"). All Linux-runnable proofs passed (Entry 3, plus POC-010 browser half and POC-002 Linux parity).
+- **Current objective**: finish every P0 module in code (Local Service modules, Editor UI, Desktop Shell, Model Manager, licensing), integrate them, keep all tests green on Linux; hand the Windows checks to the Operator (`poc/WINDOWS_RUNBOOK.md`).
+- **Blockers**: Windows machine for Electron/packaging proofs; OpenRouter test key for live agent runs; Operator-pinned model hashes (nothing is installable until pinned, SEC-074); production licence public key (`keygen --kid A1 --seal`); Remotion licence answer (BRD-010); legal review of the compositor FFmpeg (RISK-030).
+- **Next actionable tasks**: see Entry 4 below.
 
 ---
+
+## 2026-10-24 — Entry 4: Stage 3 foundation code (packages, service skeleton, licence, desktop, models)
+
+- **Stage**: 3 (foundation), on the Operator's instruction to code everything now and test on Windows later.
+- **Completed** (commits on `main`):
+  - `packages/shared`, `packages/catalogue` (112 presets as data, Compile table), `packages/composition-model` (schema v1, 41 ops, CM-001…011, timing, diff, hash, migration), `packages/engine` (`ExpertmotionTimeline`, 19 transitions, effects, captions, ducking, watermark, pixel table, bundled fonts, `build:bundle`), `packages/agents` (intents, Target Resolution, Intent Queue, Compile, `validatePlan`, Rewrite envelope, OpenRouter via AI SDK 6, Editor/Brainstorm runners).
+  - `apps/service` skeleton: config (dev env / parentPort bootstrap), encrypted DB with migrations bundled as code (`db/migrations/index.ts`; ranges 010–019 S1, 020–029 S2, 030–039 S3), recovery ladder, Host/Origin + Bearer guards, `route()` helper with Zod → EM-9002, SSE bus with replay, media grants, egress allow-list, settings store, redacting logger, module system (`src/modules/*`, static list), cross-module `ctx.hooks`, `boot.ts`, `main.ts`, esbuild bundle script.
+  - Licence (`apps/service/src/license`, `tools/license-cli`): Ed25519 offline keys, 2-of-3 Machine Fingerprint, revocation list with epochs, clock check, Trial Mode; CLI enforces one key per computer (Machine Code required, rebind revokes the old key, at most 3 rebinds per 12 months). Notes in LICENSE_OPERATIONS "Implementation notes".
+  - `packages/models`: registry, pinned resumable downloads, install/verify, engine adapters (whisper.cpp, sherpa-onnx, stable-diffusion.cpp, ACE-Step), SRT/VTT parsing and caption pages (equal to `@remotion/captions` on 7 cases), job runner.
+  - `apps/desktop`: Electron main (single instance, safeStorage keyring, utilityProcess supervisor with backoff, app:// with CSP, deny-all permissions, IPC sender checks, updater policy honouring Private Mode), frozen preload bridge, integrity manifest, hardening pipeline (`scripts/harden.mjs`: bytenode main + service on Windows, obfuscation of UI and engine bundles, encrypted prompts, signed manifest), electron-builder NSIS config with maximum compression and fuses.
+  - Golden scenarios: `packages/agents/test/golden` (harness (a) GS-01…07, 13, 16, 19; package-level replays GS-08, 09, 10, 17, 18, 20).
+- **Verification (actual results, all inside `scripts/run-capped.sh`)**: service skeleton 14/14; licence 62/62 + CLI 15/15; models 85/85; desktop 72/72; golden 21/21; typecheck clean for packages, service and desktop.
+- **Findings and doc changes**: RISK-030 + ADR-019 finding (compositor FFmpeg contains libx264 and libfdk_aac); `license.status` gains `updates-expired`; LOCAL_AI_MODELS used EM-600x for model errors (clash with storage codes) → remapped to EM-7xxx, new EM-7109 "not enough memory"; Hugging Face redirect host `cas-bridge.xethub.hf.co` added to SEC-071; GS-13: 2K/4K on T0 are blocked in the Editor, a programmatic pick is stored with CM-010 and export offers 1080p.
+- **Failed approaches / lessons**: migrations read from disk break once the service is bundled into one file, so they are TypeScript modules; parallel agents get disjoint files, a pre-allocated migration file each, and hooks in `context.ts` written before they start.
+- **In progress (parallel agents)**: Editor UI (`apps/ui`); service modules S1 (projects, composition, checkpoints, backup, intents, plans), S2 (assets, media, renders, catalogue, generators, models), S3 (providers, conversations, usage, settings, hardware, licence routes, diagnostics, events).
+- **Next tasks**: integrate the agent results; run the whole suite; build the service bundle and a packaging staging script (service `dist/service.cjs` → `apps/desktop/dist/service/`, UI build → `apps/desktop/dist/ui/`); run a real capped render through the service API on Linux; then the Windows runbook.
+- **How to continue**: read `AGENTS.md`, `memory.md`, this entry, `docs/INDEX.md`. Every heavy command through `bash scripts/run-capped.sh`.
 
 ## 2026-10-24 — Entry 3: Stage 2 started; Linux-side proofs executed
 

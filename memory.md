@@ -32,7 +32,7 @@ Read this before any work. Update it after architecture decisions, milestones, f
 
 Operator decisions given in chat on 2026-10-24: Windows first; local open-source models for generative Tools; new repo; offline signed licence key. The Operator intends to hand execution of later stages to other models (e.g. Opus); documents must be self-sufficient.
 
-- Operator requirements 2026-10-24: no manual installs; maximum compression; maximum reverse-engineering cost (ADR-021); one Licence Key = one computer (ADR-022). Honest boundary kept: not impossible for the device owner.
+- Operator requirements 2026-10-24: no manual installs; maximum compression; maximum reverse-engineering cost (ADR-021); one Licence Key = one computer (ADR-022); provider calls in JSON mode for every model in the MVP (ADR-023). Honest boundary kept: not impossible for the device owner.
 
 ## 3. Technology stack (pin exact versions in `docs/TRD.md`)
 
