@@ -132,7 +132,7 @@ Applied when `target.kind` is `selection` or `playhead`, or when a category need
 | audio (bed, ducking, fade) | selected Audio Layer | project audio bed | each selected Audio Layer |
 | shape | — | new Shape at playhead, centred, default size | — |
 | easing | selected Clip/Text motion | Theme default easing | each selected |
-| layout (ratio, resolution) | — | **project** Output Profile | — |
+| layout (ratio, resolution, palette, font pair) | — | **project** Output Profile or Theme (`op:output.*`, `op:theme.set`); palette and font-pair Design Picks use category `layout` because they change the whole project look | — |
 | output (profile) | — | project | — |
 | asset (insert, trim) | the Asset/Clip given explicitly | reject | explicit list |
 | generate (voice, music, thumbnail, captions, hashtags) | — | project; result inserted at playhead or as new layer | — |

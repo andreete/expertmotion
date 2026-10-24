@@ -1,0 +1,32 @@
+{
+  "name": "@expertmotion/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@expertmotion/shared": "0.0.0",
+    "@expertmotion/catalogue": "0.0.0",
+    "@expertmotion/composition-model": "0.0.0",
+    "@expertmotion/engine": "0.0.0",
+    "@remotion/player": "4.0.535",
+    "lucide-react": "1.61.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.535",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/react": "16.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "jsdom": "26.1.0",
+    "tailwindcss": "4.3.3",
+    "vite": "6.4.4"
+  }
+}

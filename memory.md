@@ -32,6 +32,8 @@ Read this before any work. Update it after architecture decisions, milestones, f
 
 Operator decisions given in chat on 2026-10-24: Windows first; local open-source models for generative Tools; new repo; offline signed licence key. The Operator intends to hand execution of later stages to other models (e.g. Opus); documents must be self-sufficient.
 
+- Operator requirements 2026-10-24: no manual installs; maximum compression; maximum reverse-engineering cost (ADR-021); one Licence Key = one computer (ADR-022). Honest boundary kept: not impossible for the device owner.
+
 ## 3. Technology stack (pin exact versions in `docs/TRD.md`)
 
 Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+ for `@remotion/effects`, `@remotion/media`) · React 19 · Vite · Tailwind v4 · Zod 4 · Express · `better-sqlite3-multiple-ciphers` · Vercel AI SDK v6 (+ `@openrouter/ai-sdk-provider`) · `systeminformation` · Engine binaries: whisper.cpp, sherpa-onnx (Piper voices), stable-diffusion.cpp, optional embedded Python (ACE-Step).

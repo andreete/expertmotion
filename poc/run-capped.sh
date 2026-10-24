@@ -4,6 +4,8 @@
 MAX="${EM_MEMORY_MAX:-1200M}"; HIGH="${EM_MEMORY_HIGH:-900M}"; SWAP="${EM_SWAP_MAX:-256M}"; HEAP="${EM_NODE_HEAP:-512}"
 BASE_OPTS="$(printf '%s' "${NODE_OPTIONS:-}" | sed -E 's/--max-old-space-size=[0-9]+//g')"
 export NODE_OPTIONS="$(printf '%s --max-old-space-size=%s' "${BASE_OPTS}" "${HEAP}" | sed -E 's/^ +//')"
+# Serialise heavy work across parallel agents (one capped job at a time on the 1.9 GB server).
+if [ -z "${EM_LOCK_HELD:-}" ] && command -v flock >/dev/null 2>&1; then export EM_LOCK_HELD=1; exec flock /tmp/expertmotion-heavy.lock "$0" "$@"; fi
 if command -v systemd-run >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
   exec systemd-run --user --scope --quiet -p MemoryMax="$MAX" -p MemoryHigh="$HIGH" -p MemorySwapMax="$SWAP" "$@"
 else

@@ -9,7 +9,8 @@
   },
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "tools/*"
   ],
   "scripts": {
     "typecheck": "tsc -b packages/shared packages/catalogue packages/composition-model packages/agents",

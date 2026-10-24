@@ -177,3 +177,23 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Problem**: writing `packages/catalogue` Compile rules showed that the P0 preset `preset:audio.fade-in-out` had no operation in AI_WORKFLOW.md §5 that could apply it (only `op:clip.setVolume` carries fades, and only for Clips).
 - **Selected**: add `op:audio.setFades {fadeInMs?, fadeOutMs?}` (target `audio`, scalar per field, propertyKeys `audio:<id>.fadeInMs` / `audio:<id>.fadeOutMs`). The P2 preset `preset:audio.visualizer-bars` gets no Compile rule until its P2 operation is designed (no mapping onto `op:shape.add`, which only accepts shape presets).
 - **Consequences**: AI_WORKFLOW.md §5 row added; `packages/composition-model` implements it with tests; the closed vocabulary now has 41 operations.
+
+## ADR-021 Maximum protection pipeline (Operator requirement 2026-10-24)
+
+- **Status**: accepted
+- **Problem**: the Operator requires the shipped executable to be as hard as realistically possible to decompile or reverse-engineer (by people, LLM agents or brute force), and compressed so the app stays light.
+- **Selected** (all in `apps/desktop/scripts/harden.mjs` and the electron-builder flow): (1) V8 bytecode (bytenode, compiled with the pinned Electron) for the whole main-process bundle and the whole Local Service bundle; (2) heavy javascript-obfuscator pass (RC4 string arrays, control-flow flattening, dead-code injection, self-defending) on code that must stay JavaScript: the Editor bundle and the Engine bundle that Chrome executes; (3) prompt/template assets AES-256-GCM encrypted, key split between bytecode and build constant, decrypted in memory only; (4) signed integrity manifest (Ed25519) of service, engine bundle and binaries checked at startup (EM-8002 on mismatch); (5) ASAR integrity + fuses, no source maps, signed installer and updates; (6) optional Node-API C++ addon (MSVC) for licence verification and key derivation; (7) `compression: maximum` (NSIS solid LZMA, ASAR, pruned dev dependencies).
+- **Trade-offs**: bytecode is tied to the Electron version; obfuscation slows the Editor and Engine somewhat (measured in POC-006/POC-007); builds need the Windows machine.
+- **Honest boundary** (unchanged from ADR-007): these layers make extraction slow and expensive; code executed on the Creator's computer can still be traced by a determined device owner. No duration ("years") is promised.
+
+## ADR-022 One Licence Key, one computer (Operator requirement 2026-10-24)
+
+- **Status**: accepted (refines ADR-014)
+- **Selected**: every key is issued for exactly one Machine Code (no unbound or floating keys); verification fails on another computer (EM-5003; the 2-of-3 tolerance only absorbs hardware drift on the same machine); moving to a new computer is an Operator re-bind that issues a new key and revokes the old one via the signed revocation list (EM-5004); at most 3 re-binds per 12 months, enforced by the issuing CLI.
+- **Boundary**: offline verification cannot stop a patched binary (ADR-007); the revocation list reaches an offline machine only with an update.
+
+## ADR-023 Provider calls use JSON-mode prompting in the MVP
+
+- **Status**: accepted (2026-10-24, Stage 2 implementation)
+- **Problem**: AGENT_DESIGN prefers tool calling with `composition.validateOps` for capable models; not every OpenRouter model supports tools, and the runtime validates every plan deterministically anyway.
+- **Selected**: the MVP sends the Rewrite envelope and asks for the EditPlan JSON (SYSTEM_PROMPT P-2) for every model; the runtime performs the dry-run that `composition.validateOps` would have done and re-prompts with the issues (max 2 corrections). Tool calling becomes an optimisation for capable models in P1. Provider: Vercel AI SDK 6.0.315 + `@openrouter/ai-sdk-provider` 2.10.0 (latest provider 3.x needs AI SDK 7; upgrade is a later, deliberate step).

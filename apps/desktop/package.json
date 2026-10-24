@@ -1,0 +1,17 @@
+{
+  "name": "@expertmotion/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/main.cjs",
+  "dependencies": {
+    "electron-updater": "6.8.11"
+  },
+  "devDependencies": {
+    "@electron/fuses": "2.1.3",
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0",
+    "esbuild": "0.25.12",
+    "javascript-obfuscator": "5.9.0",
+    "bytenode": "2.0.0"
+  }
+}
