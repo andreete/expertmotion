@@ -89,4 +89,4 @@ This index is the map of the documentation. Status values: `planned`, `draft`, `
 | Product name | "Remason" appears only where the rule is stated | PASS (`remason-only-in-rules`) |
 | Headers | every document starts with the header table | PASS (`header-tables`) |
 
-Counts (2026-10-24): PRD 21 P0 + 8 P1 + 7 P2 · BRD 27 · FR 178 · NFR 110 · UX 34 · AI 20 · SEC 89 · QA 222 · EM 159 · RISK 29 · ASM 21 · POC 10 · GS 20 · ADR 18 · presets 112 · ops 40 · routes 97 · SSE events 23.
+Counts (2026-10-24): PRD 21 P0 + 8 P1 + 7 P2 · BRD 27 · FR 178 · NFR 110 · UX 34 · AI 20 · SEC 89 · QA 222 · EM 159 · RISK 30 · ASM 21 · POC 10 · GS 20 · ADR 18 · presets 112 · ops 40 · routes 97 · SSE events 23.
