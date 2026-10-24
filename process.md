@@ -4,11 +4,35 @@ Append an entry after every meaningful work unit. Newest entry first. Each entry
 
 ## Current state (keep this block up to date)
 
-- **Current stage**: Stage 3 (foundation, P0 code) **code-complete on Linux on 2026-10-24**; the Windows-only proofs and the installer build are the Operator's next step ("pengetesan di windows secara manual di belakang").
+- **Current stage**: Stage 3 (foundation, P0 code). Core flow works end to end on Linux, but the FR audit (Entry 7) found 53/178 FRs fully done, 114 partial, 9 missing; the Windows-only proofs and the installer build are the Operator's next step ("pengetesan di windows secara manual di belakang").
 - **Verified here**: `bash scripts/verify.sh` → typecheck of all workspaces clean, **610 tests passed** (1 opt-in render smoke skipped by default, run separately and passing), docs-check green; `poc/e2e/run.mjs` → **18/18** (real Editor in headless Chrome against the real service: import, ingest, Insert, Fade pick via Compile, playback through the cut, 720p export).
 - **Blockers (all need the Operator)**: Windows machine for the installer and Electron runtime checks (`poc/WINDOWS_RUNBOOK.md` §6); a provider key for live agent runs; pinned model hashes (`packages/models` registry, SEC-074) before any model can install; the production licence public key (`tools/license-cli keygen --kid A1 --seal`, paste into `apps/service/src/license/keys.ts`); the real storefront host (`EXTERNAL_HOSTS`, `VITE_EM_STORE_URL`); Remotion licence answer (BRD-010); legal review of the compositor FFmpeg (RISK-030); OV code-signing certificate.
 - **Windows test build**: portable ZIP produced on this server (Entry 6); not yet run on Windows.
 - **Next actionable tasks**: see Entry 6, then Entry 5.
+
+---
+
+## 2026-10-24 — Entry 7: FR gap audit (read-only, 4 parallel auditors)
+
+FRD has FR-001…FR-178 (not 204; docs-check counts other "FR-" mentions). Static code reading against each row:
+
+| Range | DONE | PARTIAL | MISSING | Blocked / Windows-only |
+|---|---|---|---|---|
+| FR-001…054 (lifecycle, File, Home, Catalogue, Assets) | 13 | 39 | 2 | (001/002 also need Windows) |
+| FR-055…108 (Stage, Agent Panel, Output Settings, Tools) | 19 | 35 | 1 (P1) | 0 |
+| FR-109…155 (Providers, Model Manager, Hardware, Licence, Export, Help) | 8 | 31 | 5 | 3 |
+| FR-156…178 (Private Mode, persistence) | 13 | 9 | 1 | 0 |
+| **Total 178** | **53** | **114** | **9** | **3** |
+
+The earlier "P0 code-complete" claim was wrong: the core flow works end to end, but most FRs miss details from their acceptance criteria.
+
+**Real bugs (fix first)**: FR-013 Save As creates a blank project; FR-088 Auto ratio can never be re-enabled (UI reads model.settings, service writes settings_json); FR-015 duration policy never saved; FR-029/030 Insert Image/Video only import; FR-116 Providers "Test" is fake; FR-118 Validate saves the connection; FR-148 Documentation link is rejected by the https-only allow-list; FR-174 no Save/Don't save/Cancel prompt; FR-002 shell ignores EM-8304 on close during render; FR-128 low-disk event never emitted; FR-152 24 h update check never scheduled.
+
+**Missing P0**: FR-048 missing-media state/Locate/hash check; FR-054 asset filter by search; FR-116 provider test probe; FR-121/122/126 model card, filters, disk footer; FR-130 workload list with Cancel; FR-174 unsaved-changes prompt. Also FR-075 no streaming (`agent.run.delta` never emitted), Brainstorming Agent has no read-only tools. SEC-072 signed model manifest missing.
+
+**Blocked on Operator**: FR-124 model hashes, FR-131 licence public key, FR-152 feed URL/publisher.
+
+Full per-row tables: the four audit reports summarised here (re-run the audit with Explore agents per FR range if needed).
 
 ---
 
