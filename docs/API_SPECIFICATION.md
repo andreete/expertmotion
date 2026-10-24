@@ -707,7 +707,7 @@ data: {"seq":419,"at":"2026-10-24T03:05:12.410Z","projectId":"01JAZK…","jobId"
 |---|---|---|
 | `intent.updated` | `{ queue: IntentQueueDto, changed: Id[], reason: 'created'|'superseded'|'restored'|'removed'|'cleared'|'compiled'|'executed'|'rejected' }` | any change to the Intent Queue (R-060…R-064, R-082, Insert, Execute) |
 | `plan.ready` | `{ plan: PlanDto (without ops), runId?: Id }` | a plan reached `valid` (compile or agent) or changed status to `executing|executed` |
-| `plan.invalid` | `{ planId, status: 'invalid'|'stale'|'failed'|'cancelled', code: 'EM-2301'|'EM-2302'|'EM-2303'|'EM-2304'|'EM-4301'|'EM-4303', validation: Issue[], touchesLockedKeys: string[] }` | validation failed, base moved, run failed or cancelled |
+| `plan.invalid` | `{ planId, status: 'invalid'|'stale'|'failed'|'cancelled', code: 'EM-2301'|'EM-2302'|'EM-2303'|'EM-2304'|'EM-4301'|'EM-4303'|'EM-4304' or the provider code that ended the run (EM-41xx, EM-4201, EM-8202), validation: Issue[], touchesLockedKeys: string[] }` | validation failed, base moved, run failed or cancelled |
 | `composition.updated` | `{ version: VersionDto (no model), previousHash, diff: ExecutionResult.diff, cause, canUndo, canRedo, durationMs, issues: Issue[] }` | a new head version exists (Insert, Compile, Execute, undo, redo, restore, settings, asset removal) |
 | `render.queued` | `{ job: RenderJobDto }` | R-111 accepted |
 | `render.progress` | `{ jobId, progress, renderedFrames, totalFrames, etaMs: number|null, stage: 'preparing'|'rendering'|'encoding'|'validating' }` | ≤ 4× per second per job (ported 250 ms throttle); `etaMs` null until ≥ 5 % and 3 samples |

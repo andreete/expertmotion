@@ -416,6 +416,7 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 | Version | Name | Adds |
 |---|---|---|
 | 1 | init | the §3 DDL |
+| 10 | s1_versions_plans | replaces the unique index on `composition_versions(project_id, hash)` with a plain index (undo/redo append a row that copies an earlier model, so hashes repeat); `edit_plans` gains `intent_ids_json`, `message`, `result_json`, `idempotency_key`. Note: `projects.head_version_id` is not declared as a foreign key in §3 (circular reference); the service keeps it consistent in the commit transaction |
 | 30 | s3_budgets_defaults_handoffs | `project_budgets(project_id, limit_usd, updated_at)` (per-project AI cap per calendar month, NULL or 0 = no limit, FR-117); `provider_defaults(default_connection_id)` (R-097); `brainstorm_handoffs(id, project_id, message_id, intents_json, status pending/enqueued, created_at)` (R-082 payloads until the intents module enqueues them); `agent_runs.plan_id`; indexes on runs and `usage_records` |
 
 Later migrations append rows here.
