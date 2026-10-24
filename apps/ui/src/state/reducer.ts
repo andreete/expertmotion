@@ -67,6 +67,8 @@ export interface AppState {
   checkpointBadge: boolean;
   update: { version: string; downloaded: boolean } | null;
   backupJob: { jobId: string; percent: number; done: boolean; path?: string; mode: 'backup' | 'restore'; projectId?: string } | null;
+  /** Sample projects whose background preparation settled (`service.notice {kind:'sample', ready}`, R-025; ready:false = partial). */
+  sampleReady: string[];
 }
 
 export const initialState: AppState = {
@@ -75,7 +77,7 @@ export const initialState: AppState = {
   messages: { brainstorm: [], editor: [] }, streaming: { brainstorm: null, editor: null }, contextUsage: { brainstorm: null, editor: null },
   agentError: { brainstorm: null, editor: null }, connections: [], assignments: null, capabilities: {}, models: [], toasts: [], live: null,
   libMode: 'design', selection: [], playheadMs: 0, previewPresetId: null, screen: null, pulse: null, performanceProfile: 'standard', assetSelection: [],
-  editorDraft: null, checkpointBadge: false, backupJob: null, update: null,
+  editorDraft: null, checkpointBadge: false, backupJob: null, update: null, sampleReady: [],
 };
 
 export type Action =
@@ -200,6 +202,8 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     }
     case 'service.notice': {
       const d = ev.data;
+      // R-025: ready:true, or ready:false when a bundled file failed to ingest; either way the sample is settled and the tour continues on what is there.
+      if (d.kind === 'sample' && typeof d['ready'] === 'boolean' && typeof d.projectId === 'string') return state.sampleReady.includes(d.projectId) ? state : { ...state, sampleReady: [...state.sampleReady, d.projectId] };
       if (d.kind === 'update') return { ...state, update: { version: typeof d['version'] === 'string' ? d['version'] : '', downloaded: Boolean(d['downloaded']) } };
       if ((d.kind === 'backup' || d.kind === 'restore') && typeof d.jobId === 'string' && state.backupJob?.jobId === d.jobId) {
         return { ...state, backupJob: { ...state.backupJob, percent: d.percent ?? state.backupJob.percent, done: Boolean(d.done), ...(typeof d.path === 'string' ? { path: d.path } : {}), ...(typeof d.projectId === 'string' ? { projectId: d.projectId } : {}) } };

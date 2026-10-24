@@ -18,11 +18,12 @@ if (typeof window !== 'undefined') {
 import { App } from '../src/App.js';
 import { StoreProvider } from '../src/state/store.js';
 import { createMockRuntime, type Runtime } from '../src/state/runtime.js';
+import type { Prefs } from '../src/prefs.js';
 
-export async function renderEditor(seed: 'sample' | 'empty' = 'sample'): Promise<RenderResult & { runtime: Runtime }> {
-  try { localStorage.clear(); sessionStorage.clear(); } catch { /* ignore */ }
+export async function renderEditor(seed: 'sample' | 'empty' = 'sample', opts: { prefs?: Partial<Prefs>; keepStorage?: boolean } = {}): Promise<RenderResult & { runtime: Runtime }> {
+  if (!opts.keepStorage) { try { localStorage.clear(); sessionStorage.clear(); } catch { /* ignore */ } }
   const runtime = createMockRuntime({ seed, delays: false });
-  const r = render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+  const r = render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, ...(opts.prefs ?? {}) }}><App /></StoreProvider>);
   await waitFor(() => { if (!document.querySelector('[data-el="stage.timeline"]') || !document.querySelector('[data-el="hdr.title"]')?.textContent?.trim()) throw new Error('not booted'); });
   await waitFor(() => { if (!document.querySelector('[data-el="agent.output.ratio.9x16"][aria-checked]')) throw new Error('no project'); });
   return { ...r, runtime };

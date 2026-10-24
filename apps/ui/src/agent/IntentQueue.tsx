@@ -1,7 +1,7 @@
 // Intent Queue (agent.editor.intentqueue.*, CMP-15, UI_UX_SPECIFICATION.md §11.3): receipts for every pick; superseded
 // items stay visible struck through with Restore; parent/child expansion ("Fade → all 3 cuts"); IX-17 restore/remove/clear.
-import type { ReactNode } from 'react';
-import { Bookmark, Bot, Check, CheckCircle2, History, Lightbulb, MessageCircle, OctagonAlert, X } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { Bookmark, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, History, Lightbulb, MessageCircle, OctagonAlert, X } from 'lucide-react';
 import type { CompositionModelT } from '@expertmotion/composition-model';
 import { getPreset } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
@@ -29,12 +29,37 @@ export function targetText(i: EditIntent, model: CompositionModelT | undefined, 
   return t(`ui.common.target.${one.kind}`, { n: (one.index ?? 0) + 1 });
 }
 
+/** One row of the queue: a single top-level item, or the executed items of an older version collapsed under "Applied in v5 (3)". */
+export type QueueRow = { kind: 'item'; intent: EditIntent } | { kind: 'group'; version: number; items: EditIntent[] };
+
+/**
+ * Grouping (UI_UX_SPECIFICATION.md §11.3): top-level items executed in the same version collapse under one row. The newest
+ * applied version stays expanded as individual rows (it is what the Creator just did); older versions group. Items with a
+ * superseded or rejected child stay ungrouped so their Restore stays visible.
+ */
+export function groupQueue(top: EditIntent[], all: EditIntent[]): QueueRow[] {
+  const groupable = (i: EditIntent) => i.status === 'executed' && typeof i.appliedVersion === 'number' && all.every((c) => c.parentIntentId !== i.id || c.status === 'executed');
+  const versions = top.filter(groupable).map((i) => i.appliedVersion!);
+  const newest = versions.length ? Math.max(...versions) : -1;
+  const rows: QueueRow[] = [];
+  const groups = new Map<number, { kind: 'group'; version: number; items: EditIntent[] }>();
+  for (const i of top) {
+    if (!groupable(i) || i.appliedVersion === newest) { rows.push({ kind: 'item', intent: i }); continue; }
+    const v = i.appliedVersion!;
+    const g = groups.get(v);
+    if (g) g.items.push(i); else { const ng = { kind: 'group' as const, version: v, items: [i] }; groups.set(v, ng); rows.push(ng); }
+  }
+  return rows;
+}
+
 export function IntentQueue() {
   const { state, actions, t } = useStore();
   const all = visibleQueue(state).filter((i) => i.source !== 'system');
   const top = all.filter((i) => !i.parentIntentId);
   const queuedCount = top.filter((i) => i.status === 'queued' || i.status === 'superseded' || i.status === 'rejected').length;
   const needsAgent = all.some((i) => i.status === 'queued' && (i.needsInterpretation || !i.parentIntentId));
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const rows = groupQueue(top, all);
   const running = Boolean(state.streaming.editor) || state.plan?.status === 'draft' || state.plan?.status === 'executing';
   return (
     <div className="flex max-h-[45%] min-h-[5.5rem] shrink-0 flex-col border-b border-em-line">
@@ -47,7 +72,25 @@ export function IntentQueue() {
       </div>
       <ul data-el="agent.editor.intentqueue" aria-label={t('a11y.agent.editor.intentqueue', { count: top.length })} className="flex min-h-0 flex-col gap-1 overflow-y-auto px-3 pb-2">
         {top.length === 0 && <li className="py-2 text-center text-[12px] text-em-muted">{t('ui.agent.editor.intentqueue.empty')}</li>}
-        {top.map((i) => {
+        {rows.map((row) => {
+          if (row.kind === 'group') {
+            const expanded = open.has(row.version);
+            const gid = `em-q-group-${row.version}`;
+            return (
+              <li key={`g${row.version}`} className="flex shrink-0 flex-col gap-0.5">
+                <button type="button" data-el="agent.editor.intentqueue.group" aria-expanded={expanded} aria-controls={gid}
+                  onClick={() => setOpen((o) => { const n = new Set(o); if (n.has(row.version)) n.delete(row.version); else n.add(row.version); return n; })}
+                  className="flex items-center gap-1 rounded-[6px] px-1 py-0.5 text-left text-[12px] text-em-success hover:bg-em-panel-2">
+                  {expanded ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />}<CheckCircle2 size={12} aria-hidden />
+                  {t('ui.agent.editor.intentqueue.group', { version: row.version, count: row.items.length })}
+                </button>
+                <ul id={gid} hidden={!expanded} className="ml-3 flex flex-col gap-0.5">
+                  {row.items.map((i) => <li key={i.id}><IntentItem intent={i} all={all} /></li>)}
+                </ul>
+              </li>
+            );
+          }
+          const i = row.intent;
           const kids = all.filter((c) => c.parentIntentId === i.id);
           return (
             <li key={i.id} className="flex shrink-0 flex-col gap-0.5">

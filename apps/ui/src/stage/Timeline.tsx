@@ -33,7 +33,7 @@ export function buildBars(model: CompositionModelT, assetName: (id: string) => s
 const KIND_COLOUR: Record<string, string> = { clip: 'var(--em-accent)', shape: 'var(--em-accent-2)', text: '#F4F5F7', caption: 'var(--em-info)', audio: '#8FB3FF', transition: 'var(--em-warn)' };
 const TRACKS: Track[] = ['video', 'overlay', 'text', 'caption', 'audio'];
 
-export function TimelineView() {
+export function TimelineView({ height = 240 }: { height?: number } = {}) {
   const { state, actions, t, lang, prefs, dispatch } = useStore();
   const model = state.head?.model;
   const [zoom, setZoom] = useState<number | null>(null);         // px per second; null = fit
@@ -79,7 +79,7 @@ export function TimelineView() {
   };
 
   return (
-    <section data-el="stage.timeline" role="region" aria-label={t('a11y.stage.timeline')} className="flex min-h-[220px] shrink-0 flex-col rounded-[12px] border border-em-line bg-em-panel" style={{ height: 240 }}>
+    <section data-el="stage.timeline" role="region" aria-label={t('a11y.stage.timeline')} className="flex min-h-[220px] shrink-0 flex-col rounded-[12px] border border-em-line bg-em-panel" style={{ height }}>
       <div className="flex h-8 items-center gap-2 border-b border-em-line px-2">
         <span className="t-label flex-1">{t('ui.stage.timeline.title')}</span>
         <IconButton label={t('ui.stage.timeline.zoomout')} icon={<Minus size={14} />} size={28} onClick={() => setZoom(Math.max(10, (zoom ?? pxPerMs * 1000) / 1.5))} />

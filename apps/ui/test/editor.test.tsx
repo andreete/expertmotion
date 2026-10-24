@@ -24,6 +24,13 @@ const NOT_IN_MOCK: Record<string, string> = {
   'agent.editor.plancard.replan': 'only for stale/invalid/failed plans (covered in plancard.test.tsx)',
   'sys.offline': 'only while the Local Service is unreachable', 'sys.update': 'only after an update notice', 'sys.render.progress': 'only while exporting (covered in plancard.test.tsx)',
   'sys.toast': 'transient (asserted in plancard.test.tsx)',
+  'hdr.title.sample': 'only on the R-025 sample project (covered in tour.test.tsx)',
+  'sys.tour': 'only while the tour runs (covered in tour.test.tsx)', 'sys.tour.next': 'tour (tour.test.tsx)', 'sys.tour.back': 'tour (tour.test.tsx)', 'sys.tour.end': 'tour (tour.test.tsx)',
+  'sys.tour.choice.current': 'tour re-run choice (tour.test.tsx)', 'sys.tour.choice.sample': 'tour re-run choice (tour.test.tsx)', 'sys.tour.sampleplan': 'TOUR-7 without a provider (tour.test.tsx)',
+  'sys.tour.done.keep': 'tour closing card (tour.test.tsx)', 'sys.tour.done.own': 'tour closing card (tour.test.tsx)',
+  'lib.catalogue.params': 'only while a ⓘ Details popover is open (covered in params.test.tsx)', 'lib.catalogue.params.field': 'popover (params.test.tsx)',
+  'lib.catalogue.params.apply': 'popover (params.test.tsx)', 'lib.catalogue.params.reset': 'popover (params.test.tsx)',
+  'agent.editor.intentqueue.group': 'needs executed picks in an older version (covered in intentqueue.test.tsx)',
   'lib.assets.empty': 'empty project only (asserted in the next test)', 'stage.timeline.empty': 'empty project only (asserted in the next test)',
 };
 const MAIN = /^(hdr|lib|stage|agent|sys)\./;

@@ -88,6 +88,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     { key: 'sd15-q8', engine: 'stable-diffusion.cpp', version: '0.4', task: 'image', label: 'Stable Diffusion 1.5 (thumbnails)', licence: { name: 'CreativeML OpenRAIL-M', url: 'https://huggingface.co/runwayml' }, tiers: ['T0', 'T1', 'T2'], bytesTotal: 2_100_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null },
   ];
   const cancelledDownloads = new Set<string>();
+  const captionStore = new Map<string, Array<{ text: string; startMs: number; durationMs: number; tokens: [] }>>();   // subtitle assetId → parsed pages
   const startedAt = Date.now();
 
   // ───────────────────────── helpers ─────────────────────────
@@ -102,7 +103,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     id: a.id, kind: a.kind, status: a.status, name: a.name,
     ...(a.durationMs === null ? {} : { durationMs: a.durationMs }), ...(a.width === null ? {} : { width: a.width }),
     ...(a.height === null ? {} : { height: a.height }), ...(a.hasAudio === null ? {} : { hasAudio: a.hasAudio }),
-    ...(a.kind === 'subtitle' ? { captionPages: [{ text: a.name.replace(/\.(srt|vtt)$/i, ''), startMs: 0, durationMs: 2000, tokens: [] }] } : {}),
+    ...(a.kind === 'subtitle' ? { captionPages: captionStore.get(a.id) ?? [{ text: a.name.replace(/\.(srt|vtt)$/i, ''), startMs: 0, durationMs: 2000, tokens: [] }] } : {}),
   }));
   const strip = (v: VersionDto & { model: CompositionModelT }): VersionDto => { const { model: _m, ...rest } = v; return rest; };
   const queueDto = (p: ProjectState): IntentQueueDto => {
@@ -211,7 +212,13 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const interp = Boolean(body.instruction);
     const project: ElementRefT = { kind: 'project' };
     const cd = preset ? compileDefaults(preset.id) : undefined;
-    const withParams = (args: Record<string, unknown>) => (body.params && Object.keys(body.params).length ? { ...args, params: { ...((args['params'] as Record<string, unknown> | undefined) ?? {}), ...body.params } } : args);
+    // Catalogue params (ⓘ Details): keys the Compile rule lifts to the top level (transition durationMs/timing) stay there; the rest go to args.params.
+    const withParams = (args: Record<string, unknown>) => {
+      if (!body.params || !Object.keys(body.params).length) return args;
+      const top = Object.fromEntries(Object.entries(body.params).filter(([k]) => k !== 'params' && k in args));
+      const rest = Object.fromEntries(Object.entries(body.params).filter(([k]) => !(k in args)));
+      return { ...args, ...top, ...(Object.keys(rest).length ? { params: { ...((args['params'] as Record<string, unknown> | undefined) ?? {}), ...rest } } : {}) };
+    };
     const one = (target: ElementRefT, key: string, op: OperationT | null): Resolution => ({ leaves: [{ target, key, ops: op ? [op] : null }], parentKey: key, needsInterpretation: interp || op === null, notices });
 
     if (body.category === 'layout') {
@@ -502,6 +509,41 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     if ([...projects.values()].some((p) => p.dto.name === name)) throw new HttpError(409, 'EM-6103', 'A project with this name already exists.');
     const p = makeProject(name, obj(body['settings']) as Partial<ProjectSettingsT>);
     emit('composition.updated', { projectId: p.dto.id, version: strip(head(p)), previousHash: null, diff: [], cause: 'system', canUndo: false, canRedo: false, durationMs: p.dto.durationMs, issues: [] });
+    return created(p.dto);
+  });
+  // R-025 sample project for the tour: assets ingest in the background, then 3 clips + captions + palette, then service.notice {kind:'sample', ready:true}.
+  r('POST', '/projects/sample', (_m, b) => {
+    const existing = [...projects.values()].find((x) => x.dto.isSample);
+    if (existing) return existing.dto;
+    const language = obj(b)['language'] === 'en' ? 'en' : 'id';
+    const p = makeProject(language === 'id' ? 'Contoh · Kafe Senja' : 'Sample · Kafe Senja', { ratio: '9:16', autoRatio: false, language });
+    p.dto.isSample = true;
+    const shots: Array<[string, string, string]> = [['Kafe Senja', '#E8913A', '#3A1F0B'], ['Kopi susu', '#4FD1A5', '#0D2A4A'], ['Sampai jumpa', '#B48CFF', '#14120F']];
+    const clips = shots.map(([label, c1, c2], i) => { const url = sampleImage(label, c1, c2); const a = addAsset(p, { name: `kafe-senja-${i + 1}.png`, kind: 'image', bytes: 240_000 + i * 10_000 }, url); void ingest(p, a, url); return a; });
+    const srt = addAsset(p, { name: 'kafe-senja.srt', kind: 'subtitle', bytes: 180 }, null);
+    captionStore.set(srt.id, [
+      { text: 'Selamat datang di Kafe Senja', startMs: 0, durationMs: 2500, tokens: [] },
+      { text: 'Kopi susu favorit kota', startMs: 5000, durationMs: 2500, tokens: [] },
+      { text: 'Sampai jumpa sore ini', startMs: 10_000, durationMs: 2500, tokens: [] },
+    ]);
+    void ingest(p, srt, null);
+    const finish = () => {
+      if (!projects.has(p.dto.id)) return;
+      if (p.assets.some((a) => a.status === 'ingesting')) { setTimeout(finish, delays ? 100 : 0); return; }
+      const ops: OperationT[] = [
+        ...clips.map((a): OperationT => ({ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: a.id } })),
+        { op: 'op:caption.importSrt', target: { kind: 'project' }, args: { assetId: srt.id } },
+        { op: 'op:theme.set', target: { kind: 'project' }, args: { paletteId: 'preset:palette.editorial-dark' } },
+      ];
+      const res = applyOperations(head(p).model, ops, { assets: facts(p), tier: hardware.tier, newId });
+      if (!res.ok) { emit('service.notice', { projectId: p.dto.id, kind: 'sample', ready: false, code: res.issues[0]?.code ?? 'EM-9001' }); return; }
+      const v = commit(p, res.value.model, 'system', res.value.diff);
+      for (const a of clips) p.intents.push(systemIntent(p, a.id, v.hash));
+      p.dto.dirty = false;
+      emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [], reason: 'compiled' });
+      emit('service.notice', { projectId: p.dto.id, kind: 'sample', ready: true });
+    };
+    setTimeout(finish, delays ? 100 : 0);
     return created(p.dto);
   });
   r('GET', '/projects/recent', () => ({ items: [...projects.values()].map((p) => p.dto).filter((d) => d.openedAt).sort((a, b) => (b.openedAt ?? '').localeCompare(a.openedAt ?? '')).slice(0, 10) }));
@@ -930,8 +972,22 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     [0.4, 0.8].forEach((pr, i) => later(300 * (i + 1), () => { job.progress = pr; emit('service.notice', { projectId: p.dto.id, kind: 'generator', jobId: job.id, percent: Math.round(pr * 100) }); }));
     later(1000, () => {
       job.status = 'done'; job.progress = 1; job.finishedAt = nowIso();
+      const pages = [{ text: 'Selamat datang di Kafe Senja', startMs: 0, durationMs: 2000, tokens: [] }];
+      let ops: OperationT[] = [];
+      if (kind === 'voice') {                                    // the voice becomes an Asset (generators-service register()), like the real service
+        const a = addAsset(p, { name: `voice-${job.id.slice(-6).toLowerCase()}.wav`, kind: 'audio', status: 'ready', progress: 1, durationMs: 3000, hasAudio: true, bytes: 96_000,
+          media: { original: true, playable: false, proxy: false, thumb: false, filmstrip: false, waveform: false } }, null);
+        job.resultAssetId = a.id;
+        emit('ingest.done', { projectId: p.dto.id, asset: a });
+        ops = [{ op: 'op:audio.addLayer', args: { assetId: a.id, atMs: typeof body['atMs'] === 'number' ? body['atMs'] : 0, volume: 1, role: 'voice' } }];
+      } else if (kind === 'captions') ops = [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } }];
       job.result = kind === 'hashtags' ? { caption: 'Senja, kopi, dan cerita kecil di Kafe Senja.', hashtags: ['#kafesenja', '#kopisusu', '#ngopi', '#senja', '#kopilokal'] }
-        : kind === 'captions' ? { pages: [{ text: 'Selamat datang di Kafe Senja', startMs: 0, durationMs: 2000, tokens: [] }] } : { text: String(body['text'] ?? '') };
+        : kind === 'captions' ? { pages } : { text: String(body['text'] ?? '') };
+      if (body['insert'] === true && ops.length) {               // R-130 `insert: true`: deterministic apply, no Editor Agent plan
+        const res = applyOperations(head(p).model, ops, { assets: facts(p), tier: hardware.tier, newId });
+        if (res.ok) job.result['versionId'] = commit(p, res.value.model, 'system', res.value.diff).id;
+      }
+      if (ops.length) job.result['proposedOps'] = ops;
       emit('service.notice', { projectId: p.dto.id, kind: 'generator', jobId: job.id, percent: 100, done: true });
     });
     return accepted(job);

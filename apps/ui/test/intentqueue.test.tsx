@@ -85,3 +85,25 @@ describe('Intent Queue', () => {
     expect(items().some((i) => i.textContent?.includes('Slide'))).toBe(true);   // applied changes stay
   });
 });
+
+describe('Intent Queue grouping', () => {
+  it('collapses executed items of an older version under "Applied in v… (n)", expandable', async () => {
+    await renderEditor('sample');
+    await pick('preset:transition.fade');
+    await waitFor(() => { if (!items().some((i) => i.getAttribute('data-status') === 'executed')) throw new Error('none'); });
+    expect(el('agent.editor.intentqueue.group')).toBeNull();                     // the newest version stays expanded
+    fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="background"]')!);
+    const bg = document.querySelector<HTMLElement>('[data-el="lib.catalogue.card"][data-preset-id^="preset:background."]')!;
+    await act(async () => { fireEvent.click(bg); });
+    await waitFor(() => { if (!el('agent.editor.intentqueue.group')) throw new Error('no group'); });
+    const group = el('agent.editor.intentqueue.group')!;
+    expect(group.textContent).toMatch(/Applied in v\d+ \(1\)/);
+    expect(group.getAttribute('aria-expanded')).toBe('false');
+    const fade = items().find((i) => i.textContent?.includes('Fade'))!;
+    expect(fade.closest('ul[hidden]')).not.toBeNull();                              // collapsed by default
+    fireEvent.click(group);
+    expect(group.getAttribute('aria-expanded')).toBe('true');
+    expect(fade.closest('ul[hidden]')).toBeNull();
+    expect(items().find((i) => i.textContent?.includes('Fade'))?.closest('ul[hidden]')).toBeNull();
+  });
+});

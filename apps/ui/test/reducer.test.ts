@@ -108,3 +108,13 @@ describe('reducer', () => {
     expect(s.selection).toEqual([]);
   });
 });
+
+describe('sample project notice (R-025)', () => {
+  it('marks the sample settled on ready:true and on ready:false (partial), once', () => {
+    let s = reducer(initialState, { type: 'event', event: ev({ name: 'service.notice', data: { kind: 'sample', projectId: 'P1', ready: false, failed: ['kafe-senja-2.mp4'], code: 'EM-1001' } }) });
+    expect(s.sampleReady).toEqual(['P1']);
+    s = reducer(s, { type: 'event', event: ev({ name: 'service.notice', data: { kind: 'sample', projectId: 'P1', ready: true } }) });
+    expect(s.sampleReady).toEqual(['P1']);
+    expect(reducer(initialState, { type: 'event', event: ev({ name: 'service.notice', data: { kind: 'sample', projectId: 'P2' } }) }).sampleReady).toEqual([]);
+  });
+});

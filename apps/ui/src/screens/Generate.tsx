@@ -1,5 +1,7 @@
 // Generator sheets (scr.generate.*): forms that call R-130 and show "needs model", running, done, failed states (IX-08).
 // In v1.0 (P0) the Local Service answers EM-9004 for every kind; the sheet shows that copy honestly.
+// Insert is deterministic (no Editor Agent plan): a generated Asset goes in with R-035; a result without an Asset (captions)
+// is re-run with R-130 `insert: true`, which applies the generator's proposed ops directly.
 import { useEffect, useState } from 'react';
 import { Copy } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
@@ -17,6 +19,8 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const [model, setModel] = useState(installed[0]?.key ?? modelKey ?? '');
   const [job, setJob] = useState<GeneratorJobDto | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [inserting, setInserting] = useState(false);
+  const [insertJobId, setInsertJobId] = useState<string | null>(null);
   const missing = modelKey ? !state.models.some((m) => m.key === modelKey && m.status === 'installed') : false;
   const p = `scr.generate.${kind}`;
   useEffect(() => {
@@ -24,7 +28,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
     const h = setInterval(() => { void runtime.api.getGeneratorJob(job.id).then(setJob).catch(() => undefined); }, 500);
     return () => clearInterval(h);
   }, [job, runtime]);
-  const run = async () => {
+  const run = async (insert = false) => {
     if (!state.project) return;
     setError(null);
     const assetId = state.assets.find((a) => a.kind === 'video' && a.status === 'ready')?.id;
@@ -33,7 +37,28 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
         : kind === 'music' ? { prompt: input, durationMs: Math.max(5000, state.head?.durationMs ?? 15000) }
           : kind === 'thumbnail' ? { frameMs: state.playheadMs, titleText: input }
             : { language, platform: 'tiktok', count: 10 };
-    try { setJob(await runtime.api.createGeneratorJob(state.project.id, kind, body)); } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); }
+    if (insert && kind !== 'thumbnail' && kind !== 'hashtags') body['insert'] = true;
+    try { const j = await runtime.api.createGeneratorJob(state.project.id, kind, body); setJob(j); return j; } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); return null; }
+  };
+  const inserted = () => { void actions.refreshHead(); actions.toast('success', 'ui.scr.generate.inserted', { kind: t(`ui.lib.generator.${kind}.title`) }); onClose(); };
+  useEffect(() => {
+    if (!insertJobId || !job || job.id !== insertJobId || job.status === 'running' || job.status === 'queued') return;
+    setInserting(false); setInsertJobId(null);
+    if (job.status === 'done' && job.result?.['versionId']) inserted();
+  }, [job, insertJobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const insert = async () => {
+    if (!state.project || !job) return;
+    if (job.result?.['versionId']) { inserted(); return; }                  // already applied by an insert:true run
+    if (job.resultAssetId) {
+      try {
+        await runtime.api.insertAssets(state.project.id, { assetIds: [job.resultAssetId], order: 'given', ...(kind === 'voice' ? { atMs: state.playheadMs } : {}) });
+        inserted();
+      } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); }
+      return;
+    }
+    setInserting(true);
+    const j = await run(true);
+    if (j) setInsertJobId(j.id); else setInserting(false);
   };
   const hashtags = Array.isArray(job?.result?.['hashtags']) ? (job!.result!['hashtags'] as unknown[]).map(String) : [];
   return (
@@ -70,7 +95,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
           {hashtags.length > 0 && <div className="flex flex-wrap gap-1">{hashtags.map((h) => <span key={h} className="rounded-full border border-em-line px-2 text-[12px]">{h}</span>)}</div>}
           {hashtags.length > 0 && <Button size={28} icon={<Copy size={14} />} onClick={() => void navigator.clipboard?.writeText(hashtags.join(' ')).catch(() => undefined)}>{t('ui.common.copy')}</Button>}
           {Array.isArray(job.result?.['pages']) && <table className="text-[12px]"><tbody>{(job.result['pages'] as Array<{ text: string; startMs: number }>).map((pg, i) => <tr key={i}><td className="t-mono pr-2 text-em-muted">{(pg.startMs / 1000).toFixed(1)}s</td><td>{pg.text}</td></tr>)}</tbody></table>}
-          {kind !== 'hashtags' && <Button el={`${p}.insert`} variant="primary" size={28} onClick={() => { void actions.plan(t('ui.scr.generate.insert.message', { kind: t(`ui.lib.generator.${kind}.title`) })); onClose(); }}>{t('ui.scr.generate.insert')}</Button>}
+          {kind !== 'hashtags' && <Button el={`${p}.insert`} variant="primary" size={28} loading={inserting} onClick={() => void insert()}>{t('ui.scr.generate.insert')}</Button>}
         </div>
       )}
     </Modal>

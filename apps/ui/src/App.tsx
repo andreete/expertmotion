@@ -1,6 +1,7 @@
 // App shell: Header, three columns (Library / Stage / Agent), banners, toasts, live region, screens as modals.
 // Responsive rules (EDITOR_INTERACTION_MODEL.md §9–§10): ≥ 1280 defaults; 1024–1279 Library collapses to a rail and Agent
-// narrows to 320; < 1024 both collapse with a non-blocking toast.
+// narrows to 320; < 1024 both collapse with a non-blocking toast. Dividers resize the columns and the Player/Timeline split
+// (§9, FR-099); sizes are kept per window-width bucket in prefs.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Boxes, ChevronLeft, ChevronRight, ShieldCheck, Sparkles, Type, Upload, WifiOff, Wrench, X } from 'lucide-react';
 import { useStore } from './state/store.js';
@@ -12,7 +13,8 @@ import { TimelineView } from './stage/Timeline.js';
 import { AgentPanel } from './agent/AgentPanel.js';
 import { Button, IconButton, cx } from './components/ui.js';
 import { useShortcuts } from './shortcuts.js';
-import { Onboarding, Tour } from './screens/Onboarding.js';
+import { Onboarding } from './screens/Onboarding.js';
+import { Tour } from './screens/Tour.js';
 import { LicenseScreen } from './screens/License.js';
 import { ProvidersScreen } from './screens/Providers.js';
 import { ModelsScreen } from './screens/Models.js';
@@ -21,6 +23,9 @@ import { ExportDialog } from './screens/Export.js';
 import { GenerateSheet } from './screens/Generate.js';
 import { AboutScreen, BackupDialog, ConfirmModal, DiagnosticsScreen, ShortcutSheet } from './screens/Misc.js';
 import type { LibMode } from './state/reducer.js';
+import { Splitter } from './components/Splitter.js';
+import { LAYOUT, bucketFor, clamp, defaultSizes, resolveColumns, timelineMax } from './layout.js';
+import type { PanelSizes } from './prefs.js';
 
 function useWindowWidth(): number {
   const [w, setW] = useState(typeof window === 'undefined' ? 1440 : window.innerWidth);
@@ -38,6 +43,29 @@ export function App() {
   const libCollapsed = prefs.libCollapsed || narrow;
   const agentCollapsed = prefs.agentCollapsed || tiny;
   const collapse = useMemo(() => ({ toggleLibrary: () => setPrefs({ libCollapsed: !prefs.libCollapsed }), toggleAgent: () => setPrefs({ agentCollapsed: !prefs.agentCollapsed }) }), [prefs, setPrefs]);
+  // ── panel sizes (live while dragging, persisted on release / key press) ──
+  const bucket = bucketFor(width);
+  const [live, setLive] = useState<PanelSizes>({});
+  const stageRef = useRef<HTMLDivElement>(null);
+  const stored = { ...defaultSizes(bucket), ...(prefs.panelSizes[bucket] ?? {}) };
+  const want = { ...stored, ...live };
+  const cols = resolveColumns({ width: Math.max(width, 1024), lib: want.lib, agent: want.agent, libOpen: !libCollapsed, agentOpen: !agentCollapsed });
+  const tlMax = timelineMax(stageRef.current?.clientHeight ?? 0);
+  const tlHeight = clamp(want.timeline, LAYOUT.timeline.min, tlMax);
+  const resize = (key: keyof PanelSizes, min: number, max: number) => (raw: number, commit: boolean) => {
+    if (key === 'lib' && raw < LAYOUT.lib.collapseBelow) {                       // dragging the Library below 240 collapses it to the rail (§9)
+      setLive({}); if (commit) setPrefs({ libCollapsed: true }); return;
+    }
+    const v = Math.round(clamp(raw, min, max));
+    if (!commit) { setLive((l) => ({ ...l, [key]: v })); return; }
+    setLive({});
+    setPrefs({ panelSizes: { ...prefs.panelSizes, [bucket]: { ...(prefs.panelSizes[bucket] ?? {}), [key]: v } } });
+  };
+  const reset = (key: keyof PanelSizes) => () => {
+    setLive({});
+    const { [key]: _drop, ...rest } = prefs.panelSizes[bucket] ?? {};
+    setPrefs({ panelSizes: { ...prefs.panelSizes, [bucket]: rest } });
+  };
   useShortcuts(collapse);
   const warned = useRef(false);
   useEffect(() => { if (tiny && !warned.current) { warned.current = true; actions.toast('info', 'ui.window.small'); } }, [tiny, actions]);
@@ -53,17 +81,27 @@ export function App() {
           {libCollapsed ? (
             <Rail side="left" onExpand={() => (narrow ? setLibOverlay((o) => !o) : setPrefs({ libCollapsed: false }))} />
           ) : (
-            <div className="w-[300px] shrink-0 border-r border-em-line"><LibraryPanel /></div>
+            <>
+              <div className="shrink-0" style={{ width: cols.lib }}><LibraryPanel /></div>
+              <Splitter el="lib.divider" orientation="vertical" value={cols.lib} min={LAYOUT.lib.min} max={cols.libMax} label={store.t('a11y.layout.divider.library')}
+                onChange={resize('lib', LAYOUT.lib.min, cols.libMax)} onReset={reset('lib')} />
+            </>
           )}
           {libCollapsed && libOverlay && (
             <div className="absolute bottom-0 left-12 top-0 z-30 w-[300px] border-r border-em-line" style={{ boxShadow: 'var(--sh-2)' }} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setLibOverlay(false); }}><LibraryPanel /></div>
           )}
-          <div data-region="stage" aria-label={store.t('a11y.region.stage')} className="flex min-w-[560px] flex-1 flex-col gap-2 p-2">
+          <div ref={stageRef} data-region="stage" aria-label={store.t('a11y.region.stage')} className="flex min-w-[560px] flex-1 flex-col gap-1 p-2">
             <StagePlayer />
-            <TimelineView />
+            <Splitter el="stage.divider" orientation="horizontal" invert value={tlHeight} min={LAYOUT.timeline.min} max={tlMax} label={store.t('a11y.layout.divider.timeline')}
+              onChange={resize('timeline', LAYOUT.timeline.min, tlMax)} onReset={reset('timeline')} />
+            <TimelineView height={tlHeight} />
           </div>
           {agentCollapsed ? <Rail side="right" onExpand={() => setPrefs({ agentCollapsed: false })} /> : (
-            <div className={cx('shrink-0 border-l border-em-line', narrow ? 'w-[320px]' : 'w-[360px]')}><AgentPanel /></div>
+            <>
+              <Splitter el="agent.divider" orientation="vertical" invert value={cols.agent} min={LAYOUT.agent.min} max={cols.agentMax} label={store.t('a11y.layout.divider.agent')}
+                onChange={resize('agent', LAYOUT.agent.min, cols.agentMax)} onReset={reset('agent')} />
+              <div className="shrink-0" style={{ width: cols.agent }}><AgentPanel /></div>
+            </>
           )}
         </main>
         <Toasts />

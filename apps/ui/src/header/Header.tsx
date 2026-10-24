@@ -8,7 +8,13 @@ import { useStore } from '../state/store.js';
 import { Button, IconButton, MenuItem, Popover, Progress, cx } from '../components/ui.js';
 import { HardwarePopover } from '../screens/Hardware.js';
 import type { LibMode } from '../state/reducer.js';
-import { formatDuration } from '../i18n/index.js';
+import { formatDuration, translate } from '../i18n/index.js';
+
+/** Sample projects (R-025) carry a visible "Sample · " / "Contoh · " marker in the project's language; a name that already starts with it is not doubled. */
+export function sampleTitle(name: string, language: 'en' | 'id'): { marker: string; rest: string } {
+  const rest = name.replace(/^(Sample|Contoh)\s*·\s*/u, '');
+  return { marker: translate(language, 'ui.hdr.title.sample'), rest };
+}
 
 export const requestImport = (accept?: string) => window.dispatchEvent(new CustomEvent('em:import', { detail: { accept } }));
 
@@ -79,7 +85,7 @@ export function Header() {
           className="flex h-12 items-center gap-1 px-2.5 text-[13px] font-medium text-em-text-2 hover:text-em-text"><CircleHelp size={16} aria-hidden />{t('ui.hdr.menu.help')}</button>
         {menu === 'help' && (
           <Popover onClose={close} role="menu" label={t('ui.hdr.menu.help')} width={240}>
-            <MenuItem el="hdr.menu.help.tour" onClick={() => { close(); setPrefs({ tourDone: false }); window.dispatchEvent(new CustomEvent('em:tour')); }}>{t('ui.hdr.menu.help.tour')}</MenuItem>
+            <MenuItem el="hdr.menu.help.tour" onClick={() => { close(); setPrefs({ tourDone: false }); window.dispatchEvent(new CustomEvent('em:tour', { detail: { source: 'help' } })); }}>{t('ui.hdr.menu.help.tour')}</MenuItem>
             <MenuItem el="hdr.menu.help.shortcuts" shortcut="Shift+?" onClick={() => { close(); actions.setScreen({ kind: 'shortcuts' }); }}>{t('ui.hdr.menu.help.shortcuts')}</MenuItem>
             <MenuItem el="hdr.menu.help.diagnostics" onClick={() => { close(); actions.setScreen({ kind: 'diagnostics' }); }}>{t('ui.hdr.menu.help.diagnostics')}</MenuItem>
             <MenuItem el="hdr.menu.help.license" onClick={() => { close(); actions.setScreen({ kind: 'license' }); }}>{t('ui.hdr.menu.help.license')}</MenuItem>
@@ -99,7 +105,7 @@ export function Header() {
         ) : (
           <button type="button" data-el="hdr.title" aria-label={t('a11y.hdr.title')} aria-describedby={p?.dirty ? 'em-dirty' : undefined} disabled={!p}
             onClick={() => { setDraft(p?.name ?? ''); setEditing(true); }} className="max-w-[320px] truncate rounded-[6px] px-2 py-1 text-[14px] font-medium hover:bg-em-panel-2">
-            {p?.name ?? t('ui.hdr.title.untitled')}
+            {p?.isSample === true ? (() => { const st = sampleTitle(p.name, p.language); return <><span data-el="hdr.title.sample" className="font-semibold text-em-accent">{st.marker}</span>{' · '}{st.rest}</>; })() : (p?.name ?? t('ui.hdr.title.untitled'))}
           </button>
         )}
         {p?.dirty && <span id="em-dirty" data-el="hdr.title.dirty" title={t('ui.hdr.title.dirty')} className="h-1.5 w-1.5 rounded-full bg-em-accent"><span className="sr-only">{t('ui.hdr.title.dirty')}</span></span>}

@@ -236,6 +236,25 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `scr.export.codec.png` | Export format option | PNG still. |
 | `scr.project.new.name` | New Project name field | Project name input. |
 | `scr.project.settings.language` | Project Settings language toggle | Project language id/en (stored in project settings). |
+| `hdr.title.sample` | "Sample ·" / "Contoh ·" marker in the Project Title | Shown only on the R-025 sample project (`isSample: true`); the marker uses the project's language. |
+| `lib.divider` | Library Panel / Stage divider | `role="separator"`; drag or ←/→ (16 px) resizes the Library Panel 240–420 px, dragging below 200 px collapses it to the rail; double-click or Enter resets (EDITOR_INTERACTION_MODEL.md §9). |
+| `agent.divider` | Stage / Agent Panel divider | As `lib.divider` for the Agent Panel, 320–520 px; the Stage never shrinks below 560 px. |
+| `stage.divider` | Player / Timeline View divider | ↑/↓ resizes the Timeline View height (220 px to 50 % of the Stage). |
+| `lib.catalogue.card.details` | ⓘ on a Catalogue Card | Opens `lib.catalogue.params` (also Space on the focused card). |
+| `lib.catalogue.params` | Preset "Details" popover | Parameter fields with defaults from the catalogue; focus trapped, Esc closes and returns focus to ⓘ. |
+| `lib.catalogue.params.field` | one parameter input | `data-param` carries the parameter name. |
+| `lib.catalogue.params.apply` | "Apply with these settings" | Design Pick with the edited `params` (Compile path). |
+| `lib.catalogue.params.reset` | "Reset to defaults" | Restores the preset defaults in the form. |
+| `agent.editor.intentqueue.group` | "Applied in v5 (3)" row | Collapsed group of the items executed in one older version; `aria-expanded` toggles. |
+| `sys.tour` | Tour card | Card of the in-app tour (ONBOARDING_TOUR.md §3); `data-step` = 1…10, `data-phase` = choose/preparing/step/done. |
+| `sys.tour.next` | Tour "Next" | Next step (each step also advances on its real trigger). |
+| `sys.tour.back` | Tour "Back" | Previous step. |
+| `sys.tour.end` | Tour "End tour" | Ends the tour (Esc asks first). |
+| `sys.tour.choice.current` | Re-run choice "This project" | Help ▸ Tour on a project with clips. |
+| `sys.tour.choice.sample` | Re-run choice "Sample project" | Opens the R-025 sample project and starts the tour. |
+| `sys.tour.sampleplan` | Prepared sample plan (TOUR-7) | Shown when no provider is connected or no plan exists. |
+| `sys.tour.done.keep` | Closing card "Keep the sample project" | Ends the tour. |
+| `sys.tour.done.own` | Closing card "Start my own project" | Ends the tour and opens `scr.project.new`. |
 
 State variants (UI implementation rule): a superseded queue row uses `agent.editor.intentqueue.item.superseded`; a stale base version `agent.editor.baseversion.stale`; the play button swaps to `stage.player.controls.pause` while playing. Other states keep the base id and use `data-variant`, `aria-pressed` or `aria-selected`. Timeline Elements use `stage.timeline.element` with `data-kind="clip|transition|text|caption|audio|shape|image"`.
 

@@ -16,6 +16,8 @@ import { translate, type Lang } from '../i18n/index.js';
 
 export interface Actions {
   openProject(id: string): Promise<void>;
+  /** R-025: create (or reuse) the tour's sample project and open it; resolves with its id, or null on error. */
+  openSampleProject(language: Lang): Promise<string | null>;
   createProject(input: ProjectCreateInput): Promise<void>;
   renameProject(name: string): Promise<boolean>;
   refreshHead(): Promise<void>;
@@ -87,7 +89,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   stateRef.current = state;
   const dispatch = useCallback((a: Action) => rawDispatch(a), []);
   const prefsRef = useRef<Prefs>({ ...loadPrefs(), ...(initialPrefs ?? {}) });
-  const [, forcePrefs] = useReducer((x: number) => x + 1, 0);
+  const [prefsVersion, forcePrefs] = useReducer((x: number) => x + 1, 0);
   const setPrefs = useCallback((p: Partial<Prefs>) => { prefsRef.current = { ...prefsRef.current, ...p }; savePrefs(prefsRef.current); forcePrefs(); }, []);
   const api = runtime.api;
   const lang: Lang = state.settings?.uiLanguage ?? 'en';
@@ -122,6 +124,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       } catch (e) { error(e); }
     };
     const reloadState = async () => { const id = pid(); if (id) await openProject(id); };
+    const openSampleProject = async (language: Lang): Promise<string | null> => {
+      try {
+        const p = await api.createSampleProject({ language });
+        if (pid() !== p.id) await openProject(p.id);
+        return p.id;
+      } catch (e) { error(e); return null; }
+    };
     const createIntent = async (body: Omit<DesignPickInput, 'baseVersion' | 'selection' | 'playheadMs'>, label: string) => {
       const id = pid(); if (!id) { toast('info', 'err.EM-2202.title', undefined, { code: 'EM-2202' }); return; }
       const s = stateRef.current;
@@ -153,7 +162,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     const redo = async () => { const id = pid(); if (!id) return; try { await api.redo(id); await refreshHead(); } catch (e) { error(e); } };
     const setScreen = (screen: Screen | null) => dispatch({ type: 'screen', screen });
     const self: Actions = {
-      openProject, refreshHead, reloadState, error, toast, announce, undo, redo, setScreen,
+      openProject, openSampleProject, refreshHead, reloadState, error, toast, announce, undo, redo, setScreen,
       async createProject(input) {
         try { const p = await api.createProject(input); await openProject(p.id); } catch (e) { error(e); }
       },
@@ -393,6 +402,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         if (ev.data.kind === 'resync') void actions.reloadState();
         if (ev.data.kind === 'low-disk' || ev.data.kind === 'low-memory') actions.toast('warn', `err.${ev.data.code ?? 'EM-6402'}.title`, undefined, { code: ev.data.code ?? 'EM-6402' });
         if (ev.data.kind === 'restore' && ev.data.done && typeof ev.data.projectId === 'string') void actions.openProject(ev.data.projectId);
+        // R-025: the sample's clips, captions and palette are in; reload so assets, queue and head are complete for the tour.
+        if (ev.data.kind === 'sample' && typeof ev.data['ready'] === 'boolean' && ev.data.projectId === stateRef.current.project?.id) {
+          if (ev.data['ready'] === false) {
+            const code = typeof ev.data.code === 'string' ? ev.data.code : null;
+            const failed = Array.isArray(ev.data['failed']) ? (ev.data['failed'] as unknown[]).length : 0;
+            actions.toast('danger', 'ui.sys.toast.sample.partial', { count: failed }, code ? { code } : {});
+          }
+          void actions.reloadState();
+        }
         break;
       default: break;
     }
@@ -442,7 +460,9 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     return () => { stream.close(); streamRef.current = null; };
   }, [state.boot, projectId, runtime, onEvent, actions, dispatch]);
 
-  const value = useMemo<Store>(() => ({ state, dispatch, runtime, actions, prefs: prefsRef.current, setPrefs, t, lang }), [state, dispatch, runtime, actions, setPrefs, t, lang]);
+  // prefsVersion: a setPrefs call must re-render consumers even when no Service state changed (Ctrl+B, panel sizes).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const value = useMemo<Store>(() => ({ state, dispatch, runtime, actions, prefs: prefsRef.current, setPrefs, t, lang }), [state, dispatch, runtime, actions, setPrefs, t, lang, prefsVersion]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 

@@ -23,6 +23,8 @@ export interface OutputProfile {
 export interface ProjectDto {
   id: Id; name: string; settings: ProjectSettingsT; language: Lang; headVersionId: Id | null; headHash: string | null; durationMs: number;
   assetCount: number; createdAt: Iso; updatedAt: Iso; openedAt: Iso | null; dirty: boolean; warnings?: string[];
+  /** R-025 sample project for the tour ("Sample · Kafe Senja" / "Contoh · Kafe Senja"); absent on ordinary projects. */
+  isSample?: boolean;
 }
 export type VersionCause = 'insert' | 'compile' | 'execute' | 'undo' | 'redo' | 'restore' | 'system';
 export interface VersionDto { id: Id; projectId: Id; parentId: Id | null; hash: string; cause: VersionCause; planId: Id | null; durationMs: number; createdAt: Iso; model?: CompositionModelT }

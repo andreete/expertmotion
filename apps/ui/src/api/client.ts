@@ -118,6 +118,8 @@ export class ApiClient {
   putProjectSettings(id: Id, settings: ProjectSettingsT): Promise<{ settings: ProjectSettingsT; version: VersionDto | null; warnings: unknown[] }> { return this.put(`/projects/${id}/settings`, settings); } // R-018
   duplicateProject(id: Id, name: string, copyMedia = true): Promise<ProjectDto> { return this.post(`/projects/${id}/duplicate`, { name, copyMedia }); } // R-019
   backupProject(id: Id, body: { folder: string; passphrase?: string; includeOutputs?: boolean }): Promise<{ jobId: Id }> { return this.post(`/projects/${id}/backup`, body); } // R-020
+  /** R-025: the tour's sample project (201 created, 200 existing); clips are ingested and inserted in the background, then `service.notice {kind:'sample', ready:true}`. */
+  createSampleProject(body: { language: 'id' | 'en' }): Promise<ProjectDto> { return this.post('/projects/sample', body); }        // R-025
   restoreProject(body: { path: string; passphrase?: string; onConflict?: 'copy' | 'replace' }): Promise<{ jobId: Id }> { return this.post('/projects/restore', body, { 'X-Expertmotion-Caller': 'shell' }); } // R-021
   // ── 6.3 checkpoints ──
   listCheckpoints(id: Id): Promise<{ items: CheckpointDto[]; notice?: string }> { return this.get(`/projects/${id}/checkpoints`); } // R-022

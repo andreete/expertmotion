@@ -1,7 +1,8 @@
 // Preview Catalogue (lib.catalogue.*): category tabs, Catalogue Cards (CMP-04, §11.1), hover → live preview (IX-01),
 // click → Design Pick (IX-02). Labels and tags come from packages/catalogue; availability and loop URLs from GET /catalogue.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bookmark, Cpu, DownloadCloud } from 'lucide-react';
+import { Bookmark, Cpu, DownloadCloud, Info } from 'lucide-react';
+import { PresetParams } from './PresetParams.js';
 import { listPresets, searchPresets, type Category, type PresetDef } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
 import type { CatalogueItemDto } from '../api/types.js';
@@ -77,6 +78,8 @@ export function Catalogue({ query, onSuggest }: { query: string; onSuggest: (q: 
 export function CatalogueCard({ preset, item, selected, compact }: { preset: PresetDef; item: CatalogueItemDto | undefined; selected: boolean; compact?: boolean }) {
   const { state, actions, t, lang, runtime } = useStore();
   const [hover, setHover] = useState(false);
+  const [details, setDetails] = useState(false);
+  const infoRef = useRef<HTMLButtonElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const upcoming = preset.priority !== 'p0';
   const tier = state.hardware?.tier ?? 'T0';
@@ -102,10 +105,12 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
   const name = [label, t(`ui.lib.catalogue.tab.${preset.category}`), selected ? t('a11y.lib.catalogue.card.inpicks') : '', gpu ? t('ui.lib.catalogue.badge.gpu') : '', modelMissing ? t('ui.lib.catalogue.badge.model', { model: modelKey ?? '' }) : ''].filter(Boolean).join(', ');
   const reason = upcoming ? t('ui.lib.catalogue.comingsoon') : unavailable ? t('ui.lib.catalogue.unavailable') : null;
   return (
-    <div role="gridcell">
+    <div role="gridcell" className="relative">
       <button type="button" data-el="lib.catalogue.card" data-preset-id={preset.id} data-selected={selected || undefined} aria-pressed={selected} aria-label={name} aria-disabled={reason ? true : undefined}
         title={reason ?? undefined}
         onMouseEnter={enter} onMouseLeave={leave} onFocus={enter} onBlur={leave}
+        onKeyDown={(e) => { if (e.key === ' ') { e.preventDefault(); e.stopPropagation(); setDetails(true); } }}
+        onKeyUp={(e) => { if (e.key === ' ') e.preventDefault(); }}
         onClick={() => { if (reason) return; if (modelMissing) { actions.setScreen({ kind: 'models' }); return; } void actions.pick(preset.id); }}
         className={cx('group relative flex w-full flex-col overflow-hidden rounded-[8px] border bg-em-panel text-left em-trans', selected ? 'border-em-accent shadow-[inset_0_0_0_2px_var(--em-accent)]' : 'border-em-line hover:border-em-line-strong',
           hover && !reason && '-translate-y-0.5', reason && 'opacity-50 cursor-not-allowed')} style={hover ? { boxShadow: 'var(--sh-2)' } : undefined}>
@@ -120,8 +125,13 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
           {upcoming && <span className="absolute bottom-1 left-1 rounded-[4px] bg-black/60 px-1 text-[10px]">{t('ui.lib.catalogue.comingsoon')}</span>}
           {hover && !reason && typeof preset.defaults['durationMs'] === 'number' && <span className="t-mono absolute bottom-1 left-1 rounded-[4px] bg-black/60 px-1">{String(preset.defaults['durationMs'])} ms</span>}
         </div>
-        <span data-el="lib.catalogue.card.label" className="truncate px-2 py-1 text-[13px] font-medium">{label}</span>
+        <span data-el="lib.catalogue.card.label" className="truncate py-1 pl-2 pr-8 text-[13px] font-medium">{label}</span>
       </button>
+      <button ref={infoRef} type="button" data-el="lib.catalogue.card.details" aria-haspopup="dialog" aria-expanded={details} aria-label={t('ui.lib.params.open', { preset: label })} title={t('ui.lib.params.open', { preset: label })}
+        onClick={() => setDetails((d) => !d)} className="absolute bottom-0.5 right-1 flex h-6 w-6 items-center justify-center rounded-[4px] text-em-muted hover:bg-em-panel-2 hover:text-em-text">
+        <Info size={14} aria-hidden />
+      </button>
+      {details && <PresetParams preset={preset} anchor={infoRef.current} onClose={() => setDetails(false)} disabledReason={reason ?? (modelMissing ? t('ui.lib.catalogue.badge.model', { model: modelKey ?? '' }) : null)} />}
     </div>
   );
 }

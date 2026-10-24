@@ -1,6 +1,6 @@
-// First-run wizard (scr.onboarding.*, ONBOARDING_TOUR.md §2) and the 10-step in-app tour (§3).
+// First-run wizard (scr.onboarding.*, ONBOARDING_TOUR.md §2). The 10-step in-app tour (§3) lives in Tour.tsx.
 // The welcome step can switch onboarding + tour copy to Indonesian independently of the UI language (I18N-09).
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useState } from 'react';
 import { useStore } from '../state/store.js';
 import { Button, cx } from '../components/ui.js';
 import { LicenseForm } from './License.js';
@@ -19,7 +19,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   const finish = (tour: boolean) => {
     setPrefs({ onboardingDone: true, onboardingStep: 0 });
     onClose();
-    if (tour) window.dispatchEvent(new CustomEvent('em:tour'));
+    if (tour) window.dispatchEvent(new CustomEvent('em:tour', { detail: { source: 'onboarding' } }));
     else if (!state.project) void actions.createProject({ name: translate(state.settings?.uiLanguage ?? 'en', 'ui.hdr.title.untitled') });
   };
   const id = STEPS[step]!;
@@ -81,60 +81,6 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           )}
         </section>
         {step > 0 && <div><Button variant="ghost" size={28} onClick={() => go(step - 1)}>{o('onb.back')}</Button></div>}
-      </div>
-    </div>
-  );
-}
-
-const TOUR: Array<{ target: string }> = [
-  { target: 'hdr.menu.design' }, { target: 'lib.assets.panel' }, { target: 'lib.catalogue.card' }, { target: 'agent.editor.intentqueue' }, { target: 'stage.timeline' },
-  { target: 'agent.brainstorm.composer' }, { target: 'agent.editor.panel' }, { target: 'agent.output' }, { target: 'agent.output.private' }, { target: 'hdr.action.export' },
-];
-
-export function Tour() {
-  const { prefs, setPrefs, actions, state } = useStore();
-  const [step, setStep] = useState<number | null>(null);
-  const [rect, setRect] = useState<DOMRect | null>(null);
-  const o = (k: string, v?: Record<string, string | number>) => translate(prefs.onboardingLang, k, v);
-  useEffect(() => {
-    const start = () => { actions.setLibMode('design'); setStep(0); };
-    window.addEventListener('em:tour', start);
-    return () => window.removeEventListener('em:tour', start);
-  }, [actions]);
-  useLayoutEffect(() => {
-    if (step === null) return;
-    const el = document.querySelector(`[data-el="${TOUR[step]!.target}"]`);
-    el?.scrollIntoView?.({ block: 'nearest' });
-    setRect(el ? el.getBoundingClientRect() : null);
-  }, [step, state.libMode]);
-  if (step === null) return null;
-  const end = () => { setStep(null); setPrefs({ tourDone: true }); };
-  const n = step + 1;
-  const done = step >= TOUR.length;
-  const pad = 8;
-  const cardTop = rect ? Math.min(window.innerHeight - 220, rect.bottom + 12) : window.innerHeight / 2 - 100;
-  const cardLeft = rect ? Math.max(16, Math.min(window.innerWidth - 336, rect.left)) : window.innerWidth / 2 - 160;
-  return (
-    <div className="fixed inset-0 z-[70]" onKeyDown={(e) => { if (e.key === 'Escape') end(); if (e.key === 'Enter') setStep(step + 1); }}>
-      {rect && !done && <div aria-hidden className="pointer-events-none absolute rounded-[8px]" style={{ left: rect.left - pad, top: rect.top - pad, width: rect.width + 2 * pad, height: rect.height + 2 * pad, boxShadow: '0 0 0 9999px var(--em-overlay)' }} />}
-      {(!rect || done) && <div aria-hidden className="absolute inset-0" style={{ background: 'var(--em-overlay)' }} />}
-      <div role="dialog" aria-label={done ? o('tour.done.title') : o('tour.step', { n, title: o(`tour.${n}.title`) })} className="absolute w-80 rounded-[8px] border border-em-line bg-em-panel p-3" style={{ top: cardTop, left: cardLeft, boxShadow: 'var(--sh-2)' }}>
-        {done ? (
-          <>
-            <p className="mb-3">{o('tour.done.body')}</p>
-            <div className="flex gap-2"><Button size={28} onClick={end}>{o('tour.done.keep')}</Button><Button size={28} variant="primary" onClick={() => { end(); actions.setScreen({ kind: 'project.new' }); }}>{o('tour.done.own')}</Button></div>
-          </>
-        ) : (
-          <>
-            <div className="mb-1 flex items-center gap-2"><span className="flex-1 font-semibold">{o(`tour.${n}.title`)}</span><span className="t-mono text-em-muted">{n} / {TOUR.length}</span></div>
-            <p className="mb-3 text-em-text-2">{o(`tour.${n}.body`)}</p>
-            <div className="flex gap-2">
-              <Button size={28} variant="ghost" onClick={end}>{o('tour.end')}</Button><span className="flex-1" />
-              {step > 0 && <Button size={28} onClick={() => setStep(step - 1)}>{o('onb.back')}</Button>}
-              <Button size={28} variant="primary" autoFocus onClick={() => setStep(step + 1)}>{o('onb.next')}</Button>
-            </div>
-          </>
-        )}
       </div>
     </div>
   );
