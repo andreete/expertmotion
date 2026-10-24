@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS settings (                       -- app-wide preferen
 CREATE TABLE IF NOT EXISTS license (
   id                 INTEGER PRIMARY KEY CHECK(id = 1),
   token_enc          BLOB,                    -- encrypted licence token (NULL = trial)
-  status             TEXT NOT NULL CHECK(status IN ('trial','active','revoked','invalid')),
+  status             TEXT NOT NULL CHECK(status IN ('trial','active','revoked','invalid','updates-expired')),
   tier               TEXT,
   licensee_hash      TEXT,
   updates_until      TEXT,
