@@ -4,6 +4,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { devConfig, prodConfig, type Bootstrap, type ServiceConfig } from './config.js';
 import { boot } from './boot.js';
+import { loadPromptAssets } from './services/prompt-assets.js';
 
 interface ParentPort { on(ev: 'message', fn: (e: { data: unknown }) => void): void; postMessage(m: unknown): void }
 const parentPort = (process as unknown as { parentPort?: ParentPort }).parentPort;
@@ -40,7 +41,7 @@ function fatal(e: unknown): never {
 process.on('uncaughtException', fatal);
 
 if (parentPort && process.env['EM_DEV'] !== '1') {
-  parentPort.on('message', (e) => { const d = e.data as Bootstrap; if (d?.type === 'bootstrap') start(prodConfig(d)).catch(fatal); });
+  parentPort.on('message', (e) => { const d = e.data as Bootstrap; if (d?.type === 'bootstrap') { try { loadPromptAssets(d.promptKeyHalf); } catch (err) { fatal(err); } start(prodConfig(d)).catch(fatal); } });
   send({ type: 'hello' });
 } else {
   start(devConfig()).catch(fatal);

@@ -46,6 +46,8 @@ import { verifyManifest, type SignedManifest } from './lib/integrity.js';
 /** Build-time constants injected by esbuild `define` (see scripts/build-main.mjs). */
 declare const __EM_FEED_URL__: string;
 declare const __EM_ENGINE_PUBLIC_KEY_B64__: string;
+declare const __EM_PROMPT_HALF_B__: string;
+const PROMPT_HALF_B = typeof __EM_PROMPT_HALF_B__ === 'string' ? __EM_PROMPT_HALF_B__ : '';
 
 const FEED_URL = typeof __EM_FEED_URL__ === 'string' ? __EM_FEED_URL__ : 'https://updates.expertmotion.invalid/win';
 
@@ -161,7 +163,7 @@ async function startService(): Promise<void> {
     });
   });
 
-  proc.postMessage(buildBootstrap({ token, port, dataDir: layout.root, dbKeyHex }));
+  proc.postMessage(buildBootstrap({ token, port, dataDir: layout.root, dbKeyHex, promptKeyHalf: PROMPT_HALF_B }));
   proc.on('exit', (code) => onServiceExit(code));
 
   try {

@@ -1,7 +1,7 @@
 // Editor Agent and Brainstorming Agent runs (AI_WORKFLOW §7, §9–§12; AGENT_DESIGN §2–§5; SYSTEM_PROMPT P-1/P-2).
 import { conflictsWithLocked, propertyKeysOf } from '@expertmotion/composition-model';
 import { EmError, type Issue } from '@expertmotion/shared';
-import { BRAINSTORM_SYSTEM, EDITOR_SYSTEM } from './prompts.generated.js';
+import { prompts } from './prompt-store.js';
 import { parseModelReply, validatePlan, extractJson, type PlanContext } from './plan.js';
 import { BrainstormTurn, type EditPlanT } from './schemas.js';
 import type { RewriteEnvelope } from './envelope.js';
@@ -12,7 +12,7 @@ export interface EditorRunResult { ok: true; plan: EditPlanT; issues: Issue[]; a
 export interface EditorRunFailure { ok: false; error: EmError; attempts: number; usage: ChatUsage[]; lastText?: string }
 
 const langName = (l: 'id' | 'en') => (l === 'id' ? 'Bahasa Indonesia' : 'English');
-export const editorSystemPrompt = (env: RewriteEnvelope) => EDITOR_SYSTEM.replaceAll('{{language_name}}', langName(env.project.language)).replaceAll('{{base_version}}', env.baseVersion);
+export const editorSystemPrompt = (env: RewriteEnvelope) => prompts().EDITOR_SYSTEM.replaceAll('{{language_name}}', langName(env.project.language)).replaceAll('{{base_version}}', env.baseVersion);
 
 async function call(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[]): Promise<string> {
   o.budgetCheck?.();
@@ -71,7 +71,7 @@ export interface BrainstormResult { ok: true; turn: ReturnType<typeof Brainstorm
 /** Brainstorming turn. Prose replies are accepted as plain text (no proposed intents) rather than failing the Creator's chat. */
 export async function runBrainstorm(history: ChatMessage[], contextBlock: unknown, language: 'id' | 'en', provider: ChatProvider, o: RunOptions = {}): Promise<BrainstormResult | { ok: false; error: EmError; usage: ChatUsage[] }> {
   const usage: ChatUsage[] = [];
-  const system = BRAINSTORM_SYSTEM.replaceAll('{{language_name}}', langName(language)).replaceAll('{{language_code}}', language).replaceAll('{{context_block}}', JSON.stringify(contextBlock));
+  const system = prompts().BRAINSTORM_SYSTEM.replaceAll('{{language_name}}', langName(language)).replaceAll('{{language_code}}', language).replaceAll('{{context_block}}', JSON.stringify(contextBlock));
   try {
     const text = await call(provider, system, windowMessages(history, 24_000), { temperature: 0.4, ...o }, usage);
     const json = extractJson(text);

@@ -12,6 +12,13 @@ Append an entry after every meaningful work unit. Newest entry first. Each entry
 
 ---
 
+## 2026-10-24 — Entry 6b: AI prompts encrypted in release builds
+
+- `npm run build:release -w @expertmotion/service` stubs `prompts.generated` with empty strings, writes `dist/assets.enc` (AES-256-GCM of the prompt set) and `dist/prompt-half-b.hex`; half A is a build constant in `service.cjs`, half B a build constant in `main.cjs` sent in the bootstrap message (`promptKeyHalf`); key = sha256(A xor B) (`apps/service/src/services/prompt-assets.ts`, same derivation as `apps/desktop/src/lib/keysplit.ts`). The service decrypts before boot and installs the set (`installPromptSet` in `packages/agents/src/prompt-store.ts`); a missing or altered file or half fails with EM-8007. `harden` verifies no prompt text remains in `service.cjs`, `main.cjs` carries this build's half B, and `assets.enc` is in the signed integrity manifest. `release:win` and `cross-build-win.sh` run the release service build. Development builds are unchanged (prompts bundled).
+- Verified: 615 tests passed (5 new), typecheck clean; the built `assets.enc` decrypts with the half A found in `service.cjs` plus half B, and `service.cjs` contains no prompt text. Honest limit: both halves are on the user's machine (as bytecode in the Windows build), so a determined owner can still recover the prompts; this raises the cost, it does not prevent it.
+
+---
+
 ## 2026-10-24 — Entry 6: Windows test build produced on the Linux server
 
 - **Stage**: 3.
@@ -21,8 +28,8 @@ Append an entry after every meaningful work unit. Newest entry first. Each entry
   - Startup integrity check wired in the Shell (`checkIntegrity` in `apps/desktop/src/main.ts`, new **EM-8007**): it was signed at build time but never verified before. Replayed against the built tree: 12/12 entries match, signature valid, key embedded in `main.cjs`.
 - **Bugs found (fixed)**: `electron-builder.config.cjs` exported `default`/helpers on the config object (circular JSON, the Windows build would have failed too); helpers moved to `apps/desktop/build/fuses.cjs`. Five shape presets (rect, star, arrow, pie, polygon) compiled shape-specific keys at the top level of `op:shape.add` and were rejected (EM-2102); now in `params` (catalogue + `intents.ts` hoists size/fill/stroke/strokeWidth), plus a test that every preset's compiled args pass its op schema. Obfuscating the 5.6 MB Engine chunk ran out of memory here; `EM_OBFUSCATE_MAX_BYTES` (default 2.5 MB in the cross-build only) skips the two largest Engine chunks.
 - **Verification**: `bash scripts/verify.sh` → typecheck clean, **610 passed**, docs-check green; catalogue loops 83 rendered, 0 failed.
-- **Known gaps (honest)**: test build has no V8 bytecode (bytenode needs Windows) and is unsigned (SmartScreen warning); the two largest Engine chunks are not obfuscated in it; `encrypt:prompts` is a no-op because the service build emits no `prompts.json` and the service has no decrypt path, so the prompts ship inside `service.cjs` (bytecode on the Windows build is their protection until this is wired). Electron runtime still unverified until the Operator runs the ZIP on Windows.
-- **Next tasks**: Operator runs the ZIP on Windows 10/11 (runbook §6 step 9 checks) and reports errors from `%APPDATA%\Expertmotion\logs\shell.log` and `service.log`; then the Windows `release:win` build for the real installer; wire `prompts.json` emission + service-side decrypt.
+- **Known gaps (honest)**: test build has no V8 bytecode (bytenode needs Windows) and is unsigned (SmartScreen warning); the two largest Engine chunks are not obfuscated in it; prompt encryption is now wired (see Entry 6b). Electron runtime still unverified until the Operator runs the ZIP on Windows.
+- **Next tasks**: Operator runs the ZIP on Windows 10/11 (runbook §6 step 9 checks) and reports errors from `%APPDATA%\Expertmotion\logs\shell.log` and `service.log`; then the Windows `release:win` build for the real installer.
 
 ---
 

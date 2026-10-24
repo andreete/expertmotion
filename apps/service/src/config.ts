@@ -23,7 +23,7 @@ export function devConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig {
   return { port: Number(env['EM_PORT'] ?? 4110), token, dataDir, dbKeyHex, dev: true, uiOrigin, version: VERSION, mediaGrantTtlMs: Number(env['EM_MEDIA_GRANT_TTL_H'] ?? 12) * 3_600_000 };
 }
 
-export interface Bootstrap { type: 'bootstrap'; token: string; port: number; dataDir: string; dbKeyHex: string }
+export interface Bootstrap { type: 'bootstrap'; token: string; port: number; dataDir: string; dbKeyHex: string; promptKeyHalf?: string }
 export function prodConfig(b: Bootstrap): ServiceConfig {
   if (!/^[A-Za-z0-9_-]{43}$/.test(b.token) || !/^[0-9a-f]{64}$/.test(b.dbKeyHex) || b.port < PROD_PORT_RANGE[0] || b.port > PROD_PORT_RANGE[1]) throw new Error('invalid bootstrap');
   return { port: b.port, token: b.token, dataDir: b.dataDir, dbKeyHex: b.dbKeyHex, dev: false, version: VERSION, mediaGrantTtlMs: 12 * 3_600_000 };

@@ -53,6 +53,7 @@ The application code now exists; these steps build the installer from it on the 
 3. Put the LGPL full FFmpeg and ffprobe for ingestion into `resources/bin/` (ADR-019; record the build URL and hash in `docs/DEPLOYMENT_AND_PACKAGING.md`).
 4. `npm run build:all` (service bundle, Editor, engine fonts and bundle, desktop main).
 5. `node packages/engine/scripts/build-loops.mjs` (all catalogue loops; about 8 s each on this server, faster on a GPU). Check `resources/catalogue/report.json` has no failures.
+5b. `npm run build:release -w @expertmotion/service` then `npm run build:main -w @expertmotion/desktop` (moves the AI prompts into the encrypted `assets.enc`, with half of its key in the service and half in the Shell).
 6. `node scripts/stage-desktop.mjs --check`, then `npm run stage:desktop`. Review the `REVIEW:` line of the notices output (GPL or unknown licences).
 7. `npm run harden -w @expertmotion/desktop` (bytenode, obfuscation, encrypted prompts, signed integrity manifest; the signing key comes from a file outside the repo).
 8. `npm run pack:win -w @expertmotion/desktop`; the installer lands in `release/<version>/`.
@@ -70,7 +71,7 @@ Differences from the Windows release path (§6), all deliberate:
 |---|---|---|
 | V8 bytecode for main and service (bytenode) | skipped (needs the pinned Electron on Windows) | yes |
 | Code signing (signtool, OV certificate) | none: SmartScreen shows "Windows protected your PC" (More info → Run anyway) | signed |
-| Obfuscation, startup integrity check (EM-8007), Electron fuses, asar | yes | yes |
+| Obfuscation, encrypted prompts, startup integrity check (EM-8007), Electron fuses, asar | yes | yes |
 | Release key | a test key in `~/em-win-deps/keys` on the server, never in git | the Operator's release key |
 
 Use the test installer for the §6 step 9 smoke test; ship only the signed Windows build.

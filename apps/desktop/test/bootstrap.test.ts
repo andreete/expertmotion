@@ -24,6 +24,13 @@ describe('bootstrap message (SEC-002, TR-002)', () => {
     expect(parseServiceMessage('ready')).toBeNull();
   });
 
+  it('carries the prompt key half only when present and well-formed (SEC-133)', () => {
+    const base = { token: 'x'.repeat(43), port: 47600, dataDir: 'C:\\data', dbKeyHex: 'a'.repeat(64) };
+    expect(buildBootstrap({ ...base, promptKeyHalf: '' })).not.toHaveProperty('promptKeyHalf');
+    expect(buildBootstrap({ ...base, promptKeyHalf: 'b'.repeat(64) }).promptKeyHalf).toBe('b'.repeat(64));
+    expect(() => buildBootstrap({ ...base, promptKeyHalf: 'zz' })).toThrow();
+  });
+
   it('shutdown message is a constant', () => {
     expect(shutdownMessage).toEqual({ type: 'shutdown' });
   });

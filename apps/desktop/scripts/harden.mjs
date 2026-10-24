@@ -97,18 +97,16 @@ for (const step of steps) {
       break;
     }
     case 'encrypt:prompts': {
-      // Key split: half in the (bytecode) service build constant, half here. Both 32 bytes.
-      const halfA = process.env.EM_PROMPT_KEY_HALF_A || randomBytes(32).toString('hex');
-      const halfB = process.env.EM_PROMPT_KEY_HALF_B || randomBytes(32).toString('hex');
-      const key = lib.deriveAssetKey(halfA, halfB, (buf) => new Uint8Array(createHash('sha256').update(buf).digest()));
-      const promptsFile = join(root, 'dist/service/prompts.json');
-      if (!existsSync(promptsFile)) { console.log('encrypt:prompts: no prompts.json yet (service build pending); skipping payload'); break; }
-      const iv = randomBytes(12);
-      const cipher = createCipheriv('aes-256-gcm', Buffer.from(key), iv);
-      const enc = Buffer.concat([cipher.update(readFileSync(promptsFile)), cipher.final()]);
-      const tag = cipher.getAuthTag();
-      writeFileSync(join(root, 'dist/service/assets.enc'), Buffer.concat([iv, tag, enc]));
-      console.log('encrypt:prompts: assets.enc written (key split A/B; combined in service memory only)');
+      // The release service build (npm run build:release -w @expertmotion/service) already moved the prompts
+      // into dist/service/assets.enc with a split key (apps/service/src/services/prompt-assets.ts). Verify it.
+      const enc = join(root, 'dist/service/assets.enc');
+      const svc = readFileSync(join(root, 'dist/service/service.cjs'), 'utf8');
+      const main = readFileSync(join(root, 'dist/main.cjs'), 'utf8');
+      if (!existsSync(enc)) throw new Error('encrypt:prompts: dist/service/assets.enc missing (run build:release for the service, then stage)');
+      if (svc.includes('You are the Editor Agent') || svc.includes('You are the Brainstorming Agent')) throw new Error('encrypt:prompts: prompt text found in service.cjs');
+      const halfBFile = join(repoRoot, 'apps/service/dist/prompt-half-b.hex');
+      if (!existsSync(halfBFile) || !main.includes(readFileSync(halfBFile, 'utf8').trim())) throw new Error('encrypt:prompts: main.cjs does not carry this build\'s prompt key half (rebuild main after build:release)');
+      console.log('encrypt:prompts: verified (assets.enc present, no prompt text in service.cjs)');
       break;
     }
     case 'integrity:manifest': {
@@ -116,6 +114,7 @@ for (const step of steps) {
       const add = (abs, logical) => { if (existsSync(abs)) entries.push({ path: logical, sha256: sha256(abs), bytes: statSync(abs).size }); };
       add(join(root, 'dist/service/service.jsc'), 'dist/service/service.jsc');
       add(join(root, 'dist/service/service.cjs'), 'dist/service/service.cjs');
+      add(join(root, 'dist/service/assets.enc'), 'dist/service/assets.enc');
       add(join(root, 'resources/engine/bundle/index.html'), 'engine/bundle/index.html');
       for (const bin of listBinaries(join(root, 'resources/bin'))) add(bin, `bin/${relative(join(root, 'resources/bin'), bin).split(/[\\/]/).join('/')}`);
       const manifest = lib.buildManifest({ appVersion: JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version, builtAt: new Date().toISOString(), entries });

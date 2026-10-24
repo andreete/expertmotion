@@ -72,7 +72,7 @@ export function planHardening(flags: HardenFlags): HardenStep[] {
     steps.push({ id: 'obfuscate:engine', description: 'Obfuscate resources/engine/bundle/*.js (debugProtection off, headless)', skipped: false });
   }
   if (flags.encryptPrompts) {
-    steps.push({ id: 'encrypt:prompts', description: 'AES-256-GCM encrypt the prompts module; key split across service bytecode + build constant', skipped: false });
+    steps.push({ id: 'encrypt:prompts', description: 'Verify the prompts ship AES-256-GCM encrypted (assets.enc); key split between the service and Shell builds', skipped: false });
   }
   if (flags.integrity) {
     // Must run last so it hashes the final .jsc and obfuscated bundles.

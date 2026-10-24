@@ -17,10 +17,13 @@ cd "$(dirname "$0")/.."
 export EM_ENGINE_PUBLIC_KEY_B64
 export EM_RELEASE_PRIVATE_KEY_PEM="$(cat "$EM_RELEASE_PRIVATE_KEY_PEM_FILE")"
 
-npm run build:main -w @expertmotion/desktop             # embeds the public key for the startup integrity check
+npm run build:release -w @expertmotion/service         # prompts → dist/assets.enc (half A in service, half B for main)
+npm run build:main -w @expertmotion/desktop             # embeds the integrity public key and prompt key half B
 node scripts/stage-desktop.mjs --platform=win32 --check
 node scripts/stage-desktop.mjs --platform=win32
 EM_OBFUSCATE_MAX_BYTES="${EM_OBFUSCATE_MAX_BYTES:-2500000}" node apps/desktop/scripts/harden.mjs   # bytecode steps are skipped off Windows
 cd apps/desktop
-npx electron-builder --win nsis --x64 --config electron-builder.config.cjs --publish never \
-  -c.npmRebuild=false -c.win.signExecutable=false
+# Portable ZIP: the NSIS target needs wine on Linux (uninstaller generation), so the installer is built on Windows.
+npx electron-builder --win zip --x64 --config electron-builder.config.cjs --publish never \
+  -c.npmRebuild=false -c.win.signExecutable=false -c.compression=normal \
+  '-c.artifactName=Expertmotion-${version}-win-${arch}-portable.${ext}'

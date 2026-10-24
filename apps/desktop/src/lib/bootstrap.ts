@@ -9,6 +9,8 @@ export interface BootstrapMessage {
   readonly port: number;
   readonly dataDir: string;
   readonly dbKeyHex: string;
+  /** Half B of the prompt-assets key (release builds only; SEC-133). */
+  readonly promptKeyHalf?: string;
 }
 
 export interface ShutdownMessage {
@@ -21,12 +23,13 @@ export type ServiceToShell = { type: 'ready'; port: number } | { type: 'fatal'; 
 
 const HEX32 = /^[0-9a-f]{64}$/;
 
-export function buildBootstrap(args: { token: string; port: number; dataDir: string; dbKeyHex: string }): BootstrapMessage {
+export function buildBootstrap(args: { token: string; port: number; dataDir: string; dbKeyHex: string; promptKeyHalf?: string }): BootstrapMessage {
   if (args.token.length < 16) throw new Error('bootstrap: token too short');
   if (!Number.isInteger(args.port) || args.port <= 0 || args.port > 65535) throw new Error('bootstrap: bad port');
   if (args.dataDir.length === 0) throw new Error('bootstrap: empty dataDir');
   if (!HEX32.test(args.dbKeyHex)) throw new Error('bootstrap: dbKeyHex must be 64 lowercase hex chars (32 bytes)');
-  return { type: 'bootstrap', token: args.token, port: args.port, dataDir: args.dataDir, dbKeyHex: args.dbKeyHex };
+  if (args.promptKeyHalf !== undefined && args.promptKeyHalf !== '' && !HEX32.test(args.promptKeyHalf)) throw new Error('bootstrap: promptKeyHalf must be 64 lowercase hex chars');
+  return { type: 'bootstrap', token: args.token, port: args.port, dataDir: args.dataDir, dbKeyHex: args.dbKeyHex, ...(args.promptKeyHalf ? { promptKeyHalf: args.promptKeyHalf } : {}) };
 }
 
 export const shutdownMessage: ShutdownMessage = { type: 'shutdown' };
