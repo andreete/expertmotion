@@ -16,6 +16,8 @@ import { ToolError, runTool } from './proc.js';
 import { s2 } from './state.js';
 
 export const MAX_ASSETS_PER_PROJECT = 200;
+/** FR-042: poster + 10 filmstrip frames. */
+export const FILMSTRIP_FRAMES = 10;
 export type IngestStage = 'hash' | 'probe' | 'transcode' | 'proxy' | 'thumbs' | 'filmstrip' | 'waveform';
 type Outcome = { status: 'ready' | 'failed' | 'duplicate' | 'cancelled'; row?: AssetRow };
 
@@ -253,9 +255,9 @@ export class IngestService {
       if (await optional('thumbs', () => ff(['-v', 'error', '-nostdin', '-y', ...at, '-i', playable, '-frames:v', '1', '-vf', 'scale=-2:360', '-q:v', '3', '-map_metadata', '-1', 'thumb.jpg'], 'thumbs', shortTimeout)))
         cols.thumb_path = rel(projectId, assetId, 'thumb.jpg');
     }
-    // 6b. filmstrip (8 frames in one row; needs the `fps` and `tile` filters of the full FFmpeg build)
+    // 6b. filmstrip (10 frames in one row, FR-042; needs the `fps` and `tile` filters of the full FFmpeg build)
     if (row.kind === 'video' && durS > 0) {
-      if (await optional('filmstrip', () => ff(['-v', 'error', '-nostdin', '-y', '-i', playable, '-vf', `fps=8/${durS.toFixed(3)},scale=160:-2,tile=8x1`, '-frames:v', '1', '-q:v', '4', 'strip.jpg'], 'filmstrip', shortTimeout)))
+      if (await optional('filmstrip', () => ff(['-v', 'error', '-nostdin', '-y', '-i', playable, '-vf', `fps=${FILMSTRIP_FRAMES}/${durS.toFixed(3)},scale=160:-2,tile=${FILMSTRIP_FRAMES}x1`, '-frames:v', '1', '-q:v', '4', 'strip.jpg'], 'filmstrip', shortTimeout)))
         cols.filmstrip_path = rel(projectId, assetId, 'strip.jpg');
     }
     // 7. waveform

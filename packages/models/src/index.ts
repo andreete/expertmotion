@@ -3,6 +3,7 @@ export * from './types.js';
 export * from './errors.js';
 export * from './registry.js';
 export * from './manifest.js';
+export * from './signed-registry.js';
 export * from './download.js';
 export * from './install.js';
 export * from './jobs.js';

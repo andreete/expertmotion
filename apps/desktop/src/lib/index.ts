@@ -14,3 +14,4 @@ export * from './obfuscation.js';
 export * from './harden-plan.js';
 export * from './keysplit.js';
 export * from './updater-policy.js';
+export * from './close-flow.js';

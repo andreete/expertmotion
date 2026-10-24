@@ -91,6 +91,26 @@ export function buildBundle(ctx: ServiceContext, includeStructure: boolean): { p
   return { path: file, bytes: zip.length, contents: entries.map((e) => e.name) };
 }
 
+/** FR-150: recent EM codes with timestamps (job ids, never content): failed jobs and agent runs plus coded log lines. */
+export function recentCodes(ctx: ServiceContext, limit = 50): Array<{ at: string; code: string; source: string; ref: string | null }> {
+  const out: Array<{ at: string; code: string; source: string; ref: string | null }> = [];
+  for (const r of all<{ id: string; code: string; at: string }>(ctx, "SELECT id, error_code code, coalesce(finished_at, created_at) at FROM render_jobs WHERE error_code IS NOT NULL ORDER BY created_at DESC LIMIT ?", limit)) out.push({ at: r.at, code: r.code, source: 'render', ref: r.id });
+  for (const r of all<{ id: string; code: string; at: string }>(ctx, "SELECT id, error_code code, coalesce(finished_at, created_at) at FROM generator_jobs WHERE error_code IS NOT NULL ORDER BY created_at DESC LIMIT ?", limit)) out.push({ at: r.at, code: r.code, source: 'generator', ref: r.id });
+  for (const r of all<{ id: string; code: string; at: string }>(ctx, "SELECT id, error_code code, coalesce(finished_at, started_at) at FROM agent_runs WHERE error_code IS NOT NULL ORDER BY started_at DESC LIMIT ?", limit)) out.push({ at: r.at, code: r.code, source: 'agent', ref: r.id });
+  try {
+    for (const f of logFiles(ctx).slice(-2)) {
+      for (const line of tail(path.join(ctx.paths.logs, f), 1024 * 1024).split('\n')) {
+        const m = /"code":"(EM-\d{4})"/.exec(line); if (!m) continue;
+        const at = /"t":"([^"]+)"/.exec(line)?.[1];
+        const ref = /"jobId":"([0-9A-Z]{26})"/.exec(line)?.[1] ?? null;
+        if (at) out.push({ at, code: m[1]!, source: 'log', ref });
+      }
+    }
+  } catch { /* no logs yet */ }
+  const seen = new Set<string>();
+  return out.sort((a, b) => b.at.localeCompare(a.at)).filter((e) => { const k = `${e.code}|${e.ref ?? e.at}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, limit);
+}
+
 export function createDiagnosticsModule(opts: DiagnosticsOptions = {}): ServiceModule {
   const onShutdown = opts.onShutdown ?? (() => { (process.emit as unknown as (ev: string, sig: string) => boolean)('SIGTERM', 'SIGTERM'); });
   return {
@@ -114,6 +134,8 @@ export function createDiagnosticsModule(opts: DiagnosticsOptions = {}): ServiceM
         }
         return { lines: out.reverse() };
       });
+
+      route(router, 'get', '/diagnostics/codes', { query: z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }) }, ({ query }) => ({ items: recentCodes(ctx, query.limit) }));   // R-182
 
       route(router, 'post', '/service/shutdown', { body: z.object({ reason: z.enum(['window-closed', 'update', 'uninstall']), timeoutMs: z.number().int().min(1000).max(10_000).optional(), force: z.boolean().optional() }).strict(), status: 202 }, ({ body, req }) => {
         if (req.headers['x-expertmotion-caller'] !== 'shell') throw new EmError('EM-8005', 'Request refused.', { status: 403 });

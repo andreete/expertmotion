@@ -107,7 +107,7 @@ const OverlayView: React.FC<{ element: CompositionModelT['tracks']['overlay'][nu
   const box: React.CSSProperties = { position: 'absolute', left, top, width: w, height: h, transform: 'translate(-50%, -50%)', display: 'flex', alignItems: 'center', justifyContent: 'center', ...m };
   if (element.kind === 'shape') {
     const Shape = SHAPES[element.presetId];
-    return Shape ? <div style={box}><Shape size={Math.min(w, h)} fill={element.fill} stroke={element.stroke} strokeWidth={element.strokeWidth === undefined ? undefined : element.strokeWidth * layout.u} params={element.params} /></div> : null;
+    return Shape ? <div style={{ ...box, ...(element.opacity === undefined ? {} : { opacity: element.opacity * (typeof m.opacity === 'number' ? m.opacity : 1) }) }}><Shape size={Math.min(w, h)} fill={element.fill} stroke={element.stroke} strokeWidth={element.strokeWidth === undefined ? undefined : element.strokeWidth * layout.u} params={element.params} /></div> : null;
   }
   if (!urls) return null;
   return <div style={{ ...box, opacity: element.opacity * (typeof m.opacity === 'number' ? m.opacity : 1) }}><Img src={quality === 'draft' && urls.proxy ? urls.proxy : urls.playable} style={{ width: '100%', height: '100%', objectFit: element.objectFit }} effects={effectsFor(element.effects, frame, durationInFrames, fps)} /></div>;

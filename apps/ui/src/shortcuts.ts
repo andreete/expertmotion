@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useStore } from './state/store.js';
 import { playerBus } from './stage/playerBus.js';
 import { requestImport } from './header/Header.js';
+import { guardUnsaved } from './screens/Lifecycle.js';
 
 export function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -35,10 +36,10 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
         const l = k.toLowerCase();
         if (l === 'z' && !e.shiftKey) { e.preventDefault(); void actions.undo(); }
         else if (l === 'y' || (l === 'z' && e.shiftKey)) { e.preventDefault(); void actions.redo(); }
-        else if (l === 's' && e.shiftKey) { e.preventDefault(); actions.setScreen({ kind: 'project.new' }); }
+        else if (l === 's' && e.shiftKey) { e.preventDefault(); if (state.project) actions.setScreen({ kind: 'project.new', saveAs: true }); }
         else if (l === 'e') { e.preventDefault(); if (state.head?.model?.tracks.video.length) actions.setScreen({ kind: 'export' }); else actions.toast('info', 'ui.hdr.export.disabled'); }
         else if (l === 'i') { e.preventDefault(); requestImport(); }
-        else if (l === 'n') { e.preventDefault(); actions.setScreen({ kind: 'project.new' }); }
+        else if (l === 'n') { e.preventDefault(); guardUnsaved({ state, actions }, () => actions.setScreen({ kind: 'project.new' })); }
         else if (l === 'o') { e.preventDefault(); actions.setScreen({ kind: 'project.open' }); }
         else if (l === 'b') { e.preventDefault(); if (e.shiftKey) collapse.toggleAgent(); else collapse.toggleLibrary(); }
         return;

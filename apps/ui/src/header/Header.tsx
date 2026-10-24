@@ -1,14 +1,16 @@
 // Header (hdr.*): menu tabs, Project Title, header actions, render chip. UI_UX_SPECIFICATION.md §4, EDITOR_INTERACTION_MODEL.md IX-21…IX-25.
-import { STORE_URL } from '../api/client.js';
+import { renderQueue } from '../state/workload.js';
+import { LicenceStatus } from '../screens/License.js';
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   Activity, Archive, ArchiveRestore, BadgeCheck, Boxes, ChevronDown, CircleHelp, Download, Folder, KeyRound, Minus, Redo2, Save, Sparkles, Square, Type, Undo2, Wrench, X,
 } from 'lucide-react';
-import { useStore } from '../state/store.js';
+import { OPEN_HARDWARE_EVENT, useStore } from '../state/store.js';
 import { Button, IconButton, MenuItem, Popover, Progress, cx } from '../components/ui.js';
 import { HardwarePopover } from '../screens/Hardware.js';
 import type { LibMode } from '../state/reducer.js';
 import { formatDuration, translate } from '../i18n/index.js';
+import { guardUnsaved, requestWindowClose } from '../screens/Lifecycle.js';
 
 /** Sample projects (R-025) carry a visible "Sample · " / "Contoh · " marker in the project's language; a name that already starts with it is not doubled. */
 export function sampleTitle(name: string, language: 'en' | 'id'): { marker: string; rest: string } {
@@ -21,13 +23,16 @@ export const requestImport = (accept?: string) => window.dispatchEvent(new Custo
 export function Header() {
   const { state, actions, t, prefs, setPrefs } = useStore();
   const [menu, setMenu] = useState<'file' | 'help' | 'recent' | 'hardware' | 'license' | null>(null);
+  // FR-128: the low-disk banner's "Open Hardware Monitor" action opens the popover.
+  useEffect(() => { const open = () => setMenu('hardware'); window.addEventListener(OPEN_HARDWARE_EVENT, open); return () => window.removeEventListener(OPEN_HARDWARE_EVENT, open); }, []);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [titleError, setTitleError] = useState(false);
   const p = state.project;
   const hasClip = (state.head?.model?.tracks.video.length ?? 0) > 0;
   const exportReason = hasClip ? null : t('ui.hdr.export.disabled');
-  const rendering = state.renders.find((j) => j.status === 'rendering' || j.status === 'queued');
+  const queue = renderQueue(state.renders);
+  const rendering = queue.active ?? queue.queued[0];
   const licensed = state.licence?.status === 'active';
   const lowResources = state.tick ? state.tick.ramFreeMb < 2048 || (state.tick.diskFreeMb ?? Infinity) < 1024 : false;
   const close = () => setMenu(null);
@@ -60,12 +65,12 @@ export function Header() {
           className="flex h-12 items-center gap-1 px-2.5 text-[13px] font-medium text-em-text-2 hover:text-em-text"><Folder size={16} aria-hidden />{t('ui.hdr.menu.file')}</button>
         {(menu === 'file' || menu === 'recent') && (
           <Popover onClose={close} role="menu" label={t('ui.hdr.menu.file')} width={280}>
-            <MenuItem el="hdr.menu.file.new" shortcut="Ctrl+N" onClick={() => { close(); actions.setScreen({ kind: 'project.new' }); }}>{t('ui.hdr.menu.file.new')}</MenuItem>
+            <MenuItem el="hdr.menu.file.new" shortcut="Ctrl+N" onClick={() => { close(); guardUnsaved({ state, actions }, () => actions.setScreen({ kind: 'project.new' })); }}>{t('ui.hdr.menu.file.new')}</MenuItem>
             <MenuItem el="hdr.menu.file.open" shortcut="Ctrl+O" onClick={() => { close(); actions.setScreen({ kind: 'project.open' }); }}>{t('ui.hdr.menu.file.open')}</MenuItem>
             <MenuItem el="hdr.menu.file.recent" onClick={() => setMenu(menu === 'recent' ? 'file' : 'recent')}>{t('ui.hdr.menu.file.recent')} ▸</MenuItem>
-            {menu === 'recent' && <RecentList onPick={(id) => { close(); void actions.openProject(id); }} />}
+            {menu === 'recent' && <RecentList onPick={(id) => { close(); if (id !== p?.id) guardUnsaved({ state, actions }, () => { void actions.openProject(id); }); }} />}
             <MenuItem el="hdr.menu.file.save" shortcut="Ctrl+S" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); void actions.save(); }}>{t('ui.hdr.menu.file.save')}</MenuItem>
-            <MenuItem el="hdr.menu.file.saveas" shortcut="Ctrl+Shift+S" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); actions.setScreen({ kind: 'project.new' }); }}>{t('ui.hdr.menu.file.saveas')}</MenuItem>
+            <MenuItem el="hdr.menu.file.saveas" shortcut="Ctrl+Shift+S" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); actions.setScreen({ kind: 'project.new', saveAs: true }); }}>{t('ui.hdr.menu.file.saveas')}</MenuItem>
             <MenuItem el="hdr.menu.file.import" shortcut="Ctrl+I" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); requestImport(); }}>{t('ui.hdr.menu.file.import')}</MenuItem>
             <MenuItem el="hdr.menu.file.export" shortcut="Ctrl+E" disabledReason={exportReason} onClick={() => { close(); actions.setScreen({ kind: 'export' }); }}>{t('ui.hdr.menu.file.export')}</MenuItem>
             <MenuItem el="hdr.menu.file.settings" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); actions.setScreen({ kind: 'project.settings' }); }}>{t('ui.hdr.menu.file.settings')}</MenuItem>
@@ -86,10 +91,11 @@ export function Header() {
         {menu === 'help' && (
           <Popover onClose={close} role="menu" label={t('ui.hdr.menu.help')} width={240}>
             <MenuItem el="hdr.menu.help.tour" onClick={() => { close(); setPrefs({ tourDone: false }); window.dispatchEvent(new CustomEvent('em:tour', { detail: { source: 'help' } })); }}>{t('ui.hdr.menu.help.tour')}</MenuItem>
+            <MenuItem el="hdr.menu.help.onboarding" onClick={() => { close(); actions.setScreen({ kind: 'onboarding' }); }}>{t('ui.hdr.menu.help.onboarding')}</MenuItem>
             <MenuItem el="hdr.menu.help.shortcuts" shortcut="Shift+?" onClick={() => { close(); actions.setScreen({ kind: 'shortcuts' }); }}>{t('ui.hdr.menu.help.shortcuts')}</MenuItem>
             <MenuItem el="hdr.menu.help.diagnostics" onClick={() => { close(); actions.setScreen({ kind: 'diagnostics' }); }}>{t('ui.hdr.menu.help.diagnostics')}</MenuItem>
             <MenuItem el="hdr.menu.help.license" onClick={() => { close(); actions.setScreen({ kind: 'license' }); }}>{t('ui.hdr.menu.help.license')}</MenuItem>
-            <MenuItem el="hdr.menu.help.docs" onClick={() => { close(); void shell?.openExternal?.('docs/index.html'); }}>{t('ui.hdr.menu.help.docs')}</MenuItem>
+            <MenuItem el="hdr.menu.help.docs" onClick={() => { close(); actions.setScreen({ kind: 'help' }); }}>{t('ui.hdr.menu.help.docs')}</MenuItem>
             <MenuItem el="hdr.menu.help.about" onClick={() => { close(); actions.setScreen({ kind: 'about' }); }}>{t('ui.hdr.menu.help.about')}</MenuItem>
           </Popover>
         )}
@@ -113,6 +119,7 @@ export function Header() {
           <button type="button" data-el="sys.render.progress" onClick={() => actions.setScreen({ kind: 'export' })} aria-label={t('a11y.sys.render.progress', { percent, eta: rendering.etaMs ? formatDuration(rendering.etaMs) : '…' })}
             className="ml-2 flex items-center gap-2 rounded-full border border-em-line bg-em-panel-2 px-2.5 py-0.5 text-[12px]">
             <span>{t('ui.sys.render.progress', { percent, eta: rendering.etaMs ? formatDuration(rendering.etaMs) : '…' })}</span>
+            {queue.queued.length > 0 && <span className="text-em-muted">{t('ui.sys.render.queued', { n: queue.queued.length })}</span>}
             <span className="w-16"><Progress value={rendering.progress} label={t('ui.sys.render.progress', { percent, eta: '' })} /></span>
           </button>
         )}
@@ -136,13 +143,7 @@ export function Header() {
           <IconButton el="hdr.action.license" data-popover-trigger="" label={t('ui.hdr.action.license')} icon={licensed ? <BadgeCheck size={16} className="text-em-success" /> : <KeyRound size={16} className="text-em-warn" />} onClick={() => setMenu(menu === 'license' ? null : 'license')} />
           {menu === 'license' && (
             <Popover onClose={close} align="right" width={300} label={t('ui.hdr.action.license')}>
-              <div className="p-2">
-                <p className="mb-2">{licensed ? t('ui.hdr.license.licensed', { name: state.licence?.licenseeHash ?? '', date: state.licence?.updatesUntil?.slice(0, 10) ?? '' }) : t('ui.hdr.license.trial')}</p>
-                <div className="flex gap-2">
-                  <Button size={28} onClick={() => { close(); actions.setScreen({ kind: 'license' }); }}>{t('ui.hdr.license.enterkey')}</Button>
-                  {!licensed && <Button size={28} variant="primary" onClick={() => { close(); void shell?.openExternal?.(STORE_URL); actions.setScreen({ kind: 'license' }); }}>{t('ui.hdr.action.purchase')}</Button>}
-                </div>
-              </div>
+              <LicenceStatus onAction={(screen) => { close(); actions.setScreen({ kind: screen }); }} />
             </Popover>
           )}
         </div>
@@ -151,7 +152,7 @@ export function Header() {
           <span className="ml-2 flex">
             <IconButton el="hdr.win.minimize" label={t('ui.hdr.win.minimize')} icon={<Minus size={16} />} size={28} />
             <IconButton el="hdr.win.maximize" label={t('ui.hdr.win.maximize')} icon={<Square size={14} />} size={28} />
-            <IconButton el="hdr.win.close" label={t('ui.hdr.win.close')} icon={<X size={16} />} size={28} />
+            <IconButton el="hdr.win.close" label={t('ui.hdr.win.close')} icon={<X size={16} />} size={28} onClick={requestWindowClose} />
           </span>
         )}
       </div>

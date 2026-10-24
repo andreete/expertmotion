@@ -146,7 +146,7 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 |---|---|---|---|---|
 | `op:clip.insert` | sequence | `{assetId, atIndex?, trimBeforeMs?, durationMs?}` | list | from Insert; durationMs defaults to asset duration |
 | `op:clip.remove` | clip | `{}` | — | destructive → confirmation |
-| `op:clip.move` | clip | `{toIndex}` | — | P1 reordering |
+| `op:clip.move` | clip | `{toIndex}` | — | P1 reordering (FR-068 Timeline drag); the cut count is unchanged, so transitions stay on their cut positions and re-attach to the new neighbours; a Creator drag records key `clip:<id>.order` |
 | `op:clip.setTrim` | clip | `{trimBeforeMs, durationMs}` | scalar | validator: within asset duration |
 | `op:clip.setPlaybackRate` | clip | `{rate: 0.25..4}` | scalar | no reverse |
 | `op:clip.setVolume` | clip | `{volume: 0..1, fadeInMs?, fadeOutMs?}` | scalar | |
@@ -155,7 +155,7 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:transition.clear` | cut | `{}` | — | |
 | `op:text.add` | playhead/absolute | `{text, variant, atMs, durationMs, position, styleOverrides?}` | list | uses Theme defaults |
 | `op:text.setContent` | text | `{text}` | scalar | |
-| `op:text.setStyle` | text | `{fontFamily?, fontSize?, weight?, colour?, align?, opacity?}` | scalar per field | each field its own Locked Key |
+| `op:text.setStyle` | text | `{fontFamily?, fontSize? (16..200 u), weight?, italic?, colour?, align?, opacity?, variant?}` | scalar per field | each field its own Locked Key; `variant` (FR-025) sets `variantId`, moves the layer to the variant position and drops its size/weight/align overrides |
 | `op:text.setEffect` | text | `{presetId, params?}` | exclusive-group | text effects |
 | `op:text.setTiming` | text | `{atMs, durationMs}` | scalar | |
 | `op:text.remove` | text | `{}` | — | |
@@ -175,15 +175,17 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:shape.remove` | shape | `{}` | — | |
 | `op:overlay.addImage` | absolute | `{assetId, atMs, durationMs?=5000, position?, size? (width in u; height from the image aspect), objectFit?='contain', opacity?=1}` | list | ADR-020 addition (FR-029 Insert Image) |
 | `op:overlay.remove` | image | `{}` | — | ADR-020 addition |
+| `op:overlay.setOpacity` | image/shape | `{opacity: 0..1}` | scalar | ADR-020 addition (FR-028 opacity of an overlay image or Shape); key `<kind>:<id>.opacity` |
 | `op:audio.addBed` | project | `{assetId, volume, loop, duckingPresetId?}` | list | background music |
 | `op:audio.addLayer` | absolute | `{assetId, atMs, volume, fadeInMs?, fadeOutMs?}` | list | voice, sfx |
 | `op:audio.setDucking` | audio | `{presetId, params?}` | exclusive-group | |
 | `op:audio.setFades` | audio | `{fadeInMs?, fadeOutMs?}` (integers, ms, ≤ half the layer duration each) | scalar per field | applies `preset:audio.fade-in-out`; added 2026-10-24 (ADR-020) |
 | `op:audio.remove` | audio | `{}` | — | |
 | `op:theme.set` | project | `{paletteId?, fontPairId?, defaultEasingId?}` | scalar per field | |
-| `op:theme.setTextDefaults` | project | `{fontFamily?, fontSize?, weight?, colour?, align?, opacity?}` | scalar per field | Theme defaults for new Text Layers; propertyKey `theme.textDefaults.<field>` |
+| `op:theme.setTextDefaults` | project | `{fontFamily?, fontSize? (16..200 u), weight?, italic?, colour?, align?, opacity?}` | scalar per field | Theme defaults for new Text Layers; propertyKey `theme.textDefaults.<field>` |
 | `op:output.setRatio` | project | `{ratio}` | scalar | 16:9 … custom |
 | `op:output.setResolution` | project | `{preset}` | scalar | gated by tier |
+| `op:output.setAutoRatio` | project | `{on}` | scalar | FR-088: on = ratio follows the first Clip's probe (nearest supported ratio) now and whenever the first Clip changes; `op:output.setRatio` turns it off; key `project.ratioAuto` |
 | `op:project.setFps` | project | `{fps}` | scalar | re-derives frames |
 | `op:project.setDurationPolicy` | project | `{policy: 'fit-content'|'fixed', fixedMs?}` | scalar | |
 | `op:generated.insert` | project | `{kind: 'voice'|'music'|'thumbnail'|'captions', jobId}` | list | result of a generator job |

@@ -73,6 +73,34 @@ describe('projects R-010…R-019', () => {
     const bad = await s.json(`/projects/${p.id}/settings`, { method: 'PUT', json: { ...put.body.settings, ratio: 'custom', customRatio: { w: 200, h: 200 } } });
     expect([bad.status, bad.body.error.code]).toEqual([400, 'EM-2402']);
   });
+  it('FR-088/FR-095/FR-097: Auto lives in the model (can be re-enabled), follows the first clip, manual ratio turns it off, reset is one undoable version', async () => {
+    const t = await startS1({ assets: [{ id: 'land', kind: 'video', status: 'ready', durationMs: 5000, width: 1920, height: 1080, name: 'land.mp4' }, { id: 'port', kind: 'video', status: 'ready', durationMs: 5000, width: 1080, height: 1920, name: 'port.mp4' }] });
+    try {
+      const p = await newProject(t, 'Auto', { ratio: '9:16', autoRatio: false });
+      const pick = async (output: Record<string, unknown>) => t.json(`/projects/${p.id}/intents`, { method: 'POST', json: { source: 'ui', category: 'layout', target: { kind: 'project' }, output, baseVersion: await headHash(t, p.id) } });
+      const on = await pick({ kind: 'autoRatio', value: true });
+      expect(on.status).toBe(201);
+      expect(on.body.intent).toMatchObject({ propertyKey: 'project.ratioAuto', needsInterpretation: false, status: 'executed' });
+      expect((await t.json(`/projects/${p.id}/settings`)).body.autoRatio).toBe(true);
+      insertClips(t, p.id, ['land']);
+      expect((await t.json(`/projects/${p.id}/settings`)).body).toMatchObject({ ratio: '16:9', autoRatio: true });
+      insertClips(t, p.id, ['port']);
+      expect((await t.json(`/projects/${p.id}/settings`)).body.ratio).toBe('16:9');       // only the first clip counts
+      const manual = await pick({ kind: 'ratio', value: '1:1' });
+      expect(manual.body.intent.status).toBe('executed');
+      expect((await t.json(`/projects/${p.id}/settings`)).body).toMatchObject({ ratio: '1:1', autoRatio: false });
+      const again = await pick({ kind: 'autoRatio', value: true });                          // the bug: Auto could never come back
+      expect(again.body.queue.items.find((i: any) => i.id === on.body.intent.id).status).toBe('superseded');
+      expect((await t.json(`/projects/${p.id}/settings`)).body).toMatchObject({ ratio: '16:9', autoRatio: true });
+      await pick({ kind: 'resolution', value: '2k' });
+      const g = (await t.json(`/projects/${p.id}/settings`)).body;
+      const reset = await t.json(`/projects/${p.id}/settings`, { method: 'PUT', json: { fps: g.fps, language: g.language, ratio: '9:16', resolution: '1080p', autoRatio: false } });
+      expect(reset.body.settings).toMatchObject({ ratio: '9:16', resolution: '1080p', autoRatio: false });
+      expect(reset.body.version).not.toBeNull();
+      await t.json(`/projects/${p.id}/composition/undo`, { method: 'POST' });                 // one Undo restores all of it
+      expect((await t.json(`/projects/${p.id}/settings`)).body).toMatchObject({ ratio: '16:9', resolution: '2k', autoRatio: true });
+    } finally { await t.close(); }
+  });
   it('soft-deletes (204), then the project is gone; delete refuses while an agent run is active', async () => {
     const p = await newProject(s, 'Delete me');
     s.ctx.db.prepare("INSERT INTO agent_runs (id, project_id, agent, model_id, status, started_at) VALUES ('R1', ?, 'editor', 'm', 'running', 'now')").run(p.id);

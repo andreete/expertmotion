@@ -9,8 +9,9 @@ export type AgentT = z.infer<typeof Agent>;
 export const ProviderKind = z.enum(['openrouter', 'openai', 'anthropic', 'google', 'custom']);
 export type ProviderKindT = z.infer<typeof ProviderKind>;
 
-export const CapabilityRow = z.object({ modelId: z.string(), label: z.string(), contextLength: z.number().int().nullable(), toolCalling: z.boolean(), structuredOutput: z.boolean(),
-  streaming: z.boolean(), imageInput: z.boolean(), pricePerMInput: z.number().nullable(), pricePerMOutput: z.number().nullable() });
+/** Capability Table row (FR-114): capability facts are tri-state, `null` = the provider did not report it (shown as unknown, never guessed). */
+export const CapabilityRow = z.object({ modelId: z.string(), label: z.string(), contextLength: z.number().int().nullable(), toolCalling: z.boolean().nullable(), structuredOutput: z.boolean().nullable(),
+  streaming: z.boolean().nullable(), imageInput: z.boolean().nullable(), pricePerMInput: z.number().nullable(), pricePerMOutput: z.number().nullable() });
 export type CapabilityRowT = z.infer<typeof CapabilityRow>;
 
 export const AssignmentSettings = z.object({ temperature: z.number().min(0).max(2).optional(), maxTokens: z.number().int().min(64).max(64_000).optional(), effort: z.enum(['low', 'medium', 'high']).optional() }).strict();

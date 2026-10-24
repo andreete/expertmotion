@@ -10,7 +10,7 @@ import { createGeneratorsModule } from '../../src/modules/generators.js';
 import { createEgress } from '../../src/services/egress.js';
 import { generatorsServiceOf, type GeneratorEngines } from '../../src/s2/generators-service.js';
 import { modelsServiceOf } from '../../src/s2/models-service.js';
-import { hasFfmpeg, json, startS2, wavBuffer, type S2Service } from './harness.js';
+import { FIXTURES, ffmpeg, hasFfmpeg, json, startS2, wavBuffer, type S2Service } from './harness.js';
 
 const blob = crypto.randomBytes(300_000);
 const sha = (b: Buffer) => crypto.createHash('sha256').update(b).digest('hex');
@@ -70,6 +70,22 @@ describe('Model Manager (R-140…R-144) through the egress module', () => {
     expect(fetched.length).toBe(n);
     s.ctx.settings.update({ privateMode: false });
   });
+  it('FR-161: Private Mode pauses a running download with EM-7006 and resumes it automatically when turned off', async () => {
+    slow = false;
+    await s.api('/models/voice-slow/install', { method: 'POST' });
+    for (let i = 0; i < 100 && !slow; i++) await new Promise((r) => setTimeout(r, 20));
+    s.ctx.settings.update({ privateMode: true });
+    const ev = await s.waitEvent((e) => e.name === 'model.failed' && e.data['key'] === 'voice-slow' && e.data['code'] === 'EM-7006');
+    expect(ev.data['paused']).toBe(true);
+    const paused = await json<ModelDto>(await s.api('/models/voice-slow'));
+    expect(paused.status).toBe('not-installed'); expect(paused.errorCode).toBe('EM-7006');
+    const n = fetched.length;
+    s.ctx.settings.update({ privateMode: false });
+    for (let i = 0; i < 100 && fetched.length === n; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(fetched.length).toBeGreaterThan(n);
+    expect((await json<ModelDto>(await s.api('/models/voice-slow'))).status).toBe('downloading');
+    await s.api('/models/voice-slow/cancel', { method: 'POST' });
+  });
   it('cancel keeps the partial file; a second install while downloading is 409 EM-7104; delete removes weights', async () => {
     await s.api('/models/voice-slow/install', { method: 'POST' });
     expect((await s.api('/models/voice-slow/install', { method: 'POST' })).status).toBe(409);
@@ -84,11 +100,14 @@ describe('Model Manager (R-140…R-144) through the egress module', () => {
 describe('generators (R-130…R-133) with fake engines', () => {
   let s: S2Service; let pid: string; let calls: string[] = []; let gate: Promise<void> = Promise.resolve();
   const voiceDef = def('piper-test');
+  const imageDef = def('sd15-emaonly', { engine: 'stable-diffusion.cpp', task: 'image', files: [{ ...def('x').files[0]!, name: 'model.safetensors' }] });
+  let pngN = 0;
   const engines: Partial<GeneratorEngines> = {
+    image: async (i, c) => { const p = path.join(c.jobDir, `img-${++pngN}.png`); ffmpeg(['-ss', String(pngN * 0.3), '-i', path.join(FIXTURES, 'clip-a.mp4'), '-frames:v', '1', p]); c.onProgress(1); return { pngPath: p }; },
     voice: async (i, c) => { calls.push(`voice:${i.text}`); await gate; if (c.signal.aborted) throw new Error('aborted'); c.onProgress(0.5); const p = path.join(c.jobDir, 'out.wav'); fs.writeFileSync(p, wavBuffer(800)); return { wavPath: p }; },
   };
   beforeAll(async () => {
-    s = await startS2([health, createAssetsModule(), createModelsModule({ registry: () => [voiceDef], freeBytes: async () => 1e12 }), createGeneratorsModule({ engines })]);
+    s = await startS2([health, createAssetsModule(), createModelsModule({ registry: () => [voiceDef, imageDef], freeBytes: async () => 1e12 }), createGeneratorsModule({ engines })]);
     pid = s.project();
     // install the fake voice by writing its manifest-backed files through the real installer path
     s.ctx.egress = createEgress({ isPrivate: () => false, impl: (async () => new Response(blob, { status: 200 })) as unknown as typeof fetch });
@@ -156,6 +175,52 @@ describe('generators (R-130…R-133) with fake engines', () => {
     const r = await gen('hashtags', { language: 'id', platform: 'tiktok', count: 10 });
     expect(r.status).toBe(423);
     s.ctx.settings.update({ privateMode: false });
+  });
+  it('R-135 lists the five Generator Cards with priority, enabled state, model, installed state, size and tier hint', async () => {
+    type Card = { kind: string; enabled: boolean; priority: string; llm: boolean; tierHint: string; models: Array<{ key: string; installed: boolean; bytes: number }> };
+    const { items } = await json<{ items: Card[] }>(await s.api('/generators'));
+    expect(items.map((c) => c.kind)).toEqual(['voice', 'music', 'thumbnail', 'captions', 'hashtags']);
+    expect(Object.fromEntries(items.map((c) => [c.kind, c.priority]))).toEqual({ voice: 'P1', music: 'P2', thumbnail: 'P2', captions: 'P1', hashtags: 'P1' });
+    expect(items.every((c) => c.enabled)).toBe(true);
+    expect(items.find((c) => c.kind === 'voice')!.models).toEqual([expect.objectContaining({ key: 'piper-test', installed: true, bytes: blob.length })]);
+    expect(items.find((c) => c.kind === 'hashtags')!.llm).toBe(true);
+    const t = await startS2([health, createGeneratorsModule({ enabledKinds: ['voice'] })]);
+    const cards = (await json<{ items: Card[] }>(await t.api('/generators'))).items;
+    expect(cards.filter((c) => c.enabled).map((c) => c.kind)).toEqual(['voice']);
+    await t.close();
+  });
+  it.skipIf(!hasFfmpeg)('FR-103: thumbnail returns 1–4 candidates; the chosen one is saved to Outputs (R-136)', async () => {
+    await modelsServiceOf(s.ctx).install('sd15-emaonly'); await modelsServiceOf(s.ctx).idle();
+    const j = await final((await json<GenJob>(await gen('thumbnail', { prompt: 'kopi pagi', count: 3 }))).id);
+    expect([j.status, j.errorCode]).toEqual(['done', null]);
+    const cands = (j.result!['candidates'] as Array<{ assetId: string }>);
+    expect(cands).toHaveLength(3);
+    const out = await s.api(`/generator-jobs/${j.id}/save-output`, { method: 'POST', json: { assetId: cands[1]!.assetId } });
+    expect(out.status).toBe(200);
+    const o = await json<{ kind: string; path: string; fileName: string }>(out);
+    expect(o.kind).toBe('still'); expect(fs.existsSync(o.path)).toBe(true); expect(o.fileName).toMatch(/thumbnail-\d{8}-\d{4}\.png$/);
+    expect((await s.api(`/generator-jobs/${j.id}/save-output`, { method: 'POST', json: { assetId: '01ARZ3NDEKTSV4RRFFQ69G5FAV' } })).status).toBe(400);
+    expect((s.ctx.db.prepare("SELECT count(*) n FROM outputs WHERE project_id = ? AND kind = 'still'").get(pid) as { n: number }).n).toBe(1);
+  });
+  it('FR-104: caption text edited in the preview replaces the pages on Insert (R-134 body.pages)', async () => {
+    const id = '01ARZ3NDEKTSV4RRFFQ69G5FCP';
+    const pages = [{ text: 'halo dunia', startMs: 0, durationMs: 1000, tokens: [{ text: 'halo', fromMs: 0, toMs: 500 }, { text: 'dunia', fromMs: 500, toMs: 1000 }] }];
+    s.ctx.db.prepare("INSERT INTO generator_jobs (id, project_id, kind, input_json, status, progress, result_json, created_at) VALUES (?, ?, 'captions', '{}', 'done', 1, ?, ?)")
+      .run(id, pid, JSON.stringify({ pages, proposedOps: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } }] }), new Date().toISOString());
+    const edited = [{ ...pages[0]!, text: 'Halo, Dunia!', tokens: [{ text: 'Halo,', fromMs: 0, toMs: 500 }, { text: 'Dunia!', fromMs: 500, toMs: 1000 }] }];
+    const r = await s.api(`/generator-jobs/${id}/insert`, { method: 'POST', json: { pages: edited } });
+    expect(r.status).toBe(200);
+    expect(s.applied.at(-1)!.ops[0]).toMatchObject({ op: 'op:caption.setPages', args: { pages: edited } });
+  });
+  it('FR-108: jobs older than 7 days leave the Generated list; R-137 deletes one; R-131 filters by kind', async () => {
+    const old = new Date(Date.now() - 8 * 86_400_000).toISOString();
+    s.ctx.db.prepare("INSERT INTO generator_jobs (id, project_id, kind, input_json, status, created_at) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5OLD', ?, 'music', '{}', 'done', ?)").run(pid, old);
+    s.ctx.db.prepare("INSERT INTO generator_jobs (id, project_id, kind, input_json, status, created_at) VALUES ('01ARZ3NDEKTSV4RRFFQ69G5NEW', ?, 'music', '{}', 'done', ?)").run(pid, new Date().toISOString());
+    const list = await json<{ items: GenJob[] }>(await s.api(`/projects/${pid}/generator-jobs?kind=music`));
+    expect(list.items.map((j) => j.id)).toEqual(['01ARZ3NDEKTSV4RRFFQ69G5NEW']);
+    expect((await s.api('/generator-jobs/01ARZ3NDEKTSV4RRFFQ69G5NEW', { method: 'DELETE' })).status).toBe(204);
+    expect((await s.api('/generator-jobs/01ARZ3NDEKTSV4RRFFQ69G5NEW')).status).toBe(404);
+    expect((await s.api('/generator-jobs/01ARZ3NDEKTSV4RRFFQ69G5NEW', { method: 'DELETE' })).status).toBe(404);
   });
   it('a build without a kind answers EM-9004; interrupted jobs fail on start', async () => {
     const t = await startS2([health, createGeneratorsModule({ enabledKinds: [] })]);

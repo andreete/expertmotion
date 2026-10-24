@@ -29,7 +29,6 @@ const blockingOnly = (issues: readonly Issue[]) => issues.filter((i) => i.severi
 
 export class CompositionStore {
   private readonly heads = new Map<string, Head>();
-  private readonly redo = new Map<string, string[]>();
   private readonly afterCommit: Array<(projectId: string, head: Head, cause: VersionCause) => void> = [];
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -89,11 +88,20 @@ export class CompositionStore {
     this.heads.delete(projectId); this.heads.set(projectId, h);
     while (this.heads.size > HEAD_CACHE) { const k = this.heads.keys().next().value; if (k === undefined) break; this.heads.delete(k); }
   }
-  forget(projectId: string): void { this.heads.delete(projectId); this.redo.delete(projectId); }
+  forget(projectId: string): void { this.heads.delete(projectId); }
 
   canUndo(projectId: string): boolean { try { return this.head(projectId).parentId !== null; } catch { return false; } }
-  canRedo(projectId: string): boolean { return (this.redo.get(projectId)?.length ?? 0) > 0; }
-  clearRedo(projectId: string): void { this.redo.delete(projectId); }
+  canRedo(projectId: string): boolean { return this.redoStack(projectId).length > 0; }
+  clearRedo(projectId: string): void { this.setRedo(projectId, []); }
+  /** FR-168: the redo stack lives in projects.redo_json (migration 12) so Redo survives a Service restart. Newest last. */
+  redoStack(projectId: string): string[] {
+    const r = this.ctx.db.prepare('SELECT redo_json FROM projects WHERE id = ?').get(projectId) as { redo_json: string | null } | undefined;
+    if (!r?.redo_json) return [];
+    try { const a = JSON.parse(r.redo_json) as unknown; return Array.isArray(a) ? a.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
+  }
+  private setRedo(projectId: string, stack: readonly string[]): void {
+    this.ctx.db.prepare('UPDATE projects SET redo_json = ? WHERE id = ?').run(stack.length ? JSON.stringify(stack.slice(-200)) : null, projectId);
+  }
 
   /** Dry run: apply ops to a model and report only the blocking problems the ops introduce (like validatePlan). */
   tryApply(projectId: string, model: CompositionModelT, ops: readonly OperationT[]): { ok: true; model: CompositionModelT; diff: ElementDiff[]; warnings: Issue[] } | { ok: false; issues: Issue[] } {
@@ -132,6 +140,7 @@ export class CompositionStore {
         if (model.settings.customRatio) s['customRatio'] = model.settings.customRatio; else delete s['customRatio'];
         if (prev && prev.model.settings.autoRatio !== model.settings.autoRatio) s['autoRatio'] = model.settings.autoRatio;
         db.prepare('UPDATE projects SET head_version_id = ?, settings_json = ?, updated_at = ? WHERE id = ?').run(id, JSON.stringify(s), now, projectId);
+        if (!o.keepRedo) this.setRedo(projectId, []);
       } else {
         row = this.versionRow(projectId, prev!.versionId);
       }
@@ -140,7 +149,6 @@ export class CompositionStore {
     const r = row!;
     const head: Head = { versionId: r.id, hash, parentId: r.parent_id, model };
     this.touch(projectId, head);
-    if (changed && !o.keepRedo) this.redo.delete(projectId);
     const issues = validate(model, { assets: this.facts(projectId), tier: this.ctx.hooks.tier() });
     o.beforeEvent?.();
     if (changed) {
@@ -166,21 +174,18 @@ export class CompositionStore {
     if (!h.parentId) throw new EmError('EM-2401', 'Nothing to undo.', { status: 422, details: { reason: 'at-root' } });
     const target = this.versionRow(projectId, h.parentId);
     const model = this.parseModel(target);
-    const stack = this.redo.get(projectId) ?? [];
-    stack.push(h.versionId); this.redo.set(projectId, stack);
-    try { return this.commit(projectId, model, { cause: 'undo', parentId: target.parent_id, keepRedo: true, diff: diffSafe(h.model, model) }); } catch (e) { stack.pop(); throw e; }
+    const stack = [...this.redoStack(projectId), h.versionId];
+    return this.commit(projectId, model, { cause: 'undo', parentId: target.parent_id, keepRedo: true, diff: diffSafe(h.model, model), inTx: () => this.setRedo(projectId, stack) });
   }
-  /** R-054: re-applies the most recently undone version (in-memory stack, cleared by any other mutation). */
+  /** R-054: re-applies the most recently undone version (persisted stack, cleared by any other mutation; written in the commit transaction). */
   redoOnce(projectId: string): Committed {
-    const stack = this.redo.get(projectId);
-    const id = stack?.pop();
-    if (!stack || !id) throw new EmError('EM-2401', 'Nothing to redo.', { status: 422, details: { reason: 'no-redo' } });
-    try {
-      const h = this.head(projectId);
-      const target = this.versionRow(projectId, id);
-      const model = this.parseModel(target);
-      return this.commit(projectId, model, { cause: 'redo', parentId: target.parent_id, keepRedo: true, diff: diffSafe(h.model, model) });
-    } catch (e) { stack.push(id); throw e; }
+    const stack = this.redoStack(projectId);
+    const id = stack[stack.length - 1];
+    if (!id) throw new EmError('EM-2401', 'Nothing to redo.', { status: 422, details: { reason: 'no-redo' } });
+    const h = this.head(projectId);
+    const target = this.versionRow(projectId, id);
+    const model = this.parseModel(target);
+    return this.commit(projectId, model, { cause: 'redo', parentId: target.parent_id, keepRedo: true, diff: diffSafe(h.model, model), inTx: () => this.setRedo(projectId, stack.slice(0, -1)) });
   }
 }
 

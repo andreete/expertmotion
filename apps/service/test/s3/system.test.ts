@@ -62,7 +62,7 @@ describe('hardware, settings and events over HTTP', () => {
   it('live meter answers from node:os', async () => {
     const t = await body<{ cpuPercent: number; ramTotalMb: number; processMb: number; workload: { rendering: boolean; agentRuns: number } }>(await s.api('/hardware/live'));
     expect(t.ramTotalMb).toBeGreaterThan(0); expect(t.processMb).toBeGreaterThan(0);
-    expect(t.workload).toEqual({ rendering: false, ingesting: 0, downloading: 0, agentRuns: 0 });
+    expect(t.workload).toEqual({ rendering: false, ingesting: 0, downloading: 0, agentRuns: 0, items: [] });
   });
 
   it('hardware.tick only reaches clients that asked for it, and stops when they leave', async () => {
@@ -172,6 +172,22 @@ describe('licence integration (dev keys only, injected fingerprint)', () => {
     expect(s.ctx.hooks.isTrial()).toBe(true);
   });
 
+  it('the hourly check re-verifies the stored key and announces a clock rollback (EM-5007) without changing the status', async () => {
+    let t = new Date('2026-11-20T10:00:00Z');
+    const { dataDir, dbKeyHex } = s.cfg;
+    await s.api('/license/activate', { method: 'POST', json: { key: signPayload(payloadFor(fpA), key) } });
+    await s.close();
+    await boot({ ...base, now: () => t, tickMs: 30 }, dataDir, dbKeyHex);
+    expect(await body(await s.api('/license'))).toMatchObject({ status: 'active', clockAnomaly: false });
+    events.length = 0;
+    t = new Date('2026-10-01T10:00:00Z');                                       // clock set back > 24 h
+    for (let i = 0; i < 50 && !events.some((e) => e.n === 'license.changed'); i++) await new Promise((r) => setTimeout(r, 20));
+    const ev = events.find((e) => e.n === 'license.changed');
+    expect(ev?.d['licence']).toMatchObject({ status: 'active', clockAnomaly: true });
+    await s.close();
+    await boot(base, dataDir, dbKeyHex);
+  });
+
   it('survives a restart, and a newer signed revoked.json revokes the stored key at startup', async () => {
     await s.api('/license/activate', { method: 'POST', json: { key: signPayload(payloadFor(fpA), key) } });
     const { dataDir, dbKeyHex } = s.cfg;
@@ -221,6 +237,24 @@ describe('diagnostics and shutdown', () => {
     expect(JSON.parse(zip.get('hardware.json')!.toString()).profile).toMatchObject({ tier: 'T2' });
     expect(JSON.parse(zip.get('license.json')!.toString())).toMatchObject({ status: 'trial', fingerprintPrefix: fpA.fpHex.slice(0, 8) });
     expect(JSON.parse(zip.get('events.json')!.toString()).join('\n')).toContain('EM-4103');
+  });
+
+  it('R-182 lists recent EM codes with time and job id (FR-150)', async () => {
+    const projectId = addProject(s); const versionId = s.ctx.newId(); const jobId = s.ctx.newId();
+    s.ctx.db.prepare("INSERT INTO composition_versions(id, project_id, hash, model_json, cause, duration_ms, created_at) VALUES (?,?,?,'{}','system',0,?)").run(versionId, projectId, 'h3', new Date().toISOString());
+    s.ctx.db.prepare("INSERT INTO render_jobs(id, project_id, version_id, output_profile_json, performance_profile, status, error_code, created_at, finished_at) VALUES (?,?,?,'{}','standard','failed','EM-3201',?,?)")
+      .run(jobId, projectId, versionId, '2099-01-01T00:00:00.000Z', '2099-01-01T00:00:01.000Z');
+    const r = await body<{ items: Array<{ at: string; code: string; source: string; ref: string | null }> }>(await s.api('/diagnostics/codes?limit=20'));
+    expect(r.items[0]).toEqual({ at: '2099-01-01T00:00:01.000Z', code: 'EM-3201', source: 'render', ref: jobId });
+    expect(r.items.some((e) => e.code === 'EM-4103' && e.source === 'log')).toBe(true);
+    s.ctx.db.prepare("UPDATE render_jobs SET status = 'cancelled' WHERE id = ?").run(jobId);
+  });
+
+  it('health with the token adds build date, Private Mode and engine facts; without it stays reduced', async () => {
+    const open = await body<Record<string, unknown>>(await s.api('/health', { auth: false }));
+    expect(Object.keys(open).sort()).toEqual(['mode', 'status', 'uptimeMs', 'version']);
+    const full = await body<{ buildDate: string; privateMode: boolean; engine: { ok: boolean } }>(await s.api('/health'));
+    expect(full.buildDate).toMatch(/^\d{4}-\d{2}-\d{2}$/); expect(full.privateMode).toBe(false); expect(typeof full.engine.ok).toBe('boolean');
   });
 
   it('log tail is redacted and level-filtered', async () => {

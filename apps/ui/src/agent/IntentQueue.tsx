@@ -54,7 +54,7 @@ export function groupQueue(top: EditIntent[], all: EditIntent[]): QueueRow[] {
 
 export function IntentQueue() {
   const { state, actions, t } = useStore();
-  const all = visibleQueue(state).filter((i) => i.source !== 'system');
+  const all = visibleQueue(state).filter((i) => i.source !== 'system' || i.params['__output'] !== undefined);   // FR-097: Output Settings changes (incl. Reset) stay visible
   const top = all.filter((i) => !i.parentIntentId);
   const queuedCount = top.filter((i) => i.status === 'queued' || i.status === 'superseded' || i.status === 'rejected').length;
   const needsAgent = all.some((i) => i.status === 'queued' && (i.needsInterpretation || !i.parentIntentId));
@@ -122,7 +122,8 @@ function IntentItem({ intent: i, all, child }: { intent: EditIntent; all: EditIn
   const viaCompile = i.status === 'executed' && (i.source === 'ui' || i.source === 'brainstorm') && !i.needsInterpretation;
   let chip: { icon: ReactNode; text: string; tone: string };
   switch (i.status) {
-    case 'queued': chip = i.needsInterpretation ? { icon: <Bot size={12} />, text: t('ui.agent.intent.needsagent'), tone: 'text-em-text-2' } : { icon: <Bookmark size={12} />, text: pending ? t('ui.agent.intent.sending') : t('ui.agent.intent.queued'), tone: 'text-em-muted' }; break;
+    case 'queued': chip = i.needsInterpretation && state.settings?.privateMode ? { icon: <Bot size={12} />, text: t('ui.agent.intent.waiting'), tone: 'text-em-private' }   // FR-160
+      : i.needsInterpretation ? { icon: <Bot size={12} />, text: t('ui.agent.intent.needsagent'), tone: 'text-em-text-2' } : { icon: <Bookmark size={12} />, text: pending ? t('ui.agent.intent.sending') : t('ui.agent.intent.queued'), tone: 'text-em-muted' }; break;
     case 'compiled': chip = { icon: <Check size={12} />, text: t('ui.agent.intent.applieddirect', { version }), tone: 'text-em-accent-2' }; break;
     case 'planned': chip = { icon: <Lightbulb size={12} />, text: t('ui.agent.intent.inplan'), tone: 'text-em-accent' }; break;
     case 'executed': chip = viaCompile ? { icon: <Check size={12} />, text: t('ui.agent.intent.applieddirect', { version }), tone: 'text-em-accent-2' } : { icon: <CheckCircle2 size={12} />, text: t('ui.agent.intent.applied', { version }), tone: 'text-em-success' }; break;
@@ -137,7 +138,7 @@ function IntentItem({ intent: i, all, child }: { intent: EditIntent; all: EditIn
     if (i.status === 'executed' && r && (r.kind === 'clip' || r.kind === 'cut' || r.kind === 'text')) actions.select([r]);
   };
   return (
-    <div data-el={superseded ? 'agent.editor.intentqueue.item.superseded' : 'agent.editor.intentqueue.item'} data-intent-id={i.id} data-status={i.status} role="listitem" aria-label={accessible}
+    <div data-el={superseded ? 'agent.editor.intentqueue.item.superseded' : 'agent.editor.intentqueue.item'} data-intent-id={i.id} data-status={i.status} data-waiting={i.status === 'queued' && i.needsInterpretation && state.settings?.privateMode ? 'true' : undefined} role="listitem" aria-label={accessible}
       title={`${i.propertyKey}${viaCompile ? ` · ${t('ui.agent.intent.noai')}` : ''}`}
       className={cx('flex items-center gap-1.5 rounded-[6px] border border-em-line bg-em-panel px-2 py-1', superseded && 'opacity-60', i.status === 'rejected' && 'border-em-danger/60')}>
       <span className="text-em-muted">{i.source === 'brainstorm' ? <MessageCircle size={14} aria-hidden /> : i.source === 'chat' ? <Bot size={14} aria-hidden /> : categoryIcon(i.category, 14)}</span>

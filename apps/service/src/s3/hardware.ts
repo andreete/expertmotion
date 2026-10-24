@@ -1,6 +1,7 @@
 // Hardware Tier rule (PERFORMANCE §1) and the cheap meter (PERFORMANCE §6: node:os only, every 2 s while subscribed).
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import type { Tier } from '@expertmotion/composition-model';
 
 export interface GpuFacts { vendor: string | null; model: string | null; vramMb: number | null }
@@ -18,6 +19,7 @@ export function tierFor(gpus: readonly GpuFacts[]): { tier: Tier; gpu: GpuFacts 
 
 export function profileWarnings(raw: RawHardware): string[] {
   const w: string[] = [];
+  if (tierFor(raw.gpus).tier === 'T0') w.push('EM-3402');                 // FR-129: shown once per install by the Editor
   if (raw.ramTotalMb > 0 && raw.ramTotalMb < 8 * 1024) w.push('EM-8305');
   return w;
 }
@@ -45,4 +47,34 @@ export class CpuMeter {
 }
 export function diskFreeMb(dir: string): number | null {
   try { const s = fs.statfsSync(dir); return Math.round((s.bavail * s.bsize) / 1048576); } catch { return null; }
+}
+
+/** Nearest existing ancestor (an output folder that does not exist yet still reports its drive). */
+export function diskFreeMbNearest(dir: string): number | null {
+  let d = dir;
+  for (let i = 0; i < 32; i++) { const v = diskFreeMb(d); if (v !== null) return v; const up = path.dirname(d); if (up === d) break; d = up; }
+  return null;
+}
+
+/**
+ * Resident memory of every descendant process (Chrome Headless Shell, FFmpeg, engine binaries) of `rootPid`, in MB.
+ * Linux: /proc reads only (no spawn). Elsewhere null: on Windows this would need PowerShell/WMI per call, which the 2 s
+ * meter must not do (PERFORMANCE §6, NFR-009); the Shell can add its own Electron process metrics.
+ */
+export function childTreeRssMb(rootPid = process.pid, platform: NodeJS.Platform = process.platform, procRoot = '/proc'): number | null {
+  if (platform !== 'linux') return null;
+  const page = 4096; let bytes = 0; let seen = 0;
+  const children = (pid: number): number[] => {
+    try {
+      return fs.readdirSync(`${procRoot}/${pid}/task`).flatMap((tid) => { try { return fs.readFileSync(`${procRoot}/${pid}/task/${tid}/children`, 'utf8').trim().split(/\s+/).filter(Boolean).map(Number); } catch { return []; } });
+    } catch { return []; }
+  };
+  const stack = children(rootPid);
+  if (!fs.existsSync(`${procRoot}/${rootPid}/task`)) return null;
+  while (stack.length && seen < 256) {
+    const pid = stack.pop()!; seen += 1;
+    try { const rss = Number(fs.readFileSync(`${procRoot}/${pid}/statm`, 'utf8').split(' ')[1]); if (Number.isFinite(rss)) bytes += rss * page; } catch { /* exited */ }
+    stack.push(...children(pid));
+  }
+  return Math.round(bytes / 1048576);
 }

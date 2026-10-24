@@ -136,7 +136,10 @@ export const VersionDto = z.object({ id: Id, projectId: Id, parentId: Id.nullabl
 export const AssetDto = z.object({ id: Id, projectId: Id, kind: z.enum(['video','image','audio','subtitle']), name: z.string(), bytes: z.number().int(), sha256: z.string(),
   status: z.enum(['ingesting','ready','failed']), progress: z.number().min(0).max(1), errorCode: z.string().nullable(),
   durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), fps: z.number().nullable(), hasAudio: z.boolean().nullable(),
-  sequenceBadge: z.number().int().nullable(), media: z.object({ original: z.literal(true), playable: z.boolean(), proxy: z.boolean(), thumb: z.boolean(),
+  sequenceBadge: z.number().int().nullable(),
+  codec: z.string().nullable(),                                                         // FR-043 label of the first video (else audio) stream, e.g. "H.264"
+  missing: z.boolean(),                                                                  // FR-048 the stored original is not on disk (Locate via R-036, or Remove)
+  media: z.object({ original: z.literal(true), playable: z.boolean(), proxy: z.boolean(), thumb: z.boolean(),
   filmstrip: z.boolean(), waveform: z.boolean() }),                                     // which variants exist; URL = /media/<grant>/<assetId>/<variant> (§2.2)
   probe: z.record(z.unknown()).optional(), createdAt: Iso, updatedAt: Iso });
 export const RenderJobDto = z.object({ id: Id, projectId: Id, versionId: Id, outputProfile: OutputProfile, performanceProfile: PerformanceProfile,
@@ -149,11 +152,13 @@ export const OutputDto = z.object({ id: Id, projectId: Id, renderJobId: Id, kind
 export const MediaGrantDto = z.object({ grant: z.string().regex(/^[A-Za-z0-9_-]{43}$/), projectId: Id, kind: z.literal('preview'), expiresAt: Iso, baseUrl: z.string().url() /* http://127.0.0.1:<port>/media/<grant> */ });
 export const IntentQueueDto = z.object({ projectId: Id, headHash: z.string(), items: z.array(EditIntent), lockedKeys: z.array(z.string()) });
 export const PlanDto = EditPlan;                                                         // AI_WORKFLOW.md §3, plus server-set `id`, `status`, `validation`
-export const CheckpointDto = z.object({ id: Id, projectId: Id, versionId: Id, reason: z.enum(['autosave','pre-execute','pre-render','manual']), createdAt: Iso, durationMs: z.number().int() });
+export const CheckpointDto = z.object({ id: Id, projectId: Id, versionId: Id, reason: z.enum(['autosave','pre-execute','pre-render','manual']), createdAt: Iso, durationMs: z.number().int(),
+  hash: z.string(), bytes: z.number().int() });                                         // FR-016: version (integrity) hash and file size
 export const ConnectionDto = z.object({ id: Id, provider: z.enum(['openrouter','openai','anthropic','google','custom']), label: z.string(), baseUrl: z.string().url().nullable(),
-  secretHint: z.string(), status: z.enum(['unvalidated','valid','invalid']), validatedAt: Iso.nullable(), modelsFetchedAt: Iso.nullable(), budgetMonthUsd: z.number().nullable(), createdAt: Iso, updatedAt: Iso });
-export const CapabilityRow = z.object({ modelId: z.string(), label: z.string(), contextLength: z.number().int().nullable(), toolCalling: z.boolean(), structuredOutput: z.boolean(),
-  streaming: z.boolean(), imageInput: z.boolean(), pricePerMInput: z.number().nullable(), pricePerMOutput: z.number().nullable() });   // GLOSSARY Capability Table
+  secretHint: z.string(), status: z.enum(['unvalidated','valid','invalid']), validatedAt: Iso.nullable(), modelsFetchedAt: Iso.nullable(), modelCount: z.number().int().nullable() /* FR-109; null = never fetched */, budgetMonthUsd: z.number().nullable(), createdAt: Iso, updatedAt: Iso });
+// GLOSSARY Capability Table. Capability facts are tri-state (FR-114): null = not reported by the provider, shown as "?" and never guessed.
+export const CapabilityRow = z.object({ modelId: z.string(), label: z.string(), contextLength: z.number().int().nullable(), toolCalling: z.boolean().nullable(), structuredOutput: z.boolean().nullable(),
+  streaming: z.boolean().nullable(), imageInput: z.boolean().nullable(), pricePerMInput: z.number().nullable(), pricePerMOutput: z.number().nullable() });
 export const AssignmentDto = z.object({ agent: z.enum(['brainstorm','editor']), connectionId: Id, modelId: z.string(), settings: z.object({ temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().optional(), effort: z.enum(['low','medium','high']).optional() }) });
 export const AgentRunDto = z.object({ id: Id, projectId: Id, agent: z.enum(['brainstorm','editor']), status: z.enum(['running','done','failed','cancelled']), modelId: z.string(),
@@ -166,13 +171,25 @@ export const MessageDto = z.object({ id: Id, role: z.enum(['user','assistant','s
 export const HardwareProfileDto = z.object({ tier: z.enum(['T0','T1','T2']), cpuModel: z.string().nullable(), cpuThreads: z.number().int(), ramTotalMb: z.number().int(), gpuVendor: z.string().nullable(),
   gpuModel: z.string().nullable(), vramMb: z.number().int().nullable(), nvenc: z.boolean(), detectedAt: Iso, warnings: z.array(z.string()) });
 export const HardwareTickDto = z.object({ at: Iso, cpuPercent: z.number(), ramFreeMb: z.number().int(), ramTotalMb: z.number().int(), processMb: z.number().int(), chromeMb: z.number().int().nullable(),
-  diskFreeMb: z.number().int().nullable(), gpuPercent: z.number().nullable(), workload: z.object({ rendering: z.boolean(), ingesting: z.number().int(), downloading: z.number().int(), agentRuns: z.number().int() }) });
+  diskFreeMb: z.number().int().nullable(), outputDiskFreeMb: z.number().int().nullable() /* FR-127 output drive */, gpuPercent: z.number().nullable(),
+  workload: z.object({ rendering: z.boolean(), ingesting: z.number().int(), downloading: z.number().int(), agentRuns: z.number().int(),
+    items: z.array(z.object({ kind: z.enum(['render','download','ingest','generator','agent']), id: z.string(), label: z.string() /* project name, model label, asset name, generator kind or agent */,
+      status: z.string(), progress: z.number().min(0).max(1).nullable(), cancellable: z.boolean(), pausedReason: z.enum(['render']).nullable() })) /* FR-130 */ }) });
+// chromeMb = resident memory of the Service's descendant processes (Chrome Headless Shell, FFmpeg, engines); measured from /proc on Linux,
+// null on Windows (no per-tick PowerShell/WMI spawn, NFR-009).
 export const LicenseDto = z.object({ status: z.enum(['trial','active','revoked','invalid','updates-expired']), code: z.string().regex(/^EM-\d{4}$/).nullable(), clockAnomaly: z.boolean(), warnings: z.array(z.object({ code: z.literal('EM-5007'), lastSeen: Iso, now: Iso })), licenseeName: z.string().nullable(), tier: z.string().nullable(), licenseeHash: z.string().nullable(), updatesUntil: Iso.nullable(),
   updatesEligible: z.boolean(), machineCode: z.string(), limits: z.object({ watermark: z.boolean(), maxResolution: Resolution }) });
 export const SettingsDto = z.object({ privateMode: z.boolean(), outputFolder: z.string(), autoPlan: z.boolean(), uiLanguage: z.enum(['en','id']), theme: z.enum(['dark','light','system']),
-  defaultPerformanceProfile: PerformanceProfile, defaultRatio: Ratio, defaultResolution: Resolution, defaultFps: Fps, checkUpdates: z.boolean(), diagnosticsIncludeStructure: z.boolean() });
+  defaultPerformanceProfile: PerformanceProfile, defaultRatio: Ratio, defaultResolution: Resolution, defaultFps: Fps, checkUpdates: z.boolean(), diagnosticsIncludeStructure: z.boolean(),
+  onboardingDone: z.boolean(), onboardingSkippedSteps: z.array(z.enum(['license','provider','models','hardware','tour'])) });   // FR-004 onboarding record
 export const ModelStateDto = z.object({ key: z.string(), engine: z.string(), version: z.string(), task: z.enum(['stt','tts','image','music']), label: z.string(), licence: z.object({ name: z.string(), url: z.string() }),
-  tiers: z.array(z.enum(['T0','T1','T2'])), bytesTotal: z.number().int(), bytesDone: z.number().int(), status: z.enum(['not-installed','downloading','verifying','installed','failed']), errorCode: z.string().nullable(), installedAt: Iso.nullable() });
+  tiers: z.array(z.enum(['T0','T1','T2'])), bytesTotal: z.number().int(), bytesDone: z.number().int(), status: z.enum(['not-installed','downloading','verifying','paused','installed','failed']), errorCode: z.string().nullable(), installedAt: Iso.nullable(),
+  // FR-120…FR-124: paused = waiting for a Standard/Accelerated render; model card and marks
+  pausedReason: z.enum(['render']).nullable(), recommended: z.boolean() /* registry recommendedFor includes the current tier */, priority: z.enum(['P1','P2']), languages: z.array(z.string()), notes: z.array(z.string()),
+  commercialUse: z.enum(['yes','conditional','no']), licenceDetail: z.object({ spdx: z.string().nullable(), redistribution: z.enum(['yes','no','verify']), useRestrictions: z.string().nullable() }),
+  sourceUrl: z.string(), hashes: z.array(z.object({ name: z.string(), sha256: z.string().nullable() /* null = TO_PIN */ })), pathLabel: z.string(),
+  usedBy: z.object({ generators: z.array(z.string()), presets: z.array(z.string()) }), engineNotices: z.array(z.object({ label: z.string(), licence: z.string(), spdx: z.string().nullable(), url: z.string() })),
+  ramBytes: z.number().int(), vramBytes: z.number().int().nullable() });
 export const GeneratorJobDto = z.object({ id: Id, projectId: Id, kind: z.enum(['voice','music','thumbnail','captions','hashtags']), status: z.enum(['queued','running','done','failed','cancelled']),
   progress: z.number(), modelKey: z.string().nullable(), resultAssetId: Id.nullable(), result: z.record(z.unknown()).nullable(), errorCode: z.string().nullable(), createdAt: Iso, startedAt: Iso.nullable(), finishedAt: Iso.nullable() });
 ```
@@ -185,12 +202,13 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **gra
 |---|---|---|---|---|---|
 | R-001 | GET | `/health` | – / T | liveness, mode, version, tier, licence, Private Mode | 6.1 |
 | R-002 | POST | `/service/shutdown` | T+S | checkpoint all, cancel renders, exit | 6.1 |
+| R-003 | GET | `/service/recovery` | T | what start-up recovery corrected this run (FR-171, FR-172) | 6.1 |
 | R-010 | GET | `/projects` | T | list projects | 6.2 |
 | R-011 | POST | `/projects` | T | create project | 6.2 |
 | R-012 | GET | `/projects/recent` | T | recent projects (max 10) | 6.2 |
 | R-013 | GET | `/projects/:id` | T | get project | 6.2 |
 | R-014 | PATCH | `/projects/:id` | T | rename, language | 6.2 |
-| R-015 | DELETE | `/projects/:id` | T | soft delete (30-day purge) | 6.2 |
+| R-015 | DELETE | `/projects/:id` | T | soft delete (30-day purge), or permanent with "keep Outputs" | 6.2 |
 | R-016 | POST | `/projects/:id/open` | T | mark opened, lazily migrate, return head | 6.2 |
 | R-017 | GET | `/projects/:id/settings` | T | Project Settings | 6.2 |
 | R-018 | PUT | `/projects/:id/settings` | T | Project Settings (creates a version when the model changes) | 6.2 |
@@ -201,6 +219,8 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **gra
 | R-023 | POST | `/projects/:id/checkpoints` | T | manual checkpoint (Save) | 6.3 |
 | R-024 | POST | `/projects/:id/checkpoints/:checkpointId/restore` | T | restore as a new version | 6.3 |
 | R-025 | POST | `/projects/sample` | T | create (or return) the onboarding Sample Project | 6.2 |
+| R-026 | GET | `/projects/disk-usage` | T | disk use per project + total + free space; backup size estimate | 6.2 |
+| R-027 | GET | `/projects/:id/thumbnail` | T | Open dialog thumbnail (image bytes or 204) | 6.2 |
 | R-030 | POST | `/projects/:id/assets` | T+S / T | import by paths (Shell) or multipart (dev) | 6.4 |
 | R-031 | GET | `/projects/:id/assets` | T | list assets | 6.4 |
 | R-032 | GET | `/projects/:id/assets/:assetId` | T | get asset | 6.4 |
@@ -248,6 +268,9 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **gra
 | R-098 | PUT | `/providers/assignments` | T | set Model Assignments | 6.10 |
 | R-099 | GET | `/providers/budget` | T | budgets and month-to-date spend | 6.10 |
 | R-100 | PUT | `/providers/budget` | T | set budgets | 6.10 |
+| R-101 | POST | `/providers/validate` | T | dry-run validate a key + list its models; nothing stored (outbound) | 6.10 |
+| R-102 | POST | `/providers/test` | T | fixed probe per agent: latency, tokens, cost, EM code (outbound) | 6.10 |
+| R-103 | GET | `/providers/kinds` | T | providers with build availability, terms link, key shape | 6.10 |
 | R-110 | POST | `/renders/estimate` | T | estimate seconds, bytes, warnings; preflight result | 6.11 |
 | R-111 | POST | `/renders` | T | create Render Job (idempotent) | 6.11 |
 | R-112 | GET | `/renders` | T | list jobs | 6.11 |
@@ -265,11 +288,15 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **gra
 | R-132 | GET | `/generator-jobs/:jobId` | T | job | 6.13 |
 | R-133 | POST | `/generator-jobs/:jobId/cancel` | T | cancel | 6.13 |
 | R-134 | POST | `/generator-jobs/:jobId/insert` | T | insert a finished job's result later: applies its proposed ops as one version without re-running the engine; idempotent (second call → same `versionId` + notice EM-2308); 422 EM-9002 when not done or nothing to insert | 6.13 |
+| R-135 | GET | `/generators` | T | Generator Cards: kind, enabled in this build, priority, required model with installed state, size and tier hint (FR-100, FR-107) | 6.13 |
+| R-136 | POST | `/generator-jobs/:jobId/save-output` | T | save a chosen thumbnail candidate as an Output (kind `still`) in the Project output folder (FR-103) | 6.13 |
+| R-137 | DELETE | `/generator-jobs/:jobId` | T | remove a result from the 7-day "Generated" list (a running job is cancelled first) (FR-108) | 6.13 |
 | R-140 | GET | `/models` | T | Model Manager list | 6.14 |
 | R-141 | GET | `/models/:key` | T | one model with progress | 6.14 |
 | R-142 | POST | `/models/:key/install` | T | start download (outbound) | 6.14 |
 | R-143 | POST | `/models/:key/cancel` | T | cancel download | 6.14 |
 | R-144 | DELETE | `/models/:key` | T | remove weights | 6.14 |
+| R-146 | POST | `/models/engines/:engine/reveal` | T | per-engine models folder for the Shell to open | 6.14 |
 | R-150 | GET | `/hardware/profile` | T | tier and static facts | 6.15 |
 | R-151 | POST | `/hardware/profile/refresh` | T | re-detect | 6.15 |
 | R-152 | GET | `/hardware/live` | T | latest cheap-meter tick | 6.15 |
@@ -281,9 +308,10 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **gra
 | R-172 | POST | `/settings/caches/clear` | T | delete proxies/thumbs/stills caches | 6.17 |
 | R-180 | POST | `/diagnostics/bundle` | T | build diagnostics zip | 6.18 |
 | R-181 | GET | `/diagnostics/logs` | T | tail of the service log (redacted) | 6.18 |
+| R-182 | GET | `/diagnostics/codes` | T | recent EM codes with timestamps and job/run ids (no content) (FR-150) | 6.18 |
 | R-190 | GET | `/events` | T (query) | global SSE stream | 7 |
 
-97 routes.
+105 routes.
 
 ## 5. Route detail conventions
 
@@ -299,7 +327,7 @@ Each route below lists: request (params, query, body as Zod or a field table), r
 |---|---|
 | `{ status: 'ok', version: '1.0.0', mode: 'production'|'development', uptimeMs }` | adds `{ tier: 'T0'|'T1'|'T2', licence: LicenseDto.pick(status, tier, updatesEligible), privateMode: boolean, engine: { bundleVersion, remotionVersion, browserReady: boolean, ffmpeg: boolean }, db: { schemaVersion, ok: boolean }, workload: { rendering, ingesting, agentRuns, downloading }, seq: number }` |
 
-Errors: `503 EM-6001|EM-6002` when the DB is not open (the Shell shows the fatal dialog). `seq` is the current global SSE sequence so a client can detect missed events before opening the stream.
+With the token the body also carries `buildDate` (YYYY-MM-DD, the licence eligibility date, FR-151) and `engine.ok` / `engine.code` (`EM-3001`/`EM-3003`, FR-140); `engine.bundleVersion` is `ok`, `mismatch` or `unverified` (no manifest in development). Errors: `503 EM-6001|EM-6002` when the DB is not open (the Shell shows the fatal dialog). `seq` is the current global SSE sequence so a client can detect missed events before opening the stream.
 
 ```http
 GET /api/v1/health
@@ -310,6 +338,8 @@ GET /api/v1/health
 
 **R-002 `POST /service/shutdown`** — T+S. Body `{ reason: 'window-closed'|'update'|'uninstall', timeoutMs?: 1000..10000 }`. Checkpoints every dirty project (reason `manual`), cancels running Render Jobs and agent runs, emits `service.notice {kind:'shutting-down'}`, answers `202 { acceptedAt }`, then exits. Errors: `409 EM-8304` when a render is running and `body.force !== true` (the Shell asks the Creator first).
 
+**R-003 `GET /service/recovery`** — T. What the start-up recovery steps corrected in this Service run (FR-171, FR-172), computed once on the first call: `{ startedAt, unclean, renders: [{jobId, projectId}], agentRuns: [{runId, projectId, agent}], ingests: [{assetId, projectId, name}], plans: [{planId, projectId}], checkpoints: { offered: Id[], imported: Id[] } }` (rows marked `EM-3203`, `EM-4304`, `EM-1201` or plans failed by recovery within 60 s of `startedAt`; `unclean` = the running flag of the previous run was left behind). The Editor shows one toast per `startedAt` (`EM-8003` after a restart) with a link to the affected items. Before exiting (also on SIGTERM), R-002 additionally checkpoints every project changed in this run whose head has no checkpoint yet (FR-165).
+
 ### 6.2 Projects
 
 **R-010 `GET /projects`** — query `limit`, `cursor`, `includeDeleted=false`. Response `Page<ProjectDto>` ordered by `updatedAt` desc.
@@ -317,10 +347,12 @@ GET /api/v1/health
 **R-011 `POST /projects`** — body:
 
 ```ts
-z.object({ name: z.string().min(1).max(120), settings: ProjectSettings.partial().optional(), language: z.enum(['id','en']).default('id'), theme: Theme.partial().optional() })
+z.object({ name: z.string().min(1).max(120), settings: ProjectSettings.partial().optional(), language: z.enum(['id','en']).default('id'), theme: Theme.partial().optional(),
+  durationPolicy: z.enum(['fit-content','fixed']).optional(), fixedDurationMs: z.number().int().min(1000).max(1_800_000).optional(),   // FR-009
+  outputFolder: z.string().min(1).max(1024).optional() })                                                                                  // FR-009, stored with the project settings
 ```
 
-Creates the project, an empty Composition Model (`createEmptyModel`) as version 1 (`cause: 'system'`), and the media folder. Response `201 ProjectDto` + `Location: /api/v1/projects/<id>`. Errors: `409 EM-6103` duplicate name, `503 EM-6005` disk full. Events: `composition.updated`.
+Creates the project, an empty Composition Model (`createEmptyModel`) as version 1 (`cause: 'system'`; `durationPolicy`/`fixedDurationMs` set on it when given, `fixed` requires `fixedDurationMs` else `400 EM-9002`), and the media folder. `outputFolder` must be inside the user profile (`403 EM-8302`, same check as R-171) and becomes this project's export folder. Response `201 ProjectDto` + `Location: /api/v1/projects/<id>`. Errors: `409 EM-6103` duplicate name, `503 EM-6005` disk full. Events: `composition.updated`.
 
 ```http
 POST /api/v1/projects
@@ -337,13 +369,17 @@ POST /api/v1/projects
 
 **R-014 `PATCH /projects/:id`** — body `{ name?: string, language?: 'id'|'en' }`. Response `ProjectDto`. Errors: `404 EM-6101`, `409 EM-6103`.
 
-**R-015 `DELETE /projects/:id`** — soft delete (`deleted_at`), media kept 30 days. Response `204`. Errors: `409 EM-2309` when a render or agent run for the project is active.
+**R-015 `DELETE /projects/:id`** — query `permanent=false`, `keepOutputs=true`. Default: soft delete (`deleted_at`), media kept 30 days. `permanent=true` (Open ▸ Delete, FR-178): rows, media folder and checkpoint files are removed now; Output files are kept unless `keepOutputs=false` (their rows go with the project). Response `204`. Errors: `409 EM-2309` when a render or agent run for the project is active, `EM-6401` when the files could not be removed.
+
+**R-026 `GET /projects/disk-usage`** — query `projectId?`. Response `{ items: Array<{ projectId, mediaBytes, checkpointBytes, outputsBytes, outputCount, totalBytes, backupBytes, backupOutputsBytes }>, totalBytes, freeBytes }`: `totalBytes` = media folder + checkpoint files + Output files; `backupBytes` estimates an FR-017 backup without Outputs (original media + the last 50 versions' JSON + manifest), `backupOutputsBytes` is added when Outputs are included; `freeBytes` is free space on the data drive. Errors: `404 EM-6101`.
+
+**R-027 `GET /projects/:id/thumbnail`** — the head version's first clip thumbnail (else the first asset thumbnail) as `image/jpeg` (or png/webp), `Cache-Control: private, max-age=60`; `204` when the project has none. Bearer token required (the Editor fetches it and shows a blob URL; no media grant). Errors: `404 EM-6101`.
 
 **R-016 `POST /projects/:id/open`** — marks `openedAt`, runs `migrateModel` lazily (new version `cause:'system'` if migrated), returns `{ project: ProjectDto, head: VersionDto (with model), mediaGrant: MediaGrantDto, checkpointNewerThanSave: CheckpointDto | null, intentQueue: IntentQueueDto, latestPlan: PlanDto | null, renderJobs: RenderJobDto[] }` — one call restores the Editor state and hands out the preview media grant (§2.2). Errors: `404 EM-6101`, `422 EM-2001` when the stored model fails validation (the response then carries the last good checkpoint in `recovered`).
 
-**R-017 `GET /projects/:id/settings`** — response `ProjectSettings`.
+**R-017 `GET /projects/:id/settings`** — response `ProjectSettings & { durationPolicy: 'fit-content'|'fixed', fixedDurationMs?: number, outputFolder: string | null }` (the policy is read from the head model; `outputFolder` null = the app default R-171).
 
-**R-018 `PUT /projects/:id/settings`** — body `ProjectSettings`. Changes to `fps`, `ratio`, `customRatio`, `resolution`, `autoRatio` are compiled into `op:project.setFps`, `op:output.setRatio`, `op:output.setResolution` and applied as a Compile-path version (recorded as a `system`-source EditIntent so UX-010 holds). Response `{ settings, version: VersionDto | null, warnings }`. Errors: `400 EM-2402` (custom ratio bounds), `422 EM-3105` resolution not allowed on this tier (the setting is stored, rendering blocks). Events: `intent.updated`, `composition.updated`.
+**R-018 `PUT /projects/:id/settings`** — body `ProjectSettings`. Changes to `fps`, `ratio`, `customRatio`, `resolution`, `autoRatio` are compiled into `op:project.setFps`, `op:output.setRatio`, `op:output.setResolution`, `op:output.setAutoRatio` (FR-088; Auto lives in the Composition Model, so Undo restores it) and applied as one Compile-path version (recorded as a `system`-source EditIntent so UX-010 holds). Response `{ settings, version: VersionDto | null, warnings }`. The body may also carry `durationPolicy`, `fixedDurationMs` (1000…1 800 000; required for `fixed` unless the model already has one) and `outputFolder` (string inside the user profile, or `null` to clear): a policy change is compiled into `op:project.setDurationPolicy` in the same version (FR-015); the folder is stored with the project settings and used by R-111 when no `folder` is given. Errors: `400 EM-2402` (custom ratio bounds), `400 EM-9002` (fixed without a length), `403 EM-8302` (folder outside the profile), `422 EM-3105` resolution not allowed on this tier (the setting is stored, rendering blocks). Events: `intent.updated`, `composition.updated`.
 
 **R-019 `POST /projects/:id/duplicate`** — body `{ name: string, copyMedia: boolean = true }`. Response `201 ProjectDto` (new ids; media hard-linked or copied). Errors: `409 EM-6103`, `503 EM-6005`.
 
@@ -353,7 +389,7 @@ POST /api/v1/projects
 
 ### 6.3 Checkpoints
 
-**R-022 `GET /projects/:id/checkpoints`** — response `{ items: CheckpointDto[] }` newest first (≤ 20). Empty list carries `notice: 'EM-6202'`.
+**R-022 `GET /projects/:id/checkpoints`** — response `{ items: CheckpointDto[] }` newest first (≤ 20), each with `hash` (the version hash the file holds, its integrity hash) and `bytes` (file size) for FR-016. Empty list carries `notice: 'EM-6202'`.
 
 **R-023 `POST /projects/:id/checkpoints`** — body `{ reason: 'manual' }`. Writes the head model to `checkpoints/<projectId>/<hash>.json`, clears `dirty`. Response `201 CheckpointDto`. Errors: `503 EM-6005`, `EM-6104`.
 
@@ -378,7 +414,7 @@ X-Expertmotion-Caller: shell
                  {"id":"01JAZM…B","kind":"video","name":"kopi-2.mov","status":"ingesting",…}], "notices":[] }
 ```
 
-**R-031 `GET /projects/:id/assets`** — query `kind?`, `status?`, `limit`, `cursor`. Response `Page<AssetDto>` ordered by `createdAt` asc (import order).
+**R-031 `GET /projects/:id/assets`** — query `kind?`, `status?`, `limit`, `cursor`. Response `Page<AssetDto>` ordered by `createdAt` asc (import order). Failed (unsupported) assets stay listed for 24 h after they failed, then the listing removes them and their folder (FR-050).
 
 **R-032 `GET /projects/:id/assets/:assetId`** — query `probe=true` adds the full ffprobe JSON. Response `AssetDto`. Errors: `404 EM-9003`.
 
@@ -389,12 +425,12 @@ X-Expertmotion-Caller: shell
 **R-035 `POST /projects/:id/assets/insert`** — body:
 
 ```ts
-z.object({ assetIds: z.array(Id).min(1).max(50), order: z.enum(['badge','given']).default('badge'), atIndex: z.number().int().min(0).optional(), asOverlay: z.boolean().default(false) })
+z.object({ assetIds: z.array(Id).min(1).max(50), order: z.enum(['badge','given']).default('badge'), atIndex: z.number().int().min(0).optional(), asOverlay: z.boolean().default(false), atMs: z.number().int().min(0).optional() })
 ```
 
-Builds one `op:clip.insert` per video/image asset (images get `durationMs` 5000 by default; `asOverlay` places images on the overlay track), `op:audio.addLayer` for audio assets, in Sequence Badge order (unbadged assets after badged, by import order). Applies them as a Compile-path version (`cause:'insert'`), records a `system`-source EditIntent per asset, clears the used badges, and, when `settings.autoRatio` and this is the first Clip, sets the ratio by `detectRatio`. Response `{ version: VersionDto, ops: Operation[], warnings }`. Errors: `422 EM-1301` asset not `ready`, `422 EM-2002` duration out of range. Events: `intent.updated`, `composition.updated`.
+Builds one `op:clip.insert` per video/image asset (images get `durationMs` 5000 by default; `asOverlay` places images on the overlay track with `op:overlay.addImage` at `atMs`, FR-029; `atIndex` inserts after the selected Clip, FR-030/FR-049), `op:audio.addLayer` for audio assets, in Sequence Badge order (unbadged assets after badged, by import order). Applies them as a Compile-path version (`cause:'insert'`), records a `system`-source EditIntent per asset, clears the used badges, and, when `settings.autoRatio` and this is the first Clip, sets the ratio by `detectRatio`. Response `{ version: VersionDto, ops: Operation[], warnings }`. Errors: `422 EM-1301` asset not `ready`, `422 EM-2002` duration out of range. Events: `intent.updated`, `composition.updated`.
 
-**R-036 `POST /projects/:id/assets/:assetId/relocate`** — T+S. Body `{ path: string }`. The new file must hash to the stored `sha256` (`422 EM-1302` otherwise, then re-ingested as a new asset when `body.reingest = true`). Response `AssetDto`.
+**R-036 `POST /projects/:id/assets/:assetId/relocate`** — T+S. Body `{ path: string, reingest?: boolean = false }`. Used by the Locate action of a missing asset card (FR-048). The new file must hash to the stored `sha256` (`422 EM-1302` otherwise, then re-ingested as a new asset when `body.reingest = true`). Response `AssetDto`.
 
 ### 6.5 Media serving and media grants
 
@@ -453,6 +489,11 @@ export const DesignPickInput = z.object({
   instruction: z.string().max(2000).optional(),                    // chat text → needsInterpretation
   baseVersion: z.string(),                                         // head hash the UI saw; mismatch → 409
   plan: z.enum(['auto','none']).default('auto'),                   // auto: compile immediately or start a plan when autoPlan is on
+  // Deterministic Text Panel / Output picks (Compile path, no LLM):
+  field: z.enum(['fontFamily','fontSize','weight','italic','colour','align','opacity','content']).optional(), value: z.unknown().optional(),   // FR-020…FR-028; content → op:text.setContent, opacity on shape/image → op:overlay.setOpacity
+  output: z.object({ kind: z.enum(['ratio','resolution','fps','autoRatio']), value: z.unknown(), customRatio: z.object({ w, h }).optional() }).optional(),
+  assetId: z.string().optional(),                                  // music bed / sfx asset
+  text: z.string().min(1).max(500).optional(),                     // FR-027 Add Text content with a `preset:text.*` variant; without it a variant pick re-styles the selected Text Layer (FR-025)
 });
 ```
 
@@ -486,7 +527,7 @@ export const PlanCreateInput = z.object({ intentIds: z.array(Id).default([]) /* 
 
 Decision (AI_WORKFLOW.md §7): if every selected intent has `needsInterpretation=false` and no `message` → Compile (`origin:'compile'`, synchronous, `status:'valid'`; applied immediately only through R-060's auto path — a plan created here waits for Execute so the Creator can review a multi-intent batch). Otherwise → Rewrite envelope → Editor Agent run (`202`, `status:'draft'`, `agentRunId`), result validated (`validatePlan`) → `plan.ready` (`valid`) or `plan.invalid` (`invalid` with `validation[]`, `touchesLockedKeys`). Response `201 PlanDto` (compile) or `202 { plan: PlanDto (draft), runId }` (agent). Errors: `409 EM-2301` base mismatch, `409 EM-4305` an Editor Agent run is active, `423 EM-4401` Private Mode (agent path only; compile still works), `422 EM-4007` no model assigned, `422 EM-4201` budget, `422 EM-2202` no clips, `503 EM-4001` no provider (agent path). Events: `agent.run.started/delta/done/failed`, `plan.ready`, `plan.invalid`.
 
-**R-071 `GET /projects/:id/plans`** — query `status?`, `limit`. Response `Page<PlanDto>` without `steps[].ops` (use R-072).
+**R-071 `GET /projects/:id/plans`** — query `status?`, `limit`. Response `Page<PlanDto>` without `steps[].ops` (use R-072). Every `PlanDto` carries `result: { ok, toVersion, appliedOps, added, removed, modified } | null` once executed (FR-086 diff summary in the Editor thread).
 
 **R-072 `GET /plans/:planId`** — response `PlanDto` with full steps, plus `{ stale: boolean, headHash }`. Errors: `404 EM-9003`.
 
@@ -517,7 +558,7 @@ Idempotency-Key: 7c1b…
 z.object({ text: z.string().min(1).max(8000), attachments: z.array(z.object({ assetId: Id })).max(4).default([]), intentIds: z.array(Id).optional() /* editor: scope to these intents */, baseVersion: z.string() })
 ```
 
-Stores the user message, starts an agent run (`agent_runs`), answers `202 { message: MessageDto, runId }`. Brainstorming: the run ends with an assistant `MessageDto` whose blocks may include `proposed_intents` (handoff card). Editor: the run produces a plan exactly like R-070 agent mode (the response also carries `planId`). Errors: `423 EM-4401` Private Mode, `409 EM-4305` run active, `422 EM-4007` no model, `422 EM-4306` message too long for the model's context, `422 EM-4307` attachment image to a text-only model, `422 EM-4201` budget, `503 EM-4001` no provider, `409 EM-2301` (editor). Events: `agent.run.started`, `agent.run.delta` (streamed text), `agent.run.done`, `agent.run.failed`, then `plan.ready|plan.invalid` (editor).
+Stores the user message, starts an agent run (`agent_runs`), answers `202 { message: MessageDto, runId }`. Brainstorming: the run ends with an assistant `MessageDto` whose blocks may include `proposed_intents` (handoff card) and one `tool_result` block per read-only tool the agent used (FR-075: `composition.get`, `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate`; JSON-mode protocol `{"tool","input"}` → `{"toolResult"}`, at most 4 per answer). The thread window is 60 % of the model's context length; older turns are condensed by the deterministic summariser into `conversations.summary_json` (returned as `summary` by R-080). Editor: the run produces a plan exactly like R-070 agent mode (the response also carries `planId`). Errors: `423 EM-4401` Private Mode, `409 EM-4305` run active, `422 EM-4007` no model, `422 EM-4306` message too long for the model's context, `422 EM-4307` attachment image to a text-only model, `422 EM-4201` budget, `503 EM-4001` no provider, `409 EM-2301` (editor). Events: `agent.run.started`, `agent.run.delta` (streamed reply text only, coalesced to ≥ 40 chars or 80 ms; a JSON turn streams only its `reply` value, tool requests stream nothing), `agent.run.done`, `agent.run.failed`, then `plan.ready|plan.invalid` (editor).
 
 ```http
 POST /api/v1/projects/01JAZK…/conversations/editor/messages
@@ -565,6 +606,14 @@ Encrypts the secret (AES-256-GCM, TRD TR-031), stores `status:'unvalidated'`, th
 
 **R-100 `PUT /providers/budget`** — body `{ connections?: Array<{connectionId, budgetMonthUsd: number|null}>, projects?: Array<{projectId, limitUsd: number|null}> }`. Response as R-099. Events: `settings.changed {scope:'budget'}`.
 
+**R-101 `POST /providers/validate`** (FR-113, FR-118) — body `{ provider, secret }` (secret trimmed, 8…512 chars). Calls the provider's cheapest authenticated endpoint (15 s timeout) and then its model list; **stores nothing** (the Add form saves with R-091 on Save). Response `{ status: 'valid', validatedAt, models: CapabilityRow[], modelsCode?: 'EM-4006' }` (a failed model list still returns `valid` with `modelsCode`). Errors: `422 EM-4002` (key rejected), `423 EM-8202`, `503 EM-8201` (offline), `503 EM-4003`, `504 EM-4101`, `422 EM-9004` (provider not in this build). The key never appears in responses, logs or SSE.
+
+**R-102 `POST /providers/test`** (FR-116) — body `{ connectionId?: Id, draft?: { provider, secret }, brainstorm?: modelId | null, editor?: modelId | null }`. Runs one fixed probe per agent ("Reply with the word OK as JSON", temperature 0, ≤ 20 output tokens) through the same ChatProvider adapters as the chats: `draft` tests an unsaved form; otherwise the given (or assigned) connection; an omitted model id falls back to the saved assignment, `null` skips the agent. Response `{ items: Array<{ agent, modelId, ok, latencyMs, inputTokens, outputTokens, costUsd: number | null, approximate, code?: EmCode }> }` — per-agent failures are reported in `code` (EM-4002, EM-4004, EM-4101, EM-4102, EM-4103, EM-4301 when the answer is not the expected JSON, EM-8201 offline), never thrown. Cost: provider-reported, else Capability Table price (approximate), else `null` (tokens only). The probe records no Usage Record. Errors: `423 EM-8202`, `422 EM-4007` (nothing to test), `422 EM-9004`.
+
+**R-103 `GET /providers/kinds`** (FR-111, FR-112) — response `{ items: Array<{ provider, enabled: boolean, priority: 'P0'|'P1'|'P2', termsUrl: string | null, keyPattern: string | null /* regex source, warn only */, keyExample: string | null }> }`. Providers not enabled in this build answer `422 EM-9004` (details `{ feature: 'provider.<kind>', plannedPriority }`) on R-091/R-101/R-102; the default (P0) build enables `openrouter` only; the OpenAI, Anthropic and Gemini adapters are enabled for P1 with `createProvidersModule({ enabledProviders })`.
+
+R-093 detail (FR-119): with `force=true`, each affected agent moves to the oldest other **validated** connection whose cached Capability Table offers the same model id; otherwise its assignment is cleared (`EM-4007` applies). A removed default connection hands the default to that connection or to none. Usage Records are kept.
+
 ### 6.11 Render and outputs
 
 **R-110 `POST /renders/estimate`** — body:
@@ -573,7 +622,9 @@ Encrypts the secret (AES-256-GCM, TRD TR-031), stores `status:'unvalidated'`, th
 export const RenderCreateInput = z.object({ projectId: Id, versionId: Id.optional() /* default head */, outputProfile: OutputProfile, performanceProfile: PerformanceProfile, fileName: z.string().max(80).optional(), folder: z.string().optional() /* default settings.outputFolder */ });
 ```
 
-Runs the Export preflight (PERFORMANCE.md §7) and an estimate (frames × measured ms/frame for the tier, bitrate heuristic). Response `{ ok: boolean, dimensions: {width, height}, totalFrames, durationMs, estimate: { seconds: number | null, bytes: number | null, confidence: 'low'|'medium'|'high' }, checks: Array<{ check: 'disk'|'memory'|'dimensions'|'duration'|'assets'|'engine'|'licence', ok: boolean, code?: string, details? }>, effectiveProfile: OutputProfile /* after Trial cap */, watermark: boolean, warnings: Issue[] }`. Never `4xx` for a failed check (the Export dialog renders the list); `404 EM-6101|EM-2401` only.
+Runs the Export preflight (PERFORMANCE.md §7) and an estimate (frames × measured ms/frame for the tier, bitrate heuristic). Response `{ ok: boolean, dimensions: {width, height}, totalFrames, durationMs, estimate: { seconds: number | null, bytes: number | null, confidence: 'low'|'medium'|'high' }, checks: Array<{ check: 'disk'|'memory'|'dimensions'|'duration'|'assets'|'engine'|'licence'|'folder', ok: boolean, code?: string, details? }>, effectiveProfile: OutputProfile /* after Trial and GIF caps */, watermark: boolean, warnings: Issue[], notices: string[] /* EM-5001, EM-3208 */, defaultFileName: string, privateMode: boolean, queue: { active: Id | null, queued: number } }`. Never `4xx` for a failed check (the Export dialog renders the list); `404 EM-6101|EM-2401` only.
+
+Additions (FR-137…FR-140, FR-147, FR-163): `defaultFileName` is the stem `<project>-<ratio>-<res>-<yyyymmdd-hhmm>` (sanitised; R-111 uses it when `fileName` is absent and adds `-2`, `-3`… on collision); the `folder` check reports `EM-8302` (outside the allowed roots) or `EM-3206` (not writable, nearest existing parent tested); the `engine` check covers Chrome Headless Shell, the compositor FFmpeg (`binariesDirectory/ffmpeg[.exe]`) and the Engine bundle hash against `resources/engine-manifest.json` (hashed once at service start; mismatch → `EM-3003`, missing → `EM-3001`, `details: { missing[], mismatched[] }`); GIF is capped to 720p with an info warning `EM-3103` and encoded from an H.264 intermediate with FFmpeg `palettegen`/`paletteuse` at ≤ 15 fps, `-loop 0`; `privateMode` lets the dialog show "Private Mode on".
 
 **R-111 `POST /renders`** — header `Idempotency-Key` recommended. Body `RenderCreateInput`. Re-runs preflight (blocking checks → `422` with the first failing code: `EM-3101`, `EM-3102`, `EM-3103`, `EM-3104`, `EM-1301`; `503 EM-3001` engine missing; `403 EM-8302` folder not allowed; `422 EM-3206` folder not writable), writes a pre-render checkpoint, enqueues. When the job starts, the queue issues a render media grant scoped to the job's assets and revokes it on the final event (§2.2). Trial Mode: profile capped to 720p and `watermark:true` with `notices:['EM-5001']`. Response `202 RenderJobDto` (`status:'queued'`; `notices:['EM-3208']` when another job is rendering). Events: `render.queued`, then `render.progress`…, `render.done|failed|cancelled`.
 
@@ -631,7 +682,17 @@ Served from `packages/engine/catalogue` plus per-machine availability (tier, ins
 
 Response `202 GeneratorJobDto`. Errors: `422 EM-7001` model not installed (details `{modelKey, bytes}`), `422 EM-7004|7105|7106`, `423 EM-8202` (hashtags), `409 EM-7104`. Events: `generator.progress|done|failed` (carried as `service.notice {kind:'generator', …}` to keep the SSE table closed; see §7).
 
-**R-131 `GET /projects/:id/generator-jobs`** — `Page<GeneratorJobDto>`. **R-132 `GET /generator-jobs/:jobId`** — `GeneratorJobDto`. **R-133 `POST /generator-jobs/:jobId/cancel`** — kills the engine process; `GeneratorJobDto`.
+Body additions (FR-101…FR-105): `voice.speed` 0.8–1.2; `music.instrumental?: boolean` (default true; appended to the prompt) and `modelKey: 'loop-library-cc0'` selects the bundled CC0 loop library on any tier (`result.cc0: true`); `thumbnail.count?: 1..4` returns `result.candidates: [{ assetId, frameMs? | seed }]` (frame mode: the chosen frame first, then frames spread over the Sequence; prompt mode: one seed each), `result.assetId` = the first candidate.
+
+**R-131 `GET /projects/:id/generator-jobs`** — `Page<GeneratorJobDto>`; query `kind?` filters one generator. Jobs older than 7 days (not queued/running) are purged on service start and on every list call (FR-108); imported result Assets stay in the Asset Panel. **R-132 `GET /generator-jobs/:jobId`** — `GeneratorJobDto`. **R-133 `POST /generator-jobs/:jobId/cancel`** — kills the engine process; `GeneratorJobDto`.
+
+**R-134** body (optional) `{ pages?: CaptionPage[] }` (strict): for a `captions` job the Creator's edited pages replace the engine's in `op:caption.setPages` (FR-104; the Editor keeps timings and re-spreads word tokens over an edited page); validated by `applyOperations` like any op.
+
+**R-135 `GET /generators`** — response `{ items: Array<{ kind, enabled: boolean, priority: 'P1'|'P2', llm: boolean, tierHint: 'ok'|'slow', tier, model: GeneratorModel | null, models: GeneratorModel[] }> }` with `GeneratorModel = { key, label, bytes, installed, languages, minTier, belowTier, cc0 }`. `enabled` mirrors the build's `enabledKinds` (a disabled kind answers R-130 with `422 EM-9004`, so the Editor's "Coming later" badge always matches the Service); `model` is the tier default (LOCAL_AI_MODELS §5; `frame-composite` = no download), `models` every registry entry for the task (music includes the CC0 loop library). `hashtags` has `llm: true` and no model.
+
+**R-136 `POST /generator-jobs/:jobId/save-output`** — body `{ assetId: Id }` (strict; must be the job's result or one of its `candidates`). Copies the PNG to `<outputFolder | outputs/<projectId>>/<project>-thumbnail-<yyyymmdd-hhmm>.png` and records an Output (`kind: 'still'`, with a synthetic `done` Render Job row so `outputs.render_job_id` stays valid). Response `OutputDto`. Errors: `400 EM-9002` foreign asset, `422 EM-9002` not done, `422 EM-1301` file missing, `422 EM-3206` folder not writable, `404 EM-9003`.
+
+**R-137 `DELETE /generator-jobs/:jobId`** — `204`; `404 EM-9003` when unknown.
 
 ### 6.14 Models (Model Manager)
 
@@ -641,7 +702,13 @@ Response `202 GeneratorJobDto`. Errors: `422 EM-7001` model not installed (detai
 
 **R-142 `POST /models/:key/install`** — outbound, resumable, hash-verified. Response `202 ModelStateDto` (`downloading`). Errors: `423 EM-8202` (or `EM-7006` notice when offline), `422 EM-7004` disk, `409 EM-7104`. Events: `model.progress`, `model.installed`, `model.failed` (`EM-7002`, `EM-7003`).
 
-**R-143 `POST /models/:key/cancel`** — keeps the partial file for resume. Response `ModelStateDto` (`not-installed`, `bytesDone` kept).
+**R-143 `POST /models/:key/cancel`** — Pause: keeps the partial file for resume. Response `ModelStateDto` (`not-installed`, `bytesDone` kept). With `?discard=true` (Cancel, FR-124) the partial files are deleted (`bytesDone: 0`).
+
+Downloads also pause by themselves while a Standard or Accelerated Render Job is `rendering` (FR-124; checked every 2 s with one indexed query): status `paused`, `pausedReason: 'render'`, `model.progress {status:'paused', pausedReason:'render'}`; they resume from the `.part` file when the render ends.
+
+R-140 also returns `registry: { source: 'built-in' | 'signed', seq, code: 'EM-7111' | null, reason }` (SEC-072): a `models.json` + `models.json.sig` in the models folder is used only after its Ed25519 signature verifies against an embedded manifest public key and its `seq` is not older than the last accepted one; otherwise the built-in registry is used and `code` is `EM-7111`.
+
+**R-146 `POST /models/engines/:engine/reveal`** (FR-126) — response `{ path }`: the absolute `<models>\<engine>\` folder (created if missing) for the Shell's `openFolder`; the Editor shows `EM-8303` with the path when the Shell cannot open it. Errors: `404 EM-9003` unknown engine.
 
 **R-144 `DELETE /models/:key`** — removes weights and partials. Response `204`. Errors: `409 EM-7104` in use.
 
@@ -650,6 +717,8 @@ Response `202 GeneratorJobDto`. Errors: `422 EM-7001` model not installed (detai
 **R-150 `GET /hardware/profile`** — response `HardwareProfileDto` (cached from startup; `systeminformation`). **R-151 `POST /hardware/profile/refresh`** — re-detects (rate-limited to once per 30 s; `429 EM-9005` otherwise). Response `HardwareProfileDto`. Events: `settings.changed {scope:'hardware'}` when the tier changes.
 
 **R-152 `GET /hardware/live`** — the latest cheap-meter sample. Response `HardwareTickDto`. The Hardware Monitor popover uses `hardware.tick` over SSE while open and this route for its first paint.
+
+FR-128: the hardware module checks the data drive with one `statfs` call ~10 s after start, then every 60 s and on every tick; below 2 GB free it emits `service.notice {kind:'low-disk', code:'EM-6402', freeBytes, have}` **once per session**. FR-129: `HardwareProfileDto.warnings` carries `EM-3402` for T0 and `EM-8305` below 8 GB RAM; the Editor shows each once per install.
 
 ### 6.16 Licence
 
@@ -672,6 +741,8 @@ Response `202 GeneratorJobDto`. Errors: `422 EM-7001` model not installed (detai
 **R-180 `POST /diagnostics/bundle`** — body `{ includeStructure: z.boolean().default(false) }`. Builds the zip described in TRD.md TR-103 into `logs\diagnostics-<ts>.zip`. Response `{ path, bytes, contents: string[] }`. Errors: `500 EM-9006`.
 
 **R-181 `GET /diagnostics/logs?lines=200&level=warn`** — response `{ lines: string[] }` (JSON lines, redacted, max 2000).
+
+**R-182 `GET /diagnostics/codes?limit=50`** (FR-150) — response `{ items: Array<{ at: Iso, code: EmCode, source: 'render'|'generator'|'agent'|'log', ref: Id | null }> }`, newest first, de-duplicated by code + ref: failed Render Jobs, generator jobs and agent runs plus coded lines of the last two log files. Never message text or content.
 
 ## 7. Server-Sent Events
 
@@ -732,7 +803,7 @@ data: {"seq":419,"at":"2026-10-24T03:05:12.410Z","projectId":"01JAZK…","jobId"
 | `hardware.tick` | `HardwareTickDto` | every 2 s **only while at least one client subscribed with `?hardware=1`** (the Hardware Monitor popover); otherwise suppressed to save bandwidth |
 | `license.changed` | `{ licence: LicenseDto }` | R-161, R-162, revocation detected at startup |
 | `settings.changed` | `{ scope: 'settings'|'privateMode'|'providers'|'assignments'|'budget'|'hardware', settings?: SettingsDto, privateMode?: boolean }` | any settings/provider mutation; Private Mode changes always include `privateMode` |
-| `service.notice` | `{ kind: 'shutting-down'|'resync'|'backup'|'restore'|'generator'|'update'|'offline'|'low-disk'|'low-memory'|'checkpoint'|'sample', code?: string, …kind-specific }` | lifecycle and cross-cutting notices: `EM-8003` after restart, `EM-6402` low disk, `EM-8305` low memory, `EM-8105` update available, backup/restore/generator job progress (`{jobId, percent, done, projectId}`), autosave status (`EM-6203`), Sample Project prepared (`{projectId, ready}`, R-025) |
+| `service.notice` | `{ kind: 'shutting-down'|'resync'|'backup'|'restore'|'generator'|'update'|'offline'|'low-disk'|'low-memory'|'checkpoint'|'sample'|'media-missing'|'media-changed', code?: string, …kind-specific }` | lifecycle and cross-cutting notices: `EM-8003` after restart, `EM-6402` low disk, `EM-8305` low memory, `EM-8105` update available, backup/restore/generator job progress (`{jobId, percent, done, projectId}`), autosave status (`EM-6203`), Sample Project prepared (`{projectId, ready}`, R-025), media check on open and before render (FR-048: `media-missing {projectId, code:'EM-1301', assetIds}`, `media-changed {projectId, code:'EM-1302', assetId, name}` when a changed original is re-ingested in place) |
 
 `hardware.tick` subscription: `GET /events?token=…&hardware=1`; a client without the flag never receives ticks. All other events are always delivered (subject to `projectId` filtering).
 

@@ -59,6 +59,15 @@ export function searchPresets(query: string, lang: 'en' | 'id' = 'en', category?
   return scored.sort((a, b) => b.score - a.score || a.p.id.localeCompare(b.p.id)).map((x) => x.p);
 }
 
+/**
+ * DESIGN_CATALOGUE §13 suggested queries (FR-035): the search placeholder rotates through them and the suggestion list
+ * shows them on focus; choosing one selects `category`'s tab and runs the query. Each returns ≥ 1 preset of `category`.
+ */
+export const SUGGESTED_QUERIES: ReadonlyArray<{ query: string; category: Category }> = Object.freeze([
+  { query: 'smooth transition', category: 'transition' }, { query: 'karaoke captions', category: 'caption' }, { query: 'energetic motion', category: 'motion' },
+  { query: 'calm background', category: 'background' }, { query: 'transisi halus', category: 'transition' }, { query: 'teks karaoke', category: 'caption' },
+]);
+
 export function presetParamsJsonSchema(id: PresetId): Record<string, unknown> {
   const p = catalogue.get(id);
   if (!p) throw new Error(`unknown preset ${id}`);

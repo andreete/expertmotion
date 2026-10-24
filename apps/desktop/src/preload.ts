@@ -12,6 +12,10 @@
  *   openExternal(url)          → void       (system browser; HTTPS on EXTERNAL_HOSTS only, checked in main)
  *   getPathsForFiles(files)    → string[]   (paths of files dropped on the Editor; Electron webUtils, no IPC)
  *   onServiceState(cb)         → unsubscribe (service up/down + re-bootstrap token push)
+ *   onUpdateState(cb)          → unsubscribe (FR-152 updater state push)
+ *   getUpdateState()           → UpdateState
+ *   updateAction(action)       → void       (download | restart | later | check; Creator consent, checked in main)
+ *   openPath(path)             → void       (play a rendered Output with the system player; media files only)
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from './lib/constants.js';
@@ -43,6 +47,11 @@ export interface ServiceState {
   code?: string;
 }
 
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'deferred' | 'paused' | 'error';
+  version?: string; percent?: number; code?: string;
+}
+
 const api = {
   getBootstrap: (): Promise<Bootstrap> => ipcRenderer.invoke(IPC.getBootstrap) as Promise<Bootstrap>,
   pickFiles: (options?: PickFilesOptions): Promise<string[]> => ipcRenderer.invoke(IPC.pickFiles, options ?? {}) as Promise<string[]>,
@@ -57,6 +66,14 @@ const api = {
     ipcRenderer.on(IPC.serviceState, listener);
     return () => ipcRenderer.removeListener(IPC.serviceState, listener);
   },
+  onUpdateState: (cb: (state: UpdateState) => void): (() => void) => {
+    const listener = (_event: unknown, state: UpdateState): void => cb(state);
+    ipcRenderer.on(IPC.updateState, listener);
+    return () => ipcRenderer.removeListener(IPC.updateState, listener);
+  },
+  getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke(IPC.getUpdateState) as Promise<UpdateState>,
+  updateAction: (action: 'download' | 'restart' | 'later' | 'check'): Promise<void> => ipcRenderer.invoke(IPC.updateAction, action) as Promise<void>,
+  openPath: (targetPath: string): Promise<void> => ipcRenderer.invoke(IPC.openPath, targetPath) as Promise<void>,
 } as const;
 
 contextBridge.exposeInMainWorld('expertmotion', Object.freeze(api));

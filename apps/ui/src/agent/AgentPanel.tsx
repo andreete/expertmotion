@@ -11,15 +11,18 @@ export function ModelBar() {
   const def = state.connections.find((c) => c.id === state.assignments?.defaultConnectionId) ?? state.connections[0];
   const model = state.assignments?.editor?.modelId ?? state.assignments?.brainstorm?.modelId;
   const priv = Boolean(state.settings?.privateMode);
-  const status = priv ? 'private' : !def ? 'none' : def.status === 'valid' ? 'valid' : def.status === 'invalid' ? 'error' : 'unvalidated';
+  // FR-071: the last provider failure of either agent (agent.run.failed) wins over a stale "valid"; its code is shown as is.
+  const runCode = [state.agentError.editor, state.agentError.brainstorm].find((c): c is string => !!c && /^EM-4[0-2]\d\d$/.test(c)) ?? null;
+  const code = runCode ?? (def?.status === 'invalid' ? 'EM-4002' : null);
+  const status = priv ? 'private' : !def ? 'none' : code ? 'error' : def.status === 'valid' ? 'valid' : 'unvalidated';
   const provider = def ? t(`ui.scr.providers.provider.${def.provider}`) : '';
   const statusText = t(`ui.agent.modelbar.status.${status}`);
   return (
     <button type="button" data-el="agent.modelbar" onClick={() => actions.setScreen({ kind: 'providers' })}
       aria-label={def ? t('a11y.agent.modelbar', { provider, model: model ?? '—', status: statusText }) : t('ui.agent.modelbar.connect')}
       className="flex h-11 w-full shrink-0 items-center gap-2 border-b border-em-line px-3 text-left hover:bg-em-panel-2">
-      <span data-el="agent.modelbar.status" title={status === 'error' ? `${statusText} · EM-4002` : statusText} className="flex items-center">
-        {priv ? <ShieldCheck size={14} className="text-em-private" /> : <span className={cx('h-2 w-2 rounded-full', status === 'valid' ? 'bg-em-success' : status === 'error' ? 'bg-em-danger' : 'bg-em-muted')} />}
+      <span data-el="agent.modelbar.status" data-status={status} title={status === 'error' && code ? `${statusText} · ${code} · ${t(`err.${code}.title`)}` : statusText} className="flex items-center">
+        {priv ? <ShieldCheck size={14} className="text-em-private" /> : <span className={cx('h-2 w-2 rounded-full', status === 'valid' ? 'bg-em-success' : status === 'error' ? 'bg-em-danger' : status === 'none' ? 'border border-em-muted bg-transparent' : 'bg-em-muted')} />}
       </span>
       {def ? <span className="min-w-0 flex-1 truncate">{t('ui.agent.modelbar.label', { provider, model: model ?? t('ui.agent.footer.nomodel') })}</span>
         : <span className="flex-1 font-medium text-em-accent">{t('ui.agent.modelbar.connect')}</span>}

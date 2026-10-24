@@ -21,7 +21,11 @@ export function applyOperations(model: CompositionModelT, ops: readonly Operatio
   const m: CompositionModelT = structuredClone(model);
   const warnings: Issue[] = [];
   try {
-    ops.forEach((op, i) => applyOne(m, op, ctx, `ops[${i}]`, warnings));
+    ops.forEach((op, i) => {
+      const firstBefore = m.tracks.video[0]?.assetId;
+      applyOne(m, op, ctx, `ops[${i}]`, warnings);
+      if (m.tracks.video[0]?.assetId !== firstBefore) followFirstClip(m, ctx);      // FR-088: Auto re-checks when the first Clip changes
+    });
   } catch (e) {
     if (e instanceof Stop) return fail([e.issue, ...warnings.filter((w) => w.severity === 'block')]);
     throw e;
@@ -32,6 +36,14 @@ export function applyOperations(model: CompositionModelT, ops: readonly Operatio
 }
 
 // ───────────────────────────── helpers ─────────────────────────────
+/** FR-088: while Auto is on, the ratio is the nearest supported ratio of the first Clip's probe (unchanged when unknown). */
+function followFirstClip(m: CompositionModelT, ctx: ApplyContext): void {
+  if (!m.settings.autoRatio) return;
+  const first = m.tracks.video[0];
+  const as = first ? ctx.assets.find((x) => x.id === first.assetId) : undefined;
+  if (!as?.width || !as.height) return;
+  m.settings.ratio = detectRatio(as.width, as.height); delete m.settings.customRatio;
+}
 function preset(id: string, category: Category, params: unknown, ctx: ApplyContext, path: string, warnings: Issue[]): Record<string, unknown> {
   const p = getPreset(id);
   if (!p || p.category !== category) stop('EM-2101', `${id} is not a ${category} preset in the Design Catalogue.`, `${path}.args.presetId`);
@@ -115,7 +127,6 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       checkSource(clip, as, `${path}.args`);
       const at = a.atIndex ?? v.length;
       if (at > v.length) stop('EM-2102', `atIndex ${at} is beyond the end (${v.length}).`, `${path}.args.atIndex`);
-      if (v.length === 0 && m.settings.autoRatio && as.width && as.height) m.settings.ratio = detectRatio(as.width, as.height);
       shiftCutsForInsert(m, at);
       v.splice(at, 0, clip);
       return;
@@ -131,9 +142,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       if (a.toIndex >= v.length) stop('EM-2102', `toIndex ${a.toIndex} is beyond the last clip.`, `${path}.args.toIndex`);
       if (a.toIndex === i) return;
       const [clip] = v.splice(i, 1);
-      shiftCutsForRemove(m, i, v.length + 1, warnings, path);
-      shiftCutsForInsert(m, a.toIndex);
-      v.splice(a.toIndex, 0, clip!);
+      v.splice(a.toIndex, 0, clip!);                         // FR-068: the cut count is unchanged, so transitions stay on their cut positions (re-attached to the new neighbours)
       return;
     }
     case 'op:clip.setTrim': case 'op:clip.setPlaybackRate': case 'op:clip.setVolume': case 'op:clip.setFit': {
@@ -177,7 +186,18 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const i = findIndex(m.tracks.text, needTarget(op, path).id, 'text', path);
       const t = m.tracks.text[i]!;
       if (op.op === 'op:text.setContent') t.text = a.text;
-      if (op.op === 'op:text.setStyle') t.style = { ...t.style, ...a };
+      if (op.op === 'op:text.setStyle') {
+        const { variant, ...style } = a as { variant?: string } & Record<string, unknown>;
+        if (variant !== undefined) {
+          // FR-025: re-apply a variant: its position and its size/weight/align replace the layer's overrides.
+          const vp = getPreset(variant);
+          if (!vp || vp.category !== 'text') stop('EM-2101', `${variant} is not a text variant.`, `${path}.args.variant`);
+          t.variantId = variant; t.position = variantPosition(m, variant);
+          const { fontSize: _s, weight: _w, align: _a, ...keep } = t.style; void _s; void _w; void _a;
+          t.style = keep;
+        }
+        t.style = { ...t.style, ...style };
+      }
       if (op.op === 'op:text.setEffect') t.effect = { presetId: a.presetId, params: preset(a.presetId, 'texteffect', a.params, ctx, path, warnings) };
       if (op.op === 'op:text.setTiming') t.timing = { atMs: a.atMs, durationMs: a.durationMs };
       if (op.op === 'op:text.remove') m.tracks.text.splice(i, 1);
@@ -248,6 +268,12 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       if (i < 0) stop('EM-2203', `The image ${id ?? '(none)'} no longer exists.`, `${path}.target`);
       m.tracks.overlay.splice(i, 1); return;
     }
+    case 'op:overlay.setOpacity': {
+      const tg = needTarget(op, path);
+      const el = m.tracks.overlay.find((o) => o.id === tg.id && o.kind === (tg.kind === 'shape' ? 'shape' : 'image'));
+      if (!el) stop('EM-2203', `The ${tg.kind} ${tg.id ?? '(none)'} no longer exists.`, `${path}.target`);
+      el!.opacity = a.opacity; return;
+    }
     case 'op:audio.addBed': case 'op:audio.addLayer': {
       const as = asset(ctx, a.assetId, ['audio'], path);
       const layer: AudioLayerT = op.op === 'op:audio.addBed'
@@ -284,6 +310,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       m.settings.ratio = a.ratio; m.settings.autoRatio = false;           // a manual ratio pick turns Auto off (ELEMENT_IDS agent.output.ratio.auto)
       return;
     }
+    case 'op:output.setAutoRatio': m.settings.autoRatio = a.on; followFirstClip(m, ctx); return;
     case 'op:output.setResolution': {
       if (ctx.tier === 'T0' && (a.preset === '2k' || a.preset === '2160p')) warnings.push(issue('EM-3105', `${a.preset} needs a graphics card with at least 4 GB on this computer; export will offer 1080p.`, 'info', `${path}.args.preset`));
       m.settings.resolution = a.preset; return;

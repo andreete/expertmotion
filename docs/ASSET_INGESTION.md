@@ -53,7 +53,7 @@ Each import is a **job** (same envelope as generator jobs, LOCAL_AI_MODELS.md §
 | 3 | decide transcode | §3.3 rule | plan: `{needsPlayable, needsProxy, needsThumbs, needsWaveform, tonemap, cfr}` |
 | 4 | transcode (playable copy) | §3.4, only when needed | `playable.mp4` / `playable.m4a` |
 | 5 | proxy | §3.5 for video; `sharp` resize for stills | `proxy.mp4` / `proxy.jpg` |
-| 6 | thumbnails | §3.6 | `thumb.jpg` (poster) + `strip.jpg` (8 frames) |
+| 6 | thumbnails | §3.6 | `thumb.jpg` (poster) + `strip.jpg` (10 frames, FR-042) |
 | 7 | waveform | §3.7 for anything with audio | `wave.json` |
 | 8 | index + events | write the `assets` row in one transaction (DATABASE_SCHEMA.md), mark `ready`; SSE `asset.ready {assetId, meta}`; on any failure SSE `asset.failed {assetId, code}` and the folder is removed except `original.<ext>` when the failure is in steps 4–7 (so the Creator can retry without re-copying) | DB row, events |
 
@@ -148,7 +148,7 @@ The scale expression keeps the **short side** at 720 so a 9:16 clip becomes 720�
 | Output | Command | Notes |
 |---|---|---|
 | Poster `thumb.jpg` at 35 % of duration | `ffmpeg -v error -nostdin -y -ss <0.35 × duration s> -i "<playable>" -frames:v 1 -vf "scale=-2:360" -q:v 3 "<assetDir>\thumb.jpg"` | 35 % avoids black/fade-in starts; the same 35 % rule is used for Output thumbnails (`renderStill`) so Asset and Output cards look alike; images: `sharp` resize to 360 px height |
-| Filmstrip `strip.jpg` (8 frames in one row) | `ffmpeg -v error -nostdin -y -i "<playable>" -vf "fps=8/<duration s>,scale=160:-2,tile=8x1" -frames:v 1 -q:v 4 "<assetDir>\strip.jpg"` | shown on hover and in the Timeline View clip bar; for clips < 2 s, `fps=8/duration` still yields 8 samples |
+| Filmstrip `strip.jpg` (10 frames in one row, FR-042) | `ffmpeg -v error -nostdin -y -i "<playable>" -vf "fps=10/<duration s>,scale=160:-2,tile=10x1" -frames:v 1 -q:v 4 "<assetDir>\strip.jpg"` | shown on hover and in the Timeline View clip bar; for clips < 2 s, `fps=8/duration` still yields 8 samples |
 | Audio-only | no frames; the Asset card draws the waveform (`wave.json`) over a kind-coloured background | — |
 
 ### 3.7 Step 7: waveform JSON (100 samples per second)
@@ -202,7 +202,7 @@ Consequence stated in the UI (`lib.assets.drop` hint): "Files are copied into th
   playable.mp4|m4a    only when §3.3 required it
   proxy.mp4|jpg       720p short side / 1920 px image
   thumb.jpg           poster (360 px high)
-  strip.jpg           8-frame filmstrip (video)
+  strip.jpg           10-frame filmstrip (video)
   wave.json           peaks, 100/s (anything with audio)
   probe.json          raw ffprobe output (Diagnostics)
   captions.json       raw Caption[] after captions.generate (LOCAL_AI_MODELS.md)

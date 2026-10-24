@@ -11,7 +11,7 @@ describe('vocabulary matches docs/AI_WORKFLOW.md §5', () => {
     const doc = fs.readFileSync(new URL('../../../docs/AI_WORKFLOW.md', import.meta.url), 'utf8').split('## 5.')[1]!.split('## 6.')[0]!;
     const docOps = new Set([...doc.matchAll(/^\| `(op:[a-z]+\.[a-zA-Z]+)`/gm)].map((m) => m[1]!));
     expect([...docOps].sort()).toEqual([...OP_NAMES].sort());
-    expect(OP_NAMES.length).toBe(43);
+    expect(OP_NAMES.length).toBe(45);
   });
 });
 
@@ -58,6 +58,21 @@ describe('clips', () => {
     const m = must(createEmptyModel('p', { autoRatio: true, ratio: '9:16' }), [op('op:clip.insert', { assetId: 'v1' }), op('op:clip.insert', { assetId: 'v2' })]);
     expect(m.settings.ratio).toBe('16:9');
   });
+  it('FR-088: Auto re-checks when the first clip changes; setAutoRatio on applies now, off keeps the ratio', () => {
+    let m = must(createEmptyModel('p', { autoRatio: true, ratio: '16:9' }), [op('op:clip.insert', { assetId: 'v1' }), op('op:clip.insert', { assetId: 'v2' })]);
+    expect(m.settings.ratio).toBe('16:9');
+    m = must(m, [op('op:clip.move', { toIndex: 0 }, { kind: 'clip', id: m.tracks.video[1]!.id })]);
+    expect(m.settings.ratio).toBe('9:16');                                     // v2 (portrait) is now first
+    m = must(m, [op('op:clip.remove', {}, { kind: 'clip', id: m.tracks.video[0]!.id })]);
+    expect(m.settings.ratio).toBe('16:9');
+    const manual = must(m, [op('op:output.setRatio', { ratio: '1:1' }), op('op:clip.insert', { assetId: 'v2', atIndex: 0 })]);
+    expect(manual.settings).toMatchObject({ ratio: '1:1', autoRatio: false });  // manual pick turned Auto off: first-clip change ignored
+    const back = must(manual, [op('op:output.setAutoRatio', { on: true }, { kind: 'project' })]);
+    expect(back.settings).toMatchObject({ ratio: '9:16', autoRatio: true });
+    expect(must(back, [op('op:output.setAutoRatio', { on: false }, { kind: 'project' })]).settings).toMatchObject({ ratio: '9:16', autoRatio: false });
+    expect(must(createEmptyModel('p', { autoRatio: false, ratio: '4:5' }), [op('op:output.setAutoRatio', { on: true }, { kind: 'project' })]).settings).toMatchObject({ ratio: '4:5', autoRatio: true });
+    expect(propertyKeysOf(op('op:output.setAutoRatio', { on: true }, { kind: 'project' }))).toEqual(['project.ratioAuto']);
+  });
   it('insert in the middle shifts later cuts and keeps the earlier cut transition', () => {
     let m = must(base(), [op('op:transition.set', { presetId: 'preset:transition.fade', durationMs: 500 }, { kind: 'cut', index: 0 }), op('op:transition.set', { presetId: 'preset:transition.wipe', durationMs: 500 }, { kind: 'cut', index: 1 })]);
     m = must(m, [op('op:clip.insert', { assetId: 'img', atIndex: 1 })]);
@@ -83,6 +98,10 @@ describe('clips', () => {
     expect(must(m0, [op('op:clip.move', { toIndex: 2 }, { kind: 'clip', id })]).tracks.video.map((c) => c.assetId)).toEqual(['v2', 'v3', 'v1']);
     expect(must(m0, [op('op:clip.move', { toIndex: 0 }, { kind: 'clip', id })]).tracks.video.map((c) => c.assetId)).toEqual(['v1', 'v2', 'v3']);
     expect(blocked(applyOperations(m0, [op('op:clip.move', { toIndex: 3 }, { kind: 'clip', id })], ctx()))).toMatchObject({ code: 'EM-2102' });
+    const withFades = must(m0, [op('op:transition.set', { presetId: 'preset:transition.fade', durationMs: 500 }, { kind: 'cut', index: 0 }), op('op:transition.set', { presetId: 'preset:transition.wipe', durationMs: 500 }, { kind: 'cut', index: 1 })]);
+    const moved = must(withFades, [op('op:clip.move', { toIndex: 0 }, { kind: 'clip', id: withFades.tracks.video[2]!.id })]);
+    expect(moved.tracks.video.map((c) => c.assetId)).toEqual(['v3', 'v1', 'v2']);
+    expect(moved.transitions.map((t) => [t.cutIndex, t.presetId])).toEqual([[0, 'preset:transition.fade'], [1, 'preset:transition.wipe']]);   // FR-068: re-attached to the new cuts
   });
   it('trim and playback rate obey trimBefore + duration × rate ≤ source (CM-002 corrected)', () => {
     const m0 = base(); const id = m0.tracks.video[0]!.id;       // v1 has 10 s

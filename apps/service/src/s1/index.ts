@@ -4,6 +4,7 @@ import type { ServiceContext } from '../context.js';
 import { Backups } from './backup.js';
 import { Checkpoints } from './checkpoints.js';
 import { Projects } from './projects-svc.js';
+import { purgeRetention } from './retention.js';
 import { SampleProjects } from './sample.js';
 import { CompositionStore } from './store.js';
 import { Workflow } from './workflow.js';
@@ -31,4 +32,5 @@ export function recoverOnce(ctx: ServiceContext): void {
   r.workflow.recoverOnStart();
   r.projects.purge();
   r.checkpoints.recoverOnStart();
+  try { purgeRetention(ctx); } catch (e) { ctx.log.warn({ err: String(e) }, 'retention housekeeping failed'); }
 }

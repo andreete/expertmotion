@@ -16,6 +16,7 @@ import { ULID, decodeCursor, em, encodeCursor, isInside, parseOrThrow, requirePr
 import { clearBadges, getAsset, listAssets, requireAsset, setBadge, toAssetDto, toFacts, type AssetRow } from '../s2/assets-repo.js';
 import { assetDir, hashFile, ingestOf, inspectSource, MAX_ASSETS_PER_PROJECT } from '../s2/ingest.js';
 import { SIZE_LIMIT, kindFromExt, sniffMatches, readHead } from '../s2/probe.js';
+import { checkProjectMedia, isMissing, purgeExpiredFailed } from '../s2/media-check.js';
 
 const Id = z.string().regex(ULID, 'expected an id');
 const P = z.object({ id: Id });
@@ -40,7 +41,7 @@ export function canonicalImportPath(p: string, roots: readonly string[]): string
 }
 
 const isShell = (req: Request) => req.headers['x-expertmotion-caller'] === 'shell';
-const dto = (ctx: ServiceContext, r: AssetRow, probe = false) => toAssetDto(r, ingestOf(ctx).progressOf(r.id), probe);
+const dto = (ctx: ServiceContext, r: AssetRow, probe = false) => toAssetDto(r, ingestOf(ctx).progressOf(r.id), probe, isMissing(ctx, r));
 
 /** Clips/layers of the head model that reference an asset (R-033). */
 function references(ctx: ServiceContext, projectId: string, assetId: string): OperationT[] {
@@ -58,6 +59,7 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
     name: 'assets',
     start(ctx) {
       ctx.hooks.assetFacts = (projectId) => listAssets(ctx, projectId).map(toFacts);
+      ctx.hooks.mediaCheck = (projectId) => checkProjectMedia(ctx, projectId);
       const r = ingestOf(ctx).recover();
       if (r.requeued.length || r.failed.length) ctx.log.info({ requeued: r.requeued.length, failed: r.failed.length }, 'ingest recovery');
     },
@@ -101,6 +103,7 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
           limit: z.coerce.number().int().min(1).max(200).default(50), cursor: z.string().max(400).optional() }),
       }, ({ params, query }) => {
         requireProject(ctx, params.id);
+        purgeExpiredFailed(ctx, params.id);                       // FR-050: failed cards stay listed for 24 h
         const where = ['project_id = ?']; const args: unknown[] = [params.id];
         if (query.kind) { where.push('kind = ?'); args.push(query.kind); }
         if (query.status) { where.push('status = ?'); args.push(query.status); }

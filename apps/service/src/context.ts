@@ -36,6 +36,8 @@ export interface Hooks {
   isTrial(): boolean;
   /** projects module: notify that the project head changed (autosave, SSE). */
   headChanged(projectId: string, versionId: string): void;
+  /** projects module (FR-165): write a checkpoint right before a risky operation (render start); never throws. */
+  checkpoint?(projectId: string, reason: 'pre-render'): void;
   /** composition module (S1): current head of a project (EM-9003 when unknown). */
   composition(projectId: string): { model: CompositionModelT; versionId: string };
   /** composition module (S1): apply ops as one new version (validated, transactional); returns the new version id. */
@@ -46,6 +48,8 @@ export interface Hooks {
     runId?: string; intentIds?: string[] }): Promise<EditPlanT & { planId: string; runId?: string }>;
   /** intents module (S1): enqueue intents (Brainstorm handoff, AI_WORKFLOW §6), persist, emit intent.updated; returns the queue. */
   enqueueIntents?(projectId: string, intents: EditIntentT[]): { queue: EditIntentT[] };
+  /** assets module (FR-048): check the project's media copies (missing / changed → re-ingest); run on open and before render. */
+  mediaCheck?(projectId: string): Promise<{ missing: string[]; changed: string[] }>;
 }
 
 export interface ServiceContext {

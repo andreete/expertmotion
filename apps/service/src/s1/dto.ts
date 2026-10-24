@@ -16,7 +16,19 @@ export const ProjectCreateInput = z.object({
   settings: ProjectSettings.partial().optional(),
   language: z.enum(['id', 'en']).default('id'),
   theme: Theme.partial().optional(),
+  // FR-009: chosen in the New dialog. durationPolicy lands on v1; outputFolder is stored with the project settings (R-017).
+  durationPolicy: z.enum(['fit-content', 'fixed']).optional(),
+  fixedDurationMs: z.number().int().min(1000).max(1_800_000).optional(),
+  outputFolder: z.string().min(1).max(1024).optional(),
 }).strict();
+/** R-018 body: ProjectSettings plus the duration policy (op:project.setDurationPolicy) and the per-project output folder (null clears). */
+export const ProjectSettingsInput = ProjectSettings.extend({
+  durationPolicy: z.enum(['fit-content', 'fixed']).optional(),
+  fixedDurationMs: z.number().int().min(1000).max(1_800_000).optional(),
+  outputFolder: z.string().max(1024).nullable().optional(),
+}).strict();
+export const ProjectDeleteQuery = z.object({ permanent: z.enum(['true', 'false']).optional().transform((v) => v === 'true'), keepOutputs: z.enum(['true', 'false']).optional().transform((v) => v !== 'false') });
+export const DiskUsageQuery = z.object({ projectId: Id.optional() });
 export const SampleCreateInput = z.object({ language: z.enum(['id', 'en']).default('id') }).strict();
 export const ProjectPatchInput = z.object({ name: z.string().trim().min(1).max(120).optional(), language: z.enum(['id', 'en']).optional() }).strict();
 export const ProjectListQuery = PageQuery.extend({ includeDeleted: boolQ });
@@ -43,11 +55,13 @@ export const DesignPickInput = z.object({
   instruction: z.string().max(2000).optional(),
   baseVersion: z.string().min(1).max(128),
   plan: z.enum(['auto', 'none']).default('auto'),
-  field: z.enum(['fontFamily', 'fontSize', 'weight', 'colour', 'align', 'opacity']).optional(),
+  field: z.enum(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity', 'content']).optional(),
   value: z.unknown().optional(),
-  output: z.object({ kind: z.enum(['ratio', 'resolution', 'fps']), value: z.unknown(), customRatio: z.object({ w: z.number().int().min(1), h: z.number().int().min(1) }).optional() }).optional(),
+  output: z.object({ kind: z.enum(['ratio', 'resolution', 'fps', 'autoRatio']), value: z.unknown(), customRatio: z.object({ w: z.number().int().min(1), h: z.number().int().min(1) }).optional() }).optional(),
   assetId: z.string().max(64).optional(),
   text: z.string().min(1).max(500).optional(),
+  /** FR-068 (P1): Timeline drag on the video Track (op:clip.move / op:clip.setTrim). */
+  clipEdit: z.object({ clipId: z.string().min(1).max(64), toIndex: z.number().int().min(0).optional(), trimBeforeMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(100).optional() }).strict().optional(),
 }).strict();
 export type DesignPickInputT = z.infer<typeof DesignPickInput>;
 export const IntentParams = z.object({ id: Id, intentId: Id });
@@ -90,15 +104,23 @@ export function versionDto(r: VersionRow, withModel = false) {
 }
 export type VersionDto = ReturnType<typeof versionDto>;
 
-export function checkpointDto(r: CheckpointRow, durationMs: number) {
-  return { id: r.id, projectId: r.project_id, versionId: r.version_id, reason: r.reason, createdAt: r.created_at, durationMs };
+/** FR-016: `hash` is the Composition Version hash the checkpoint file holds (its integrity hash); `bytes` the file size (0 if missing). */
+export function checkpointDto(r: CheckpointRow, durationMs: number, file?: { bytes: number }) {
+  const hash = r.file_path.split('/').pop()?.replace(/\.json$/, '') ?? '';
+  return { id: r.id, projectId: r.project_id, versionId: r.version_id, reason: r.reason, createdAt: r.created_at, durationMs, hash, bytes: file?.bytes ?? 0 };
 }
 
 export function planDto(r: PlanRow, opts: { withOps?: boolean } = {}) {
   const p = JSON.parse(r.plan_json) as EditPlanT;
   const steps = opts.withOps === false ? p.steps.map((s) => ({ ...s, ops: [], opCount: s.ops.length })) : p.steps;
   return { ...p, steps, id: r.id, status: r.status, origin: r.origin, baseVersionId: r.base_version_id, agentRunId: r.agent_run_id,
-    intentIds: r.intent_ids_json ? (JSON.parse(r.intent_ids_json) as string[]) : [], createdAt: r.created_at, updatedAt: r.updated_at };
+    intentIds: r.intent_ids_json ? (JSON.parse(r.intent_ids_json) as string[]) : [], createdAt: r.created_at, updatedAt: r.updated_at,
+    // FR-086: the execution result summary so a reopened Editor thread shows "3 added, 1 modified" and the version hash.
+    result: r.result_json ? resultSummary(JSON.parse(r.result_json) as { ok: boolean; toVersion?: string; appliedOps: number; diff?: Array<{ change: 'added' | 'removed' | 'modified' }> }) : null };
+}
+function resultSummary(x: { ok: boolean; toVersion?: string; appliedOps: number; diff?: Array<{ change: 'added' | 'removed' | 'modified' }> }) {
+  const n = (c: string) => (x.diff ?? []).filter((d) => d.change === c).length;
+  return { ok: x.ok, toVersion: x.toVersion ?? null, appliedOps: x.appliedOps, added: n('added'), removed: n('removed'), modified: n('modified') };
 }
 export type PlanDto = ReturnType<typeof planDto>;
 

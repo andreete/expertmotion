@@ -58,6 +58,9 @@ export async function validateKey(p: ProviderKindT, key: string, fetchFn: typeof
 const num = (v: unknown): number | null => { const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN; return Number.isFinite(n) ? n : null; };
 const perM = (v: unknown): number | null => { const n = num(v); return n === null || n < 0 ? null : Math.round(n * 1e6 * 1e6) / 1e6; };
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d);
+/** OpenAI, Anthropic and Gemini model lists report no capability facts: unknown (null), never guessed (FR-114). These adapters
+ *  do not stream (ADR-023), so streaming is a known `false`. */
+const UNREPORTED = { toolCalling: null, structuredOutput: null, streaming: false, imageInput: null, pricePerMInput: null, pricePerMOutput: null } as const;
 
 /** Fetches the provider's model list and maps it to Capability Table rows (GLOSSARY). */
 export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof fetch): Promise<CapabilityRowT[]> {
@@ -75,11 +78,12 @@ export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof 
       return j.data.flatMap((m) => {
         const r = m as { id?: unknown; name?: unknown; context_length?: unknown; pricing?: { prompt?: unknown; completion?: unknown }; supported_parameters?: unknown; architecture?: { input_modalities?: unknown } };
         if (typeof r.id !== 'string') return [];
-        const sp = Array.isArray(r.supported_parameters) ? r.supported_parameters.map(String) : [];
-        const mods = Array.isArray(r.architecture?.input_modalities) ? r.architecture!.input_modalities.map(String) : [];
+        // Unknown stays unknown (FR-114): no `supported_parameters` / `input_modalities` in the response → null, never a guess.
+        const sp = Array.isArray(r.supported_parameters) ? r.supported_parameters.map(String) : null;
+        const mods = Array.isArray(r.architecture?.input_modalities) ? r.architecture!.input_modalities.map(String) : null;
         const ctxLen = num(r.context_length);
-        return [{ modelId: r.id, label: str(r.name, r.id), contextLength: ctxLen === null ? null : Math.trunc(ctxLen), toolCalling: sp.includes('tools'),
-          structuredOutput: sp.includes('response_format') || sp.includes('structured_outputs'), streaming: true, imageInput: mods.includes('image'),
+        return [{ modelId: r.id, label: str(r.name, r.id), contextLength: ctxLen === null ? null : Math.trunc(ctxLen), toolCalling: sp ? sp.includes('tools') : null,
+          structuredOutput: sp ? sp.includes('response_format') || sp.includes('structured_outputs') : null, streaming: true, imageInput: mods ? mods.includes('image') : null,
           pricePerMInput: perM(r.pricing?.prompt), pricePerMOutput: perM(r.pricing?.completion) }];
       });
     });
@@ -89,13 +93,13 @@ export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof 
       return j.data.flatMap((m) => {
         const id = str(m.id);
         if (!/^(gpt-|o[1-9]|chatgpt-)/.test(id) || /(embed|audio|realtime|tts|transcribe|image|search|moderation|instruct)/.test(id)) return [];
-        return [{ modelId: id, label: id, contextLength: null, toolCalling: true, structuredOutput: true, streaming: true, imageInput: /(4o|4\.1|gpt-5|o3|o4)/.test(id), pricePerMInput: null, pricePerMOutput: null }];
+        return [{ modelId: id, label: id, ...UNREPORTED, contextLength: null }];
       });
     });
     case 'anthropic': return wrap(async () => {
       const j = await getJson(fetchFn, `${ANTHROPIC}/models?limit=1000`, authHeaders(p, key), { timeoutMs: 30_000 }) as { data?: Array<{ id?: unknown; display_name?: unknown }> };
       if (!Array.isArray(j?.data)) throw new Error('bad shape');
-      return j.data.flatMap((m) => (typeof m.id === 'string' ? [{ modelId: m.id, label: str(m.display_name, m.id), contextLength: null, toolCalling: true, structuredOutput: true, streaming: true, imageInput: true, pricePerMInput: null, pricePerMOutput: null }] : []));
+      return j.data.flatMap((m) => (typeof m.id === 'string' ? [{ modelId: m.id, label: str(m.display_name, m.id), ...UNREPORTED, contextLength: null }] : []));
     });
     case 'google': return wrap(async () => {
       const j = await getJson(fetchFn, `${GEMINI}/models?pageSize=1000`, authHeaders(p, key), { timeoutMs: 30_000 }) as { models?: Array<{ name?: unknown; displayName?: unknown; inputTokenLimit?: unknown; supportedGenerationMethods?: unknown }> };
@@ -105,7 +109,7 @@ export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof 
         const methods = Array.isArray(m.supportedGenerationMethods) ? m.supportedGenerationMethods.map(String) : [];
         if (!id || !methods.includes('generateContent')) return [];
         const ctxLen = num(m.inputTokenLimit);
-        return [{ modelId: id, label: str(m.displayName, id), contextLength: ctxLen === null ? null : Math.trunc(ctxLen), toolCalling: true, structuredOutput: true, streaming: true, imageInput: /gemini/.test(id), pricePerMInput: null, pricePerMOutput: null }];
+        return [{ modelId: id, label: str(m.displayName, id), ...UNREPORTED, contextLength: ctxLen === null ? null : Math.trunc(ctxLen) }];
       });
     });
     default: return notYet(p);

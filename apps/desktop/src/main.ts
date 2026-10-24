@@ -27,7 +27,7 @@ import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { redact } from '@expertmotion/shared';
 import {
-  APP_HOST, APP_ORIGIN, APP_SCHEME, EM, IPC, isAllowedExternal, READY_TIMEOUT_MS, SHELL_CALLER_HEADER, SHELL_CALLER_VALUE,
+  APP_HOST, APP_ORIGIN, APP_SCHEME, EM, IPC, isAllowedExternal, isPlayableOutput, READY_TIMEOUT_MS, UPDATE_ACTIONS, type UpdateAction, SHELL_CALLER_HEADER, SHELL_CALLER_VALUE,
   SHUTDOWN_KILL_AFTER_MS, SHUTDOWN_REQUEST_WAIT_MS,
 } from './lib/constants.js';
 import { pickPort } from './lib/port.js';
@@ -40,7 +40,8 @@ import { crashFileName, dataLayout, directoriesToCreate, logFiles, type DataLayo
 import { editorEntryUrl, resolveDevRules, type DevRules } from './lib/dev-mode.js';
 import { buildBootstrap, parseServiceMessage, shutdownMessage } from './lib/bootstrap.js';
 import { evaluateKeyring } from './lib/keyring.js';
-import { shouldCheckForUpdates, updaterConfig } from './lib/updater-policy.js';
+import { installDecision, nextUpdateState, shouldCheckForUpdates, updaterConfig, UPDATE_TICK_MS, type UpdateEvent, type UpdateState } from './lib/updater-policy.js';
+import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, type ShutdownAnswer } from './lib/close-flow.js';
 import { verifyManifest, type SignedManifest } from './lib/integrity.js';
 
 /** Build-time constants injected by esbuild `define` (see scripts/build-main.mjs). */
@@ -81,6 +82,9 @@ let restartState: RestartState = initialRestartState;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let lastUpdateCheckAt: number | null = null;
+let updateState: UpdateState = { status: 'idle' };
+let updateStage: 'check' | 'download' | 'install' = 'check';
+let updateTimer: NodeJS.Timeout | null = null;
 let shuttingDown = false;
 const triedPorts = new Set<number>();
 const stderrTail: string[] = [];
@@ -202,12 +206,24 @@ function scheduleRestart(): void {
 // ---------------------------------------------------------------------------------------------
 // Graceful shutdown (ARCHITECTURE.md §5 step 5).
 // ---------------------------------------------------------------------------------------------
-async function shutdownService(reason: 'window-closed' | 'update' | 'uninstall'): Promise<void> {
+async function shutdownService(reason: 'window-closed' | 'update' | 'uninstall'): Promise<'stopped' | 'kept'> {
   shuttingDown = true;
   const proc = serviceProc;
-  if (proc === null || endpoint === null) return;
+  if (proc === null || endpoint === null) return 'stopped';
   try {
-    await requestServiceShutdown(reason);
+    let answer = await requestServiceShutdown(reason, false);
+    // FR-002: a render is running (409 EM-8304): ask, then retry with force, or keep the Service and reopen the Editor.
+    if (answer.kind === 'render-running') {
+      const { response } = await dialog.showMessageBox({ type: 'warning', ...RENDER_RUNNING_DIALOG, buttons: [...RENDER_RUNNING_DIALOG.buttons] });
+      if (choiceFromButton(response) === 'keep') {
+        shuttingDown = false;
+        logLine('info', 'close cancelled: keep rendering');
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+        return 'kept';
+      }
+      answer = await requestServiceShutdown(reason, true);
+    }
+    if (answer.kind === 'failed') logLine('warn', 'shutdown request refused', { status: answer.status });
   } catch (err) {
     logLine('warn', 'shutdown request failed', { error: (err as Error).message });
   }
@@ -217,22 +233,27 @@ async function shutdownService(reason: 'window-closed' | 'update' | 'uninstall')
     proc.once('exit', () => { clearTimeout(killTimer); resolve(); });
   });
   serviceProc = null;
+  return 'stopped';
 }
 
-/** Asks the Service to checkpoint and stop (POST /service/shutdown, trusted-caller header). */
-function requestServiceShutdown(reason: string): Promise<void> {
-  if (endpoint === null) return Promise.resolve();
+/** Asks the Service to checkpoint and stop (POST /service/shutdown, trusted-caller header); `force` cancels a running render. */
+function requestServiceShutdown(reason: string, force: boolean): Promise<ShutdownAnswer> {
+  if (endpoint === null) return Promise.resolve({ kind: 'accepted' });
   const { port, token } = endpoint;
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<ShutdownAnswer>((resolve, reject) => {
     const request = net.request({ method: 'POST', url: `http://127.0.0.1:${port}/api/v1/service/shutdown`, useSessionCookies: false });
     request.setHeader('Authorization', `Bearer ${token}`);
     request.setHeader(SHELL_CALLER_HEADER, SHELL_CALLER_VALUE);
     request.setHeader('Content-Type', 'application/json');
     request.setHeader('Origin', APP_ORIGIN);
     const timer = setTimeout(() => { request.abort(); reject(new Error('shutdown timeout')); }, SHUTDOWN_REQUEST_WAIT_MS);
-    request.on('response', (res) => { res.on('data', () => undefined); res.on('end', () => { clearTimeout(timer); resolve(); }); });
+    request.on('response', (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => { if (chunks.length < 16) chunks.push(c); });
+      res.on('end', () => { clearTimeout(timer); resolve(parseShutdownResponse(res.statusCode, Buffer.concat(chunks).toString('utf8'))); });
+    });
     request.on('error', (e) => { clearTimeout(timer); reject(e); });
-    request.end(JSON.stringify({ reason, timeoutMs: SHUTDOWN_REQUEST_WAIT_MS }));
+    request.end(JSON.stringify({ reason, timeoutMs: SHUTDOWN_REQUEST_WAIT_MS, ...(force ? { force: true } : {}) }));
   });
 }
 
@@ -377,6 +398,18 @@ function registerIpc(): void {
     if (!senderOk(event) || typeof url !== 'string' || !isAllowedExternal(url)) return;
     await shell.openExternal(url);
   });
+
+  ipcMain.handle(IPC.openPath, async (event, targetPath: unknown) => {          // FR-146 Play: rendered media only
+    if (!senderOk(event) || typeof targetPath !== 'string' || !isPlayableOutput(targetPath) || !existsSync(targetPath)) return;
+    const err = await shell.openPath(targetPath);
+    if (err) logLine('warn', 'open path failed', { code: EM.openFolderFailed });
+  });
+
+  ipcMain.handle(IPC.getUpdateState, (event) => (senderOk(event) ? updateState : null));
+  ipcMain.handle(IPC.updateAction, async (event, action: unknown) => {
+    if (!senderOk(event) || typeof action !== 'string' || !(UPDATE_ACTIONS as readonly string[]).includes(action)) return;
+    await onUpdateAction(action as UpdateAction);
+  });
 }
 
 function pushServiceState(state: { status: 'starting' | 'ready' | 'offline' | 'failed'; bootstrap?: Endpoint; code?: string }): void {
@@ -386,13 +419,61 @@ function pushServiceState(state: { status: 'starting' | 'ready' | 'offline' | 'f
 // ---------------------------------------------------------------------------------------------
 // Updater (SEC-090…096). Disabled in Private Mode, read from the Local Service settings.
 // ---------------------------------------------------------------------------------------------
+function setUpdate(e: UpdateEvent): void {
+  updateState = nextUpdateState(updateState, e);
+  mainWindow?.webContents.send(IPC.updateState, updateState);
+}
+
 function configureUpdater(): void {
   const cfg = updaterConfig(FEED_URL);
-  autoUpdater.autoDownload = cfg.autoDownload;
+  autoUpdater.autoDownload = cfg.autoDownload;           // FR-152: download only after the Creator's consent
   autoUpdater.allowDowngrade = cfg.allowDowngrade;
+  autoUpdater.autoInstallOnAppQuit = false;              // never install behind a running render; restart goes through onUpdateAction
   autoUpdater.channel = cfg.channel;
-  autoUpdater.on('error', (err) => logLine('warn', 'updater error', { code: EM.updateCheckFailed, error: err.message }));
-  autoUpdater.on('update-available', (info) => { logLine('info', 'update available', { code: EM.updateAvailable, version: info.version }); });
+  autoUpdater.on('checking-for-update', () => setUpdate({ type: 'checking' }));
+  autoUpdater.on('update-not-available', () => setUpdate({ type: 'none' }));
+  autoUpdater.on('error', (err) => { logLine('warn', 'updater error', { code: EM.updateCheckFailed, stage: updateStage, error: err.message }); setUpdate({ type: 'error', message: err.message, stage: updateStage }); });
+  autoUpdater.on('update-available', (info) => { logLine('info', 'update available', { code: EM.updateAvailable, version: info.version }); setUpdate({ type: 'available', version: info.version }); });
+  autoUpdater.on('download-progress', (p) => setUpdate({ type: 'progress', percent: p.percent }));
+  autoUpdater.on('update-downloaded', (info) => { logLine('info', 'update downloaded', { code: EM.updateAvailable, version: info.version }); setUpdate({ type: 'downloaded', version: info.version }); });
+  // FR-152: check after the Editor is interactive and then every 24 h (the hourly tick lets the policy decide)
+  updateTimer = setInterval(scheduleUpdateCheck, UPDATE_TICK_MS);
+  updateTimer.unref();
+}
+
+async function renderActive(): Promise<boolean> {
+  if (endpoint === null) return false;
+  try {
+    const [r, q] = await Promise.all([
+      getJson<{ total: number }>(`http://127.0.0.1:${endpoint.port}/api/v1/renders?status=rendering&limit=1`),
+      getJson<{ total: number }>(`http://127.0.0.1:${endpoint.port}/api/v1/renders?status=queued&limit=1`),
+    ]);
+    return r.total + q.total > 0;
+  } catch { return true; }    // unknown → do not install
+}
+
+async function onUpdateAction(action: UpdateAction): Promise<void> {
+  if (!app.isPackaged) return;
+  if (action === 'check') { lastUpdateCheckAt = null; scheduleUpdateCheck(); return; }
+  if (action === 'later') { logLine('info', 'update postponed', { version: updateState.version ?? null }); return; }
+  if (action === 'download') {
+    if (await privateModeOn()) { setUpdate({ type: 'paused' }); return; }
+    updateStage = 'download';
+    try { await autoUpdater.downloadUpdate(); } catch (err) { setUpdate({ type: 'error', message: (err as Error).message, stage: 'download' }); }
+    return;
+  }
+  // restart: never while a Render Job runs (FR-152); poll until the queue is empty
+  const decision = installDecision({ renderActive: await renderActive(), downloaded: updateState.status === 'downloaded' || updateState.status === 'deferred' });
+  if (decision === 'nothing') return;
+  if (decision === 'defer') {
+    setUpdate({ type: 'deferred' });
+    const h = setInterval(() => { void renderActive().then((busy) => { if (!busy) { clearInterval(h); setUpdate({ type: 'resumed' }); void onUpdateAction('restart'); } }); }, 15_000);
+    h.unref();
+    return;
+  }
+  updateStage = 'install';
+  await shutdownService('update').catch(() => undefined);
+  autoUpdater.quitAndInstall(false, true);
 }
 
 async function privateModeOn(): Promise<boolean> {
@@ -423,8 +504,9 @@ function scheduleUpdateCheck(): void {
   if (!app.isPackaged) return;
   void (async () => {
     const decision = shouldCheckForUpdates({ privateMode: await privateModeOn(), lastCheckAt: lastUpdateCheckAt, editorInteractive: true, now: Date.now() });
-    if (!decision.check) { logLine('info', 'update check skipped', { reason: decision.reason }); return; }
+    if (!decision.check) { logLine('info', 'update check skipped', { reason: decision.reason }); if (decision.reason === 'private-mode') setUpdate({ type: 'paused' }); return; }
     lastUpdateCheckAt = Date.now();
+    updateStage = 'check';
     try { await autoUpdater.checkForUpdates(); } catch (err) { logLine('warn', 'update check failed', { code: EM.updateCheckFailed, error: (err as Error).message }); }
   })();
 }
@@ -494,7 +576,7 @@ function boot(): void {
   });
 
   app.on('window-all-closed', () => {
-    void (async () => { await shutdownService('window-closed'); app.quit(); })();
+    void (async () => { if ((await shutdownService('window-closed')) === 'stopped') app.quit(); })();
   });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 }

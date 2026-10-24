@@ -5,14 +5,15 @@ import { deriveTiming, propertyKeysOf, type CompositionModelT, type ElementRefT,
 import { fail, issue, ok, type Result } from '@expertmotion/shared';
 import type { EditIntentT, IntentCategory } from './schemas.js';
 
-export type TextField = 'fontFamily' | 'fontSize' | 'weight' | 'colour' | 'align' | 'opacity';
+/** Text Panel fields (FR-020…FR-028). `content` edits the selected layer's text (op:text.setContent, FR-027); `opacity` also applies to Shapes and overlay images (FR-028). */
+export type TextField = 'fontFamily' | 'fontSize' | 'weight' | 'italic' | 'colour' | 'align' | 'opacity' | 'content';
 /** What the Editor sends when the Creator picks something (a Catalogue Card, a Text Panel value, an Output Setting, or a chat request). */
 export interface DesignPick {
   projectId: string;
   source: EditIntentT['source'];
   presetId?: string;                         // catalogue card
   field?: TextField; value?: unknown;        // Text Panel value (deterministic)
-  output?: { kind: 'ratio' | 'resolution' | 'fps'; value: unknown; customRatio?: { w: number; h: number } };
+  output?: { kind: 'ratio' | 'resolution' | 'fps' | 'autoRatio' | 'durationPolicy'; value: unknown; customRatio?: { w: number; h: number }; fixedMs?: number };
   category?: IntentCategory;                 // required for instruction-only picks (chat / brainstorm)
   params?: Record<string, unknown>;
   instruction?: string;
@@ -20,6 +21,8 @@ export interface DesignPick {
   playheadMs?: number;
   assetId?: string;                          // music bed / sfx asset
   text?: string;                             // content for a text variant
+  /** FR-068 (P1): Timeline drag on the video Track — reorder (toIndex) or trim (trimBeforeMs + durationMs, frame-snapped by the Editor). */
+  clipEdit?: { clipId: string; toIndex?: number; trimBeforeMs?: number; durationMs?: number };
 }
 export interface IntentContext { model: CompositionModelT; baseVersion: string; newId: () => string; now?: () => string }
 
@@ -37,13 +40,24 @@ function elementsAt(model: CompositionModelT, ms: number) {
 
 /** Builds the operation an intent stands for on one resolved target (used both for Compile and for the property key). */
 function opFor(pick: DesignPick, target: ElementRefT | undefined, model: CompositionModelT): { op: OperationT; complete: boolean } | null {
+  if (pick.clipEdit) {
+    const e = pick.clipEdit, clip = { kind: 'clip' as const, id: e.clipId };
+    if (e.toIndex !== undefined) return { op: { op: 'op:clip.move', target: clip, args: { toIndex: e.toIndex } }, complete: true };
+    const c = model.tracks.video.find((x) => x.id === e.clipId);
+    return { op: { op: 'op:clip.setTrim', target: clip, args: { trimBeforeMs: e.trimBeforeMs ?? c?.trimBeforeMs ?? 0, durationMs: e.durationMs ?? c?.durationMs ?? 100 } }, complete: true };
+  }
   if (pick.output) {
     const o = pick.output;
     if (o.kind === 'ratio') return { op: { op: 'op:output.setRatio', target: { kind: 'project' }, args: { ratio: o.value, ...(o.customRatio ? { customRatio: o.customRatio } : {}) } }, complete: true };
+    if (o.kind === 'autoRatio') return { op: { op: 'op:output.setAutoRatio', target: { kind: 'project' }, args: { on: o.value === true } }, complete: true };
     if (o.kind === 'resolution') return { op: { op: 'op:output.setResolution', target: { kind: 'project' }, args: { preset: o.value } }, complete: true };
+    // FR-015: output / project.durationPolicy / scalar → op:project.setDurationPolicy (fixedMs only with 'fixed').
+    if (o.kind === 'durationPolicy') return { op: { op: 'op:project.setDurationPolicy', target: { kind: 'project' }, args: { policy: o.value, ...(o.value === 'fixed' && o.fixedMs !== undefined ? { fixedMs: o.fixedMs } : {}) } }, complete: true };
     return { op: { op: 'op:project.setFps', target: { kind: 'project' }, args: { fps: o.value } }, complete: true };
   }
   if (pick.field) {
+    if (pick.field === 'content') return target?.kind === 'text' ? { op: { op: 'op:text.setContent', target, args: { text: pick.value } }, complete: true } : null;
+    if (pick.field === 'opacity' && (target?.kind === 'shape' || target?.kind === 'image')) return { op: { op: 'op:overlay.setOpacity', target, args: { opacity: pick.value } }, complete: true };
     if (target?.kind === 'text') return { op: { op: 'op:text.setStyle', target, args: { [pick.field]: pick.value } }, complete: true };
     return { op: { op: 'op:theme.setTextDefaults', target: { kind: 'project' }, args: { [pick.field]: pick.value } }, complete: true };
   }
@@ -54,7 +68,14 @@ function opFor(pick: DesignPick, target: ElementRefT | undefined, model: Composi
   let args: Record<string, unknown> = { ...d.args };
   if ('params' in args) args['params'] = { ...(args['params'] as object), ...params };
   else args = { ...args, ...params };
-  if (p.category === 'text') { args = { ...args, text: pick.text, atMs: Math.round(pick.playheadMs ?? 0) }; if (target?.kind === 'text') return { op: { op: 'op:text.setStyle', target, args: { ...(p.data?.['fontSize'] ? { fontSize: p.data['fontSize'] } : {}) } }, complete: true }; }
+  if (p.category === 'text') {
+    // FR-025: a variant pick on a selected Text Layer re-applies the variant; otherwise FR-027 Add Text at the playhead,
+    // default 3000 ms clamped to the Sequence end.
+    if (target?.kind === 'text') return { op: { op: 'op:text.setStyle', target, args: { variant: p.id } }, complete: true };
+    const atMs = Math.round(pick.playheadMs ?? 0), end = deriveTiming(model).durationMs;
+    const want = typeof args['durationMs'] === 'number' ? (args['durationMs'] as number) : 3000;
+    args = { ...args, text: pick.text, atMs, durationMs: end > atMs ? Math.max(100, Math.min(want, end - atMs)) : want };
+  }
   if (p.category === 'shape') {
     // size/fill/stroke/strokeWidth are first-class op:shape.add args; everything else stays in params.
     const { size, fill, stroke, strokeWidth, ...rest } = (args['params'] ?? {}) as Record<string, unknown>;
@@ -73,10 +94,16 @@ function opFor(pick: DesignPick, target: ElementRefT | undefined, model: Composi
 export function resolveTargets(pick: DesignPick, model: CompositionModelT): Result<{ targets: Array<ElementRefT | undefined>; label: string }> {
   const sel = pick.selection ?? [];
   const p = pick.presetId ? getPreset(pick.presetId) : undefined;
-  const cat: Category | 'field' | 'output' | 'instruction' = pick.output ? 'output' : pick.field ? 'field' : p ? p.category : 'instruction';
+  const cat: Category | 'field' | 'output' | 'clip' | 'instruction' = pick.clipEdit ? 'clip' : pick.output ? 'output' : pick.field ? 'field' : p ? p.category : 'instruction';
   const v = model.tracks.video;
   const at = elementsAt(model, pick.playheadMs ?? 0);
   switch (cat) {
+    case 'clip': {
+      const id = pick.clipEdit!.clipId;
+      const i = v.findIndex((c) => c.id === id);
+      if (i < 0) return fail([issue('EM-2203', 'That clip no longer exists.', 'block', 'clipEdit.clipId')]);
+      return ok({ targets: [{ kind: 'clip' as const, id }], label: `clip ${i + 1}` });
+    }
     case 'transition': {
       if (v.length < 2) return fail([issue('EM-2202', 'Add at least two clips before choosing a transition.', 'block', 'target')]);
       const cuts = sel.flatMap((s) => (s.kind === 'cut' && s.index !== undefined ? [s.index] : s.kind === 'clip' ? (() => { const i = v.findIndex((c) => c.id === s.id); return i >= 0 && i < v.length - 1 ? [i] : []; })() : []));
@@ -87,12 +114,22 @@ export function resolveTargets(pick: DesignPick, model: CompositionModelT): Resu
       const kinds = cat === 'effect' ? ['clip'] : cat === 'texteffect' ? ['text'] : ['clip', 'text', 'shape'];
       const chosen = sel.filter((s) => kinds.includes(s.kind) && s.id);
       if (chosen.length) return ok({ targets: chosen.map((s) => ({ kind: s.kind, id: s.id! })), label: chosen.length === 1 ? `selected ${chosen[0]!.kind}` : `${chosen.length} selected elements` });
-      const under = cat === 'texteffect' ? (at.text ? { kind: 'text' as const, id: at.text.id } : undefined) : at.clip ? { kind: 'clip' as const, id: at.clip.id } : cat === 'motion' && at.text ? { kind: 'text' as const, id: at.text.id } : undefined;
+      // FR-026: a text effect without a selected Text Layer is queued for the Editor Agent (placement is creative).
+      if (cat === 'texteffect') return ok({ targets: [undefined], label: 'needs the Editor Agent' });
+      const under = at.clip ? { kind: 'clip' as const, id: at.clip.id } : cat === 'motion' && at.text ? { kind: 'text' as const, id: at.text.id } : undefined;
       if (!under) return fail([issue('EM-2201', 'Select a clip or move the playhead onto one.', 'block', 'target')]);
       return ok({ targets: [under], label: `${under.kind} under the playhead` });
     }
     case 'field': case 'font': case 'text': {
       const texts = sel.filter((s) => s.kind === 'text' && s.id);
+      if (cat === 'field' && pick.field === 'opacity') {
+        const els = sel.filter((s) => (s.kind === 'text' || s.kind === 'shape' || s.kind === 'image') && s.id);
+        if (!els.length) return fail([issue('EM-2201', 'Select an element first.', 'block', 'target')]);
+        return ok({ targets: els.map((s) => ({ kind: s.kind, id: s.id! })), label: els.length === 1 ? `selected ${els[0]!.kind}` : `${els.length} elements` });
+      }
+      if (cat === 'field' && pick.field === 'content' && !texts.length) return fail([issue('EM-2201', 'Select a text first.', 'block', 'target')]);
+      if (cat === 'text' && pick.text === undefined && texts.length) return ok({ targets: texts.map((s) => ({ kind: 'text' as const, id: s.id! })), label: texts.length === 1 ? 'selected text' : `${texts.length} texts` });
+      if (cat === 'text' && pick.text !== undefined && v.length === 0) return fail([issue('EM-2202', 'Insert at least one clip before adding text.', 'block', 'target')]);
       if (cat !== 'text' && texts.length) return ok({ targets: texts.map((s) => ({ kind: 'text' as const, id: s.id! })), label: texts.length === 1 ? 'selected text' : `${texts.length} texts` });
       return ok({ targets: [undefined], label: cat === 'text' ? 'new text at the playhead' : 'new text (theme default)' });
     }
@@ -116,11 +153,11 @@ export function createIntents(pick: DesignPick, ctx: IntentContext): Result<Edit
   const now = ctx.now ?? (() => new Date().toISOString());
   const p = pick.presetId ? getPreset(pick.presetId) : undefined;
   if (pick.presetId && !p) return fail([issue('EM-2101', `Unknown design preset ${pick.presetId}.`, 'block', 'presetId')]);
-  const category: IntentCategory = pick.output ? 'layout' : pick.field ? 'text' : p ? CATEGORY_OF[p.category] : (pick.category ?? 'layout');
-  const instructionOnly = !p && !pick.field && !pick.output;
+  const category: IntentCategory = pick.clipEdit ? 'asset' : pick.output ? 'layout' : pick.field ? 'text' : p ? CATEGORY_OF[p.category] : (pick.category ?? 'layout');
+  const instructionOnly = !p && !pick.field && !pick.output && !pick.clipEdit;
   // Persisted intents must be recompilable without the original pick: stash its deterministic inputs under `__` keys.
   const stash: Record<string, unknown> = { ...(pick.params ?? {}),
-    ...(pick.field ? { __field: pick.field, __value: pick.value } : {}), ...(pick.output ? { __output: pick.output } : {}),
+    ...(pick.field ? { __field: pick.field, __value: pick.value } : {}), ...(pick.output ? { __output: pick.output } : {}), ...(pick.clipEdit ? { __clipEdit: pick.clipEdit } : {}),
     ...(pick.text !== undefined ? { __text: pick.text } : {}), ...(pick.assetId ? { __assetId: pick.assetId } : {}), ...(pick.playheadMs !== undefined ? { __playheadMs: pick.playheadMs } : {}) };
   const base = (over: Partial<EditIntentT>): EditIntentT => ({
     id: ctx.newId(), projectId: pick.projectId, source: pick.source, createdAt: now(), category,
@@ -135,6 +172,7 @@ export function createIntents(pick: DesignPick, ctx: IntentContext): Result<Edit
   const { targets, label } = r.value;
   const built = targets.map((t) => ({ t, o: opFor(pick, t, ctx.model) }));
   const keyOf = (o: OperationT | undefined, t: ElementRefT | undefined) => {
+    if (o?.op === 'op:clip.move') return `clip:${o.target?.id ?? ''}.order`;       // FR-068: lock the order of this clip, not every key of it
     const keys = o ? propertyKeysOf(o) : [];
     if (keys.length) return keys.join('|');
     return `list:${category}:${pick.presetId ?? pick.field ?? 'x'}:${t ? `${t.kind}:${t.id ?? t.index}` : 'project'}`;
@@ -219,8 +257,9 @@ export function pickFromIntent(i: EditIntentT, extra: Partial<DesignPick> = {}):
   const p = { ...(i.params ?? {}) } as Record<string, unknown>; delete p['targetLabel'];
   const field = p['__field'] as TextField | undefined; const value = p['__value'];
   const output = p['__output'] as DesignPick['output'] | undefined;
+  const clipEdit = p['__clipEdit'] as DesignPick['clipEdit'] | undefined;
   const text = p['__text'] as string | undefined; const assetId = p['__assetId'] as string | undefined; const playheadMs = p['__playheadMs'] as number | undefined;
   for (const k of Object.keys(p)) if (k.startsWith('__')) delete p[k];
-  return { projectId: i.projectId, source: i.source, ...(i.presetId ? { presetId: i.presetId } : {}), ...(field ? { field, value } : {}), ...(output ? { output } : {}),
+  return { projectId: i.projectId, source: i.source, ...(i.presetId ? { presetId: i.presetId } : {}), ...(field ? { field, value } : {}), ...(output ? { output } : {}), ...(clipEdit ? { clipEdit } : {}),
     ...(Object.keys(p).length ? { params: p } : {}), ...(text !== undefined ? { text } : {}), ...(assetId ? { assetId } : {}), ...(playheadMs !== undefined ? { playheadMs } : {}), ...extra };
 }

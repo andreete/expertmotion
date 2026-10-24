@@ -85,6 +85,7 @@ export class Workflow {
       ...(b.presetId ? { presetId: b.presetId } : {}), ...(b.instruction ? { instruction: b.instruction } : {}),
       ...(b.field ? { field: b.field, value: b.value } : {}), ...(b.output ? { output: { kind: b.output.kind, value: b.output.value, ...(b.output.customRatio ? { customRatio: b.output.customRatio } : {}) } } : {}),
       ...(b.assetId ? { assetId: b.assetId } : {}), ...(b.text ? { text: b.text } : {}),
+      ...(b.clipEdit ? { clipEdit: { clipId: b.clipEdit.clipId, ...(b.clipEdit.toIndex !== undefined ? { toIndex: b.clipEdit.toIndex } : {}), ...(b.clipEdit.trimBeforeMs !== undefined ? { trimBeforeMs: b.clipEdit.trimBeforeMs } : {}), ...(b.clipEdit.durationMs !== undefined ? { durationMs: b.clipEdit.durationMs } : {}) } } : {}),
     };
     const r = createIntents(pick, { model: head.model, baseVersion: head.hash, newId: this.ctx.newId, now: this.ctx.now });
     if (!r.ok) throw issueError(r.issues[0] ?? issue('EM-2303', 'This pick cannot be used.'));
@@ -135,7 +136,10 @@ export class Workflow {
     const planId = this.ctx.newId();
     const label = String(intents[0]?.params['targetLabel'] ?? intents[0]?.propertyKey ?? 'pick');
     const plan = buildCompilePlan(comp.value, { id: planId, projectId, baseVersion: head.hash, goal: o.goal ?? `${intents[0]?.category ?? 'pick'}${intents[0]?.presetId ? ` · ${intents[0].presetId}` : ''} → ${label}`, expectedDiff: label });
-    const v = validatePlan(plan, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: lockedKeysFromQueue(queue), newId: this.ctx.newId });
+    // Locked Keys protect the Creator's picks from agent-authored changes (ADR-002); the Creator's own direct edits (UI drag,
+    // Output Settings) are never blocked by them — the newest pick wins through supersession (AI-018, FR-068).
+    const creatorOnly = intents.every((i) => i.source === 'ui' || i.source === 'system');
+    const v = validatePlan(plan, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: creatorOnly ? [] : lockedKeysFromQueue(queue), newId: this.ctx.newId });
     if (v.plan.status !== 'valid') throw reject(v.issues.find((i) => i.severity === 'block') ?? issue('EM-2303', 'The change could not be applied.'));
     this.insertPlan({ plan: v.plan, baseVersionId: head.versionId, intentIds, message: null, agentRunId: null });
     const notices = comp.value.some((op) => op.op === 'op:theme.setTextDefaults') && intents.some((i) => i.category === 'text') ? [{ code: 'EM-2403' }] : [];
@@ -394,7 +398,9 @@ export class Workflow {
     const intentIds = row.intent_ids_json ? (JSON.parse(row.intent_ids_json) as string[]) : [];
     const own = new Set(intentIds);
     const queue = this.loadQueue(projectId);
-    const v = validatePlan({ ...plan, status: 'draft' }, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: lockedKeysFromQueue(queue.filter((i) => !own.has(i.id))), newId: this.ctx.newId });
+    const mine = queue.filter((i) => own.has(i.id));
+    const creatorOnly = plan.origin === 'compile' && mine.length > 0 && mine.every((i) => i.source === 'ui' || i.source === 'system');   // see applyNow
+    const v = validatePlan({ ...plan, status: 'draft' }, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: creatorOnly ? [] : lockedKeysFromQueue(queue.filter((i) => !own.has(i.id))), newId: this.ctx.newId });
     if (v.plan.status !== 'valid' || (!v.predicted && planOps(plan).length > 0)) {
       const st = v.plan.status === 'stale' ? 'stale' : 'invalid';
       this.updatePlan(planId, v.plan, st);

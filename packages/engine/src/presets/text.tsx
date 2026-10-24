@@ -24,7 +24,7 @@ export const TextElement: React.FC<{ layer: TextLayerT; layout: Layout; duration
   const minW = 0.3 * layout.contentW;
   const boxW = Math.max(minW, Math.min((layer.maxWidth ?? Infinity) * layout.u, layout.contentW, room));
   const boxLeft = Math.min(Math.max(anchor.left, layout.safe.left + boxW / 2), layout.width - layout.safe.right - boxW / 2);
-  const fit = fitText(layer.text, { width: boxW, height: layout.contentH * 0.5, maxSize: wantU * layout.u, minSize: 34 * layout.u, charWidth: charWidthFor(weight), maxLines: 6 });
+  const fit = fitText(layer.text, { width: boxW, height: layout.contentH * 0.5, maxSize: wantU * layout.u, minSize: Math.min(34, wantU) * layout.u, charWidth: charWidthFor(weight), maxLines: 6 });
   const align = layer.style.align ?? (v['align'] as 'left' | 'center' | 'right' | undefined) ?? t.textDefaults.align;
   const colour = layer.style.colour ?? t.textDefaults.colour;
   const family = layer.style.fontFamily ?? t.textDefaults.fontFamily ?? (layer.variantId === 'preset:text.lower-third' ? t.bodyFont : t.headingFont);
@@ -36,7 +36,7 @@ export const TextElement: React.FC<{ layer: TextLayerT; layout: Layout; duration
   return (
     <div style={{ position: 'absolute', left, top, width: boxW, transform: 'translate(-50%, -50%)', textAlign: align, ...mStyle }}>
       <span style={{ display: 'inline-block', fontFamily: family, fontWeight: weight, fontSize: fit.fontSize, lineHeight: 1.15, color: colour, opacity: layer.style.opacity ?? t.textDefaults.opacity,
-        fontStyle: v['italic'] ? 'italic' : 'normal', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', ...box, ...bar }}>
+        fontStyle: (layer.style.italic ?? t.textDefaults.italic ?? v['italic']) ? 'italic' : 'normal', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', ...box, ...bar }}>
         {v['italic'] ? '“' : ''}{content}{v['italic'] ? '”' : ''}
       </span>
     </div>

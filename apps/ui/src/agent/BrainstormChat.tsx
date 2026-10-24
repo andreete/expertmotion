@@ -27,8 +27,13 @@ export function BrainstormChat() {
       </div>
       <Thread agent="brainstorm" label={t('a11y.agent.brainstorm.thread')}
         empty={state.messages.brainstorm.length === 0 ? <div className="mx-auto max-w-[90%] text-center text-[12px] text-em-muted">{t('ui.agent.brainstorm.first')}</div> : null}>
-        {state.messages.brainstorm.map((m) => (
-          <Bubble key={m.id} m={m} agent="brainstorm">
+        {state.messages.brainstorm.map((m, idx) => (
+          <Bubble key={m.id} m={m} agent="brainstorm" onRetry={m.role === 'system' ? () => {
+            // FR-077: a restored failure re-sends the request it answered
+            const prev = state.messages.brainstorm.slice(0, idx).reverse().find((x) => x.role === 'user');
+            const text = prev?.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n') ?? '';
+            if (text) void actions.send('brainstorm', text, prev?.blocks.flatMap((b) => (b.type === 'attachment' && b.assetId ? [b.assetId] : [])) ?? []);
+          } : undefined}>
             {m.blocks.map((b, i) => (b.type === 'proposed_intents' ? <Handoff key={i} message={m} intents={b.intents} handoffState={b.handoffState} /> : null))}
           </Bubble>
         ))}
@@ -42,9 +47,15 @@ export function BrainstormChat() {
 
 export function intentTitle(i: Pick<EditIntent, 'category' | 'presetId' | 'instruction' | 'params'>, t: (k: string, v?: Record<string, string | number>) => string, lang: 'en' | 'id'): string {
   const cat = t(`ui.agent.category.${i.category}`);
+  const out = i.params['__output'] as { kind?: string; value?: unknown; customRatio?: { w: number; h: number } } | undefined;
+  if (out?.kind) {                                                              // Output Settings picks (FR-097)
+    if (out.kind === 'autoRatio') return t(out.value === true ? 'ui.agent.output.ratio.auto.on' : 'ui.agent.output.ratio.auto.off');
+    const v = out.kind === 'ratio' && out.value === 'custom' && out.customRatio ? `${out.customRatio.w}:${out.customRatio.h}` : String(out.value);
+    return t(`ui.agent.intent.output.${out.kind}`, { value: v });
+  }
   if (i.presetId) return `${cat} · ${getPreset(i.presetId)?.label[lang] ?? i.presetId}`;
   if (i.instruction) return `“${i.instruction}”`;
-  const p = Object.entries(i.params).filter(([k]) => k !== 'text').map(([k, v]) => `${t(`ui.agent.param.${k}`)} ${String(v)}`).join(', ');
+  const p = Object.entries(i.params).filter(([k]) => k !== 'text' && k !== 'targetLabel' && !k.startsWith('__')).map(([k, v]) => `${t(`ui.agent.param.${k}`)} ${String(v)}`).join(', ');
   return p ? `${cat} · ${p}` : cat;
 }
 

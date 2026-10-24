@@ -99,6 +99,20 @@ export function createLicenseModule(opts: LicenseOptions = {}): ServiceModule {
     if (r0 && r0.status !== r.status) { audit(ctx, 'license.status-changed', { from: r0.status, to: r.status, code: r.code ?? null }); changed(ctx); }
   }
 
+  /** Hourly licence check (FR-134): re-verifies the stored key offline (revocation, eligibility vs build date, clock) and announces changes. */
+  function recheck(ctx: ServiceContext) {
+    const s = st(ctx); const before = s.result;
+    let token: string | null = null;
+    const r0 = row(ctx);
+    if (r0?.token_enc) { try { token = boxFor(ctx).open(r0.token_enc, TOKEN_AAD); } catch { token = null; } }
+    const r = verify(ctx, token);
+    tickClock({ now, lastSeen: lastSeen(ctx) });
+    if (before && before.status === r.status && before.clockAnomaly === r.clockAnomaly) { s.result = r; return; }
+    persist(ctx, r, undefined);
+    if (before && before.status !== r.status) audit(ctx, 'license.status-changed', { from: before.status, to: r.status, code: r.code ?? null });
+    changed(ctx);
+  }
+
   return {
     name: 'license',
     start(ctx) {
@@ -106,7 +120,7 @@ export function createLicenseModule(opts: LicenseOptions = {}): ServiceModule {
       states.set(ctx, s);
       ctx.hooks.isTrial = () => s.result?.trialExports ?? true;
       s.ready = load(ctx).catch((e: unknown) => { ctx.log.error({ err: String(e) }, 'licence load failed'); });
-      s.timer = setInterval(() => { if (s.fp) { try { tickClock({ now, lastSeen: lastSeen(ctx) }); } catch { /* db closed */ } } }, opts.tickMs ?? 3_600_000);
+      s.timer = setInterval(() => { if (s.fp) { try { recheck(ctx); } catch { /* db closed */ } } }, opts.tickMs ?? 3_600_000);   // FR-134: startup + hourly
       s.timer.unref();
     },
     async stop(ctx) {

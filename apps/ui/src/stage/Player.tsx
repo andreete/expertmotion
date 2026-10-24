@@ -11,6 +11,7 @@ import { useStore } from '../state/store.js';
 import { Button, IconButton, MenuItem, Popover, cx } from '../components/ui.js';
 import { formatTimecode } from '../i18n/index.js';
 import { playerBus } from './playerBus.js';
+import { playerPrefsFor, playerPrefsPatch, type PlayerPrefs } from '../prefs.js';
 import type { AppState } from '../state/reducer.js';
 import type { ApiClient } from '../api/client.js';
 
@@ -22,7 +23,7 @@ export function buildAssetUrls(state: AppState, api: ApiClient): Record<string, 
   const grant = state.grant;
   if (!grant) return out;
   for (const a of state.assets) {
-    if (a.status !== 'ready' || a.kind === 'subtitle' || !a.media.playable) continue;
+    if (a.status !== 'ready' || a.kind === 'subtitle' || !a.media.playable || a.missing) continue;   // FR-048: missing → placeholder frame
     out[a.id] = {
       kind: a.kind, playable: api.mediaUrl(grant, a.id, 'playable'),
       ...(a.media.proxy ? { proxy: api.mediaUrl(grant, a.id, 'proxy') } : {}),
@@ -45,9 +46,25 @@ export function previewModel(model: CompositionModelT, presetId: string, state: 
   let ops: OperationT[] = [];
   const clipAt = (() => { const t = deriveTiming(model); return model.tracks.video.find((c) => { const w = t.elementWindows[c.id]; return w && state.playheadMs >= w.fromMs && state.playheadMs < w.toMs; }) ?? model.tracks.video[0]; })();
   switch (p.category) {
-    case 'transition': ops = model.tracks.video.slice(0, -1).map((_, i) => ({ op: cd.op, target: { kind: 'cut' as const, index: i }, args: cd.args })); break;
+    case 'transition': {
+      // FR-033: preview on the current selection (selected cuts / the cut after a selected clip), else every cut.
+      const cuts = state.selection.flatMap((s) => (s.kind === 'cut' && s.index !== undefined ? [s.index] : s.kind === 'clip' ? (() => { const i = model.tracks.video.findIndex((c) => c.id === s.id); return i >= 0 && i < model.tracks.video.length - 1 ? [i] : []; })() : []));
+      const list = cuts.length ? [...new Set(cuts)] : model.tracks.video.slice(0, -1).map((_, i) => i);
+      ops = list.map((index) => ({ op: cd.op, target: { kind: 'cut' as const, index }, args: cd.args })); break;
+    }
     case 'caption': case 'background': case 'easing': case 'palette': case 'fontpair': case 'font': ops = [{ op: cd.op, target: project, args: cd.args }]; break;
-    case 'motion': case 'effect': if (clipAt) ops = [{ op: cd.op, target: { kind: 'clip', id: clipAt.id }, args: cd.args }]; break;
+    case 'motion': case 'effect': {
+      const kinds = p.category === 'motion' ? ['clip', 'text', 'shape'] : ['clip'];
+      const chosen = state.selection.filter((s) => kinds.includes(s.kind) && s.id);
+      if (chosen.length) ops = chosen.map((s) => ({ op: cd.op, target: { kind: s.kind, id: s.id! }, args: cd.args }));
+      else if (clipAt) ops = [{ op: cd.op, target: { kind: 'clip', id: clipAt.id }, args: cd.args }];
+      break;
+    }
+    case 'texteffect': {
+      const texts = state.selection.filter((s) => s.kind === 'text' && s.id);
+      ops = texts.map((s) => ({ op: cd.op, target: { kind: 'text' as const, id: s.id! }, args: cd.args }));
+      break;
+    }
     case 'shape': ops = [{ op: cd.op, args: { ...cd.args, atMs: state.playheadMs } }]; break;
     case 'text': ops = [{ op: cd.op, args: { ...cd.args, text: p.label.en, atMs: state.playheadMs } }]; break;
     default: return null;
@@ -73,10 +90,14 @@ export function StagePlayer() {
   const [menu, setMenu] = useState(false);
   const [remountKey, setRemountKey] = useState(0);
   const [slow, setSlow] = useState(false);
+  const [buffering, setBuffering] = useState(false);
+  const pid = state.project?.id;
+  const pp = playerPrefsFor(prefs, pid);                                       // FR-060: per-Project Player choices
+  const setPlayer = (patch: Partial<PlayerPrefs>) => setPrefs(playerPrefsPatch(prefs, pid, patch));
   const head = state.head?.model;
   const hasClip = (head?.tracks.video.length ?? 0) > 0;
   const turbo = state.performanceProfile === 'turbo';
-  const draft = !turbo && prefs.draft;
+  const draft = !turbo && pp.draft;
   const assets = useMemo(() => buildAssetUrls(state, runtime.api), [state.assets, state.grant, runtime.api]); // eslint-disable-line react-hooks/exhaustive-deps
   const preview = useMemo(() => (head && state.previewPresetId ? previewModel(head, state.previewPresetId, state) : null), [head, state.previewPresetId]); // eslint-disable-line react-hooks/exhaustive-deps
   const model = preview ?? head ?? null;
@@ -103,11 +124,14 @@ export function StagePlayer() {
     const onPlay = () => setPlaying(true);
     const onPause = () => { setPlaying(false); actions.seek((p.getCurrentFrame() / fps) * 1000); };
     const onSeek = (e: { detail: { frame: number } }) => { const v = (e.detail.frame / fps) * 1000; setMs(v); playerBus.emit(v); if (!p.isPlaying()) actions.seek(v); };
+    const onWaiting = () => setBuffering(true), onResume = () => setBuffering(false);   // FR-061: media still loading
+    p.addEventListener('waiting', onWaiting);
+    p.addEventListener('resume', onResume);
     p.addEventListener('frameupdate', onFrame);
     p.addEventListener('play', onPlay);
     p.addEventListener('pause', onPause);
     p.addEventListener('seeked', onSeek);
-    return () => { p.removeEventListener('frameupdate', onFrame); p.removeEventListener('play', onPlay); p.removeEventListener('pause', onPause); p.removeEventListener('seeked', onSeek); };
+    return () => { p.removeEventListener('waiting', onWaiting); p.removeEventListener('resume', onResume); p.removeEventListener('frameupdate', onFrame); p.removeEventListener('play', onPlay); p.removeEventListener('pause', onPause); p.removeEventListener('seeked', onSeek); };
   }, [fps, actions, meta?.durationInFrames, remountKey]);
 
   useEffect(() => {
@@ -121,12 +145,20 @@ export function StagePlayer() {
     return () => playerBus.set(null);
   }, [fps, meta?.durationInFrames, durationMs, actions]);
 
-  useEffect(() => { if (prefs.muted) ref.current?.mute(); else ref.current?.unmute(); }, [prefs.muted, remountKey]);
+  useEffect(() => { if (pp.muted) ref.current?.mute(); else ref.current?.unmute(); }, [pp.muted, remountKey]);
 
   const fit = meta ? Math.min((size.w - 32) / meta.width, (size.h - 32) / meta.height) : 1;
   const w = meta ? Math.max(1, Math.floor(meta.width * fit)) : 0, h = meta ? Math.max(1, Math.floor(meta.height * fit)) : 0;
   const ratio = head?.settings.ratio ?? '16:9';
-  const safe = meta && prefs.safeArea ? safeAreaFor(ratio, meta.width, meta.height) : null;
+  const safe = meta && pp.safeArea ? safeAreaFor(ratio, meta.width, meta.height) : null;
+  const quality = t(draft ? 'ui.stage.player.quality.draft' : 'ui.stage.player.quality.full');   // FR-058
+  const loading = state.headLoading || buffering;
+  const reload = () => { void runtime.api.issueMediaGrant(state.project?.id ?? '').then((g) => dispatch({ type: 'grant', grant: g })).catch(() => undefined); setRemountKey((k) => k + 1); };
+  const toggleDraft = () => {
+    const next = !pp.draft;
+    setPlayer({ draft: next });
+    if (!next && (state.hardware?.tier ?? 'T0') === 'T0') actions.toast('warn', 'ui.stage.player.menu.full.t0warn');
+  };
   const previewLabel = state.previewPresetId ? getPreset(state.previewPresetId)?.label[lang] : null;
   const version = state.head?.hash.slice(0, 6);
   const ratioLabel = ratio === 'custom' && head?.settings.customRatio ? `${head.settings.customRatio.w}:${head.settings.customRatio.h}` : ratio;
@@ -135,17 +167,17 @@ export function StagePlayer() {
     <div data-el="stage.player.frame" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-em-line bg-em-panel">
       <div className="flex h-7 items-center gap-2 border-b border-em-line px-2 text-[12px]">
         <span data-el="stage.player.controls.ratio" className="t-mono" title={t('ui.stage.player.ratio')}>{ratioLabel}</span>
-        <span data-el="stage.player.controls.res" className="t-mono text-em-muted" title={t('ui.stage.player.res')}>{exportDims ? `${exportDims.width}×${exportDims.height}` : '—'}</span>
+        <span data-el="stage.player.controls.res" className="t-mono text-em-muted" title={t('ui.stage.player.res')}>{exportDims ? `${exportDims.width}×${exportDims.height}` : '—'} · {quality}</span>
         {version && <span className="t-mono text-em-success" title={t('ui.stage.player.version.ok', { version })}>v{version} ✓</span>}
         <span className="flex-1" />
         <span className="relative">
           <IconButton el="stage.player.menu" data-popover-trigger="" label={t('ui.stage.player.menu')} icon={<Menu size={16} />} size={28} onClick={() => setMenu((m) => !m)} />
           {menu && (
             <Popover role="menu" align="right" width={240} onClose={() => setMenu(false)} label={t('ui.stage.player.menu')}>
-              <MenuItem el="stage.player.menu.safearea" onClick={() => setPrefs({ safeArea: !prefs.safeArea })}>{prefs.safeArea ? '✓ ' : ''}{t('ui.stage.player.menu.safearea')}</MenuItem>
-              <MenuItem el="stage.player.menu.draft" disabledReason={turbo ? t('ui.stage.player.menu.draft.turbo') : null} onClick={() => setPrefs({ draft: !prefs.draft })}>{draft ? '✓ ' : ''}{t('ui.stage.player.menu.draft')}</MenuItem>
-              <MenuItem el="stage.player.menu.loop" onClick={() => setPrefs({ loop: !prefs.loop })}>{prefs.loop ? '✓ ' : ''}{t('ui.stage.player.menu.loop')}</MenuItem>
-              <MenuItem el="stage.player.menu.mute" onClick={() => setPrefs({ muted: !prefs.muted })}>{prefs.muted ? '✓ ' : ''}{t('ui.stage.player.menu.mute')}</MenuItem>
+              <MenuItem el="stage.player.menu.safearea" onClick={() => setPlayer({ safeArea: !pp.safeArea })}>{pp.safeArea ? '✓ ' : ''}{t('ui.stage.player.menu.safearea')}</MenuItem>
+              <MenuItem el="stage.player.menu.draft" disabledReason={turbo ? t('ui.stage.player.menu.draft.turbo') : null} onClick={toggleDraft}>{draft ? '✓ ' : ''}{t('ui.stage.player.menu.draft')}</MenuItem>
+              <MenuItem el="stage.player.menu.loop" onClick={() => setPlayer({ loop: !pp.loop })}>{pp.loop ? '✓ ' : ''}{t('ui.stage.player.menu.loop')}</MenuItem>
+              <MenuItem el="stage.player.menu.mute" onClick={() => setPlayer({ muted: !pp.muted })}>{pp.muted ? '✓ ' : ''}{t('ui.stage.player.menu.mute')}</MenuItem>
               <MenuItem el="stage.player.menu.seekonselect" onClick={() => setPrefs({ seekOnSelect: !prefs.seekOnSelect })}>{prefs.seekOnSelect ? '✓ ' : ''}{t('ui.stage.player.menu.seekonselect')}</MenuItem>
             </Popover>
           )}
@@ -161,14 +193,22 @@ export function StagePlayer() {
           <div className="relative" style={{ width: w, height: h }}>
             <RemotionPlayer key={remountKey} ref={ref} component={Timeline} inputProps={inputProps as unknown as Record<string, unknown>}
               durationInFrames={meta.durationInFrames} compositionWidth={meta.width} compositionHeight={meta.height} fps={meta.fps}
-              style={{ width: w, height: h }} controls={false} loop={prefs.loop} clickToPlay spaceKeyToPlayOrPause={false} acknowledgeRemotionLicense initialFrame={Math.min(meta.durationInFrames - 1, Math.round((state.playheadMs / 1000) * meta.fps))}
+              style={{ width: w, height: h, ...(state.headLoading ? { visibility: 'hidden' as const } : {}) }} controls={false} loop={pp.loop} clickToPlay spaceKeyToPlayOrPause={false} acknowledgeRemotionLicense initialFrame={Math.min(meta.durationInFrames - 1, Math.round((state.playheadMs / 1000) * meta.fps))}
               errorFallback={({ error }) => (
                 <div data-el="stage.player.state.error" role="alert" className="flex h-full w-full flex-col items-center justify-center gap-2 bg-em-panel p-4 text-center">
                   <span className="font-semibold">{t('ui.stage.player.error')}</span><span className="t-mono text-em-muted">EM-3301</span>
                   <span className="max-w-[320px] truncate text-[11px] text-em-muted">{error.message}</span>
-                  <Button size={28} onClick={() => { void runtime.api.issueMediaGrant(state.project?.id ?? '').then((g) => dispatch({ type: 'grant', grant: g })).catch(() => undefined); setRemountKey((k) => k + 1); }}>{t('ui.stage.player.rebuild')}</Button>
+                  <span className="flex gap-2">
+                    <Button el="stage.player.state.error.reload" size={28} onClick={reload}>{t('ui.stage.player.rebuild')}</Button>
+                    <Button el="stage.player.state.error.recovery" size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'project.recover' })}>{t('ui.stage.player.openrecovery')}</Button>
+                  </span>
                 </div>
               )} />
+            {loading && (
+              <div data-el="stage.player.state.loading" role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-em-bg/80 text-em-muted">
+                <RefreshCw size={20} className="em-spin" aria-hidden />{state.headLoading ? t('ui.stage.player.loading.version') : t('ui.stage.player.loading.media')}
+              </div>
+            )}
             {safe && (
               <div aria-hidden className="pointer-events-none absolute border border-dashed border-em-accent-2/80"
                 style={{ left: safe.left * fit, top: safe.top * fit, right: safe.right * fit, bottom: safe.bottom * fit }} />

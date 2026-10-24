@@ -181,6 +181,8 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 
 - **Addition (2026-10-24, Stage 3)**: `op:overlay.addImage` and `op:overlay.remove` with the new target kind `image`, because FR-029 (Insert Image as an overlay) had no operation; the Engine already rendered `OverlayImage`.
 
+- **Addition (2026-10-24, Stage 3, FR gap closure)**: `op:overlay.setOpacity` (target `image` or `shape`, FR-028 opacity of overlay elements; `OverlayShape.opacity` optional field), and two optional args on existing ops: `italic` on `op:text.setStyle` / `op:theme.setTextDefaults` (FR-022, bundled italic font files) and `variant` on `op:text.setStyle` (FR-025). Text `fontSize` range is 16–200 u per FR-021. The vocabulary has 45 operations.
+
 ## ADR-021 Maximum protection pipeline (Operator requirement 2026-10-24)
 
 - **Status**: accepted

@@ -51,6 +51,12 @@ export const IPC = {
   openFolder: 'em:open-folder',
   openExternal: 'em:open-external',
   serviceState: 'em:service-state',
+  /** FR-152 updater: state push, current state, Creator consent (download / restart / later / check). */
+  updateState: 'em:update-state',
+  getUpdateState: 'em:get-update-state',
+  updateAction: 'em:update-action',
+  /** FR-146 Play: open a rendered Output with the system player (media extensions only). */
+  openPath: 'em:open-path',
 } as const;
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
 
@@ -58,7 +64,17 @@ export type IpcChannel = (typeof IPC)[keyof typeof IPC];
  * The complete key set of `window.expertmotion` (SEC-003, SEC-031). A test enumerates it.
  * `pickSavePath` is the save dialog required by the Desktop Shell brief; see README "Bridge surface".
  */
-export const BRIDGE_KEYS = ['getBootstrap', 'pickFiles', 'pickFolder', 'pickSavePath', 'openFolder', 'openExternal', 'getPathsForFiles', 'onServiceState'] as const;
+export const BRIDGE_KEYS = ['getBootstrap', 'pickFiles', 'pickFolder', 'pickSavePath', 'openFolder', 'openExternal', 'getPathsForFiles', 'onServiceState',
+  'onUpdateState', 'getUpdateState', 'updateAction', 'openPath'] as const;
+/** Update actions the Editor may request (FR-152); anything else is ignored by main. */
+export const UPDATE_ACTIONS = ['download', 'restart', 'later', 'check'] as const;
+export type UpdateAction = (typeof UPDATE_ACTIONS)[number];
+/** `openPath` opens only rendered media (FR-146 Play), never executables or documents. */
+export const PLAYABLE_EXTENSIONS: readonly string[] = ['.mp4', '.webm', '.gif', '.png', '.wav'];
+export function isPlayableOutput(p: string): boolean {
+  const lower = p.toLowerCase();
+  return !lower.includes('\0') && !/^[a-z]+:\/\//.test(lower) && PLAYABLE_EXTENSIONS.some((e) => lower.endsWith(e));
+}
 
 /**
  * Hosts `openExternal` may open in the system browser (Purchase / licence help). HTTPS only; everything else is refused.

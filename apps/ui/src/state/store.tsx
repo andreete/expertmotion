@@ -6,12 +6,14 @@ import type { ElementRefT, ProjectSettingsT } from '@expertmotion/composition-mo
 import { getPreset } from '@expertmotion/catalogue';
 import { createEventStream, type EventStream } from '../api/events.js';
 import type {
-  AgentKind, DesignPickInput, EditIntent, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProviderKind, Ratio, RenderCreateInput,
+  AgentKind, AssetDto, IntentCreateResponse, DesignPickInput, EditIntent, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
 } from '../api/types.js';
 import { initialState, reducer, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
 import type { Runtime } from './runtime.js';
 import { loadPrefs, savePrefs, type Prefs } from '../prefs.js';
+/** Window event that opens the Hardware Monitor popover (Header listens; FR-128 low-disk banner action). */
+export const OPEN_HARDWARE_EVENT = 'expertmotion:open-hardware';
 import { translate, type Lang } from '../i18n/index.js';
 
 export interface Actions {
@@ -26,13 +28,21 @@ export interface Actions {
   redo(): Promise<void>;
   pick(presetId: string, opts?: { params?: Record<string, unknown>; target?: ElementRefT }): Promise<void>;
   textPick(params: Record<string, unknown>): Promise<void>;
-  addText(text: string, variantId: string): Promise<void>;
+  /** FR-027: adds a Text Layer at the playhead and selects it; resolves with the new layer id (null when nothing was applied). */
+  addText(text: string, variantId: string): Promise<string | null>;
   layoutPick(params: { ratio?: Ratio; customRatio?: { w: number; h: number }; resolution?: Resolution }): Promise<void>;
   setAutoRatio(on: boolean): Promise<void>;
+  /** FR-068 (P1): Timeline drag on the video Track → op:clip.move / op:clip.setTrim through the Intent Queue. */
+  clipEdit(edit: { clipId: string; toIndex?: number; trimBeforeMs?: number; durationMs?: number }, label: string): Promise<void>;
   updateProjectSettings(patch: Partial<ProjectSettingsT>): Promise<void>;
-  upload(files: readonly File[]): Promise<void>;
+  upload(files: readonly File[]): Promise<AssetDto[]>;
   setBadge(assetId: string, badge: number | null): Promise<void>;
-  insert(assetIds: string[]): Promise<void>;
+  /** FR-049: without `opts`, Clips go after the selected Clip (else at the end); FR-029 `asOverlay` + `atMs` places images on the overlay. */
+  insert(assetIds: string[], opts?: { asOverlay?: boolean; atMs?: number; atIndex?: number }): Promise<void>;
+  /** FR-048: Locate a missing asset's file (Shell picker → R-036, re-link by hash). */
+  locateAsset(assetId: string): Promise<void>;
+  /** FR-037: hold a pick whose preset needs a model that is not installed (EM-2104); it runs when `model.installed` arrives. */
+  holdPick(presetId: string, modelKey: string): void;
   removeAsset(assetId: string, confirm?: boolean): Promise<void>;
   setAssetSelection(ids: string[]): void;
   captionsFromAsset(assetId: string): Promise<void>;
@@ -78,6 +88,9 @@ export function useStore(): Store {
 }
 
 export const errCode = (e: unknown): string => (e instanceof EmError ? e.code : 'EM-9001');
+/** FR-053: import-level errors go to the Asset Panel banner (`lib.assets.error`), per-file errors stay on the card. */
+export const IMPORT_LEVEL = new Set(['EM-6401', 'EM-6005', 'EM-1401', 'EM-1010']);
+export const importError = (code: string): void => { window.dispatchEvent(new CustomEvent('em:import-error', { detail: { code } })); };
 const PRESET_CATEGORY_TO_INTENT: Record<string, IntentCategory> = {
   transition: 'transition', caption: 'caption', background: 'background', motion: 'motion', shape: 'shape', easing: 'easing', effect: 'effect', audio: 'audio',
   text: 'text', texteffect: 'text', font: 'text', palette: 'layout', fontpair: 'layout',
@@ -87,6 +100,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   const [state, rawDispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const heldPicks = useRef(new Map<string, string>());   // FR-037: presetId → model key, held with EM-2104
   const dispatch = useCallback((a: Action) => rawDispatch(a), []);
   const prefsRef = useRef<Prefs>({ ...loadPrefs(), ...(initialPrefs ?? {}) });
   const [prefsVersion, forcePrefs] = useReducer((x: number) => x + 1, 0);
@@ -98,7 +112,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   const headHash = () => stateRef.current.head?.hash ?? stateRef.current.project?.headHash ?? '';
 
   const actions = useMemo<Actions>(() => {
-    const toast: Actions['toast'] = (kind, textKey, vars, opts = {}) => dispatch({ type: 'toast', toast: { kind, textKey, ...(vars ? { vars } : {}), ...(opts.code ? { code: opts.code } : {}), ...(opts.action ? { action: opts.action } : {}), sticky: opts.sticky ?? kind === 'danger' } });
+    const toast: Actions['toast'] = (kind, textKey, vars, opts = {}) => dispatch({ type: 'toast', toast: { kind, textKey, ...(vars ? { vars } : {}), ...(opts.code ? { code: opts.code } : {}), ...(opts.action ? { action: opts.action } : {}), sticky: opts.sticky ?? (kind === 'danger' || kind === 'warn') } });
     const announce = (text: string) => dispatch({ type: 'announce', text });
     const error = (err: unknown) => {
       const code = errCode(err);
@@ -131,8 +145,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         return p.id;
       } catch (e) { error(e); return null; }
     };
-    const createIntent = async (body: Omit<DesignPickInput, 'baseVersion' | 'selection' | 'playheadMs'>, label: string) => {
-      const id = pid(); if (!id) { toast('info', 'err.EM-2202.title', undefined, { code: 'EM-2202' }); return; }
+    const createIntent = async (body: Omit<DesignPickInput, 'baseVersion' | 'selection' | 'playheadMs'>, label: string): Promise<IntentCreateResponse | null> => {
+      const id = pid(); if (!id) { toast('info', 'err.EM-2202.title', undefined, { code: 'EM-2202' }); return null; }
       const s = stateRef.current;
       const optimistic: EditIntent = {
         id: `pending-${Date.now()}`, projectId: id, source: body.source, createdAt: new Date().toISOString(), category: body.category, params: body.params ?? {}, target: body.target,
@@ -151,11 +165,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           await refreshHead();
           toast('success', 'ui.sys.toast.applieddirect', { label }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } });
           announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.sys.live.applied', { version: res.appliedVersion.hash.slice(0, 6) }));
+        } else if (res.intent.needsInterpretation && res.intent.status !== 'rejected') {
+          announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.sys.live.queuedforagent', { label }));   // FR-026: queued for the Editor Agent
         }
+        return res;
       } catch (e) {
         dispatch({ type: 'dropOptimistic', id: optimistic.id });
         if (e instanceof EmError && e.code === 'EM-2301') { await refreshHead(); }
         error(e);
+        return null;
       }
     };
     const undo = async () => { const id = pid(); if (!id) return; try { await api.undo(id); await refreshHead(); } catch (e) { error(e); } };
@@ -179,25 +197,43 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         if (!p) return;
         await createIntent({ source: 'ui', category: PRESET_CATEGORY_TO_INTENT[p.category] ?? 'effect', presetId, params: opts.params ?? {}, target: opts.target ?? { kind: 'selection' }, plan: 'auto' }, p.label[stateRef.current.settings?.uiLanguage ?? 'en']);
       },
-      async textPick(params) { await createIntent({ source: 'ui', category: 'text', params, target: { kind: 'selection' }, plan: 'auto' }, Object.keys(params).join(', ')); },
-      async addText(text, variantId) { await createIntent({ source: 'ui', category: 'text', presetId: variantId, params: { text }, target: { kind: 'playhead' }, plan: 'auto' }, text); },
-      async layoutPick(params) { await createIntent({ source: 'ui', category: 'layout', params, target: { kind: 'project' }, plan: 'auto' }, params.ratio ?? params.resolution ?? 'layout'); },
+      // FR-020…FR-028: each Text Panel value is one deterministic field pick (Compile path, no provider call).
+      async textPick(params) { for (const [field, value] of Object.entries(params)) await createIntent({ source: 'ui', category: 'text', field, value, target: { kind: 'selection' }, plan: 'auto' }, field); },
+      async addText(text, variantId) {
+        const before = new Set((stateRef.current.head?.model?.tracks.text ?? []).map((x) => x.id));
+        const res = await createIntent({ source: 'ui', category: 'text', presetId: variantId, text, target: { kind: 'playhead' }, plan: 'auto' }, text);
+        const pidNow = pid();
+        if (!res?.appliedVersion || !pidNow) return null;
+        const head = await api.getComposition(pidNow).catch(() => null);
+        const added = (head?.head.model?.tracks.text ?? []).find((x) => !before.has(x.id));
+        if (added) dispatch({ type: 'select', selection: [{ kind: 'text', id: added.id }] });
+        return added?.id ?? null;
+      },
+      // FR-087/FR-089/FR-097: Output Settings are typed `output` picks (Compile path, visible + supersedable in the Intent Queue).
+      async layoutPick(params) {
+        const output = params.ratio ? { kind: 'ratio' as const, value: params.ratio, ...(params.customRatio ? { customRatio: params.customRatio } : {}) } : { kind: 'resolution' as const, value: params.resolution };
+        await createIntent({ source: 'ui', category: 'layout', output, target: { kind: 'project' }, plan: 'auto' }, params.ratio === 'custom' && params.customRatio ? `${params.customRatio.w}:${params.customRatio.h}` : params.ratio ?? params.resolution ?? 'layout');
+      },
+      async clipEdit(edit, label) {
+        await createIntent({ source: 'ui', category: 'asset', clipEdit: edit, target: { kind: 'clip', id: edit.clipId }, plan: 'auto' }, label);
+      },
+      // FR-088: Auto is `op:output.setAutoRatio` in the model (so it can be turned on again and Undo restores it).
       async setAutoRatio(on) {
-        const id = pid(), s = stateRef.current.head?.model?.settings; if (!id || !s) return;
-        try { await api.putProjectSettings(id, { ...s, autoRatio: on }); await refreshHead(); } catch (e) { error(e); }
+        await createIntent({ source: 'ui', category: 'layout', output: { kind: 'autoRatio', value: on }, target: { kind: 'project' }, plan: 'auto' }, translate(stateRef.current.settings?.uiLanguage ?? 'en', on ? 'ui.agent.output.ratio.auto.on' : 'ui.agent.output.ratio.auto.off'));
       },
       async updateProjectSettings(patch) {
         const id = pid(), s = stateRef.current.head?.model?.settings; if (!id || !s) return;
         try { await api.putProjectSettings(id, { ...s, ...patch }); await refreshHead(); } catch (e) { error(e); }
       },
       async upload(files) {
-        const id = pid(); if (!id || !files.length) return;
+        const id = pid(); if (!id || !files.length) return [];
         try {
           const paths = files.map((f) => (f as File & { path?: string }).path).filter((x): x is string => typeof x === 'string' && x.length > 0);
           const res = runtime.mode === 'live' && paths.length === files.length && window.expertmotion ? await api.importAssetPaths(id, paths) : await api.uploadAssets(id, files);
           dispatch({ type: 'assetsUpsert', assets: res.items });
-          for (const n of res.notices) if (n.code) toast('info', `err.${n.code}.title`, undefined, { code: n.code });
-        } catch (e) { error(e); }
+          for (const n of res.notices) if (n.code) { if (IMPORT_LEVEL.has(n.code)) importError(n.code); else toast('info', `err.${n.code}.title`, undefined, { code: n.code }); }
+          return res.items;
+        } catch (e) { if (IMPORT_LEVEL.has(errCode(e))) importError(errCode(e)); else error(e); return []; }
       },
       async setBadge(assetId, badge) {
         const id = pid(); if (!id) return;
@@ -207,11 +243,16 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           if (badge !== null && !stateRef.current.assetSelection.includes(assetId)) dispatch({ type: 'assetSelection', ids: [...stateRef.current.assetSelection, assetId] });
         } catch (e) { error(e); }
       },
-      async insert(assetIds) {
+      async insert(assetIds, opts) {
         const id = pid(); if (!id || !assetIds.length) return;
-        const first = !(stateRef.current.head?.model?.tracks.video.length);
+        const s0 = stateRef.current;
+        const first = !(s0.head?.model?.tracks.video.length);
+        // FR-049 / FR-030: "after the selected Clip" when one is selected, otherwise at the end of the Sequence.
+        const selClip = s0.selection.find((x) => x.kind === 'clip');
+        const selIdx = selClip ? (s0.head?.model?.tracks.video.findIndex((c) => c.id === selClip.id) ?? -1) : -1;
+        const place = opts ?? (selIdx >= 0 ? { atIndex: selIdx + 1 } : {});
         try {
-          await api.insertAssets(id, { assetIds, order: 'badge' });
+          await api.insertAssets(id, { assetIds, order: 'badge', ...place });
           const assets = await api.listAssets(id, { limit: 200 });
           dispatch({ type: 'assets', assets: assets.items });
           dispatch({ type: 'assetSelection', ids: [] });
@@ -235,6 +276,20 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         }
       },
       setAssetSelection: (ids) => dispatch({ type: 'assetSelection', ids }),
+      async locateAsset(assetId) {
+        const id = pid(), shell = window.expertmotion; if (!id) return;
+        const a = stateRef.current.assets.find((x) => x.id === assetId);
+        if (!shell?.pickFiles) { toast('info', 'ui.lib.assets.locate.unavailable'); return; }
+        const ext = (a?.name.split('.').pop() ?? '').toLowerCase();
+        const paths = await shell.pickFiles({ filters: [{ name: a?.name ?? '', extensions: ext ? [ext] : ['*'] }], multiple: false });
+        if (!paths[0]) return;
+        try {
+          const dto = await api.relocateAsset(id, assetId, paths[0]);
+          dispatch({ type: 'assetsUpsert', assets: [dto] });
+          announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.lib.assets.locate.done', { name: a?.name ?? '' }));
+        } catch (e) { error(e); }
+      },
+      holdPick(presetId, modelKey) { heldPicks.current.set(presetId, modelKey); },
       async captionsFromAsset(assetId) {
         const a = stateRef.current.assets.find((x) => x.id === assetId);
         await createIntent({ source: 'ui', category: 'caption', params: { assetId }, target: { kind: 'project' }, plan: 'auto' }, a?.name ?? 'captions');
@@ -272,7 +327,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           try {
             const r = await api.executePlan(plan.id, { confirmDestructive: destructive });
             if (r.ok) {
-              dispatch({ type: 'plan', plan: { ...plan, status: 'executed' } });
+              const n = (c: string) => r.diff.filter((d) => d.change === c).length;   // FR-086 diff summary on the executed card
+              dispatch({ type: 'plan', plan: { ...plan, status: 'executed', result: { ok: true, toVersion: r.toVersion ?? null, appliedOps: r.appliedOps, added: n('added'), removed: n('removed'), modified: n('modified') } } });
               await refreshHead();
               const v = (r.toVersion ?? '').slice(0, 6);
               toast('success', 'ui.sys.toast.applied', { count: r.appliedOps, version: v }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } });
@@ -332,7 +388,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const msgs = stateRef.current.messages.brainstorm.map((m) => (m.id === message.id ? { ...m, blocks: m.blocks.map((b) => (b.type === 'proposed_intents' ? { ...b, handoffState: b.handoffState === 'dismissed' ? 'pending' as const : 'dismissed' as const } : b)) } : m));
         dispatch({ type: 'messages', agent: 'brainstorm', messages: msgs });
       },
-      async setPrivateMode(on) { try { dispatch({ type: 'settings', settings: await api.putSettings({ privateMode: on }) }); } catch (e) { error(e); } },
+      async setPrivateMode(on) {
+        try {
+          const settings = await api.putSettings({ privateMode: on });
+          dispatch({ type: 'settings', settings });
+          // FR-160: intents that waited for an agent while Private Mode was on are planned automatically once it is off
+          const s = stateRef.current;
+          if (!on && settings.autoPlan !== false && !s.streaming.editor && s.plan?.status !== 'draft' && hasWaitingIntents(s)) await self.plan();
+        } catch (e) { error(e); }
+      },
       async setLanguage(l) { try { dispatch({ type: 'settings', settings: await api.putSettings({ uiLanguage: l }) }); } catch (e) { error(e); } },
       async putSettings(patch) { try { dispatch({ type: 'settings', settings: await api.putSettings(patch) }); } catch (e) { error(e); } },
       async setProfile(p) {
@@ -340,10 +404,12 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         setPrefs({ draft: p !== 'turbo' });
         try { dispatch({ type: 'settings', settings: await api.putSettings({ defaultPerformanceProfile: p }) }); } catch (e) { error(e); }
       },
+      // FR-095: the Project defaults (Settings ▸ default ratio / resolution), profile Standard, Auto off — one Composition Version.
       async resetOutput() {
         const id = pid(), s = stateRef.current.head?.model?.settings; if (!id || !s) return;
+        const d = outputDefaults(stateRef.current);
         try {
-          await api.putProjectSettings(id, { ...s, ratio: '16:9', resolution: '1080p', autoRatio: false });
+          await api.putProjectSettings(id, { fps: s.fps, language: s.language, ratio: d.ratio, resolution: d.resolution, autoRatio: false });
           dispatch({ type: 'performanceProfile', profile: 'standard' });
           await api.putSettings({ defaultPerformanceProfile: 'standard' }).then((x) => dispatch({ type: 'settings', settings: x }));
           await refreshHead();
@@ -394,14 +460,32 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         actions.announce(translate(L, 'ui.sys.live.exportfailed'));
         break;
       case 'ingest.done': actions.announce(translate(L, 'ui.sys.live.ingested', { name: ev.data.asset.name })); break;
+      case 'model.installed': {
+        // FR-037: picks held with EM-2104 resume once their model is installed.
+        for (const [presetId, key] of [...heldPicks.current]) if (key === ev.data.model.key) { heldPicks.current.delete(presetId); void actions.pick(presetId); }
+        break;
+      }
       case 'plan.ready':
         if (ev.data.plan.status === 'valid' && ev.data.plan.origin === 'editor-agent') actions.announce(translate(L, 'ui.sys.live.planready', { goal: ev.data.plan.goal }));
+        break;
+      case 'settings.changed':                                       // FR-093: the Hardware Monitor re-detected; gating follows the new tier
+        if (ev.data.scope === 'hardware') void runtime.api.hardwareProfile().then((hardware) => dispatch({ type: 'globals', hardware })).catch(() => undefined);
+        if (ev.data.scope === 'providers') void actions.loadProviders();       // FR-071: the status dot follows connection changes
         break;
       case 'agent.run.failed': if (ev.data.code === 'EM-8202') actions.toast('info', 'err.EM-8202.title', undefined, { code: 'EM-8202' }); break;
       case 'service.notice':
         if (ev.data.kind === 'resync') void actions.reloadState();
-        if (ev.data.kind === 'low-disk' || ev.data.kind === 'low-memory') actions.toast('warn', `err.${ev.data.code ?? 'EM-6402'}.title`, undefined, { code: ev.data.code ?? 'EM-6402' });
+        // FR-128: the Service sends EM-6402 once per session; the banner stays until dismissed and opens the Hardware Monitor.
+        if (ev.data.kind === 'low-disk' || ev.data.kind === 'low-memory') actions.toast('warn', `err.${ev.data.code ?? 'EM-6402'}.title`, typeof ev.data['have'] === 'number' ? { have: ev.data['have'] } : undefined,
+          { code: ev.data.code ?? 'EM-6402', sticky: true, action: { labelKey: 'ui.scr.hardware.open', run: () => { window.dispatchEvent(new CustomEvent(OPEN_HARDWARE_EVENT)); } } });
         if (ev.data.kind === 'restore' && ev.data.done && typeof ev.data.projectId === 'string') void actions.openProject(ev.data.projectId);
+        // FR-048: media check on open / before render (missing originals; a changed file was re-ingested).
+        if ((ev.data.kind === 'media-missing' || ev.data.kind === 'media-changed') && ev.data.projectId === stateRef.current.project?.id) {
+          const id = stateRef.current.project?.id;
+          if (id) void runtime.api.listAssets(id, { limit: 200 }).then((p) => dispatch({ type: 'assets', assets: p.items })).catch(() => undefined);
+          const name = typeof ev.data['name'] === 'string' ? ev.data['name'] : String((ev.data['assetIds'] as unknown[] | undefined)?.length ?? '');
+          actions.toast('warn', `err.${ev.data.kind === 'media-missing' ? 'EM-1301' : 'EM-1302'}.title`, { name }, { code: ev.data.kind === 'media-missing' ? 'EM-1301' : 'EM-1302' });
+        }
         // R-025: the sample's clips, captions and palette are in; reload so assets, queue and head are complete for the tour.
         if (ev.data.kind === 'sample' && typeof ev.data['ready'] === 'boolean' && ev.data.projectId === stateRef.current.project?.id) {
           if (ev.data['ready'] === false) {
@@ -414,7 +498,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         break;
       default: break;
     }
-  }, [actions, dispatch]);
+  }, [actions, dispatch, runtime]);
 
   // ── boot ──
   useEffect(() => {
@@ -426,6 +510,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         ]);
         if (cancelled) return;
         dispatch({ type: 'globals', health, settings, licence, hardware });
+        // FR-129: EM-3402 (T0) and EM-8305 (< 8 GB RAM) once per install; the onboarding Hardware step shows them itself.
+        const onboardingPending = !prefsRef.current.onboardingDone && settings.onboardingDone !== true;
+        const fresh = (['EM-3402', 'EM-8305'] as const).filter((c) => hardware?.warnings.includes(c) && !prefsRef.current.nudgesDismissed.includes(`hw:${c}`));
+        if (fresh.length) {
+          if (!onboardingPending) for (const c of fresh) actions.toast('warn', `err.${c}.title`, { ram: Math.round((hardware?.ramTotalMb ?? 0) / 1024) }, { code: c });
+          setPrefs({ nudgesDismissed: [...prefsRef.current.nudgesDismissed, ...fresh.map((c) => `hw:${c}`)] });
+        }
         await actions.loadProviders();
         await actions.loadModels();
         const recent = await runtime.api.recentProjects().catch(() => ({ items: [] }));
@@ -433,14 +524,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         if (target) await actions.openProject(target);
         if (!cancelled) {
           dispatch({ type: 'boot', boot: 'ready' });
-          if (!prefsRef.current.onboardingDone) dispatch({ type: 'screen', screen: { kind: 'onboarding' } });
+          // FR-004: the onboarding record lives server-side (settings.onboardingDone); prefs mirror it for older services and the mock.
+          if (!prefsRef.current.onboardingDone && settings.onboardingDone !== true) dispatch({ type: 'screen', screen: { kind: 'onboarding' } });
         }
       } catch (e) {
         if (!cancelled) { dispatch({ type: 'boot', boot: 'no-service' }); actions.error(e); }
       }
     })();
     return () => { cancelled = true; };
-  }, [runtime, actions, dispatch]);
+  }, [runtime, actions, dispatch, setPrefs]);
 
   // ── SSE: one stream per open project (projectId filter), reopened on project change ──
   const projectId = state.project?.id;
@@ -466,7 +558,18 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 
+/** FR-095: the Project defaults Reset restores (Settings defaults; 9:16 · 1080p when unset). */
+export function outputDefaults(s: AppState): { ratio: Ratio; resolution: Resolution } {
+  const r = s.settings?.defaultRatio;
+  return { ratio: r && r !== 'custom' ? r : '9:16', resolution: s.settings?.defaultResolution ?? '1080p' };
+}
+
 /** Output profile for the Export dialog from the current project settings. */
+/** FR-160: queued intents that need the Editor Agent (they wait while Private Mode is on). */
+export function hasWaitingIntents(s: Pick<AppState, 'queue'>): boolean {
+  return (s.queue?.items ?? []).some((i) => i.status === 'queued' && i.needsInterpretation);
+}
+
 export function currentOutputProfile(s: AppState): OutputProfile {
   const st = s.head?.model?.settings ?? s.project?.settings;
   return { ratio: st?.ratio ?? '16:9', ...(st?.customRatio ? { customRatio: st.customRatio } : {}), resolution: st?.resolution ?? '1080p', fps: st?.fps ?? 30, format: 'mp4', codec: 'h264', crf: 18, alpha: false };

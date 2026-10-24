@@ -6,8 +6,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyOperations, type CompositionModelT, type OperationT } from '@expertmotion/composition-model';
-import { EmError } from '@expertmotion/shared';
+import { applyOperations, deriveTiming, type CompositionModelT, type OperationT } from '@expertmotion/composition-model';
+import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
 import { JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, removeJobDir, synthesize, transcribeToPages,
   type JobContext, type JobEvent, type ModelDef } from '@expertmotion/models';
 import type { ServiceContext } from '../context.js';
@@ -17,10 +17,17 @@ import { ingestOf, inspectSource } from './ingest.js';
 import { modelsServiceOf } from './models-service.js';
 import { runTool } from './proc.js';
 import { defaultRemotionPort, type RendererLike } from './render-service.js';
+import { getOutput, outputRelPath, toOutputDto } from './render-repo.js';
 import { s2, useModel } from './state.js';
 
 export const GENERATOR_KINDS = ['voice', 'music', 'thumbnail', 'captions', 'hashtags'] as const;
 export type GeneratorKind = (typeof GENERATOR_KINDS)[number];
+/** ADR-016 priority tag per Generator Card (FR-100). */
+export const GENERATOR_PRIORITY: Record<GeneratorKind, 'P1' | 'P2'> = { voice: 'P1', captions: 'P1', hashtags: 'P1', music: 'P2', thumbnail: 'P2' };
+/** FR-108: results that were not inserted stay listed for 7 days. */
+export const GENERATED_RETENTION_MS = 7 * 24 * 3_600_000;
+const TIER_RANK = { T0: 0, T1: 1, T2: 2 } as const;
+const MODEL_TASKS: Record<Exclude<GeneratorKind, 'hashtags'>, ReadonlyArray<ModelDef['task']>> = { captions: ['stt'], voice: ['tts'], music: ['music', 'library'], thumbnail: ['image'] };
 
 export interface EngineStepCtx { engineDir: string; jobDir: string; signal: AbortSignal; onProgress: (f: number) => void }
 /** Engine steps (default: packages/models adapters). Tests inject fakes; nothing here knows engine argv. */
@@ -102,7 +109,41 @@ export class GeneratorsService {
   idle(): Promise<void> { return this.runner.idle(); }
 
   recover(): number {
+    this.purge();
     return this.ctx.db.prepare("UPDATE generator_jobs SET status = 'failed', error_code = 'EM-8003', finished_at = ? WHERE status IN ('queued','running')").run(this.ctx.now()).changes;
+  }
+  /** FR-108: jobs older than 7 days leave the "Generated" list (rows only; imported Assets stay in the Asset Panel). */
+  purge(nowMs = Date.parse(this.ctx.now())): number {
+    const cutoff = new Date(nowMs - GENERATED_RETENTION_MS).toISOString();
+    return this.ctx.db.prepare("DELETE FROM generator_jobs WHERE created_at < ? AND status NOT IN ('queued','running')").run(cutoff).changes;
+  }
+  /** R-137: remove a job from the "Generated" list (a running job is cancelled first). */
+  remove(id: string): boolean {
+    const r = this.get(id); if (!r) return false;
+    if (r.status === 'queued' || r.status === 'running') this.runner.cancel(id);
+    this.ctx.db.prepare('DELETE FROM generator_jobs WHERE id = ?').run(id);
+    return true;
+  }
+  /** R-135: Generator Cards (FR-100, FR-107): enabled in this build, priority, required model with installed state, size and tier hint. */
+  async cards(): Promise<Array<Record<string, unknown>>> {
+    const ctx = this.ctx; const tier = ctx.hooks.tier(); const models = modelsServiceOf(ctx);
+    const lang = ctx.settings.get().defaultLanguage;
+    const enabled = this.opts.enabledKinds ?? GENERATOR_KINDS;
+    const out: Array<Record<string, unknown>> = [];
+    for (const kind of GENERATOR_KINDS) {
+      const base = { kind, enabled: enabled.includes(kind), priority: GENERATOR_PRIORITY[kind] };
+      if (kind === 'hashtags') { out.push({ ...base, model: null, models: [], llm: true, tierHint: 'ok' }); continue; }
+      const task = kind === 'captions' ? 'stt' : kind === 'voice' ? 'tts' : kind === 'music' ? 'music' : 'image';
+      const defKey = defaultModelFor(task, tier, { language: lang });
+      const list = await Promise.all(models.defs().filter((d) => MODEL_TASKS[kind].includes(d.task)).map(async (d) => ({
+        key: d.key, label: d.label, bytes: d.bytes, installed: await models.isInstalled(d.key), languages: d.languages, minTier: d.minTier, belowTier: TIER_RANK[tier] < TIER_RANK[d.minTier],
+        cc0: d.engine === 'loops' })));
+      const def = list.find((m) => m.key === defKey) ?? null;
+      // frame-composite (T0 thumbnails) needs no model: a still of the current frame plus the title (LOCAL_AI_MODELS §5)
+      const model = def ?? (defKey === 'frame-composite' ? { key: defKey, label: 'Frame + title', bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: false } : null);
+      out.push({ ...base, model, models: list, llm: false, tierHint: model?.belowTier ? 'slow' : 'ok', tier });
+    }
+    return out;
   }
   enginesDir(): string { return this.opts.enginesDir ?? this.ctx.resources.enginesDir; }
   /** `<engines>/<engine>/` or its single version sub-folder (LOCAL_AI_MODELS §3.1 `resources/engines/<engine>/<version>/`). */
@@ -147,16 +188,47 @@ export class GeneratorsService {
     return toGenDto(this.get(id)!);
   }
   /** R-134: insert a finished job's result later (no re-run). Idempotent: a second call returns the same version with notice EM-2308. */
-  insertResult(id: string): { versionId: string; notice?: string } | undefined {
+  insertResult(id: string, override: { pages?: unknown[] } = {}): { versionId: string; notice?: string } | undefined {
     const ctx = this.ctx; const r = this.get(id); if (!r) return undefined;
     if (r.status !== 'done') throw em('EM-9002', 'This result is not ready yet.', { status: 422, details: { reason: 'not-done', status: r.status } });
     const result = (r.result_json ? JSON.parse(r.result_json) : {}) as Record<string, unknown>;
     if (typeof result['versionId'] === 'string') return { versionId: result['versionId'], notice: 'EM-2308' };
-    const ops = result['proposedOps'] as OperationT[] | undefined;
+    let ops = result['proposedOps'] as OperationT[] | undefined;
     if (!ops?.length) throw em('EM-9002', 'This result has nothing to insert.', { status: 422, details: { reason: 'no-ops' } });
+    // FR-104: the Creator may edit caption text in the preview before Insert; timings stay the engine's
+    if (override.pages && r.kind === 'captions') ops = ops.map((o) => (o.op === 'op:caption.setPages' ? { ...o, args: { ...o.args, pages: override.pages } } as OperationT : o));
     const versionId = ctx.hooks.applyOps(r.project_id, ops, { kind: 'generator', ref: id, summary: `Inserted generated ${r.kind}` });
     ctx.db.prepare('UPDATE generator_jobs SET result_json = ? WHERE id = ?').run(JSON.stringify({ ...result, versionId }), id);
     return { versionId };
+  }
+  /** R-136 (FR-103): copy a thumbnail candidate into the Project output folder as an Output (kind still). */
+  saveOutput(id: string, assetId: string): Record<string, unknown> | undefined {
+    const ctx = this.ctx; const r = this.get(id); if (!r) return undefined;
+    if (r.status !== 'done') throw em('EM-9002', 'This result is not ready yet.', { status: 422, details: { reason: 'not-done', status: r.status } });
+    const result = (r.result_json ? JSON.parse(r.result_json) : {}) as { candidates?: Array<{ assetId: string }>; assetId?: string };
+    const allowed = new Set([r.result_asset_id, result.assetId, ...(result.candidates ?? []).map((c) => c.assetId)].filter(Boolean));
+    if (!allowed.has(assetId)) throw em('EM-9002', 'Invalid request: assetId is not a result of this job.', { status: 400, path: 'body.assetId' });
+    const a = getAsset(ctx, assetId, r.project_id); if (!a) throw em('EM-9003', 'Not found.');
+    const src = path.resolve(ctx.paths.media, a.original_path);
+    if (!fs.existsSync(src)) throw em('EM-1301', 'The generated file is missing.');
+    const project = ctx.db.prepare('SELECT name FROM projects WHERE id = ?').get(r.project_id) as { name: string } | undefined;
+    const folder = ctx.settings.get().outputFolder ? path.resolve(ctx.settings.get().outputFolder!) : path.join(ctx.paths.outputs, r.project_id);
+    try { fs.mkdirSync(folder, { recursive: true }); fs.accessSync(folder, fs.constants.W_OK); } catch { throw em('EM-3206', 'Expertmotion cannot save files in this folder.', { details: { folder: path.basename(folder) } }); }
+    const stem = sanitizeFilename(`${project?.name ?? 'thumbnail'}-thumbnail-${timestamp().slice(0, 13)}`, 'thumbnail');
+    let file = path.join(folder, `${stem}.png`);
+    for (let i = 2; fs.existsSync(file); i++) file = path.join(folder, `${stem}-${i}.png`);
+    fs.copyFileSync(src, file);
+    const head = ctx.hooks.composition(r.project_id);
+    const jobId = ctx.newId(); const outputId = ctx.newId(); const at = ctx.now();
+    const profile = { ...head.model.settings, format: 'png', codec: 'png', alpha: false };
+    ctx.db.transaction(() => {
+      ctx.db.prepare("INSERT INTO render_jobs (id, project_id, version_id, output_profile_json, performance_profile, status, progress, created_at, started_at, finished_at) VALUES (?,?,?,?,'standard','done',1,?,?,?)")
+        .run(jobId, r.project_id, head.versionId, JSON.stringify(profile), at, at, at);
+      ctx.db.prepare(`INSERT INTO outputs (id, project_id, render_job_id, path, thumb_path, kind, bytes, width, height, fps, duration_ms, validated, watermarked, created_at)
+        VALUES (?,?,?,?,NULL,'still',?,?,?,NULL,NULL,1,0,?)`).run(outputId, r.project_id, jobId, outputRelPath(ctx, file), fs.statSync(file).size, a.width, a.height, at);
+      ctx.db.prepare('UPDATE render_jobs SET output_id = ? WHERE id = ?').run(outputId, jobId);
+    })();
+    return toOutputDto(ctx, getOutput(ctx, outputId)!);
   }
   cancel(id: string): Record<string, unknown> | undefined {
     const r = this.get(id); if (!r) return undefined;
@@ -232,7 +304,8 @@ export class GeneratorsService {
     if (kind === 'music') {
       const key = typeof b['modelKey'] === 'string' ? b['modelKey'] : defaultModelFor('music', tier);
       const def = await this.requireInstalled(key, 'Generate Music');
-      const durationMs = Number(b['durationMs']); const prompt = String(b['prompt'] ?? '');
+      const durationMs = Number(b['durationMs']);
+      const prompt = `${String(b['prompt'] ?? '')}${typeof b['style'] === 'string' && b['style'] ? `, ${b['style']}` : ''}${b['instrumental'] === false ? '' : ', instrumental'}`;
       return { modelKey: def.key, run: (j) => this.withJobDir(j, async () => {
         const seed = crypto.createHash('sha256').update(prompt).digest().readUInt32BE(0);
         let wav: string; let source: 'ace-step' | 'loop-library';
@@ -250,22 +323,28 @@ export class GeneratorsService {
         }
         j.progress(0.9, 'ingest');
         const assetId = await this.register(projectId, wav, `music-${short(j.jobId)}.wav`);
-        return { assetId, result: { assetId, durationMs, source }, ops: [{ op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId, volume: 0.2, loop: true } }] };
+        return { assetId, result: { assetId, durationMs, source, instrumental: b['instrumental'] !== false, cc0: source === 'loop-library' }, ops: [{ op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId, volume: 0.2, loop: true } }] };
       }) };
     }
     if (kind === 'thumbnail') {
       const prompt = typeof b['prompt'] === 'string' ? b['prompt'] : undefined;
       const size = (b['size'] as { w?: number; h?: number } | undefined) ?? {};
+      const count = Math.max(1, Math.min(4, typeof b['count'] === 'number' ? Math.round(b['count']) : 1));   // FR-103: 1–4 candidates
       if (prompt) {
         let key = defaultModelFor('image', tier);
         if (key === 'frame-composite') key = 'sd15-emaonly';
         const def = await this.requireInstalled(key, 'Generate Thumbnail');
         return { modelKey: def.key, run: (j) => this.withJobDir(j, async () => {
-          const seed = crypto.randomInt(0, 2 ** 31);
-          const r = await this.engineStep(j, 'stable-diffusion.cpp', 'diffuse', (c) => this.engines.image({ model: def, modelDir: models.dirOf(def), prompt, width: size.w ?? 1280, height: size.h ?? 720, seed, tier }, c));
+          const candidates: Array<{ assetId: string; seed: number }> = [];
+          for (let i = 0; i < count; i++) {
+            const seed = crypto.randomInt(0, 2 ** 31);
+            const r = await this.engineStep(j, 'stable-diffusion.cpp', 'diffuse', (c) => this.engines.image({ model: def, modelDir: models.dirOf(def), prompt, width: size.w ?? 1280, height: size.h ?? 720, seed, tier },
+              { ...c, onProgress: (f) => c.onProgress((i + f) / count) }));
+            candidates.push({ assetId: await this.register(projectId, r.pngPath, `thumbnail-${short(j.jobId)}-${i + 1}.png`), seed });
+          }
           j.progress(0.9, 'ingest');
-          const assetId = await this.register(projectId, r.pngPath, `thumbnail-${short(j.jobId)}.png`);
-          return { assetId, result: { assetId, source: def.key.startsWith('flux') ? 'flux' : 'sd15' } };
+          const assetId = candidates[0]!.assetId;
+          return { assetId, result: { assetId, candidates, source: def.key.startsWith('flux') ? 'flux' : 'sd15' } };
         }) };
       }
       const head = ctx.hooks.composition(projectId);
@@ -278,12 +357,19 @@ export class GeneratorsService {
         if (r.ok) model = r.value.model;
       }
       const assetIds = [...new Set([...model.tracks.video.map((c) => c.assetId), ...model.tracks.audio.map((a) => a.assetId)])];
+      // candidates: the chosen frame first, then frames spread over the Sequence (still + title overlay each)
+      const durationMs = Math.max(1, deriveTiming(model).durationMs);
+      const times = [...new Set(Array.from({ length: count }, (_, i) => (i === 0 ? frameMs : Math.round((frameMs + (i * durationMs) / (count + 1)) % durationMs))))];
       return { modelKey: null, run: (j) => this.withJobDir(j, async () => {
-        const out = path.join(ctx.paths.tmp, 'jobs', j.jobId, 'still.png');
-        await this.engineStep(j, 'none', 'still', (c) => this.engines.frame({ model, projectId, frameMs, outPath: out, assetIds }, { ...c, ctx, jobId: j.jobId }));
+        const candidates: Array<{ assetId: string; frameMs: number }> = [];
+        for (const [i, at] of times.entries()) {
+          const out = path.join(ctx.paths.tmp, 'jobs', j.jobId, `still-${i + 1}.png`);
+          await this.engineStep(j, 'none', 'still', (c) => this.engines.frame({ model, projectId, frameMs: at, outPath: out, assetIds }, { ...c, onProgress: (f) => c.onProgress((i + f) / times.length), ctx, jobId: j.jobId }));
+          candidates.push({ assetId: await this.register(projectId, out, `thumbnail-${short(j.jobId)}-${i + 1}.png`), frameMs: at });
+        }
         j.progress(0.9, 'ingest');
-        const assetId = await this.register(projectId, out, `thumbnail-${short(j.jobId)}.png`);
-        return { assetId, result: { assetId, source: 'frame-composite', frameMs } };
+        const assetId = candidates[0]!.assetId;
+        return { assetId, result: { assetId, candidates, source: 'frame-composite', frameMs } };
       }) };
     }
     // hashtags / social caption text (FR-105, ADR-009): connected LLM; never touches the Composition Model

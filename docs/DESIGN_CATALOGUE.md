@@ -205,4 +205,4 @@ Transitions 6 (+none) · Captions 3 (+none) · Backgrounds 5 (+video-dim, none) 
 
 ## 13. Catalogue search tags
 
-Each preset carries `tags: string[]` in EN and ID (e.g. fade: `["soft","gentle","lembut","pudar"]`) used by `lib.search.input` and `catalogue.search`. Suggested queries shown in the search placeholder rotate through: "smooth transition", "karaoke captions", "energetic intro", "calm background", "transisi halus", "judul besar".
+Each preset carries `tags: string[]` in EN and ID (e.g. fade: `["soft","gentle","lembut","pudar"]`) used by `lib.search.input` and `catalogue.search`. Suggested queries shown in the search placeholder rotate through `SUGGESTED_QUERIES` in `packages/catalogue` (FR-035; each names the tab it opens and must return ≥ 1 P0 preset, enforced by the catalogue test): "smooth transition", "karaoke captions", "energetic motion", "calm background", "transisi halus", "teks karaoke".

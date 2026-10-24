@@ -6,7 +6,9 @@ import type { Router } from 'express';
 import { z } from 'zod';
 import { EmError, errorMessage } from '@expertmotion/shared';
 import { hashModel, summarizeForAgent, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
-import { BrainstormTurn, createIntents, runBrainstorm, type ChatMessage, type ChatUsage, type DesignPick, type EditIntentT, type IntentCategory } from '@expertmotion/agents';
+import { BrainstormTurn, createIntents, runBrainstorm, type ChatMessage, type ChatUsage, type DesignPick, type EditIntentT, type IntentCategory, type ToolHandlers } from '@expertmotion/agents';
+import { availableOnTier, searchPresets, type Category } from '@expertmotion/catalogue';
+import { renderServiceOf } from '../s2/render-service.js';
 import type { ServiceContext } from '../context.js';
 import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
@@ -102,13 +104,54 @@ function brainstormContext(ctx: ServiceContext, project: { id: string; name: str
   return { project: { name: project.name, language: project.language }, tier: ctx.hooks.tier(), composition };
 }
 
+/**
+ * FR-075 / AI_WORKFLOW §9: the Brainstorming Agent's read-only tools. Every handler only reads (no composition mutation, no
+ * render start, no egress); results are compact so they fit the context window.
+ */
+export function brainstormTools(ctx: ServiceContext, projectId: string, language: 'id' | 'en'): ToolHandlers {
+  return {
+    'composition.get': () => { try { const h = ctx.hooks.composition(projectId); return summarizeForAgent(h.model, ctx.hooks.assetFacts(projectId), 2000); } catch { return null; } },
+    'assets.list': () => ctx.hooks.assetFacts(projectId).filter((a) => a.status === 'ready').slice(0, 100)
+      .map((a) => ({ id: a.id, kind: a.kind, name: a.name ?? a.id, ...(a.durationMs !== undefined ? { durationMs: a.durationMs } : {}), ...(a.width ? { width: a.width, height: a.height } : {}), ...(a.hasAudio !== undefined ? { hasAudio: a.hasAudio } : {}) })),
+    'catalogue.search': (i) => {
+      const tier = ctx.hooks.tier();
+      return searchPresets(String(i['query'] ?? ''), language, i['category'] as Category | undefined).filter((p) => p.priority !== 'p2' && availableOnTier(p, tier)).slice(0, 20)
+        .map((p) => ({ id: p.id, category: p.category, label: p.label[language], tags: p.tags.slice(0, 6), ...(p.flags.includes('gpu') && tier === 'T0' ? { slowWithoutGpu: true } : {}) }));
+    },
+    'hardware.profile': () => {
+      const r = ctx.db.prepare('SELECT tier, cpu_threads, ram_total_mb, gpu_model, vram_mb FROM hardware_profiles WHERE is_current = 1').get() as { tier: string; cpu_threads: number | null; ram_total_mb: number | null; gpu_model: string | null; vram_mb: number | null } | undefined;
+      return r ? { tier: r.tier, cpuThreads: r.cpu_threads, ramTotalMb: r.ram_total_mb, gpuModel: r.gpu_model, vramMb: r.vram_mb } : { tier: ctx.hooks.tier() };
+    },
+    'project.settings.get': () => { try { return ctx.hooks.composition(projectId).model.settings; } catch { return null; } },
+    'render.estimate': async (i) => {
+      const s = ctx.hooks.composition(projectId).model.settings;
+      const prep = await renderServiceOf(ctx).prepare({ projectId, performanceProfile: (i['performanceProfile'] as 'standard' | 'accelerated' | 'turbo' | undefined) ?? 'standard',
+        outputProfile: { ratio: s.ratio, ...(s.customRatio ? { customRatio: s.customRatio } : {}), resolution: (i['resolution'] as typeof s.resolution | undefined) ?? s.resolution, fps: s.fps, format: 'mp4', codec: 'h264', crf: 18, alpha: false } });
+      return { seconds: prep.estimate.seconds, bytes: prep.estimate.bytes, confidence: prep.estimate.confidence, dimensions: prep.dims, warnings: prep.warnings.map((w) => w.code) };
+    },
+  };
+}
+
+/** Streamed deltas are coalesced (≥ 40 chars or 80 ms) so a fast provider cannot flood the SSE stream. */
+function deltaEmitter(ctx: ServiceContext, projectId: string, runId: string, agent: AgentT) {
+  let buf = ''; let timer: NodeJS.Timeout | null = null;
+  const flush = () => { if (timer) { clearTimeout(timer); timer = null; } if (buf) { const delta = buf; buf = ''; emit(ctx, 'agent.run.delta', { projectId, runId, agent, delta }); } };
+  return { push(d: string) { buf += d; if (buf.length >= 40) flush(); else if (!timer) timer = setTimeout(flush, 80); }, flush };
+}
+
 async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: string, project: { id: string; name: string; language: 'id' | 'en' }, signal: AbortSignal) {
   const provider = ctx.hooks.providerFor('brainstorm', project.id);
-  const r = await runBrainstorm(historyOf(ctx, convId), brainstormContext(ctx, project), project.language, provider, { signal, budgetCheck: () => ctx.hooks.budgetCheck(project.id) });
+  const deltas = deltaEmitter(ctx, project.id, run.id, 'brainstorm');
+  const r = await runBrainstorm(historyOf(ctx, convId), brainstormContext(ctx, project), project.language, provider, {
+    signal, budgetCheck: () => ctx.hooks.budgetCheck(project.id), contextLength: contextLengthOf(ctx, run.connection_id, run.model_id),
+    tools: brainstormTools(ctx, project.id, project.language), onDelta: (d) => { if (!signal.aborted) deltas.push(d); },
+  }).finally(() => deltas.flush());
   record(ctx, project.id, 'brainstorm', run.id, r.usage);
   if (signal.aborted) return;
   if (!r.ok) return failRun(ctx, run, convId, r.error);
-  const blocks: Block[] = [{ type: 'text', text: r.turn.reply }];
+  if (r.summary) ctx.db.prepare('UPDATE conversations SET summary_json = ? WHERE id = ?').run(JSON.stringify(r.summary), convId);
+  const blocks: Block[] = r.toolCalls.map((c): Block => ({ type: 'tool_result', name: c.name, output: { ok: c.ok, input: c.input, ...(c.ok ? {} : { output: c.output }) } }));
+  blocks.push({ type: 'text', text: r.turn.reply });
   if (r.turn.questions?.length) blocks.push({ type: 'text', text: r.turn.questions.join('\n') });
   if (r.turn.proposedIntents?.length) blocks.push({ type: 'proposed_intents', intents: r.turn.proposedIntents.map((p) => ({ ...p, id: ctx.newId() })), handoffState: 'pending' });
   const msg = insertMessage(ctx, convId, 'assistant', blocks, run.id);
@@ -172,7 +215,7 @@ export const agentsModule: ServiceModule = {
       const a = getAssignment(ctx, agent);
       const cap = a ? cachedModels(ctx, a.connectionId)?.find((m) => m.modelId === a.modelId) : undefined;
       if (cap?.contextLength && Math.ceil(body.text.length / 4) > 0.6 * cap.contextLength) throw new EmError('EM-4306', `This message does not fit the model's memory (${cap.contextLength} tokens). Shorten it or start a new chat.`, { status: 422 });
-      if (body.attachments.length && cap && !cap.imageInput) throw new EmError('EM-4307', `"${provider.model}" cannot read images. Describe the image in words, or switch to a model that can.`, { status: 422 });
+      if (body.attachments.length && cap && cap.imageInput === false) throw new EmError('EM-4307', `"${provider.model}" cannot read images. Describe the image in words, or switch to a model that can.`, { status: 422 });
       if (agent === 'editor') {
         let head: { versionId: string; hash: string } | null = null;
         try { head = headOf(ctx, project.id); } catch { /* composition module absent: createPlan checks the base */ }

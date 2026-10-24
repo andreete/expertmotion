@@ -29,4 +29,13 @@ ALTER TABLE projects ADD COLUMN is_sample INTEGER NOT NULL DEFAULT 0 CHECK(is_sa
 CREATE INDEX IF NOT EXISTS idx_projects_sample ON projects(is_sample) WHERE is_sample = 1;
 `,
   },
+  {
+    version: 12,
+    name: 's1_redo_stack',
+    // FR-168 / API R-054: the redo stack (version ids undone since the last mutation, newest last) survives a Service restart.
+    // NULL = empty. Cleared in the same transaction as any other new version.
+    sql: `
+ALTER TABLE projects ADD COLUMN redo_json TEXT CHECK(redo_json IS NULL OR json_valid(redo_json));
+`,
+  },
 ];

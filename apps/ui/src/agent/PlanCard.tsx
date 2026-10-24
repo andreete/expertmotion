@@ -7,12 +7,36 @@ import type { PlanDto } from '../api/types.js';
 import { Button, cx } from '../components/ui.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
 
-export function executeDisabledReason(plan: PlanDto | null, headHash: string | undefined, t: (k: string) => string): string | null {
+/** FR-083: Execute needs a valid plan on the head, no block risk, no run in progress and at least one Clip; else the reason. */
+export function executeDisabledReason(plan: PlanDto | null, headHash: string | undefined, t: (k: string) => string, ctx: { hasClip?: boolean; running?: boolean } = {}): string | null {
   if (!plan || plan.status === 'draft' || plan.status === 'cancelled' || plan.status === 'executed') return t('ui.agent.editor.execute.noplan');
   if (plan.status === 'stale' || (headHash && plan.baseVersion !== headHash)) return t('ui.agent.editor.execute.stale');
   if (plan.status === 'invalid' || plan.status === 'failed' || plan.risks.some((r) => r.severity === 'block')) return t('ui.agent.editor.execute.blocked');
   if (plan.status !== 'valid') return t('ui.agent.editor.execute.noplan');
+  if (ctx.running) return t('ui.agent.editor.execute.running');
+  if (ctx.hasClip === false) return t('ui.agent.editor.execute.noclip');
   return null;
+}
+/** FR-086: "3 added, 1 modified" from an execution result. */
+export function diffSummary(r: PlanDto['result'], t: (k: string, v?: Record<string, string | number>) => string): string {
+  if (!r) return '';
+  const parts = (['added', 'modified', 'removed'] as const).filter((k) => r[k] > 0).map((k) => t(`ui.agent.plan.diff.${k}`, { count: r[k] }));
+  return parts.length ? parts.join(', ') : t('ui.agent.plan.diff.none');
+}
+export const stepOps = (s: PlanDto['steps'][number]): number => (s.ops.length || s.opCount) ?? 0;
+
+/** FR-086: an older plan inline in the Editor thread, collapsed: goal, status, version hash, diff summary. */
+export function PlanSummary({ plan }: { plan: PlanDto }) {
+  const { t } = useStore();
+  const v = plan.result?.toVersion?.slice(0, 6);
+  return (
+    <div data-el="agent.editor.plancard" data-status={plan.status} data-collapsed="true" className={cx('flex items-center gap-2 rounded-[8px] border px-2 py-1 text-[12px]', plan.status === 'executed' ? 'border-em-success/70 text-em-success' : 'border-em-line text-em-muted')}>
+      {plan.status === 'executed' ? <CheckCircle2 size={14} /> : <History size={14} />}
+      <span className="min-w-0 flex-1 truncate text-em-text">{plan.goal}</span>
+      <span>{t(`ui.agent.plan.status.${plan.status}`)}{v ? ` · v${v}` : ''}</span>
+      {plan.result && <span className="text-em-muted">· {diffSummary(plan.result, t)}</span>}
+    </div>
+  );
 }
 
 export function PlanCard({ plan }: { plan: PlanDto }) {
@@ -24,7 +48,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
   const headHash = state.head?.hash;
   const stale = plan.status === 'stale' || (plan.status === 'valid' && headHash !== undefined && plan.baseVersion !== headHash);
   const status = stale ? 'stale' : plan.status;
-  const reason = executeDisabledReason(plan, headHash, t);
+  const reason = executeDisabledReason(plan, headHash, t, { hasClip: (state.head?.model?.tracks.video.length ?? 1) > 0, running: Boolean(state.streaming.editor) });
   const base = plan.baseVersion.slice(0, 6);
   const header: Record<string, { icon: ReactNode; text: string; tone: string; border: string }> = {
     draft: { icon: <Loader size={14} className="em-spin" />, text: t('ui.agent.plan.state.draft'), tone: 'text-em-muted', border: 'border-dashed border-em-line-strong' },
@@ -32,13 +56,14 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
     invalid: { icon: <OctagonAlert size={14} />, text: t('ui.agent.plan.state.invalid'), tone: 'text-em-danger', border: 'border-dashed border-em-danger' },
     stale: { icon: <History size={14} />, text: t('ui.agent.plan.state.stale'), tone: 'text-em-warn', border: 'border-dashed border-em-warn' },
     executing: { icon: <Loader size={14} className="em-spin" />, text: t('ui.agent.plan.state.executing', { step: 1, total: Math.max(1, plan.steps.length) }), tone: 'text-em-accent', border: 'border-solid border-em-accent' },
-    executed: { icon: <CheckCircle2 size={14} />, text: t('ui.agent.plan.state.executed', { version: headHash?.slice(0, 6) ?? '' }), tone: 'text-em-success', border: 'border-solid border-em-success' },
+    executed: { icon: <CheckCircle2 size={14} />, text: t('ui.agent.plan.state.executed', { version: (plan.result?.toVersion ?? headHash)?.slice(0, 6) ?? '' }), tone: 'text-em-success', border: 'border-solid border-em-success' },
     failed: { icon: <XCircle size={14} />, text: t('ui.agent.plan.state.failed', { code: plan.errorCode ?? 'EM-2307' }), tone: 'text-em-danger', border: 'border-solid border-em-danger' },
     cancelled: { icon: <XCircle size={14} />, text: plan.errorCode === 'EM-4304' ? t('ui.agent.plan.state.interrupted') : t('ui.agent.plan.state.cancelled'), tone: 'text-em-muted', border: 'border-solid border-em-line' },
   };
   const h = header[status] ?? header['draft']!;
   if (collapsed) {
-    return <div data-el="agent.editor.plancard" className="flex items-center gap-2 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} />{plan.goal}<span className="flex-1" /><button type="button" className="underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button></div>;
+    return <div data-el="agent.editor.plancard" data-status="executed" data-collapsed="true" className="flex items-center gap-2 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} /><span className="min-w-0 flex-1 truncate">{plan.goal}</span>
+      <span>{t('ui.agent.plan.status.executed')} · v{(plan.result?.toVersion ?? headHash ?? '').slice(0, 6)}{plan.result ? ` · ${diffSummary(plan.result, t)}` : ''}</span><button type="button" className="underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button></div>;
   }
   return (
     <section data-el="agent.editor.plancard" data-status={status} role="region" aria-label={t('a11y.agent.editor.plancard', { goal: plan.goal, status: h.text, version: base })}
@@ -58,6 +83,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
               <span className="t-mono text-em-muted">{s.n}</span>
               <span data-el="agent.editor.plancard.step.tool" className="t-mono shrink-0 rounded-[4px] border border-em-line px-1 text-[10px] text-em-muted">{s.tool}</span>
               <span data-el="agent.editor.plancard.step.diff" className="flex-1">{s.expectedDiff}</span>
+              <span data-el="agent.editor.plancard.step.ops" className="t-mono shrink-0 text-[10px] text-em-muted">{t('ui.agent.plan.step.ops', { count: stepOps(s) })}</span>
             </li>
           ))}
         </ol>
@@ -77,9 +103,10 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
       <textarea data-el="agent.editor.plancard.notes" value={notes} maxLength={1000} rows={2} placeholder={t('ui.agent.plan.notes.placeholder')} aria-label={t('ui.agent.plan.notes.placeholder')}
         onChange={(e) => setNotes(e.target.value)} onBlur={() => { if (notes !== (plan.notes ?? '')) void actions.setNotes(notes); }}
         className="resize-none rounded-[6px] border border-em-line bg-em-panel-2 px-2 py-1 text-[12px] outline-none placeholder:text-em-muted" />
+      {status === 'executed' && plan.result && <div data-el="agent.editor.plancard.result" className="text-[12px] text-em-success">{diffSummary(plan.result, t)}</div>}
       {plan.usage && (
         <div className="t-mono text-[11px] text-em-muted" title={plan.usage.approximate ? t('ui.agent.common.cost.approx') : plan.usage.costUsd === null ? t('ui.agent.common.cost.na') : undefined}>
-          {t('ui.agent.plan.usage', { input: formatTokens(plan.usage.inputTokens, lang), output: formatTokens(plan.usage.outputTokens, lang), cost: formatMoney(plan.usage.costUsd, plan.usage.approximate, lang) })}
+          <span data-el="agent.editor.plancard.model">{plan.usage.model}</span> · {t('ui.agent.plan.usage', { input: formatTokens(plan.usage.inputTokens, lang), output: formatTokens(plan.usage.outputTokens, lang), cost: formatMoney(plan.usage.costUsd, plan.usage.approximate, lang) })}
         </div>
       )}
       <div className="flex items-center gap-2 border-t border-em-line pt-2">

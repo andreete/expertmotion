@@ -99,3 +99,12 @@ describe('Compile table (AI_WORKFLOW §7)', () => {
     expect(compileDefaults('preset:fontpair.inter-mono')).toMatchObject({ op: 'op:theme.set', args: { fontPairId: 'preset:fontpair.inter-mono' } });
   });
 });
+
+describe('suggested queries (FR-035, DESIGN_CATALOGUE §13)', () => {
+  it('every suggestion finds at least one P0 preset of its category in EN or ID', async () => {
+    const { SUGGESTED_QUERIES, searchPresets } = await import('../src/index.js');
+    expect(SUGGESTED_QUERIES.length).toBeGreaterThanOrEqual(4);
+    const empty = SUGGESTED_QUERIES.filter((s) => ![...searchPresets(s.query, 'en'), ...searchPresets(s.query, 'id')].some((p) => p.category === s.category && p.priority === 'p0'));
+    expect(empty).toEqual([]);
+  });
+});

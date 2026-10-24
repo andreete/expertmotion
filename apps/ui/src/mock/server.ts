@@ -61,6 +61,8 @@ const CAPABILITIES: CapabilityRow[] = [
   { modelId: 'openai/gpt-4.1-mini', label: 'GPT-4.1 mini', contextLength: 1_000_000, toolCalling: true, structuredOutput: true, streaming: true, imageInput: true, pricePerMInput: 0.4, pricePerMOutput: 1.6 },
   { modelId: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', contextLength: 1_000_000, toolCalling: true, structuredOutput: true, streaming: true, imageInput: true, pricePerMInput: 0.3, pricePerMOutput: 2.5 },
   { modelId: 'meta-llama/llama-3.1-8b-instruct', label: 'Llama 3.1 8B', contextLength: 131_072, toolCalling: false, structuredOutput: false, streaming: true, imageInput: false, pricePerMInput: null, pricePerMOutput: null },
+  { modelId: 'qwen/qwen-2.5-7b-instruct', label: 'Qwen 2.5 7B', contextLength: 32_768, toolCalling: true, structuredOutput: true, streaming: true, imageInput: false, pricePerMInput: 0.04, pricePerMOutput: 0.1 },   // text-only (EM-4307)
+  { modelId: 'mistralai/mistral-small', label: 'Mistral Small', contextLength: 32_000, toolCalling: null, structuredOutput: null, streaming: true, imageInput: null, pricePerMInput: 0.1, pricePerMOutput: 0.3 },   // capabilities not reported (FR-114)
 ];
 
 export function createMockServer(opts: MockOptions = {}): MockServer {
@@ -82,9 +84,12 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   const assignments: { brainstorm: AssignmentDto | null; editor: AssignmentDto | null; defaultConnectionId: string | null } = { brainstorm: null, editor: null, defaultConnectionId: null };
   const projectBudgets = new Map<string, number | null>();
   const models: ModelStateDto[] = [
-    { key: 'whisper-small', engine: 'whisper.cpp', version: '1.7', task: 'stt', label: 'Whisper small (captions)', licence: { name: 'MIT', url: 'https://github.com/openai/whisper' }, tiers: ['T0', 'T1', 'T2'], bytesTotal: 488_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null },
+    { key: 'whisper-small', engine: 'whisper.cpp', version: '1.7', task: 'stt', label: 'Whisper small (captions)', licence: { name: 'MIT', url: 'https://github.com/openai/whisper' }, tiers: ['T0', 'T1', 'T2'], bytesTotal: 488_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null, recommended: true, languages: ['id', 'en'], commercialUse: 'yes', usedBy: { generators: ['captions'], presets: [] }, pathLabel: 'models\\whisper.cpp\\whisper-small\\' },
     { key: 'whisper-large-v3-turbo', engine: 'whisper.cpp', version: '1.7', task: 'stt', label: 'Whisper large v3 turbo', licence: { name: 'MIT', url: 'https://github.com/openai/whisper' }, tiers: ['T1', 'T2'], bytesTotal: 1_620_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null },
-    { key: 'piper-id-news', engine: 'sherpa-onnx', version: '1.10', task: 'tts', label: 'Piper Indonesian voice', licence: { name: 'MIT', url: 'https://github.com/rhasspy/piper' }, tiers: ['T0', 'T1', 'T2'], bytesTotal: 63_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null },
+    { key: 'piper-id-news', engine: 'sherpa-onnx', version: '1.10', task: 'tts', label: 'Piper Indonesian voice', licence: { name: 'MIT', url: 'https://github.com/rhasspy/piper' }, tiers: ['T0', 'T1', 'T2'], bytesTotal: 63_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null, recommended: true, languages: ['id'], commercialUse: 'yes',
+      licenceDetail: { spdx: 'MIT', redistribution: 'verify', useRestrictions: null }, sourceUrl: 'https://huggingface.co/rhasspy/piper-voices', hashes: [{ name: 'id_ID-news_tts-medium.onnx', sha256: null }],
+      pathLabel: 'models\\sherpa-onnx\\piper-id-news\\', usedBy: { generators: ['voice'], presets: [] }, notes: ['dataset licence unverified (RISK-002)'],
+      engineNotices: [{ label: 'espeak-ng phonemiser data', licence: 'GPL-3.0-or-later (espeak-ng)', spdx: 'GPL-3.0-or-later', url: 'https://github.com/espeak-ng/espeak-ng' }] },
     { key: 'sd15-q8', engine: 'stable-diffusion.cpp', version: '0.4', task: 'image', label: 'Stable Diffusion 1.5 (thumbnails)', licence: { name: 'CreativeML OpenRAIL-M', url: 'https://huggingface.co/runwayml' }, tiers: ['T0', 'T1', 'T2'], bytesTotal: 2_100_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null },
   ];
   const cancelledDownloads = new Set<string>();
@@ -221,6 +226,20 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     };
     const one = (target: ElementRefT, key: string, op: OperationT | null): Resolution => ({ leaves: [{ target, key, ops: op ? [op] : null }], parentKey: key, needsInterpretation: interp || op === null, notices });
 
+    if (body.clipEdit) {                                                                  // FR-068 Timeline drag, as the Local Service
+      const e = body.clipEdit; const clip: ElementRefT = { kind: 'clip', id: e.clipId };
+      const c = model.tracks.video.find((x) => x.id === e.clipId);
+      if (!c) return { leaves: [], parentKey: '?', needsInterpretation: false, notices, reject: { code: 'EM-2203', message: 'That clip no longer exists.' } };
+      if (e.toIndex !== undefined) return one(clip, `clip:${e.clipId}.order`, { op: 'op:clip.move', target: clip, args: { toIndex: e.toIndex } });
+      return one(clip, `clip:${e.clipId}.trim`, { op: 'op:clip.setTrim', target: clip, args: { trimBeforeMs: e.trimBeforeMs ?? c.trimBeforeMs, durationMs: e.durationMs ?? c.durationMs } });
+    }
+    if (body.output) {                                                                    // Output Settings picks (FR-087…FR-097), as the Local Service
+      const o = body.output;
+      if (o.kind === 'ratio') return one(project, 'project.ratio', { op: 'op:output.setRatio', target: project, args: { ratio: o.value, ...(o.customRatio ? { customRatio: o.customRatio } : {}) } });
+      if (o.kind === 'resolution') return one(project, 'project.resolution', { op: 'op:output.setResolution', target: project, args: { preset: o.value } });
+      if (o.kind === 'autoRatio') return one(project, 'project.ratioAuto', { op: 'op:output.setAutoRatio', target: project, args: { on: o.value === true } });
+      return one(project, 'project.fps', { op: 'op:project.setFps', target: project, args: { fps: o.value } });
+    }
     if (body.category === 'layout') {
       const prm = body.params ?? {};
       if (typeof prm['ratio'] === 'string') return one(project, 'project.ratio', { op: 'op:output.setRatio', target: project, args: { ratio: prm['ratio'], ...(prm['customRatio'] ? { customRatio: prm['customRatio'] } : {}) } });
@@ -230,9 +249,13 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       return one(project, 'project.layout', null);
     }
     if (body.category === 'text' && !preset) {                                              // Text Panel style pick (IX-03)
-      const fields = Object.entries(body.params ?? {}).filter(([k]) => ['fontFamily', 'fontSize', 'weight', 'colour', 'align', 'opacity'].includes(k));
+      const fields = body.field ? [[body.field, body.value] as [string, unknown]] : Object.entries(body.params ?? {}).filter(([k]) => ['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity'].includes(k));
       const field = fields[0]?.[0] ?? 'style';
       const selText = sel.find((s) => s.kind === 'text');
+      if (field === 'content') return selText?.id ? one(selText, `text:${selText.id}.content`, { op: 'op:text.setContent', target: { kind: 'text', id: selText.id }, args: { text: fields[0]![1] } })
+        : { leaves: [], parentKey: '', needsInterpretation: false, reject: { code: 'EM-2201', message: 'Select a text first.' }, notices };
+      const overlaySel = sel.find((s) => (s.kind === 'shape' || s.kind === 'image') && s.id);
+      if (field === 'opacity' && !selText && overlaySel) return one(overlaySel, `${overlaySel.kind}:${overlaySel.id}.opacity`, { op: 'op:overlay.setOpacity', target: overlaySel, args: { opacity: fields[0]![1] } });
       if (selText?.id) return one(selText, `text:${selText.id}.${field}`, { op: 'op:text.setStyle', target: { kind: 'text', id: selText.id }, args: Object.fromEntries(fields) });
       notices.push('EM-2403');
       return one(project, `theme.textDefaults.${field}`, { op: 'op:theme.setTextDefaults', target: project, args: Object.fromEntries(fields) });
@@ -272,13 +295,16 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
         return { leaves, parentKey: leaves.length > 1 ? `selection.${cat}` : leaves[0]!.key, needsInterpretation: interp, notices };
       }
       case 'texteffect': {
-        const t = sel.find((s) => s.kind === 'text' && s.id) ?? (() => { const id = elementAt(model, 'text', playhead); return id ? { kind: 'text' as const, id } : undefined; })();
-        if (!t?.id) return { leaves: [], parentKey: '', needsInterpretation: false, reject: { code: 'EM-2201', message: 'Select a text first.' }, notices };
+        const t = sel.find((s) => s.kind === 'text' && s.id);
+        if (!t?.id) return one(project, `text:new.effect.${preset.id}`, null);              // FR-026: no selection → queued for the Editor Agent
         return one(t, `text:${t.id}.effect`, { op: cd.op, target: { kind: 'text', id: t.id }, args: baseArgs });
       }
       case 'text': {
-        const text = typeof body.params?.['text'] === 'string' ? String(body.params['text']).trim() : '';
+        const text = typeof body.text === 'string' ? body.text.trim() : typeof body.params?.['text'] === 'string' ? String(body.params['text']).trim() : '';
+        const selText = sel.find((s) => s.kind === 'text' && s.id);
+        if (!text && selText?.id) return one(selText, `text:${selText.id}.variant`, { op: 'op:text.setStyle', target: { kind: 'text', id: selText.id }, args: { variant: preset.id } });   // FR-025
         if (!text) return one(project, 'text:new', null);
+        if (model.tracks.video.length === 0) return { leaves: [], parentKey: '', needsInterpretation: false, reject: { code: 'EM-2202', message: 'Insert at least one clip before adding text.' }, notices };
         const { text: _t, ...styleParams } = body.params ?? {};
         return one(project, 'text:new', { op: cd.op, args: { ...cd.args, ...(Object.keys(styleParams).length ? { styleOverrides: { ...(cd.args['styleOverrides'] as object), ...styleParams } } : {}), text, atMs: playhead } });
       }
@@ -338,7 +364,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const preset = body.presetId ? getPreset(body.presetId) : undefined;
     const propertyClass = (preset?.propertyClass ?? (body.category === 'shape' ? 'list' : body.category === 'text' && body.presetId ? 'list' : 'scalar')) as EditIntent['propertyClass'];
     const base = {
-      projectId: p.dto.id, source, createdAt: nowIso(), category: body.category, params: body.params ?? {}, target: body.target, propertyClass,
+      projectId: p.dto.id, source, createdAt: nowIso(), category: body.category, params: { ...(body.params ?? {}), ...(body.output ? { __output: body.output } : {}) }, target: body.target, propertyClass,
       baseVersion: body.baseVersion, supersedes: [] as string[], ...(body.presetId ? { presetId: body.presetId } : {}), ...(body.instruction ? { instruction: body.instruction } : {}),
     };
     if (res.reject) {
@@ -373,6 +399,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     if (settings.privateMode) throw new HttpError(423, 'EM-4401', 'Agents are off in Private Mode.');
     if (!connections.length) throw new HttpError(503, 'EM-4001', 'No AI provider is connected.');
   }
+  let lastEditorRunId = '';
   function startAgentPlan(p: ProjectState, intentIds: string[], message: string | undefined): PlanDto {
     const intents = p.intents.filter((i) => intentIds.includes(i.id));
     const words = (message ?? intents.map((i) => i.instruction ?? '').join(' ')).trim();
@@ -381,6 +408,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     p.plans.push(plan);
     for (const i of intents) if (i.status === 'queued') i.status = 'planned';
     const runId = newId(), modelId = assignments.editor?.modelId ?? 'mock-model';
+    lastEditorRunId = runId;
     emit('agent.run.started', { projectId: p.dto.id, run: run(p, runId, 'editor', 'running', plan.id), agent: 'editor', modelId, planId: plan.id });
     later(400, () => emit('agent.run.delta', { projectId: p.dto.id, runId, agent: 'editor', delta: 'Reading the composition and your picks… ' }));
     later(900, () => {
@@ -437,6 +465,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       settleParents(p);
       const res: ExecutionResult = { planId, ok: true, fromVersion: from, toVersion: v.hash, appliedOps: ops.length, diff: r.value.diff, durationMs: 41 };
       p.results.set(planId, res);
+      const count = (c: string) => r.value.diff.filter((d) => d.change === c).length;
+      plan.result = { ok: true, toVersion: v.hash, appliedOps: ops.length, added: count('added'), removed: count('removed'), modified: count('modified') };   // FR-086
       emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [], reason: 'executed' });
       emit('plan.ready', { projectId: p.dto.id, plan });
       return res;
@@ -454,13 +484,18 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const t = deriveTiming(m);
     const totalFrames = Math.round((t.durationMs / 1000) * body.outputProfile.fps);
     const hasClips = m.tracks.video.length > 0;
-    const checks: Array<{ check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence'; ok: boolean; code?: string }> = [
+    const checks: Array<{ check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence' | 'folder'; ok: boolean; code?: string }> = [
+      { check: 'folder' as const, ok: true },
       { check: 'disk' as const, ok: true }, { check: 'memory' as const, ok: true }, { check: 'dimensions' as const, ok: true },
       { check: 'duration' as const, ok: hasClips, ...(hasClips ? {} : { code: 'EM-2202' }) },
       { check: 'assets' as const, ok: p.assets.every((a) => a.status !== 'ingesting'), ...(p.assets.some((a) => a.status === 'ingesting') ? { code: 'EM-1301' } : {}) },
       { check: 'engine' as const, ok: true }, { check: 'licence' as const, ok: true, ...(capped ? { code: 'EM-5001' } : {}) },
     ];
-    return { ok: checks.every((c) => c.ok), dimensions: dims, totalFrames, durationMs: t.durationMs, estimate: { seconds: Math.round(totalFrames * 0.08), bytes: Math.round(t.durationMs * 900), confidence: 'low' as const }, checks, effectiveProfile, watermark: capped, warnings: [] };
+    const active = renders.find((j) => j.status === 'rendering' || j.status === 'queued');
+    const d = new Date(); const pad = (n: number) => String(n).padStart(2, '0');
+    const defaultFileName = `${p.dto.name.replace(/[^\p{L}\p{N}._-]+/gu, '-')}-${effectiveProfile.ratio.replace(':', 'x')}-${effectiveProfile.resolution}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+    return { ok: checks.every((c) => c.ok), dimensions: dims, totalFrames, durationMs: t.durationMs, estimate: { seconds: Math.round(totalFrames * 0.08), bytes: Math.round(t.durationMs * 900), confidence: 'low' as const }, checks, effectiveProfile, watermark: capped, warnings: [],
+      notices: [...(capped ? ['EM-5001'] : []), ...(active ? ['EM-3208'] : [])], defaultFileName, privateMode: settings.privateMode, queue: { active: active?.id ?? null, queued: renders.filter((j) => j.status === 'queued').length } };
   }
   function startRender(body: RenderCreateInput): RenderJobDto {
     const e = estimate(body);
@@ -498,7 +533,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   const created = (body: unknown) => ({ __status: 201, body });
   const accepted = (body: unknown) => ({ __status: 202, body });
 
-  r('GET', '/health', () => ({ status: 'ok', version: '0.0.0-mock', mode: 'development', uptimeMs: Date.now() - startedAt, tier: hardware.tier, licence: { status: license.status, tier: license.tier, updatesEligible: license.updatesEligible }, privateMode: settings.privateMode, engine: { bundleVersion: 'mock', remotionVersion: '4.0.535', browserReady: true, ffmpeg: true }, db: { schemaVersion: 1, ok: true }, workload: { rendering: renders.some((j) => j.status === 'rendering'), ingesting: 0, agentRuns: 0, downloading: models.filter((x) => x.status === 'downloading').length }, seq: bus.currentSeq() }));
+  r('GET', '/health', () => ({ status: 'ok', version: '0.0.0-mock', mode: 'development', uptimeMs: Date.now() - startedAt, buildDate: '2026-10-24', tier: hardware.tier, licence: { status: license.status, tier: license.tier, updatesEligible: license.updatesEligible }, privateMode: settings.privateMode, engine: { bundleVersion: 'mock', remotionVersion: '4.0.535', browserReady: true, ffmpeg: true }, db: { schemaVersion: 1, ok: true }, workload: { rendering: renders.some((j) => j.status === 'rendering'), ingesting: 0, agentRuns: 0, downloading: models.filter((x) => x.status === 'downloading').length }, seq: bus.currentSeq() }));
   r('POST', '/service/shutdown', () => accepted({ acceptedAt: nowIso() }));
   // projects
   r('GET', '/projects', () => ({ items: [...projects.values()].map((p) => p.dto).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), nextCursor: null, total: projects.size }));
@@ -547,6 +582,16 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     return created(p.dto);
   });
   r('GET', '/projects/recent', () => ({ items: [...projects.values()].map((p) => p.dto).filter((d) => d.openedAt).sort((a, b) => (b.openedAt ?? '').localeCompare(a.openedAt ?? '')).slice(0, 10) }));
+  // R-026 disk usage (mock: assets' bytes as media, outputs' bytes) and R-003 recovery summary (clean start), R-027 thumbnail (none in the mock)
+  r('GET', '/projects/disk-usage', () => {
+    const items = [...projects.values()].map((p) => {
+      const mediaBytes = p.assets.reduce((n, a) => n + a.bytes, 0), outputsBytes = p.outputs.reduce((n, o) => n + o.bytes, 0), checkpointBytes = p.checkpoints.length * 4000;
+      return { projectId: p.dto.id, mediaBytes, checkpointBytes, outputsBytes, outputCount: p.outputs.length, totalBytes: mediaBytes + checkpointBytes + outputsBytes, backupBytes: mediaBytes + 64_000, backupOutputsBytes: outputsBytes };
+    });
+    return { items, totalBytes: items.reduce((n, i) => n + i.totalBytes, 0), freeBytes: 120_000_000_000 };
+  });
+  r('GET', '/service/recovery', () => ({ startedAt: new Date(startedAt).toISOString(), unclean: false, renders: [], agentRuns: [], ingests: [], plans: [], checkpoints: { offered: [], imported: [] } }));
+  r('GET', '/projects/:id/thumbnail', (m) => { proj(m[1]!); return undefined; });
   r('GET', '/projects/:id', (m) => proj(m[1]!).dto);
   r('PATCH', '/projects/:id', (m, b) => {
     const p = proj(m[1]!), body = obj(b);
@@ -560,7 +605,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     p.dto.openedAt = nowIso();
     return { project: p.dto, head: head(p), mediaGrant: p.grant, checkpointNewerThanSave: p.dto.dirty && p.checkpoints[0] ? p.checkpoints[0] : null, intentQueue: queueDto(p), latestPlan: p.plans.filter((x) => x.origin === 'editor-agent').slice(-1)[0] ?? null, renderJobs: renders.filter((j) => j.projectId === p.dto.id) };
   });
-  r('GET', '/projects/:id/settings', (m) => head(proj(m[1]!)).model.settings);
+  r('GET', '/projects/:id/settings', (m) => { const md = head(proj(m[1]!)).model; return { ...md.settings, durationPolicy: md.durationPolicy, ...(md.fixedDurationMs ? { fixedDurationMs: md.fixedDurationMs } : {}), outputFolder: null }; });
   r('PUT', '/projects/:id/settings', (m, b) => {
     const p = proj(m[1]!), s = obj(b) as Partial<ProjectSettingsT>;
     const cur = head(p).model;
@@ -569,14 +614,32 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     if (s.fps && s.fps !== cur.settings.fps) ops.push({ op: 'op:project.setFps', target: project, args: { fps: s.fps } });
     if (s.ratio && (s.ratio !== cur.settings.ratio || s.ratio === 'custom')) ops.push({ op: 'op:output.setRatio', target: project, args: { ratio: s.ratio, ...(s.customRatio ? { customRatio: s.customRatio } : {}) } });
     if (s.resolution && s.resolution !== cur.settings.resolution) ops.push({ op: 'op:output.setResolution', target: project, args: { preset: s.resolution } });
+    const autoAfter = ops.some((o) => o.op === 'op:output.setRatio') ? false : cur.settings.autoRatio;
+    if (s.autoRatio !== undefined && s.autoRatio !== autoAfter) ops.push({ op: 'op:output.setAutoRatio', target: project, args: { on: s.autoRatio } });
+    const dp = obj(b) as { durationPolicy?: 'fit-content' | 'fixed'; fixedDurationMs?: number };
+    if (dp.durationPolicy && (dp.durationPolicy !== cur.durationPolicy || (dp.durationPolicy === 'fixed' && dp.fixedDurationMs !== cur.fixedDurationMs)))
+      ops.push({ op: 'op:project.setDurationPolicy', target: project, args: { policy: dp.durationPolicy, ...(dp.durationPolicy === 'fixed' && dp.fixedDurationMs ? { fixedMs: dp.fixedDurationMs } : {}) } });
     let model = cur, version: VersionDto | null = null;
     if (ops.length) {
       const res = applyOperations(cur, ops, { assets: facts(p), tier: hardware.tier, newId });
       if (!res.ok) throw new HttpError(400, res.issues[0]?.code ?? 'EM-9002', res.issues[0]?.message ?? 'Invalid settings.');
       model = res.value.model;
     }
-    if (s.autoRatio !== undefined || s.language) model = { ...model, settings: { ...model.settings, ...(s.autoRatio !== undefined ? { autoRatio: s.autoRatio } : {}), ...(s.language ? { language: s.language } : {}) } };
+    if (s.language && s.language !== model.settings.language) model = { ...model, settings: { ...model.settings, language: s.language } };
     if (model !== cur) version = strip(commit(p, model, 'system', []));
+    // As the Local Service: each output change is a system-source intent in the queue (FR-097), superseding the previous pick.
+    if (version) {
+      for (const o of ops) {
+        const kind = o.op === 'op:output.setRatio' ? 'ratio' : o.op === 'op:output.setResolution' ? 'resolution' : o.op === 'op:output.setAutoRatio' ? 'autoRatio' : 'fps';
+        const value = kind === 'ratio' ? o.args['ratio'] : kind === 'resolution' ? o.args['preset'] : kind === 'autoRatio' ? o.args['on'] : o.args['fps'];
+        const key = kind === 'ratio' ? 'project.ratio' : kind === 'resolution' ? 'project.resolution' : kind === 'autoRatio' ? 'project.ratioAuto' : 'project.fps';
+        const it: EditIntent = { id: newId(), projectId: p.dto.id, source: 'system', createdAt: nowIso(), category: 'layout', params: { __output: { kind, value } }, target: project, resolvedTargets: [project],
+          propertyKey: key, propertyClass: 'scalar', needsInterpretation: false, status: 'executed', supersedes: [], baseVersion: head(p).hash, appliedVersion: p.pointer + 1 };
+        it.supersedes = supersedeFor(p, it);
+        p.intents.push(it);
+      }
+      emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [], reason: 'compiled' });
+    }
     return { settings: model.settings, version, warnings: [] };
   });
   r('POST', '/projects/:id/duplicate', (m, b) => {
@@ -607,7 +670,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('GET', '/projects/:id/checkpoints', (m) => { const p = proj(m[1]!); return p.checkpoints.length ? { items: p.checkpoints } : { items: [], notice: 'EM-6202' }; });
   r('POST', '/projects/:id/checkpoints', (m) => {
     const p = proj(m[1]!);
-    const c: CheckpointDto = { id: newId(), projectId: p.dto.id, versionId: head(p).id, reason: 'manual', createdAt: nowIso(), durationMs: p.dto.durationMs };
+    const c: CheckpointDto = { id: newId(), projectId: p.dto.id, versionId: head(p).id, reason: 'manual', createdAt: nowIso(), durationMs: p.dto.durationMs, hash: head(p).hash, bytes: 4000 };
     p.checkpoints.unshift(c); p.checkpoints = p.checkpoints.slice(0, 20); p.dto.dirty = false;
     emit('service.notice', { projectId: p.dto.id, kind: 'checkpoint', code: 'EM-6203' });
     return created(c);
@@ -629,6 +692,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       ...paths.map((path) => ({ name: path.split(/[\\/]/).pop() ?? path, bytes: 0, url: null, type: '' })),
     ];
     if (!entries.length) throw new HttpError(400, 'EM-9002', 'No files.');
+    if (entries.length > 50) throw new HttpError(413, 'EM-1010', 'You can import up to 50 files at a time.');
+    if (p.assets.length + entries.length > 200) throw new HttpError(422, 'EM-1401', 'A project can hold up to 200 assets.');
     const items = entries.map((e) => {
       const ext = e.name.split('.').pop()?.toLowerCase() ?? '';
       const kind = KIND_BY_EXT[ext];
@@ -705,8 +770,11 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const notReady = chosen.find((a) => a.status !== 'ready');
     if (notReady) throw new HttpError(422, 'EM-1301', `${notReady.name} is not ready yet.`);
     const ordered = body['order'] === 'given' ? chosen : [...chosen.filter((a) => a.sequenceBadge !== null).sort((x, y) => x.sequenceBadge! - y.sequenceBadge!), ...chosen.filter((a) => a.sequenceBadge === null)];
+    let atIndex = typeof body['atIndex'] === 'number' ? body['atIndex'] : undefined;          // FR-030 / FR-049 after the selected Clip
+    const atMs = typeof body['atMs'] === 'number' ? body['atMs'] : 0;
     const ops: OperationT[] = ordered.flatMap((a): OperationT[] => a.kind === 'audio' ? [{ op: 'op:audio.addLayer', args: { assetId: a.id, atMs: 0, volume: 1, role: 'voice' } }]
-      : a.kind === 'subtitle' ? [] : [{ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: a.id } }]);
+      : a.kind === 'subtitle' ? [] : a.kind === 'image' && body['asOverlay'] === true ? [{ op: 'op:overlay.addImage', args: { assetId: a.id, atMs } }]   // FR-029
+      : [{ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: a.id, ...(atIndex === undefined ? {} : { atIndex: atIndex++ }) } }]);
     const res = applyOperations(head(p).model, ops, { assets: facts(p), tier: hardware.tier, newId });
     if (!res.ok) throw new HttpError(422, res.issues[0]?.code ?? 'EM-2002', res.issues[0]?.message ?? 'Insert failed.');
     const v = commit(p, res.value.model, 'insert', res.value.diff);
@@ -833,7 +901,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       if (body['baseVersion'] !== head(p).hash) throw new HttpError(409, 'EM-2301', 'Base version is not the head.');
       const res = createIntent(p, { source: 'chat', category: 'text', target: { kind: 'selection' }, instruction: text, baseVersion: head(p).hash, plan: 'none' }, 'chat');
       const plan = startAgentPlan(p, [res.intent.id], text);
-      return accepted({ message: user, runId: newId(), planId: plan.id });
+      return accepted({ message: user, runId: lastEditorRunId, planId: plan.id });
     }
     const runId = newId();
     emit('agent.run.started', { projectId: p.dto.id, run: run(p, runId, 'brainstorm', 'running', null), agent: 'brainstorm', modelId: assignments.brainstorm?.modelId ?? 'mock' });
@@ -878,7 +946,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   });
   r('GET', '/projects/:id/usage', (m) => { proj(m[1]!); return { project: { inputTokens: 0, outputTokens: 0, costUsd: 0, approximate: true, runs: 0 }, byAgent: {}, byModel: [], budget: { projectLimitUsd: projectBudgets.get(m[1]!) ?? null, monthLimitUsd: connections[0]?.budgetMonthUsd ?? null, spentMonthUsd: 0, warn80: false, exceeded: false } }; });
   // providers
-  r('GET', '/providers/connections', () => ({ items: connections }));
+  r('GET', '/providers/connections', () => ({ items: connections.map((c) => ({ ...c, modelCount: c.modelsFetchedAt ? CAPABILITIES.length : null })) }));
   r('POST', '/providers/connections', (_m, b) => {
     const body = obj(b), secret = String(body['secret'] ?? '');
     if (secret.length < 8) throw new HttpError(400, 'EM-9002', 'Key is too short.', undefined);
@@ -919,13 +987,14 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       const a = body[agent] as AssignmentDto | null;
       if (a) {
         const cap = CAPABILITIES.find((x) => x.modelId === a.modelId);
-        if (cap && !cap.structuredOutput) throw new HttpError(422, 'EM-9002', 'This model cannot return structured output.', { reason: 'no-json-output' });
+        if (cap && cap.structuredOutput === false) throw new HttpError(422, 'EM-9002', 'This model cannot return structured output.', { reason: 'no-json-output' });
       }
       assignments[agent] = a ? { ...a, agent } : null;
     }
     if ('defaultConnectionId' in body) assignments.defaultConnectionId = (body['defaultConnectionId'] as string | null) ?? null;
     emit('settings.changed', { scope: 'assignments' });
-    return { ...assignments, warnings: [] };
+    const warnings = (['brainstorm', 'editor'] as const).flatMap((agent) => { const cap = CAPABILITIES.find((x) => x.modelId === assignments[agent]?.modelId); return cap && (cap.toolCalling !== true || cap.structuredOutput !== true) ? [{ code: 'EM-4005', path: `body.${agent}.modelId`, message: 'simple mode', severity: 'info' as const }] : []; });
+    return { ...assignments, warnings };
   });
   const budget = () => ({ connections: connections.map((c) => ({ connectionId: c.id, budgetMonthUsd: c.budgetMonthUsd, spentMonthUsd: 0.12, approximate: true })), projects: [...projectBudgets.entries()].map(([projectId, limitUsd]) => ({ projectId, limitUsd, spentUsd: 0.01 })), month: new Date().toISOString().slice(0, 7) });
   r('GET', '/providers/budget', budget);
@@ -935,6 +1004,33 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     for (const pb of (Array.isArray(body['projects']) ? body['projects'] : []) as Array<{ projectId: string; limitUsd: number | null }>) projectBudgets.set(pb.projectId, pb.limitUsd);
     emit('settings.changed', { scope: 'budget' });
     return budget();
+  });
+  // R-101…R-103 (FR-111, FR-113, FR-116)
+  r('GET', '/providers/kinds', () => ({ items: [
+    { provider: 'openrouter', enabled: true, priority: 'P0', termsUrl: 'https://openrouter.ai/terms', keyPattern: '^sk-or-v1-[A-Za-z0-9]{20,}$', keyExample: 'sk-or-v1-…' },
+    { provider: 'openai', enabled: false, priority: 'P1', termsUrl: 'https://openai.com/policies/terms-of-use', keyPattern: '^sk-[A-Za-z0-9_-]{20,}$', keyExample: 'sk-…' },
+    { provider: 'anthropic', enabled: false, priority: 'P1', termsUrl: 'https://www.anthropic.com/legal/commercial-terms', keyPattern: '^sk-ant-[A-Za-z0-9_-]{20,}$', keyExample: 'sk-ant-…' },
+    { provider: 'google', enabled: false, priority: 'P1', termsUrl: 'https://ai.google.dev/gemini-api/terms', keyPattern: '^AIza[0-9A-Za-z_-]{30,}$', keyExample: 'AIza…' },
+    { provider: 'custom', enabled: false, priority: 'P2', termsUrl: null, keyPattern: null, keyExample: null },
+  ] }));
+  r('POST', '/providers/validate', (_m, b) => {
+    const body = obj(b), secret = String(body['secret'] ?? '').trim();
+    if (body['provider'] !== 'openrouter') throw new HttpError(422, 'EM-9004', 'Not available in this version yet.', { feature: `provider.${String(body['provider'])}`, plannedPriority: 'P1' });
+    if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.');
+    if (/bad|invalid/i.test(secret)) throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.');
+    return { status: 'valid', validatedAt: nowIso(), models: CAPABILITIES };
+  });
+  r('POST', '/providers/test', (_m, b) => {
+    const body = obj(b);
+    if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.');
+    const items = (['brainstorm', 'editor'] as const).flatMap((agent) => {
+      const modelId = typeof body[agent] === 'string' ? (body[agent] as string) : body[agent] === null ? null : assignments[agent]?.modelId ?? null;
+      if (!modelId) return [];
+      const cap = CAPABILITIES.find((x) => x.modelId === modelId);
+      return [{ agent, modelId, ok: true, latencyMs: 1200, inputTokens: 30, outputTokens: 8, costUsd: cap?.pricePerMInput != null ? 0.0001 : null, approximate: true }];
+    });
+    if (!items.length) throw new HttpError(422, 'EM-4007', 'No agent has a model to test yet.');
+    return { items };
   });
   // renders
   r('POST', '/renders/estimate', (_m, b) => estimate(obj(b) as unknown as RenderCreateInput));
@@ -992,12 +1088,13 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     });
     return accepted(job);
   });
-  r('POST', '/generator-jobs/:jid/insert', (m) => {           // R-134: apply a finished job's proposed ops later, idempotent
+  r('POST', '/generator-jobs/:jid/insert', (m, b) => {        // R-134: apply a finished job's proposed ops later, idempotent; captions may carry edited pages
     for (const p of projects.values()) {
       const j = p.genJobs.find((x) => x.id === m[1]); if (!j) continue;
       if (j.status !== 'done') throw new HttpError(422, 'EM-9002', 'This result is not ready yet.');
       if (typeof j.result?.['versionId'] === 'string') return { versionId: j.result['versionId'], notice: 'EM-2308' };
-      const ops = (j.result?.['proposedOps'] ?? []) as OperationT[];
+      const pagesOverride = Array.isArray(obj(b)['pages']) ? obj(b)['pages'] : null;
+      const ops = ((j.result?.['proposedOps'] ?? []) as OperationT[]).map((o) => (pagesOverride && o.op === 'op:caption.setPages' ? { ...o, args: { ...o.args, pages: pagesOverride } } as OperationT : o));
       if (!ops.length) throw new HttpError(422, 'EM-9002', 'This result has nothing to insert.');
       const res = applyOperations(head(p).model, ops, { assets: facts(p), tier: hardware.tier, newId });
       if (!res.ok) throw new HttpError(422, res.issues[0]?.code ?? 'EM-2102', res.issues[0]?.message ?? 'Invalid.');
@@ -1006,7 +1103,17 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     }
     throw new HttpError(404, 'EM-9003', 'Not found.');
   });
-  r('GET', '/projects/:id/generator-jobs', (m) => ({ items: proj(m[1]!).genJobs, nextCursor: null }));
+  r('GET', '/projects/:id/generator-jobs', (m, _b, q) => { const items = proj(m[1]!).genJobs.filter((j) => !q.get('kind') || j.kind === q.get('kind')); return { items, nextCursor: null, total: items.length }; });
+  r('DELETE', '/generator-jobs/:jid', (m) => { for (const p of projects.values()) { const n = p.genJobs.length; p.genJobs = p.genJobs.filter((x) => x.id !== m[1]); if (p.genJobs.length !== n) return undefined; } throw new HttpError(404, 'EM-9003', 'Not found.'); });   // R-137
+  r('POST', '/generator-jobs/:jid/save-output', () => { throw new HttpError(422, 'EM-9004', 'Coming in a later version.', { feature: 'thumbnail' }); });   // R-136 (thumbnail is off in the mock build)
+  r('GET', '/generators', () => {                                                                                 // R-135: the mock build enables P1 generators only
+    const card = (kind: GeneratorJobDto['kind'], task: string | null, def: string | null) => {
+      const list = task ? models.filter((x) => x.task === task).map((x) => ({ key: x.key, label: x.label, bytes: x.bytesTotal, installed: x.status === 'installed', languages: [], minTier: x.tiers[0] ?? 'T0', belowTier: !x.tiers.includes(hardware.tier), cc0: false })) : [];
+      const model = list.find((x) => x.key === def) ?? list[0] ?? null;
+      return { kind, enabled: kind !== 'music' && kind !== 'thumbnail', priority: kind === 'music' || kind === 'thumbnail' ? 'P2' : 'P1', llm: kind === 'hashtags', tierHint: model?.belowTier ? 'slow' : 'ok', model, models: list, tier: hardware.tier };
+    };
+    return { items: [card('voice', 'tts', 'piper-id-news'), card('music', 'music', null), card('thumbnail', 'image', null), card('captions', 'stt', 'whisper-small'), card('hashtags', null, null)] };
+  });
   r('GET', '/generator-jobs/:jid', (m) => { for (const p of projects.values()) { const j = p.genJobs.find((x) => x.id === m[1]); if (j) return j; } throw new HttpError(404, 'EM-9003', 'Not found.'); });
   r('POST', '/generator-jobs/:jid/cancel', (m) => { for (const p of projects.values()) { const j = p.genJobs.find((x) => x.id === m[1]); if (j) { if (j.status === 'running') j.status = 'cancelled'; return j; } } throw new HttpError(404, 'EM-9003', 'Not found.'); });
   // models
@@ -1028,21 +1135,26 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     later(200, step);
     return accepted(x);
   });
-  r('POST', '/models/:key/cancel', (m) => { const x = model(decodeURIComponent(m[1]!)); cancelledDownloads.add(x.key); if (x.status === 'downloading') x.status = 'not-installed'; return x; });
+  r('POST', '/models/:key/cancel', (m, _b, q) => { const x = model(decodeURIComponent(m[1]!)); cancelledDownloads.add(x.key); if (x.status === 'downloading') x.status = 'not-installed'; if (q.get('discard') === 'true') x.bytesDone = 0; return x; });
+  r('POST', '/models/engines/:engine/reveal', (m) => ({ path: `C:\\Users\\septi\\AppData\\Roaming\\Expertmotion\\models\\${decodeURIComponent(m[1]!)}` }));   // R-146
   r('DELETE', '/models/:key', (m) => { const x = model(decodeURIComponent(m[1]!)); x.status = 'not-installed'; x.bytesDone = 0; x.installedAt = null; return undefined; });
   // hardware, licence, settings, diagnostics
   r('GET', '/hardware/profile', () => hardware);
   r('POST', '/hardware/profile/refresh', () => ({ ...hardware, detectedAt: nowIso() }));
-  r('GET', '/hardware/live', () => ({ at: nowIso(), cpuPercent: 18 + Math.round(Math.random() * 20), ramFreeMb: 7400 + Math.round(Math.random() * 300), ramTotalMb: hardware.ramTotalMb, processMb: 580 + Math.round(Math.random() * 60), chromeMb: renders.some((j) => j.status === 'rendering') ? 420 : null, diskFreeMb: 48_000, gpuPercent: null, workload: { rendering: renders.some((j) => j.status === 'rendering'), ingesting: 0, downloading: models.filter((x) => x.status === 'downloading').length, agentRuns: 0 } }));
+  r('GET', '/hardware/live', () => ({ at: nowIso(), cpuPercent: 18 + Math.round(Math.random() * 20), ramFreeMb: 7400 + Math.round(Math.random() * 300), ramTotalMb: hardware.ramTotalMb, processMb: 580 + Math.round(Math.random() * 60), chromeMb: renders.some((j) => j.status === 'rendering') ? 420 : null, diskFreeMb: 48_000, outputDiskFreeMb: 48_000, gpuPercent: null, workload: { rendering: renders.some((j) => j.status === 'rendering'), ingesting: 0, downloading: models.filter((x) => x.status === 'downloading').length, agentRuns: 0,
+    items: [
+      ...renders.filter((j) => j.status === 'rendering' || j.status === 'queued').map((j) => ({ kind: 'render' as const, id: j.id, label: projects.get(j.projectId)?.dto.name ?? '', status: j.status, progress: j.status === 'rendering' ? j.progress : null, cancellable: true, pausedReason: null })),
+      ...models.filter((x) => x.status === 'downloading' || x.status === 'paused').map((x) => ({ kind: 'download' as const, id: x.key, label: x.label, status: x.status, progress: x.bytesTotal ? x.bytesDone / x.bytesTotal : null, cancellable: true, pausedReason: x.pausedReason ?? null })),
+    ] } }));
   r('GET', '/license', () => license);
   r('POST', '/license/activate', (_m, b) => {
     const key = String(obj(b)['key'] ?? '').trim();
     if (key.length < 40 || !key.startsWith('EM1.')) throw new HttpError(422, 'EM-5006', 'This does not look like a licence key.');
-    license = { ...license, status: 'active', tier: 'creator', licenseeHash: 'a1b2c3', updatesUntil: new Date(Date.now() + 365 * 86400_000).toISOString(), updatesEligible: true, limits: { watermark: false, maxResolution: '2160p' } };
+    license = { ...license, status: 'active', tier: 'creator', licenseeHash: 'a1b2c3', licenseeName: 'Septianus Angga', clockAnomaly: false, updatesUntil: new Date(Date.now() + 365 * 86400_000).toISOString(), updatesEligible: true, limits: { watermark: false, maxResolution: '2160p' } };
     emit('license.changed', { licence: license });
     return license;
   });
-  r('POST', '/license/deactivate', () => { license = { ...license, status: 'trial', tier: null, licenseeHash: null, updatesUntil: null, updatesEligible: false, limits: { watermark: true, maxResolution: '720p' } }; emit('license.changed', { licence: license }); return license; });
+  r('POST', '/license/deactivate', () => { license = { ...license, status: 'trial', tier: null, licenseeHash: null, licenseeName: null, updatesUntil: null, updatesEligible: false, limits: { watermark: true, maxResolution: '720p' } }; emit('license.changed', { licence: license }); return license; });
   r('GET', '/settings', () => settings);
   r('PUT', '/settings', (_m, b) => {
     const prevPrivate = settings.privateMode;
@@ -1052,6 +1164,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   });
   r('POST', '/settings/caches/clear', () => ({ freedBytes: 123_000_000 }));
   r('POST', '/diagnostics/bundle', () => ({ path: 'C:\\Users\\septi\\AppData\\Roaming\\Expertmotion\\logs\\diagnostics-mock.zip', bytes: 182_000, contents: ['service.log', 'versions.json', 'hardware.json', 'settings.redacted.json'] }));
+  r('GET', '/diagnostics/codes', () => ({ items: renders.filter((j) => j.errorCode).map((j) => ({ at: j.finishedAt ?? j.createdAt, code: j.errorCode!, source: 'render', ref: j.id })) }));   // R-182
   r('GET', '/diagnostics/logs', () => ({ lines: [`{"level":"info","msg":"mock service started","at":"${new Date(startedAt).toISOString()}"}`, '{"level":"warn","msg":"engine: browser download skipped in mock mode"}'] }));
 
   const respond = (status: number, body: unknown) => new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'X-Expertmotion-Version': '0.0.0-mock' } });

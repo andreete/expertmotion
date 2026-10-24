@@ -8,6 +8,9 @@ import { ULID, decodeCursor, em, encodeCursor, requireProject } from '../s2/comm
 import { getJob, getOutput, outputAbsPath, toJobDto, toOutputDto, type OutputRow, type RenderJobRow } from '../s2/render-repo.js';
 import { renderServiceOf, type RenderOptions } from '../s2/render-service.js';
 import { s2 } from '../s2/state.js';
+import { availableMemBytes } from '../services/memory.js';
+import { EngineBrowser, engineBrowserOf, setEngineBrowser, warmupEnabled, type BrowserLike } from '../services/engine-browser.js';
+import { startEngineCheck } from '../s2/engine-check.js';
 
 const Id = z.string().regex(ULID, 'expected an id');
 export const OutputProfile = z.object({
@@ -27,8 +30,22 @@ export function createRendersModule(opts: RenderOptions = {}): ServiceModule {
     start(ctx) {
       const n = renderServiceOf(ctx, opts).recover();
       if (n) ctx.log.info({ jobs: n }, 'interrupted render jobs marked failed');
+      void startEngineCheck(ctx);   // FR-140: bundle hash verified once at service start (cached for preflight)
+      // FR-003: warm the Engine browser in the background (one browser, memory-gated, idle-closed; see services/engine-browser.ts).
+      if (!opts.renderer && warmupEnabled(process.env, !ctx.cfg.dev)) {
+        const eb = new EngineBrowser({
+          open: async () => (await import('@remotion/renderer')).openBrowser('chrome', {
+            browserExecutable: ctx.resources.browserExecutable ?? null, chromiumOptions: { gl: ctx.hooks.tier() === 'T0' ? 'swangle' : 'angle' },
+          }) as unknown as Promise<BrowserLike>,
+          freeMemBytes: opts.freeMemBytes ?? (() => availableMemBytes()),
+          log: (msg, extra) => ctx.log.info(extra ?? {}, msg),
+        });
+        setEngineBrowser(ctx, eb);
+        const t = setTimeout(() => { void eb.warm(); }, Number(process.env['EM_ENGINE_WARMUP_DELAY_MS'] ?? 5000));
+        t.unref?.();
+      }
     },
-    async stop(ctx) { await renderServiceOf(ctx, opts).stopAll(); },
+    async stop(ctx) { await renderServiceOf(ctx, opts).stopAll(); await engineBrowserOf(ctx)?.stop(); setEngineBrowser(ctx, undefined); },
     register(router, ctx) {
       const svc = renderServiceOf(ctx, opts);
       route(router, 'post', '/renders/estimate', { body: RenderCreateInput }, async ({ body }) => svc.estimateResponse(await svc.prepare(body)));   // R-110

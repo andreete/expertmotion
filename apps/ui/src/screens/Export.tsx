@@ -1,26 +1,58 @@
-// Export dialog (scr.export): setup with preflight (R-110), start (R-111), progress/ETA via SSE, cancel (R-114), done with
-// open folder (R-119 + Shell revealPath). IX-21, USER_FLOWS F8.
+// Export dialog (scr.export): setup with preflight (R-110), start (R-111), progress/ETA/elapsed via SSE, cancel (R-114), done with
+// thumbnail, Open folder (R-119 + Shell revealPath), Play, Copy path. IX-21, USER_FLOWS F8, FR-136…FR-147, FR-163.
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Info, TriangleAlert, XCircle } from 'lucide-react';
+import { CheckCircle2, Copy, Info, Play, ShieldCheck, TriangleAlert, XCircle } from 'lucide-react';
 import { useStore, currentOutputProfile } from '../state/store.js';
-import type { OutputProfile, RenderEstimate } from '../api/types.js';
+import type { OutputProfile, PreflightCheckName, RenderEstimate } from '../api/types.js';
 import { Button, ErrorBox, Field, Modal, Progress, Segmented, inputCls } from '../components/ui.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
 
 type Format = 'mp4' | 'gif' | 'png';
+/** FR-138: Standard = CRF 18, Smaller = CRF 23 (H.264, AAC 192 kbps). */
+export const QUALITY_CRF = { standard: 18, smaller: 23 } as const;
+export type Quality = keyof typeof QUALITY_CRF;
+export type Recovery = 'folder' | 'standard' | 'settings' | 'assets' | 'diagnostics' | 'license' | 'progress' | 'recheck';
+
+/** FR-139: the recovery button of a failed or noted preflight check (label = the ERROR_CATALOGUE action copy). */
+export function recoveryFor(c: { check: PreflightCheckName; ok: boolean; code?: string }, profile: string): Recovery | null {
+  if (!c.code) return null;
+  switch (c.code) {
+    case 'EM-3102': case 'EM-3206': case 'EM-8302': return 'folder';
+    case 'EM-3101': return profile !== 'standard' ? 'standard' : 'recheck';
+    case 'EM-3103': return 'settings';
+    case 'EM-2202': case 'EM-1301': return 'assets';
+    case 'EM-3001': case 'EM-3003': return 'diagnostics';
+    case 'EM-5001': return 'license';
+    case 'EM-3208': return 'progress';
+    default: return c.ok ? null : 'recheck';
+  }
+}
+const RECOVERY_LABEL: Record<Recovery, string> = {
+  folder: 'ui.scr.export.fix.folder', standard: 'ui.scr.export.fix.standard', settings: 'ui.scr.export.fix.settings', assets: 'ui.scr.export.fix.assets',
+  diagnostics: 'ui.scr.export.fix.diagnostics', license: 'ui.scr.export.fix.license', progress: 'ui.scr.export.fix.progress', recheck: 'ui.scr.export.recheck',
+};
 
 export function ExportDialog({ onClose }: { onClose: () => void }) {
   const { state, runtime, actions, t, lang } = useStore();
   const [format, setFormat] = useState<Format>('mp4');
-  const [quality, setQuality] = useState<'standard' | 'high'>('high');
-  const [fileName, setFileName] = useState(state.project?.name.replace(/[^\p{L}\p{N}._-]+/gu, '-') ?? 'video');
+  const [quality, setQuality] = useState<Quality>('standard');
+  const [fileName, setFileName] = useState('');
+  const [nameTouched, setNameTouched] = useState(false);
   const [folder, setFolder] = useState(state.settings?.outputFolder ?? '');
+  const [stillMs, setStillMs] = useState(state.playheadMs);
   const [est, setEst] = useState<RenderEstimate | null>(null);
+  const [recheck, setRecheck] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const [jobId, setJobId] = useState<string | null>(state.renders.find((j) => j.status === 'rendering' || j.status === 'queued')?.id ?? null);
   const job = state.renders.find((j) => j.id === jobId) ?? null;
   const output = job?.outputId ? state.outputs.find((o) => o.id === job.outputId) : undefined;
-  const profile: OutputProfile = { ...currentOutputProfile(state), format, codec: format === 'mp4' ? 'h264' : format, crf: quality === 'high' ? 18 : 23 };
-  const body = { outputProfile: profile, performanceProfile: state.performanceProfile, fileName, ...(folder ? { folder } : {}) };
+  const durationMs = state.head?.durationMs ?? 0;
+  const profile: OutputProfile = { ...currentOutputProfile(state), format, codec: format === 'mp4' ? 'h264' : format, ...(format === 'mp4' ? { crf: QUALITY_CRF[quality] } : {}),
+    ...(format === 'png' ? { stillAtMs: Math.max(0, Math.min(stillMs, Math.max(0, durationMs - 1))) } : {}) };
+  const name = nameTouched ? fileName : (est?.defaultFileName ?? fileName);
+  const body = { outputProfile: profile, performanceProfile: state.performanceProfile, ...(nameTouched && fileName.trim() ? { fileName: fileName.trim() } : {}), ...(folder ? { folder } : {}) };
+  const priv = est?.privateMode ?? Boolean(state.settings?.privateMode);
 
   useEffect(() => {
     if (!state.project || jobId) return;
@@ -28,16 +60,33 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     setEst(null);
     runtime.api.estimateRender({ projectId: state.project.id, ...body }).then((e) => { if (alive) setEst(e); }).catch(actions.error);
     return () => { alive = false; };
-  }, [format, quality, state.project?.id, state.head?.id, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [format, quality, folder, stillMs, recheck, state.performanceProfile, state.project?.id, state.head?.id, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const running = Boolean(job && (job.status === 'queued' || job.status === 'rendering'));
+  useEffect(() => { if (!running) return; const h = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(h); }, [running]);
 
   const start = async () => { const id = await actions.startRender(body); if (id) setJobId(id); };
-  const reveal = async () => {
-    if (!output) return;
-    try { const r = await runtime.api.revealOutput(output.id); await window.expertmotion?.openFolder?.(r.path); } catch (e) { actions.error(e); }
+  const outPath = async (): Promise<string | null> => { if (!output) return null; try { return (await runtime.api.revealOutput(output.id)).path; } catch (e) { actions.error(e); return null; } };
+  const reveal = async () => { const p = await outPath(); if (p) await window.expertmotion?.openFolder?.(p); };
+  const play = async () => { const p = await outPath(); if (p) await (window.expertmotion?.openPath ?? window.expertmotion?.openFolder)?.(p); };
+  const copyPath = async () => { const p = output?.path ?? (await outPath()); if (!p) return; void navigator.clipboard?.writeText(p).catch(() => undefined); setCopied(true); };
+  const pickFolder = () => void window.expertmotion?.pickFolder?.({ ...(folder ? { defaultPath: folder } : {}) }).then((f) => { if (f) setFolder(f); });
+  const fix = (r: Recovery) => {
+    if (r === 'folder') pickFolder();
+    else if (r === 'standard') void actions.setProfile('standard');
+    else if (r === 'settings') actions.setScreen({ kind: 'project.settings' });
+    else if (r === 'assets') { onClose(); window.dispatchEvent(new CustomEvent('em:focus-assets')); }
+    else if (r === 'diagnostics') actions.setScreen({ kind: 'diagnostics' });
+    else if (r === 'license') actions.setScreen({ kind: 'license' });
+    else if (r === 'progress') { const a = state.renders.find((j) => j.status === 'rendering' || j.status === 'queued'); if (a) setJobId(a.id); }
+    else setRecheck((n) => n + 1);
   };
-  const running = job && (job.status === 'queued' || job.status === 'rendering');
-  const s = currentOutputProfile(state);
-  const durationMs = state.head?.durationMs ?? 0;
+  const elapsedMs = job?.startedAt ? Math.max(0, (job.finishedAt ? Date.parse(job.finishedAt) : now) - Date.parse(job.startedAt)) : 0;
+  const thumb = output?.media.thumb && state.grant ? runtime.api.outputMediaUrl(state.grant, output.id, 'thumb') : output?.kind === 'still' && state.grant ? runtime.api.outputMediaUrl(state.grant, output.id, 'file') : null;
+  const res = est?.effectiveProfile.resolution ?? profile.resolution;
+  const summary = `${est ? `${est.dimensions.width}×${est.dimensions.height}` : '…'} · ${format === 'png' ? t('ui.scr.export.still') : `${format === 'gif' ? Math.min(15, profile.fps) : profile.fps} fps`} · ${formatDuration(format === 'png' ? 0 : durationMs)} · ${t(`ui.agent.output.profile.${state.performanceProfile}`)}`
+    + ` · ≈ ${est?.estimate.bytes != null ? formatBytes(est.estimate.bytes, lang) : '…'} · ≈ ${est?.estimate.seconds != null ? formatDuration(est.estimate.seconds * 1000) : '…'}`
+    + (est?.watermark ? ` · ${t('ui.scr.export.trialres', { res })}` : '');
+  const notices = (est?.notices ?? []).filter((n) => n === 'EM-3208');
 
   return (
     <Modal el="scr.export" title={t('ui.scr.export.title')} onClose={onClose}
@@ -45,57 +94,94 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         <Button variant="ghost" onClick={onClose}>{t('ui.common.cancel')}</Button>
         <Button el="scr.export.start" variant="primary" disabledReason={!est ? t('ui.common.loading') : est.ok ? null : t('ui.scr.export.blocked')} onClick={() => void start()}>{t('ui.scr.export.start')}</Button>
       </> : running ? <Button el="scr.export.cancel" variant="danger-ghost" onClick={() => void actions.cancelRender(job.id)}>{t('ui.common.cancel')}</Button>
-        : <><Button variant="ghost" onClick={() => setJobId(null)}>{t('ui.scr.export.again')}</Button>{output && <Button el="scr.export.open.folder" variant="primary" onClick={() => void reveal()}>{t('ui.scr.export.openfolder')}</Button>}</>}>
+        : <><Button el="scr.export.again" variant="ghost" onClick={() => { setJobId(null); setCopied(false); }}>{t('ui.scr.export.again')}</Button>{output && <Button el="scr.export.open.folder" variant="primary" onClick={() => void reveal()}>{t('ui.scr.export.openfolder')}</Button>}</>}>
       {!job && (
         <div className="flex flex-col gap-3">
-          <div data-el="scr.export.profile.summary" className="t-mono rounded-[6px] border border-em-line px-2 py-1.5">
-            {`${s.ratio} · ${est ? `${est.dimensions.width}×${est.dimensions.height}` : '…'} · ${s.fps} fps · ${formatDuration(durationMs)} · ${t(`ui.agent.output.profile.${state.performanceProfile}`)}`}
-          </div>
+          <div data-el="scr.export.profile.summary" className="t-mono rounded-[6px] border border-em-line px-2 py-1.5">{summary}</div>
           {est?.watermark && <p className="rounded-[6px] border border-em-warn px-2 py-1.5 text-em-warn">{t('ui.scr.export.trial')}</p>}
           <div data-el="scr.export.codec"><Segmented<Format> label={t('ui.scr.export.codec')} value={format} onChange={setFormat}
             options={[{ value: 'mp4', label: 'MP4 (H.264)', el: 'scr.export.codec.mp4' }, { value: 'gif', label: 'GIF', el: 'scr.export.codec.gif' }, { value: 'png', label: t('ui.scr.export.still'), el: 'scr.export.codec.png' }]} /></div>
           <div className="grid grid-cols-2 gap-2">
-            <Field label={t('ui.scr.export.quality')} htmlFor="em-ex-q"><select id="em-ex-q" data-el="scr.export.quality" className={inputCls} value={quality} onChange={(e) => setQuality(e.target.value as 'standard' | 'high')}><option value="standard">{t('ui.scr.export.quality.standard')}</option><option value="high">{t('ui.scr.export.quality.high')}</option></select></Field>
-            <Field label={t('ui.scr.export.filename')} htmlFor="em-ex-f"><input id="em-ex-f" data-el="scr.export.filename" className={inputCls} value={fileName} maxLength={80} onChange={(e) => setFileName(e.target.value)} /></Field>
+            {format === 'mp4' && (
+              <Field label={t('ui.scr.export.quality')} htmlFor="em-ex-q"><select id="em-ex-q" data-el="scr.export.quality" className={inputCls} value={quality} onChange={(e) => setQuality(e.target.value as Quality)}>
+                <option value="standard">{t('ui.scr.export.quality.standard')}</option><option value="smaller">{t('ui.scr.export.quality.smaller')}</option></select></Field>
+            )}
+            {format === 'gif' && <p data-el="scr.export.quality" className="self-end pb-1 text-[12px] text-em-text-2">{t('ui.scr.export.gif.note')}</p>}
+            {format === 'png' && (
+              <Field label={t('ui.scr.export.still.time')} htmlFor="em-ex-t" hint={t('ui.scr.export.still.hint', { time: formatDuration(durationMs) })}>
+                <div className="flex gap-2">
+                  <input id="em-ex-t" data-el="scr.export.still.time" type="number" min={0} step={0.1} max={durationMs / 1000} className={inputCls} value={(stillMs / 1000).toFixed(1)} onChange={(e) => setStillMs(Math.round(Number(e.target.value) * 1000) || 0)} />
+                  <Button size={32} onClick={() => setStillMs(state.playheadMs)}>{t('ui.scr.export.still.playhead')}</Button>
+                </div>
+              </Field>
+            )}
+            <Field label={t('ui.scr.export.filename')} htmlFor="em-ex-f" hint={`.${format}`}><input id="em-ex-f" data-el="scr.export.filename" className={inputCls} value={name} maxLength={80} onChange={(e) => { setNameTouched(true); setFileName(e.target.value); }} /></Field>
           </div>
-          <Field label={t('ui.scr.export.folder')} htmlFor="em-ex-d">
+          <Field label={t('ui.scr.export.folder')} htmlFor="em-ex-d" hint={folder ? undefined : t('ui.scr.export.folder.default')}>
             <div className="flex gap-2"><input id="em-ex-d" data-el="scr.export.folder" className={inputCls} value={folder} onChange={(e) => setFolder(e.target.value)} />
-              <Button onClick={() => void window.expertmotion?.pickFolder?.().then((f) => { if (f) setFolder(f); })}>{t('ui.scr.project.open.browse')}</Button></div>
+              <Button onClick={pickFolder}>{t('ui.scr.project.open.browse')}</Button></div>
           </Field>
           <ul data-el="scr.export.preflight" aria-label={t('ui.scr.export.preflight')} className="flex flex-col gap-1">
             {!est && <li className="text-em-muted">{t('ui.scr.export.checking')}</li>}
             {est?.checks.map((c) => {
               const info = c.ok && c.code;
+              const r = recoveryFor(c, state.performanceProfile);
               return (
-                <li key={c.check} className="flex items-center gap-2">
+                <li key={c.check} data-check={c.check} data-ok={String(c.ok)} className="flex items-center gap-2">
                   {!c.ok ? <TriangleAlert size={14} className="text-em-danger" /> : info ? <Info size={14} className="text-em-info" /> : <CheckCircle2 size={14} className="text-em-success" />}
-                  <span className="w-24">{t(`ui.scr.export.check.${c.check}`)}</span>
-                  <span className="flex-1 text-em-text-2">{c.code ? t(`err.${c.code}.title`) : t('ui.scr.export.check.ok')}</span>
+                  <span className="w-24 shrink-0">{t(`ui.scr.export.check.${c.check}`)}</span>
+                  <span className="flex-1 text-em-text-2" title={c.code ? t(`err.${c.code}.body`, { name: state.project?.name ?? '', folder: folder || '…', feature: '' }) : undefined}>{c.code ? t(`err.${c.code}.title`) : t('ui.scr.export.check.ok')}</span>
                   {c.code && <span className="t-mono text-em-muted">{c.code}</span>}
+                  {r && <Button el="scr.export.preflight.fix" size={28} variant={c.ok ? 'ghost' : 'secondary'} onClick={() => fix(r)}>{t(RECOVERY_LABEL[r])}</Button>}
                 </li>
               );
             })}
+            {notices.map((code) => (
+              <li key={code} className="flex items-center gap-2"><Info size={14} className="text-em-info" /><span className="w-24 shrink-0">{t('ui.scr.export.check.queue')}</span>
+                <span className="flex-1 text-em-text-2">{t(`err.${code}.title`)}</span><span className="t-mono text-em-muted">{code}</span>
+                <Button el="scr.export.preflight.fix" size={28} variant="ghost" onClick={() => fix('progress')}>{t(RECOVERY_LABEL.progress)}</Button></li>
+            ))}
+            {est?.warnings.map((w) => <li key={`${w.code}-${w.path}`} className="flex items-center gap-2 text-[12px] text-em-text-2"><Info size={14} className="text-em-info" /><span className="flex-1">{w.code === 'EM-3103' && format === 'gif' ? t('ui.scr.export.gif.capped') : t(`err.${w.code}.title`)}</span><span className="t-mono text-em-muted">{w.code}</span></li>)}
+            {priv && <li data-el="scr.export.private" className="flex items-center gap-2 text-em-private"><ShieldCheck size={14} /><span className="flex-1">{t('ui.scr.export.private')}</span></li>}
           </ul>
-          {est && <p className="text-em-muted">{t('ui.scr.export.estimate', { time: est.estimate.seconds !== null ? formatDuration(est.estimate.seconds * 1000) : '…', size: est.estimate.bytes !== null ? formatBytes(est.estimate.bytes, lang) : '…' })}</p>}
+          {est && (
+            <div className="flex items-center gap-2">
+              <p className="flex-1 text-em-muted">{t('ui.scr.export.estimate', { time: est.estimate.seconds !== null ? formatDuration(est.estimate.seconds * 1000) : '…', size: est.estimate.bytes !== null ? formatBytes(est.estimate.bytes, lang) : '…' })}</p>
+              <Button el="scr.export.preflight.recheck" size={28} variant="ghost" onClick={() => fix('recheck')}>{t('ui.scr.export.recheck')}</Button>
+            </div>
+          )}
         </div>
       )}
       {job && running && (
         <div className="flex flex-col gap-2">
           <Progress el="scr.export.progress" value={job.progress} label={t('ui.scr.export.progress', { frame: job.renderedFrames ?? 0, total: job.totalFrames ?? 0, percent: Math.round(job.progress * 100) })} />
-          <span>{t('ui.scr.export.progress', { frame: job.renderedFrames ?? 0, total: job.totalFrames ?? 0, percent: Math.round(job.progress * 100) })}</span>
-          <span data-el="scr.export.eta" className="text-em-muted">{job.etaMs ? t('ui.scr.export.eta', { time: formatDuration(job.etaMs) }) : t('ui.scr.export.estimating')}</span>
+          <span>{job.status === 'queued' ? t('err.EM-3208.title') : t('ui.scr.export.progress', { frame: job.renderedFrames ?? 0, total: job.totalFrames ?? 0, percent: Math.round(job.progress * 100) })}</span>
+          <div className="flex gap-4">
+            <span data-el="scr.export.eta" className="text-em-muted">{job.etaMs ? t('ui.scr.export.eta', { time: formatDuration(job.etaMs) }) : t('ui.scr.export.estimating')}</span>
+            <span data-el="scr.export.elapsed" className="text-em-muted">{t('ui.scr.export.elapsed', { time: formatDuration(elapsedMs) })}</span>
+          </div>
           <p className="text-[12px] text-em-muted">{t('ui.scr.export.keepediting')}</p>
         </div>
       )}
       {job && job.status === 'done' && (
         <div data-el="scr.export.done" className="flex flex-col items-center gap-2 py-4 text-center">
-          <CheckCircle2 size={32} className="text-em-success" />
+          {thumb ? <img data-el="scr.export.done.thumb" src={thumb} alt={output?.fileName ?? ''} className="max-h-40 rounded-[6px] border border-em-line" /> : <CheckCircle2 size={32} className="text-em-success" />}
           <div className="text-[20px] font-semibold">{t('ui.scr.export.done')}</div>
           {output && <div className="text-em-text-2">{t('ui.scr.export.done.body', { name: output.fileName, duration: formatDuration(output.durationMs ?? 0), w: output.width ?? 0, h: output.height ?? 0, size: formatBytes(output.bytes, lang) })}</div>}
           {output?.watermarked && <div className="text-em-warn">{t('ui.scr.export.done.trial')}</div>}
+          {output && (
+            <div className="flex gap-2">
+              <Button el="scr.export.done.play" size={28} icon={<Play size={14} />} onClick={() => void play()}>{t('ui.scr.export.play')}</Button>
+              <Button el="scr.export.done.copypath" size={28} icon={<Copy size={14} />} onClick={() => void copyPath()}>{copied ? t('ui.common.copied') : t('ui.scr.export.copypath')}</Button>
+            </div>
+          )}
+          {output && <code className="t-mono max-w-full truncate text-[11px] text-em-muted select-all">{output.path}</code>}
         </div>
       )}
-      {job && job.status === 'failed' && <ErrorBox code={job.errorCode ?? 'EM-3201'} actions={<Button size={28} onClick={() => setJobId(null)}>{t('ui.sys.toast.tryagain')}</Button>} />}
+      {job && job.status === 'failed' && <ErrorBox code={job.errorCode ?? 'EM-3201'} actions={<>
+        <Button size={28} onClick={() => setJobId(null)}>{t('ui.sys.toast.tryagain')}</Button>
+        <Button el="scr.export.diagnostics" size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'diagnostics' })}>{t('ui.scr.export.fix.diagnostics')}</Button>
+      </>} />}
       {job && job.status === 'cancelled' && <div className="flex items-center gap-2 text-em-muted"><XCircle size={16} />{t('ui.scr.export.cancelled')}</div>}
     </Modal>
   );

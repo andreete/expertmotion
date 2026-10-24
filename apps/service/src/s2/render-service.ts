@@ -16,10 +16,24 @@ import { moveFile } from './ingest.js';
 import { runTool } from './proc.js';
 import { getJob, getOutput, outputRelPath, outputRoots, profileDims, toJobDto, toOutputDto, type OutputProfileT, type RenderJobRow } from './render-repo.js';
 import { s2 } from './state.js';
+import { engineBrowserOf, type BrowserLike } from '../services/engine-browser.js';
+import { engineStatus } from './engine-check.js';
+
+/** FR-137 default filename stem: `<project>-<ratio>-<res>-<yyyymmdd-hhmm>` (the extension follows the codec). */
+export function defaultFileStem(projectName: string, profile: Pick<OutputProfileT, 'ratio' | 'resolution'>, d: Date = new Date()): string {
+  const ratio = profile.ratio === 'custom' ? 'custom' : profile.ratio.replace(':', 'x');
+  return sanitizeFilename(`${projectName}-${ratio}-${profile.resolution}-${timestamp(d).slice(0, 13)}`, 'video');
+}
+/** GIF via palette generation (FR-147): ≤ 15 fps, one palette per clip, Sierra dithering, endless loop. */
+export function gifPaletteArgs(input: string, output: string, fps: number): string[] {
+  const f = Math.min(15, fps);
+  // `-r` instead of the fps filter: the slim compositor FFmpeg has no fps filter, the full ingestion build has both
+  return ['-v', 'error', '-nostdin', '-y', '-i', input, '-filter_complex', '[0:v]split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a', '-r', String(f), '-loop', '0', output];
+}
 
 export type PerfProfile = 'standard' | 'accelerated' | 'turbo';
 export interface RenderInput { projectId: string; versionId?: string | undefined; outputProfile: OutputProfileT; performanceProfile: PerfProfile; fileName?: string | undefined; folder?: string | undefined }
-export interface Check { check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence'; ok: boolean; code?: string; details?: Record<string, unknown> }
+export interface Check { check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence' | 'folder'; ok: boolean; code?: string; details?: Record<string, unknown> }
 
 /** The subset of @remotion/renderer the queue uses (kept loose so a fake can stand in for tests). */
 export interface RendererLike {
@@ -62,6 +76,7 @@ interface Prepared {
   model: CompositionModelT; versionId: string; profile: OutputProfileT; watermark: boolean; dims: { width: number; height: number }; frames: number; durationMs: number;
   assetIds: string[]; checks: Check[]; warnings: Array<{ code: string; path: string; message: string; severity: 'info' | 'warn' }>; notices: string[];
   estimate: { seconds: number | null; bytes: number | null; confidence: 'low' | 'medium' | 'high' };
+  defaultFileName: string; privateMode: boolean; queue: { active: string | null; queued: number };
 }
 
 export class RenderService {
@@ -98,6 +113,8 @@ export class RenderService {
     const watermark = ctx.hooks.isTrial();
     const profile: OutputProfileT = { ...input.outputProfile };
     if (watermark) { if (profile.resolution !== '720p') profile.resolution = '720p'; notices.push('EM-5001'); }
+    // FR-138: GIF is capped at 720p (and 15 fps at encode time)
+    if (profile.format === 'gif' && profile.resolution !== '720p') { warnings.push({ code: 'EM-3103', path: 'outputProfile.resolution', message: `GIF exports are limited to 720p (${profile.resolution} chosen).`, severity: 'info' }); profile.resolution = '720p'; }
     checks.push({ check: 'licence', ok: true, ...(watermark ? { code: 'EM-5001', details: { watermark: true, maxResolution: '720p' } } : {}) });
     if (ctx.hooks.tier() === 'T0' && (profile.resolution === '2k' || profile.resolution === '2160p')) warnings.push({ code: 'EM-3105', path: 'outputProfile.resolution', message: `${profile.resolution} needs a graphics card; 1080p is the highest option here.`, severity: 'info' });
     model.settings = { ...model.settings, ratio: profile.ratio, resolution: profile.resolution, fps: profile.fps, ...(profile.ratio === 'custom' && profile.customRatio ? { customRatio: profile.customRatio } : {}) };
@@ -113,17 +130,24 @@ export class RenderService {
 
     const assetIds = [...new Set([...model.tracks.video.map((c) => c.assetId), ...model.tracks.audio.map((a) => a.assetId),
       ...model.tracks.overlay.map((o) => (o as { assetId?: string }).assetId).filter((x): x is string => typeof x === 'string')])];
+    await ctx.hooks.mediaCheck?.(input.projectId).catch(() => undefined);    // FR-048: hash check before render (changed copies re-ingest)
     const missing = assetIds.filter((id) => {
       const a = getAsset(ctx, id, input.projectId);
-      return !a || a.status !== 'ready' || !a.playable_path || !fs.existsSync(path.resolve(ctx.paths.media, a.playable_path));
+      return !a || a.status !== 'ready' || !a.playable_path || !fs.existsSync(path.resolve(ctx.paths.media, a.playable_path)) || !fs.existsSync(path.resolve(ctx.paths.media, a.original_path));
     });
     checks.push({ check: 'assets', ok: missing.length === 0, ...(missing.length ? { code: 'EM-1301', details: { assetIds: missing } } : {}) });
 
-    const engineOk = fs.existsSync(path.join(ctx.resources.engineBundle, 'index.html')) && (!ctx.resources.browserExecutable || fs.existsSync(ctx.resources.browserExecutable));
-    checks.push({ check: 'engine', ok: engineOk, ...(engineOk ? {} : { code: 'EM-3001' }) });
+    const eng = await engineStatus(ctx);   // FR-140: Headless Shell, compositor FFmpeg, bundle hash
+    checks.push({ check: 'engine', ok: eng.ok, ...(eng.code ? { code: eng.code, details: { missing: eng.missing, mismatched: eng.mismatched.slice(0, 20) } } : {}) });
 
     const estimate = estimateOf(profile, dims, frames, timing.durationMs, ctx.hooks.tier(), input.performanceProfile);
     const folder = this.folderFor(input);
+    // FR-137: the folder must be on the allow-list and writable (nearest existing parent when it does not exist yet)
+    const custom = input.folder !== undefined || Boolean(ctx.settings.get().outputFolder);
+    const allowed = !custom || outputRoots(ctx).some((r) => isInside(r, folder) || path.resolve(r) === folder);
+    let writable = allowed;
+    if (allowed) { let d = folder; while (!fs.existsSync(d) && path.dirname(d) !== d) d = path.dirname(d); try { fs.accessSync(d, fs.constants.W_OK); } catch { writable = false; } }
+    checks.push({ check: 'folder', ok: allowed && writable, ...(allowed ? writable ? {} : { code: 'EM-3206' } : { code: 'EM-8302' }), details: { folder: path.basename(folder) } });
     const free = await freeBytes(fs.existsSync(folder) ? folder : ctx.paths.outputs);
     const needDisk = 3 * (estimate.bytes ?? 0) + 500_000_000;
     checks.push({ check: 'disk', ok: free >= needDisk, ...(free >= needDisk ? {} : { code: 'EM-3102' }), details: { needBytes: needDisk, freeBytes: free } });
@@ -133,16 +157,25 @@ export class RenderService {
     const needMem = MEM_NEED[input.performanceProfile];
     checks.push({ check: 'memory', ok: mem >= needMem, ...(mem >= needMem ? {} : { code: 'EM-3101' }), details: { needBytes: needMem, freeBytes: mem } });
     if (this.queue.size > 0) notices.push('EM-3208');
-    return { model, versionId, profile, watermark, dims, frames, durationMs: timing.durationMs, assetIds, checks, warnings, notices, estimate };
+    const projectName = (ctx.db.prepare('SELECT name FROM projects WHERE id = ?').get(input.projectId) as { name: string } | undefined)?.name ?? 'video';
+    return { model, versionId, profile, watermark, dims, frames, durationMs: timing.durationMs, assetIds, checks, warnings, notices, estimate,
+      defaultFileName: defaultFileStem(projectName, profile), privateMode: ctx.settings.get().privateMode, queue: { active: this.queue.running, queued: Math.max(0, this.queue.size - (this.queue.running ? 1 : 0)) } };
   }
 
   estimateResponse(p: Prepared): Record<string, unknown> {
     return { ok: p.checks.every((c) => c.ok), dimensions: p.dims, totalFrames: p.frames, durationMs: p.durationMs, estimate: p.estimate, checks: p.checks,
-      effectiveProfile: p.profile, watermark: p.watermark, warnings: p.warnings, notices: p.notices };
+      effectiveProfile: p.profile, watermark: p.watermark, warnings: p.warnings, notices: p.notices, defaultFileName: p.defaultFileName, privateMode: p.privateMode, queue: p.queue };
   }
 
+  /** FR-009/FR-015: a project's own output folder (R-018 `outputFolder`) beats the app default. */
+  private projectFolder(projectId: string): string | undefined {
+    try {
+      const r = this.ctx.db.prepare("SELECT json_extract(settings_json, '$.outputFolder') AS f FROM projects WHERE id = ?").get(projectId) as { f: unknown } | undefined;
+      return typeof r?.f === 'string' && r.f ? r.f : undefined;
+    } catch { return undefined; }
+  }
   private folderFor(input: RenderInput): string {
-    const chosen = input.folder ?? this.ctx.settings.get().outputFolder;
+    const chosen = input.folder ?? this.projectFolder(input.projectId) ?? this.ctx.settings.get().outputFolder;
     return chosen ? path.resolve(chosen) : path.join(this.ctx.paths.outputs, input.projectId);
   }
 
@@ -159,19 +192,19 @@ export class RenderService {
     if (this.starts.length >= (this.opts.maxStartsPerMinute ?? 5)) throw em('EM-9005', 'Too many exports started. Try again in a minute.', { status: 429 });
     const prep = await this.prepare(input);
     const failed = prep.checks.find((c) => !c.ok);
-    if (failed) throw em(failed.code as EmCode, `Export preflight failed (${failed.check}).`, { status: failed.code === 'EM-3001' ? 503 : 422, ...(failed.details ? { details: failed.details } : {}) });
+    if (failed) throw em(failed.code as EmCode, `Export preflight failed (${failed.check}).`, { status: failed.code === 'EM-3001' || failed.code === 'EM-3003' ? 503 : failed.code === 'EM-8302' ? 403 : 422, ...(failed.details ? { details: failed.details } : {}) });
     const folder = this.folderFor(input);
-    if (input.folder !== undefined || ctx.settings.get().outputFolder) {
+    if (input.folder !== undefined || this.projectFolder(input.projectId) || ctx.settings.get().outputFolder) {
       if (!outputRoots(ctx).some((r) => isInside(r, folder) || path.resolve(r) === folder)) throw em('EM-8302', 'Expertmotion can only save to folders inside your user profile.');
     }
     try { fs.mkdirSync(folder, { recursive: true }); fs.accessSync(folder, fs.constants.W_OK); } catch { throw em('EM-3206', 'Expertmotion cannot save files in this folder.', { details: { folder: path.basename(folder) } }); }
-    const project = requireProject(ctx, input.projectId);
-    const ratio = prep.profile.ratio === 'custom' ? 'custom' : prep.profile.ratio.replace(':', 'x');
-    const stem = sanitizeFilename(input.fileName ?? `${project.name}-${ratio}-${prep.profile.resolution}-${timestamp()}`, 'video');
+    requireProject(ctx, input.projectId);
+    const stem = input.fileName?.trim() ? sanitizeFilename(input.fileName.replace(/\.(mp4|webm|gif|png|wav)$/i, ''), 'video') : prep.defaultFileName;
     const ext = EXT[prep.profile.format];
     let outFile = path.join(folder, `${stem}.${ext}`);
     for (let i = 2; fs.existsSync(outFile) || [...this.inputs.values()].some((x) => x.outFile === outFile); i++) outFile = path.join(folder, `${stem}-${i}.${ext}`);
 
+    ctx.hooks.checkpoint?.(input.projectId, 'pre-render');           // FR-165: checkpoint right before the render starts
     const id = ctx.newId(); const at = ctx.now();
     ctx.db.prepare(`INSERT INTO render_jobs (id, project_id, version_id, output_profile_json, performance_profile, status, progress, total_frames, created_at)
       VALUES (?,?,?,?,?,'queued',0,?,?)`).run(id, input.projectId, prep.versionId, JSON.stringify(prep.profile), input.performanceProfile, prep.frames, at);
@@ -235,6 +268,7 @@ export class RenderService {
         if (Date.now() - lastProgressAt > (this.opts.stallMs ?? 120_000) || Date.now() - startedAt > (this.opts.wallClockMs ?? 2 * 3_600_000)) { ctl.reason = 'stalled'; ctl.cancel(); }
       }, Math.min(5000, Math.max(50, Math.floor((this.opts.stallMs ?? 120_000) / 4))));
       let stage: 'compose' | 'render' | 'validate' = 'compose';
+      let warm: BrowserLike | null = null;                   // FR-003: the warmed Engine browser, borrowed for this job
       try {
         report(0, 0, 'preparing', true);
         fs.mkdirSync(tmpDir, { recursive: true });
@@ -259,6 +293,8 @@ export class RenderService {
         const common: Record<string, unknown> = { serveUrl: ctx.resources.engineBundle, inputProps, port, logLevel: 'error', timeoutInMilliseconds: 60_000,
           chromiumOptions: { gl: tier === 'T0' ? 'swangle' : 'angle' }, ...(ctx.resources.browserExecutable ? { browserExecutable: ctx.resources.browserExecutable } : {}),
           ...(ctx.resources.binariesDirectory ? { binariesDirectory: ctx.resources.binariesDirectory } : {}) };
+        warm = this.opts.renderer ? null : await (engineBrowserOf(ctx)?.acquire() ?? Promise.resolve(null));
+        if (warm) common['puppeteerInstance'] = warm;
         const composition = await R.selectComposition({ ...common, id: COMPOSITION_ID });
         stage = 'render';
         const tmpOut = path.join(tmpDir, `out.${EXT[prep.profile.format]}`);
@@ -267,13 +303,22 @@ export class RenderService {
           const frame = Math.min(composition.durationInFrames - 1, Math.round(((prep.profile.stillAtMs ?? 0) / 1000) * composition.fps));
           await R.renderStill({ ...common, composition, output: tmpOut, frame, imageFormat: 'png', cancelSignal });
         } else {
-          const codec = f === 'mp4' ? 'h264' : f === 'webm' ? 'vp9' : f === 'gif' ? 'gif' : 'wav';
-          await R.renderMedia({ ...common, composition, codec, outputLocation: tmpOut, cancelSignal, concurrency,
+          // GIF: render a near-lossless H.264 intermediate, then palettegen/paletteuse with the ingestion FFmpeg (FR-147)
+          const codec = f === 'mp4' || f === 'gif' ? 'h264' : f === 'webm' ? 'vp9' : 'wav';
+          const mediaOut = f === 'gif' ? path.join(tmpDir, 'gif-source.mp4') : tmpOut;
+          await R.renderMedia({ ...common, composition, codec, outputLocation: mediaOut, cancelSignal, concurrency,
             imageFormat: prep.profile.alpha ? 'png' : 'jpeg', ...(prep.profile.alpha && f === 'webm' ? { pixelFormat: 'yuva420p' } : {}),
-            ...(f === 'mp4' || f === 'webm' ? { crf: prep.profile.crf ?? 18 } : {}), ...(f === 'gif' ? { everyNthFrame: Math.max(1, Math.round(composition.fps / 15)) } : {}),
+            ...(f === 'mp4' || f === 'webm' ? { crf: prep.profile.crf ?? 18 } : {}), ...(f === 'gif' ? { crf: 12, muted: true } : {}),
             ...(f === 'mp4' ? { audioBitrate: '192k' } : {}), offthreadVideoCacheSizeInBytes: pol.cache, disallowParallelEncoding: !pol.parallelEncoding,
             ...(tier === 'T2' && input.performanceProfile !== 'standard' ? { hardwareAcceleration: 'if-possible' } : {}),
-            onProgress: (p: { progress: number; renderedFrames?: number; stitchStage?: string }) => report(p.progress * 0.97, p.renderedFrames ?? null, p.stitchStage === 'muxing' ? 'encoding' : 'rendering') });
+            onProgress: (p: { progress: number; renderedFrames?: number; stitchStage?: string }) => report(p.progress * (f === 'gif' ? 0.9 : 0.97), p.renderedFrames ?? null, p.stitchStage === 'muxing' ? 'encoding' : 'rendering') });
+          if (f === 'gif') {
+            report(0.92, prep.frames, 'encoding', true);
+            const gifCancel = new AbortController(); const prevCancel = ctl.cancel;
+            ctl.cancel = () => { gifCancel.abort(); prevCancel(); };
+            if (ctl.reason) gifCancel.abort();
+            await runTool({ exe: ctx.resources.ffmpeg, args: gifPaletteArgs(mediaOut, tmpOut, prep.profile.fps), cwd: tmpDir, timeoutMs: Math.max(120_000, prep.durationMs * 20), signal: gifCancel.signal });
+          }
         }
         stage = 'validate';
         report(0.98, prep.frames, 'validating', true);
@@ -314,6 +359,7 @@ export class RenderService {
           this.finish(job, 'failed', code, stage);
         }
       } finally {
+        if (warm) engineBrowserOf(ctx)?.release(getJob(ctx, jobId)?.status === 'done');
         clearInterval(watchdog);
         for (const o of origins) ctx.mediaOrigins.delete(o);
         this.cancels.delete(jobId);

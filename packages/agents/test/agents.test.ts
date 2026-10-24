@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { applyOperations, createEmptyModel, hashModel, type AssetFacts, type CompositionModelT } from '@expertmotion/composition-model';
 import { createIntents, enqueue, restore, remove, clearQueue, lockedKeysFromQueue, compileIntents, pickFromIntent, resolveTargets, validatePlan, buildCompilePlan,
-  parseModelReply, extractJson, buildRewriteEnvelope, fakeProvider, runEditorAgent, runBrainstorm, windowMessages, mapProviderError, estimateCost, PROMPT_SET_VERSION,
+  parseModelReply, extractJson, buildRewriteEnvelope, fakeProvider, runEditorAgent, runBrainstorm, windowMessages, windowThread, threadBudgetChars, ReplyStreamer, mapProviderError, estimateCost, PROMPT_SET_VERSION,
   type DesignPick, type EditIntentT } from '../src/index.js';
 
 const ASSETS: AssetFacts[] = [
@@ -107,6 +107,18 @@ describe('Compile (AI_WORKFLOW §7)', () => {
     const m = base();
     const ops = compileIntents([...intents(m, { field: 'fontSize', value: 80 }), ...intents(m, { output: { kind: 'ratio', value: '1:1' } })], (i) => pickFromIntent(i), m);
     expect(ops.ok && ops.value.map((o) => o.op)).toEqual(['op:theme.setTextDefaults', 'op:output.setRatio']);
+    const c3 = m.tracks.video[2]!.id;
+    const move = intents(m, { clipEdit: { clipId: c3, toIndex: 0 } });
+    expect(move[0]).toMatchObject({ category: 'asset', propertyKey: `clip:${c3}.order`, resolvedTargets: [{ kind: 'clip', id: c3 }] });
+    const trim = intents(m, { clipEdit: { clipId: c3, trimBeforeMs: 0, durationMs: 3000 } });
+    expect(trim[0]!.propertyKey).toBe(`clip:${c3}.trim`);
+    const edits = compileIntents(JSON.parse(JSON.stringify([...move, ...trim])) as EditIntentT[], (i) => pickFromIntent(i), m);
+    expect(edits.ok && edits.value.map((o) => [o.op, o.args])).toEqual([['op:clip.move', { toIndex: 0 }], ['op:clip.setTrim', { trimBeforeMs: 0, durationMs: 3000 }]]);
+    expect(createIntents({ projectId: 'p1', source: 'ui', clipEdit: { clipId: 'gone', toIndex: 0 } }, { model: m, baseVersion: 'h', newId }).ok).toBe(false);
+    const auto = intents(m, { output: { kind: 'autoRatio', value: true } });
+    expect(auto[0]).toMatchObject({ category: 'layout', propertyKey: 'project.ratioAuto', needsInterpretation: false });
+    const autoOps = compileIntents(auto, (i) => pickFromIntent(i), m);
+    expect(autoOps.ok && autoOps.value[0]).toMatchObject({ op: 'op:output.setAutoRatio', args: { on: true } });
     expect(compileIntents(intents(m, { presetId: 'preset:text.title', playheadMs: 0 }), (i) => pickFromIntent(i), m).ok).toBe(false);
     expect(compileIntents(intents(m, { presetId: 'preset:text.title', playheadMs: 0, text: 'Halo' }), (i) => pickFromIntent(i), m).ok).toBe(true);
   });
@@ -199,8 +211,43 @@ describe('Brainstorming, envelope, providers, prompts', () => {
   it('window keeps the newest messages and notes omissions', () => {
     const h = Array.from({ length: 30 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', content: 'x'.repeat(1000) }));
     const w = windowMessages(h, 5000);
-    expect(w[0]!.content).toContain('omitted');
+    expect(w[0]!.content).toContain('threadSummary');
     expect(w.length).toBeLessThan(10);
+  });
+  it('FR-075: summary keeps requests and proposals; window is 60 % of the model context', async () => {
+    const old = [{ role: 'user' as const, content: 'ide intro energik untuk video kopi' }, { role: 'assistant' as const, content: 'Usul transisi.\n(proposed 2 change(s); sent)' }];
+    const h = [...old, ...Array.from({ length: 20 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', content: 'y'.repeat(2000) }))];
+    const w = windowThread(h, 10_000);
+    expect(w.summary?.requests[0]).toContain('intro energik');
+    expect(w.summary?.proposals).toEqual(['2 change(s) sent']);
+    expect(threadBudgetChars(100_000, 4000, 1000)).toBe(0.6 * 100_000 * 4 - 4000 - 4000);
+    expect(threadBudgetChars(null, 0, 0)).toBe(0.6 * 32_000 * 4);
+    const prov = fakeProvider(['{"reply":"ok"}']);
+    await runBrainstorm(h, {}, 'id', prov, { contextLength: 8_000 });
+    const sent = prov.calls[0]!.messages.reduce((n, m) => n + m.content.length, 0) + prov.calls[0]!.system.length;
+    expect(sent).toBeLessThanOrEqual(0.6 * 8_000 * 4);
+    expect(prov.calls[0]!.messages[0]!.content).toContain('threadSummary');
+  });
+  it('FR-075: streamed deltas show only the reply text; read-only tools run in JSON mode and never mutate', async () => {
+    const deltas: string[] = [];
+    const turn = JSON.stringify({ reply: 'Halo \"kopi\"\nsenja', proposedIntents: [] });
+    const r = await runBrainstorm([{ role: 'user', content: 'halo' }], {}, 'id', fakeProvider([turn]), { onDelta: (d) => deltas.push(d) });
+    expect(deltas.join('')).toBe('Halo "kopi"\nsenja');
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(r.ok && r.turn.reply).toBe('Halo "kopi"\nsenja');
+    const prose: string[] = [];
+    await runBrainstorm([{ role: 'user', content: 'halo' }], {}, 'id', fakeProvider(['  Mau bikin video apa hari ini?']), { onDelta: (d) => prose.push(d) });
+    expect(prose.join('')).toBe('Mau bikin video apa hari ini?');
+    const seen: unknown[] = [];
+    const prov = fakeProvider(['{"tool":"catalogue.search","input":{"query":"pudar"}}', '{"tool":"composition.applyOps","input":{}}', '{"tool":"assets.list","input":{"x":1}}', JSON.stringify({ reply: 'Pakai Fade.' })]);
+    const t = await runBrainstorm([{ role: 'user', content: 'transisi halus?' }], {}, 'id', prov, { tools: { 'catalogue.search': (i) => { seen.push(i); return [{ id: 'preset:transition.fade' }]; }, 'assets.list': () => [] } });
+    expect(t.ok && t.turn.reply).toBe('Pakai Fade.');
+    expect(seen).toEqual([{ query: 'pudar' }]);
+    expect(t.toolCalls.map((c) => [c.name, c.ok, c.ok ? null : (c.output as { error: { code: string } }).error.code])).toEqual([['catalogue.search', true, null], ['composition.applyOps', false, 'EM-4502'], ['assets.list', false, 'EM-4503']]);
+    expect(prov.calls[0]!.system).toContain('catalogue.search');
+    expect(prov.calls[0]!.system).not.toContain('composition.validateOps');
+    expect(prov.calls[1]!.messages.at(-1)!.content).toContain('preset:transition.fade');
+    expect(new ReplyStreamer().push('{"tool":"assets.list"}')).toBe('');
   });
   it('error mapping and approximate cost', () => {
     expect(mapProviderError(Object.assign(new Error('x'), { statusCode: 429 })).code).toBe('EM-4102');

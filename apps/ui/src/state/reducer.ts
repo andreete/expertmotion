@@ -3,7 +3,7 @@
 // Local Service returns. Kept React-free so it can be unit-tested directly.
 import type { ElementRefT } from '@expertmotion/composition-model';
 import type {
-  AgentKind, AssetDto, AssignmentsDto, CapabilityRow, ConnectionDto, EditIntent, ElementDiff, HardwareProfileDto, HardwareTickDto, HealthDto, IntentQueueDto,
+  AgentKind, AssetDto, AssignmentsDto, UsageNumbers, CapabilityRow, ConnectionDto, EditIntent, ElementDiff, HardwareProfileDto, HardwareTickDto, HealthDto, IntentQueueDto,
   LicenseDto, MediaGrantDto, MessageDto, ModelStateDto, OpenProjectResponse, OutputDto, PerformanceProfile, PlanDto, ProjectDto, RenderJobDto, ServiceEvent,
   SettingsDto, VersionDto,
 } from '../api/types.js';
@@ -15,10 +15,14 @@ export interface ToastAction { labelKey: string; run: () => void }
 export interface Toast { id: string; kind: ToastKind; textKey: string; vars?: Record<string, string | number>; code?: string; count: number; action?: ToastAction; sticky: boolean }
 
 export type Screen =
-  | { kind: 'onboarding' } | { kind: 'license' } | { kind: 'providers' } | { kind: 'models' } | { kind: 'project.new' } | { kind: 'project.open' }
+  | { kind: 'onboarding' } | { kind: 'license' } | { kind: 'providers' } | { kind: 'models'; focus?: string } | { kind: 'project.new'; saveAs?: boolean } | { kind: 'project.open' }
   | { kind: 'project.settings' } | { kind: 'project.recover' } | { kind: 'export' } | { kind: 'generate'; generator: 'voice' | 'music' | 'thumbnail' | 'captions' | 'hashtags' }
-  | { kind: 'diagnostics' } | { kind: 'about' } | { kind: 'backup' } | { kind: 'restore' } | { kind: 'ratio.custom' } | { kind: 'history' } | { kind: 'shortcuts' }
-  | { kind: 'confirm'; titleKey: string; bodyKey?: string; vars?: Record<string, string | number>; confirmKey: string; danger?: boolean; onConfirm: () => void };
+  | { kind: 'diagnostics' } | { kind: 'about' } | { kind: 'help' } | { kind: 'backup' } | { kind: 'restore' } | { kind: 'ratio.custom' } | { kind: 'history' } | { kind: 'shortcuts' }
+  | { kind: 'confirm'; titleKey: string; bodyKey?: string; vars?: Record<string, string | number>; confirmKey: string; danger?: boolean; onConfirm: () => void }
+  /** FR-174: Save / Don't save / Cancel before switching or closing with unsaved UI state; `then` runs after Save or Don't save. */
+  | { kind: 'unsaved'; then: () => void; closing?: boolean }
+  /** FR-002: closing while a Render Job runs: "Cancel render and close" / "Keep rendering". */
+  | { kind: 'close.render'; jobId: string; then: () => void };
 
 export interface Streaming { runId: string; text: string; modelId: string }
 
@@ -48,6 +52,12 @@ export interface AppState {
   messages: Record<AgentKind, MessageDto[]>;
   streaming: Record<AgentKind, Streaming | null>;
   contextUsage: Record<AgentKind, { usedTokens: number; contextLength: number } | null>;
+  /** FR-074: usage of each agent's last finished run (cost shown in the context counter tooltip). */
+  lastUsage: Record<AgentKind, UsageNumbers | null>;
+  /** Runs that already finished (agent.run.done / .failed): a late 202 must not restart their "Asking…" state. */
+  doneRuns: string[];
+  /** FR-061: a newer Composition Version was announced (composition.updated) and its model is still being fetched. */
+  headLoading: boolean;
   agentError: Record<AgentKind, string | null>;
   connections: ConnectionDto[];
   assignments: AssignmentsDto | null;
@@ -65,7 +75,8 @@ export interface AppState {
   assetSelection: string[];
   editorDraft: { text: string; target: ElementRefT | null; nonce: number } | null;
   checkpointBadge: boolean;
-  update: { version: string; downloaded: boolean } | null;
+  /** FR-152 / FR-162 updater state from the Desktop Shell bridge (or a legacy service.notice {kind:'update'}). */
+  update: { version: string; downloaded: boolean; status?: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'deferred' | 'paused' | 'error'; percent?: number; code?: string } | null;
   backupJob: { jobId: string; percent: number; done: boolean; path?: string; mode: 'backup' | 'restore'; projectId?: string } | null;
   /** Sample projects whose background preparation settled (`service.notice {kind:'sample', ready}`, R-025; ready:false = partial). */
   sampleReady: string[];
@@ -74,7 +85,7 @@ export interface AppState {
 export const initialState: AppState = {
   boot: 'loading', stream: 'connecting', streamAttempt: 0, health: null, settings: null, licence: null, hardware: null, tick: null, project: null, head: null,
   canUndo: false, canRedo: false, grant: null, assets: [], ingestStage: {}, queue: null, pending: [], plan: null, previousPlans: [], renders: [], outputs: [],
-  messages: { brainstorm: [], editor: [] }, streaming: { brainstorm: null, editor: null }, contextUsage: { brainstorm: null, editor: null },
+  messages: { brainstorm: [], editor: [] }, streaming: { brainstorm: null, editor: null }, contextUsage: { brainstorm: null, editor: null }, lastUsage: { brainstorm: null, editor: null }, headLoading: false, doneRuns: [],
   agentError: { brainstorm: null, editor: null }, connections: [], assignments: null, capabilities: {}, models: [], toasts: [], live: null,
   libMode: 'design', selection: [], playheadMs: 0, previewPresetId: null, screen: null, pulse: null, performanceProfile: 'standard', assetSelection: [],
   editorDraft: null, checkpointBadge: false, backupJob: null, update: null, sampleReady: [],
@@ -122,6 +133,7 @@ export type Action =
   | { type: 'editorDraft'; draft: AppState['editorDraft'] }
   | { type: 'backupJob'; job: AppState['backupJob'] }
   | { type: 'dismissUpdate' }
+  | { type: 'update'; update: { status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'deferred' | 'paused' | 'error'; version?: string; percent?: number; code?: string } }
   | { type: 'event'; event: ServiceEvent };
 
 const MAX_TOASTS = 3;
@@ -169,7 +181,7 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
       const project = state.project ? { ...state.project, headVersionId: v.id, headHash: v.hash, durationMs: ev.data.durationMs, dirty: true } : null;
       const plan = state.plan && (state.plan.status === 'valid' || state.plan.status === 'invalid') && state.plan.baseVersion !== v.hash && ev.data.cause !== 'execute'
         ? { ...state.plan, status: 'stale' as const } : state.plan;
-      return { ...state, head, project, canUndo: ev.data.canUndo, canRedo: ev.data.canRedo, plan, pulse: ev.data.diff.length ? { diff: ev.data.diff, at: Date.now() } : state.pulse };
+      return { ...state, head, project, canUndo: ev.data.canUndo, canRedo: ev.data.canRedo, plan, headLoading: state.headLoading || (state.head !== null && state.head.id !== v.id), pulse: ev.data.diff.length ? { diff: ev.data.diff, at: Date.now() } : state.pulse };
     }
     case 'render.queued': return { ...state, renders: upsert(state.renders, [ev.data.job], true) };
     case 'render.progress': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'rendering', progress: ev.data.progress, renderedFrames: ev.data.renderedFrames, totalFrames: ev.data.totalFrames, etaMs: ev.data.etaMs } : j)) };
@@ -187,12 +199,12 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     case 'agent.run.done': {
       const agent = ev.data.run.agent;
       const msgs = state.messages[agent].some((m) => m.id === ev.data.message.id) ? state.messages[agent] : [...state.messages[agent], ev.data.message];
-      return { ...state, messages: { ...state.messages, [agent]: msgs }, streaming: { ...state.streaming, [agent]: null }, contextUsage: { ...state.contextUsage, [agent]: ev.data.contextUsage ?? state.contextUsage[agent] } };
+      return { ...state, doneRuns: [ev.data.run.id, ...state.doneRuns].slice(0, 20), messages: { ...state.messages, [agent]: msgs }, streaming: { ...state.streaming, [agent]: null }, contextUsage: { ...state.contextUsage, [agent]: ev.data.contextUsage ?? state.contextUsage[agent] }, lastUsage: { ...state.lastUsage, [agent]: ev.data.usage ?? state.lastUsage[agent] } };
     }
-    case 'agent.run.failed': return { ...state, streaming: { ...state.streaming, [ev.data.agent]: null }, agentError: { ...state.agentError, [ev.data.agent]: ev.data.code } };
-    case 'model.progress': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, bytesDone: ev.data.bytesDone, bytesTotal: ev.data.bytesTotal, status: ev.data.status } : m)) };
+    case 'agent.run.failed': return { ...state, doneRuns: [ev.data.runId, ...state.doneRuns].slice(0, 20), streaming: { ...state.streaming, [ev.data.agent]: null }, agentError: { ...state.agentError, [ev.data.agent]: ev.data.code } };
+    case 'model.progress': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, bytesDone: ev.data.bytesDone, bytesTotal: ev.data.bytesTotal, status: ev.data.status, pausedReason: ev.data.pausedReason ?? null } : m)) };
     case 'model.installed': return { ...state, models: state.models.map((m) => (m.key === ev.data.model.key ? ev.data.model : m)) };
-    case 'model.failed': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, status: 'failed', errorCode: ev.data.code } : m)) };
+    case 'model.failed': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, status: ev.data.code === 'EM-7006' ? 'not-installed' : 'failed', errorCode: ev.data.code } : m)) };   // EM-7006 = paused (FR-161)
     case 'hardware.tick': return { ...state, tick: ev.data };
     case 'license.changed': return { ...state, licence: ev.data.licence };
     case 'settings.changed': {
@@ -235,15 +247,16 @@ export function reducer(state: AppState, action: Action): AppState {
         canUndo: o.head.parentId !== null, canRedo: false, checkpointBadge: o.checkpointNewerThanSave !== null,
         messages: { brainstorm: action.messages?.brainstorm ?? [], editor: action.messages?.editor ?? [] },
         contextUsage: { brainstorm: action.contextUsage?.brainstorm ?? null, editor: action.contextUsage?.editor ?? null },
-        streaming: { brainstorm: null, editor: null }, agentError: { brainstorm: null, editor: null }, outputs: [], pulse: null,
+        streaming: { brainstorm: null, editor: null }, agentError: { brainstorm: null, editor: null }, outputs: [], pulse: null, headLoading: false, lastUsage: { brainstorm: null, editor: null },
       };
     }
     case 'projectClosed': return { ...state, project: null, head: null, grant: null, assets: [], queue: null, plan: null, previousPlans: [], selection: [], messages: { brainstorm: [], editor: [] } };
     case 'project': return { ...state, project: action.project };
-    case 'head': return { ...state, head: action.head, canUndo: action.canUndo, canRedo: action.canRedo, project: state.project ? { ...state.project, headVersionId: action.head.id, headHash: action.head.hash, durationMs: action.head.durationMs, settings: action.head.model?.settings ?? state.project.settings } : null, selection: pruneSelection(state.selection, action.head) };
+    case 'head': return { ...state, headLoading: false, head: action.head, canUndo: action.canUndo, canRedo: action.canRedo, project: state.project ? { ...state.project, headVersionId: action.head.id, headHash: action.head.hash, durationMs: action.head.durationMs, settings: action.head.model?.settings ?? state.project.settings } : null, selection: pruneSelection(state.selection, action.head) };
     case 'grant': return { ...state, grant: action.grant };
     case 'assets': return { ...state, assets: action.assets };
-    case 'assetsUpsert': return { ...state, assets: upsert(state.assets, action.assets) };
+    // An import response can arrive after its own `ingest.done` event: never let the older `ingesting` snapshot win.
+    case 'assetsUpsert': return { ...state, assets: upsert(state.assets, action.assets.map((a) => { const cur = state.assets.find((x) => x.id === a.id); return cur && cur.status !== 'ingesting' && a.status === 'ingesting' && cur.updatedAt >= a.updatedAt ? cur : a; })) };
     case 'assetRemoved': return { ...state, assets: state.assets.filter((a) => a.id !== action.assetId), assetSelection: state.assetSelection.filter((id) => id !== action.assetId) };
     case 'queue': return { ...state, queue: action.queue, pending: [] };
     case 'optimisticIntent': return { ...state, pending: [action.intent, ...state.pending] };
@@ -252,9 +265,17 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'renders': return { ...state, renders: action.renders };
     case 'outputs': return { ...state, outputs: action.outputs };
     case 'messages': return { ...state, messages: { ...state.messages, [action.agent]: action.messages }, ...(action.contextUsage !== undefined ? { contextUsage: { ...state.contextUsage, [action.agent]: action.contextUsage } } : {}) };
-    case 'messageAdded': return state.messages[action.agent].some((m) => m.id === action.message.id) ? state : { ...state, messages: { ...state.messages, [action.agent]: [...state.messages[action.agent], action.message] } };
+    case 'messageAdded': {
+      const list = state.messages[action.agent], m = action.message;
+      if (list.some((x) => x.id === m.id)) return state;
+      // The reply's SSE event can overtake the 202 that carries the Creator's own message: keep creation order (FR-086).
+      let at = list.findIndex((x) => x.createdAt > m.createdAt || (x.createdAt === m.createdAt && m.role === 'user' && x.role !== 'user' && x.agentRunId !== null));
+      if (at < 0) at = list.length;
+      return { ...state, messages: { ...state.messages, [action.agent]: [...list.slice(0, at), m, ...list.slice(at)] } };
+    }
     case 'agentError': return { ...state, agentError: { ...state.agentError, [action.agent]: action.code }, ...(action.code ? { streaming: { ...state.streaming, [action.agent]: null } } : {}) };
-    case 'streamingStart': return { ...state, streaming: { ...state.streaming, [action.agent]: state.streaming[action.agent] ?? { runId: action.runId, text: '', modelId: action.modelId } } };
+    case 'streamingStart': if (state.doneRuns.includes(action.runId)) return state;
+      return { ...state, streaming: { ...state.streaming, [action.agent]: state.streaming[action.agent] ?? { runId: action.runId, text: '', modelId: action.modelId } } };
     case 'streamingStop': return { ...state, streaming: { ...state.streaming, [action.agent]: null } };
     case 'providers': return { ...state, ...(action.connections ? { connections: action.connections } : {}), ...(action.assignments !== undefined ? { assignments: action.assignments } : {}) };
     case 'capabilities': return { ...state, capabilities: { ...state.capabilities, [action.connectionId]: action.rows } };
@@ -280,6 +301,11 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'assetSelection': return { ...state, assetSelection: action.ids };
     case 'editorDraft': return { ...state, editorDraft: action.draft };
     case 'dismissUpdate': return { ...state, update: null };
+    case 'update': {
+      const u = action.update;
+      if (u.status === 'idle' || u.status === 'checking') return { ...state, update: null };
+      return { ...state, update: { version: u.version ?? '', downloaded: u.status === 'downloaded' || u.status === 'deferred', status: u.status, ...(u.percent !== undefined ? { percent: u.percent } : {}), ...(u.code ? { code: u.code } : {}) } };
+    }
     case 'backupJob': return { ...state, backupJob: action.job };
     case 'event': return reduceEvent(state, action.event);
     default: return state;

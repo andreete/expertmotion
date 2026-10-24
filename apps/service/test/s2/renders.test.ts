@@ -9,7 +9,9 @@ import { health } from '../../src/modules/health.js';
 import { createAssetsModule } from '../../src/modules/assets.js';
 import { mediaModule } from '../../src/modules/media.js';
 import { createRendersModule } from '../../src/modules/renders.js';
-import { renderServiceOf, type RendererLike } from '../../src/s2/render-service.js';
+import { defaultFileStem, gifPaletteArgs, renderServiceOf, type RendererLike } from '../../src/s2/render-service.js';
+import { engineStatus, verifyBundleHash } from '../../src/s2/engine-check.js';
+import type { ServiceContext } from '../../src/context.js';
 import { tempDir } from '../helpers.js';
 import { json, startS2, type S2Service } from './harness.js';
 
@@ -78,7 +80,7 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     const r = await json<{ ok: boolean; dimensions: { width: number; height: number }; totalFrames: number; checks: Array<{ check: string; ok: boolean; code?: string }>; estimate: { bytes: number } }>(
       await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard' } }));
     expect(r.ok).toBe(true); expect(r.dimensions).toEqual({ width: 1080, height: 1920 }); expect(r.totalFrames).toBe(120);
-    expect(r.checks.map((c) => c.check).sort()).toEqual(['assets', 'dimensions', 'disk', 'duration', 'engine', 'licence', 'memory']);
+    expect(r.checks.map((c) => c.check).sort()).toEqual(['assets', 'dimensions', 'disk', 'duration', 'engine', 'folder', 'licence', 'memory']);
     expect(r.estimate.bytes).toBeGreaterThan(0);
     mem = 1e9;
     const low = await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard' } });
@@ -172,6 +174,13 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     s.ctx.hooks.isTrial = () => false;
   });
 
+  it('estimate returns the default filename, Private Mode and queue facts; GIF is capped to 720p with a note', async () => {
+    const r = await json<{ defaultFileName: string; privateMode: boolean; queue: { active: string | null; queued: number } }>(await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard' } }));
+    expect(r.defaultFileName).toMatch(/^Promo-Kopi-9x16-1080p-\d{8}-\d{4}$/); expect(r.privateMode).toBe(false); expect(r.queue).toEqual({ active: null, queued: 0 });
+    const g = await json<{ effectiveProfile: { resolution: string }; warnings: Array<{ code: string }> }>(await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: { ...profile, format: 'gif' }, performanceProfile: 'standard' } }));
+    expect(g.effectiveProfile.resolution).toBe('720p'); expect(g.warnings.map((w) => w.code)).toContain('EM-3103');
+  });
+
   it('blocking preflight: engine missing → 503 EM-3001; folder outside the profile → 403 EM-8302; no clips → EM-2202', async () => {
     s.ctx.resources.engineBundle = path.join(bundle, 'missing');
     const r = await create();
@@ -179,9 +188,43 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     s.ctx.resources.engineBundle = bundle;
     const f = await create({ folder: '/etc' });
     expect(f.status).toBe(403); expect((await json<{ error: { code: string } }>(f)).error.code).toBe('EM-8302');
+    const pre = await json<{ ok: boolean; checks: Array<{ check: string; code?: string }> }>(await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard', folder: '/etc' } }));
+    expect(pre.ok).toBe(false); expect(pre.checks.find((c) => c.check === 'folder')!.code).toBe('EM-8302');
     const empty = s.project('Kosong');
     const e = await s.api('/renders', { method: 'POST', json: { projectId: empty, outputProfile: profile, performanceProfile: 'standard' } });
     expect((await json<{ error: { code: string } }>(e)).error.code).toBe('EM-2202');
+  });
+});
+
+describe('export defaults and engine checks (FR-137, FR-138, FR-140, FR-147)', () => {
+  it('default filename is <project>-<ratio>-<res>-<yyyymmdd-hhmm>', () => {
+    expect(defaultFileStem('Promo Kopi', { ratio: '9:16', resolution: '1080p' }, new Date(2026, 9, 24, 7, 5, 59))).toBe('Promo-Kopi-9x16-1080p-20261024-0705');
+    expect(defaultFileStem('a/b:c', { ratio: 'custom', resolution: '720p' }, new Date(2026, 0, 2, 3, 4))).toMatch(/^a.b.c-custom-720p-20260102-0304$/);
+  });
+  it('GIF uses palette generation, ≤ 15 fps and an endless loop', () => {
+    const a = gifPaletteArgs('in.mp4', 'out.gif', 30);
+    expect(a.join(' ')).toContain('-r 15'); expect(a.join(' ')).toContain('palettegen'); expect(a.join(' ')).toContain('paletteuse');
+    expect(a.slice(-3)).toEqual(['-loop', '0', 'out.gif']);
+    expect(gifPaletteArgs('i', 'o', 12).join(' ')).toContain('-r 12');
+  });
+  const fakeCtx = (root: string, over: Partial<ServiceContext['resources']> = {}) => ({
+    resources: { engineBundle: path.join(root, 'engine', 'bundle'), ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', loopsDir: '', licenseDir: '', enginesDir: '', sampleDir: '', ...over },
+    log: { info() {}, warn() {}, error() {}, debug() {} },
+  }) as unknown as ServiceContext;
+  it('bundle hash: ok against the manifest, EM-3003 when a file changed, EM-3001 when the compositor FFmpeg is missing', async () => {
+    const root = tempDir('em-res-'); const b = path.join(root, 'engine', 'bundle'); fs.mkdirSync(b, { recursive: true });
+    fs.writeFileSync(path.join(b, 'index.html'), '<html></html>'); fs.writeFileSync(path.join(b, 'a.js'), 'console.log(1)');
+    const entry = (f: string) => { const d = fs.readFileSync(path.join(b, f)); return { path: `engine/bundle/${f}`, size: d.length, sha256: crypto.createHash('sha256').update(d).digest('hex') }; };
+    fs.writeFileSync(path.join(root, 'engine-manifest.json'), JSON.stringify({ files: [entry('index.html'), entry('a.js')] }));
+    expect(await verifyBundleHash(fakeCtx(root))).toEqual({ hash: 'ok', mismatched: [] });
+    const comp = path.join(root, 'compositor'); fs.mkdirSync(comp);
+    const ok = await engineStatus(fakeCtx(root, { binariesDirectory: comp }));
+    expect(ok).toMatchObject({ ok: false, code: 'EM-3001', missing: ['ffmpeg'] });
+    fs.writeFileSync(path.join(comp, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'), '');
+    expect(await engineStatus(fakeCtx(root, { binariesDirectory: comp }))).toMatchObject({ ok: true, bundleHash: 'ok' });
+    fs.writeFileSync(path.join(b, 'a.js'), 'console.log(2)');
+    const bad = await engineStatus(fakeCtx(root));
+    expect(bad).toMatchObject({ ok: false, code: 'EM-3003', bundleHash: 'mismatch', mismatched: ['engine/bundle/a.js'] });
   });
 });
 

@@ -11,7 +11,7 @@ export function ensureFontsLoaded(): Promise<void> {
   const jobs: Promise<void>[] = [];
   for (const p of listPresets({ category: 'font' })) {
     const family = String(p.data?.['family']), stem = String(p.data?.['fileStem']);
-    for (const w of (p.data?.['weights'] as number[] | undefined) ?? []) jobs.push(loadFont({ family, url: staticFile(`${stem}-${w}-normal.woff2`), weight: String(w), format: 'woff2' }));
+    for (const w of (p.data?.['weights'] as number[] | undefined) ?? []) for (const style of ['normal', 'italic'] as const) jobs.push(loadFont({ family, url: staticFile(`${stem}-${w}-${style}.woff2`), weight: String(w), style, format: 'woff2' }));
   }
   loaded = Promise.all(jobs).then(() => { continueRender(handle); }, (e) => { continueRender(handle); throw e; });
   return loaded;

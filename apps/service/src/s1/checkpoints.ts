@@ -44,7 +44,12 @@ export class Checkpoints {
   private failures = 0;
   /** Projects whose newest checkpoint is newer than the stored head after an unclean shutdown (R-016 checkpointNewerThanSave). */
   readonly offers = new Map<string, string>();
+  /** Start of this Service run: projects changed since then are checked for a missing checkpoint at shutdown (R-002). */
+  readonly bootAt: string;
+  /** Result of recoverOnStart (R-003 recovery summary). */
+  lastRecovery: { unclean: boolean; offered: string[]; imported: string[] } = { unclean: false, offered: [], imported: [] };
   constructor(private readonly ctx: ServiceContext, private readonly store: CompositionStore, timers: Timers = realTimers) {
+    this.bootAt = ctx.now();
     this.autosave = new Debouncer((pid) => this.autosaveNow(pid), () => { const s = ctx.settings.get(); return { debounce: s.autosaveDebounceMs, max: Math.max(s.autosaveMaxMs, s.autosaveDebounceMs) }; }, timers);
   }
 
@@ -91,7 +96,10 @@ export class Checkpoints {
     this.ctx.db.prepare('INSERT INTO recovery_checkpoints (id, project_id, version_id, file_path, reason, created_at) VALUES (@id, @project_id, @version_id, @file_path, @reason, @created_at)').run(row);
     this.offers.delete(projectId);
     this.prune(projectId);
-    return checkpointDto(row, v.duration_ms);
+    return checkpointDto(row, v.duration_ms, this.fileMeta(row));
+  }
+  private fileMeta(r: CheckpointRow): { bytes: number } {
+    try { return { bytes: fs.statSync(this.abs(r.file_path)).size }; } catch { return { bytes: 0 }; }
   }
 
   private prune(projectId: string): void {
@@ -106,7 +114,7 @@ export class Checkpoints {
   list(projectId: string) {
     const rows = this.ctx.db.prepare(`SELECT c.*, v.duration_ms AS duration_ms FROM recovery_checkpoints c LEFT JOIN composition_versions v ON v.id = c.version_id
       WHERE c.project_id = ? ORDER BY c.created_at DESC, c.id DESC LIMIT ${MAX_CHECKPOINTS}`).all(projectId) as Array<CheckpointRow & { duration_ms: number | null }>;
-    return rows.map((r) => checkpointDto(r, r.duration_ms ?? 0));
+    return rows.map((r) => checkpointDto(r, r.duration_ms ?? 0, this.fileMeta(r)));
   }
   row(projectId: string, id: string): CheckpointRow {
     const r = this.ctx.db.prepare('SELECT * FROM recovery_checkpoints WHERE id = ? AND project_id = ?').get(id, projectId) as CheckpointRow | undefined;
@@ -143,7 +151,7 @@ export class Checkpoints {
     const id = this.offers.get(projectId);
     if (!id) return null;
     const r = this.ctx.db.prepare('SELECT c.*, v.duration_ms AS duration_ms FROM recovery_checkpoints c LEFT JOIN composition_versions v ON v.id = c.version_id WHERE c.id = ?').get(id) as (CheckpointRow & { duration_ms: number | null }) | undefined;
-    return r ? checkpointDto(r, r.duration_ms ?? 0) : null;
+    return r ? checkpointDto(r, r.duration_ms ?? 0, this.fileMeta(r)) : null;
   }
 
   removeProjectFiles(projectId: string): void { fs.rmSync(path.join(this.ctx.paths.checkpoints, projectId), { recursive: true, force: true }); }
@@ -176,7 +184,8 @@ export class Checkpoints {
     }
     if (unclean) this.ctx.bus.emit('service.notice', { at: this.ctx.now(), kind: 'checkpoint', code: 'EM-8003', offered, imported });
     else if (imported.length) this.ctx.bus.emit('service.notice', { at: this.ctx.now(), kind: 'checkpoint', imported });
-    return { unclean, offered, imported };
+    this.lastRecovery = { unclean, offered, imported };
+    return this.lastRecovery;
   }
 
   private importOrphan(pid: string): boolean {
@@ -204,9 +213,22 @@ export class Checkpoints {
     } catch (e) { this.ctx.log.warn({ projectId: pid, err: String(e) }, 'orphan checkpoint import failed'); return false; }
   }
 
-  /** Clean shutdown: flush pending autosaves and clear the running flag. */
+  /**
+   * R-002 / FR-165 "immediately before close": every project changed during this Service run whose head has no checkpoint yet
+   * gets one (reason manual). Failures are logged; shutdown continues.
+   */
+  checkpointDirty(): string[] {
+    const rows = this.ctx.db.prepare(`SELECT p.id FROM projects p WHERE p.deleted_at IS NULL AND p.head_version_id IS NOT NULL AND p.updated_at >= ?
+      AND p.head_version_id IS NOT (SELECT c.version_id FROM recovery_checkpoints c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1)`).all(this.bootAt) as Array<{ id: string }>;
+    const done: string[] = [];
+    for (const r of rows) { try { this.write(r.id, 'manual'); done.push(r.id); } catch (e) { this.ctx.log.warn({ projectId: r.id, err: String(e) }, 'shutdown checkpoint failed'); } }
+    return done;
+  }
+
+  /** Clean shutdown: flush pending autosaves, checkpoint what is still dirty, clear the running flag. */
   shutdown(): void {
     try { this.autosave.flush(); } catch (e) { this.ctx.log.warn({ err: String(e) }, 'autosave flush failed'); }
+    try { this.checkpointDirty(); } catch (e) { this.ctx.log.warn({ err: String(e) }, 'shutdown checkpoints failed'); }
     try { fs.rmSync(path.join(this.ctx.paths.data, RUNNING_FLAG), { force: true }); } catch { /* ignore */ }
   }
 }

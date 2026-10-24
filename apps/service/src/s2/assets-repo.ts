@@ -27,13 +27,26 @@ export function listAssets(ctx: ServiceContext, projectId: string): AssetRow[] {
   return ctx.db.prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY created_at, id').all(projectId) as AssetRow[];
 }
 
-export function toAssetDto(r: AssetRow, progress: number | undefined, withProbe = false): Record<string, unknown> {
+const CODEC_LABEL: Record<string, string> = { h264: 'H.264', hevc: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1', prores: 'ProRes', mpeg4: 'MPEG-4', mjpeg: 'JPEG', png: 'PNG', webp: 'WebP', gif: 'GIF',
+  aac: 'AAC', mp3: 'MP3', opus: 'Opus', vorbis: 'Vorbis', flac: 'FLAC', pcm_s16le: 'PCM', pcm_s24le: 'PCM' };
+/** FR-043: human codec label of the first video stream (else the first audio stream) from the stored ffprobe JSON. */
+export function codecOf(probeJson: string | null): string | null {
+  if (!probeJson) return null;
+  try {
+    const j = JSON.parse(probeJson) as { streams?: Array<{ codec_type?: string; codec_name?: string; disposition?: { attached_pic?: number } }> };
+    const s = j.streams?.find((x) => x.codec_type === 'video' && !x.disposition?.attached_pic) ?? j.streams?.find((x) => x.codec_type === 'audio');
+    return s?.codec_name ? (CODEC_LABEL[s.codec_name] ?? s.codec_name.toUpperCase()) : null;
+  } catch { return null; }
+}
+
+/** `missing` (FR-048): the stored original is not on disk; computed by the caller, which knows the media root. */
+export function toAssetDto(r: AssetRow, progress: number | undefined, withProbe = false, missing = false): Record<string, unknown> {
   let probe: unknown;
   if (withProbe && r.probe_json) { try { probe = JSON.parse(r.probe_json); } catch { probe = undefined; } }
   return {
     id: r.id, projectId: r.project_id, kind: r.kind, name: r.name, bytes: r.bytes, sha256: r.sha256.startsWith('pending-') ? '' : r.sha256, status: r.status,
     progress: r.status === 'ready' ? 1 : (progress ?? 0), errorCode: r.error_code, durationMs: r.duration_ms, width: r.width, height: r.height, fps: r.fps,
-    hasAudio: r.has_audio === null ? null : r.has_audio === 1, sequenceBadge: r.sequence_badge,
+    hasAudio: r.has_audio === null ? null : r.has_audio === 1, sequenceBadge: r.sequence_badge, codec: codecOf(r.probe_json), missing,
     media: { original: true, playable: !!r.playable_path, proxy: !!r.proxy_path, thumb: !!r.thumb_path, filmstrip: !!r.filmstrip_path, waveform: !!r.waveform_path },
     ...(probe === undefined ? {} : { probe }), createdAt: r.created_at, updatedAt: r.updated_at,
   };

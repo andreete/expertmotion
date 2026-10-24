@@ -20,9 +20,19 @@ const NOT_IN_MOCK: Record<string, string> = {
   'stage.player.controls.pause': 'shown only while playing (Player is mocked in jsdom)',
   'stage.player.state.loading': 'transient state before the first composition arrives',
   'stage.player.state.error': 'Player error fallback (Player is mocked in jsdom)',
+  'stage.player.state.error.reload': 'Player error fallback', 'stage.player.state.error.recovery': 'Player error fallback',
+  'stage.timeline.element.generated': 'needs a generator result on the timeline (covered in stage-agent.test.tsx)',
+  'agent.brainstorm.message.copy': 'needs a brainstorm reply (stage-agent.test.tsx)', 'agent.editor.message.copy': 'needs an editor message (stage-agent.test.tsx)',
+  'agent.brainstorm.message.retry': 'saved failure only (stage-agent.test.tsx)', 'agent.editor.message.retry': 'saved failure only',
+  'agent.editor.message.applied': 'needs a compiled pick (stage-agent.test.tsx)',
+  'agent.brainstorm.attach.file': 'attach menu (stage-agent.test.tsx)', 'agent.editor.attach.file': 'attach menu',
+  'agent.brainstorm.attach.error': 'attachment notice (stage-agent.test.tsx)', 'agent.editor.attach.error': 'attachment notice',
+  'agent.brainstorm.footer.model.option': 'footer model picker (stage-agent.test.tsx)', 'agent.editor.footer.model.option': 'footer model picker',
+  'agent.editor.plancard.step.ops': 'needs a plan with steps (stage-agent.test.tsx)', 'agent.editor.plancard.model': 'needs plan usage', 'agent.editor.plancard.result': 'needs an executed plan',
+  'agent.output.ratio.help.table': 'help popover (stage-agent.test.tsx)', 'agent.output.ratio.auto.hint': 'Auto on with no clip (stage-agent.test.tsx)',
   'stage.timeline.element.selected': 'state variant: aria-selected on stage.timeline.element',
   'agent.editor.plancard.replan': 'only for stale/invalid/failed plans (covered in plancard.test.tsx)',
-  'sys.offline': 'only while the Local Service is unreachable', 'sys.update': 'only after an update notice', 'sys.render.progress': 'only while exporting (covered in plancard.test.tsx)',
+  'sys.offline': 'only while the Local Service is unreachable', 'sys.update': 'only after an update notice', 'sys.update.download': 'update banner (export-licence-help.test.tsx)', 'sys.update.restart': 'update banner (export-licence-help.test.tsx)', 'sys.update.later': 'update banner (export-licence-help.test.tsx)', 'sys.render.progress': 'only while exporting (covered in plancard.test.tsx)',
   'sys.toast': 'transient (asserted in plancard.test.tsx)',
   'hdr.title.sample': 'only on the R-025 sample project (covered in tour.test.tsx)',
   'sys.tour': 'only while the tour runs (covered in tour.test.tsx)', 'sys.tour.next': 'tour (tour.test.tsx)', 'sys.tour.back': 'tour (tour.test.tsx)', 'sys.tour.end': 'tour (tour.test.tsx)',
@@ -31,6 +41,9 @@ const NOT_IN_MOCK: Record<string, string> = {
   'lib.catalogue.params': 'only while a ⓘ Details popover is open (covered in params.test.tsx)', 'lib.catalogue.params.field': 'popover (params.test.tsx)',
   'lib.catalogue.params.apply': 'popover (params.test.tsx)', 'lib.catalogue.params.reset': 'popover (params.test.tsx)',
   'agent.editor.intentqueue.group': 'needs executed picks in an older version (covered in intentqueue.test.tsx)',
+  'lib.text.colour.contrast': 'only for a low-contrast text colour (covered in library.test.tsx)',
+  'lib.assets.card.state.missing': 'only when an original is missing on disk (covered in library.test.tsx)', 'lib.assets.card.action.locate': 'missing asset (library.test.tsx)',
+  'stage.timeline.element.missing': 'missing asset (library.test.tsx)',
   'lib.assets.empty': 'empty project only (asserted in the next test)', 'stage.timeline.empty': 'empty project only (asserted in the next test)',
 };
 const MAIN = /^(hdr|lib|stage|agent|sys)\./;
@@ -61,7 +74,8 @@ describe('main editor element ids', () => {
     fireEvent.change(el('lib.search.input')!, { target: { value: '' } });
     // Home mode + Add Text input
     fireEvent.click(el('hdr.menu.home')!);
-    fireEvent.click(el('lib.text.add')!); sweep();
+    await act(async () => { fireEvent.click(el('lib.text.add')!); });
+    await waitFor(() => { if (!el('lib.text.add.input')) throw new Error('no content field'); }); sweep();
     // Tools mode
     fireEvent.click(el('hdr.menu.tools')!); sweep();
     fireEvent.click(el('hdr.menu.design')!);
@@ -92,6 +106,9 @@ describe('main editor element ids', () => {
     // Failed import → unsupported card + error banner
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
     await act(async () => { fireEvent.change(input, { target: { files: [new File(['x'], 'notes.xyz')] } }); });
+    await waitFor(() => { if (!el('lib.assets.card.state.unsupported')) throw new Error('no unsupported card'); });
+    // FR-053: an import-level error (limit reached) shows the banner with a recovery action
+    await act(async () => { window.dispatchEvent(new CustomEvent('em:import-error', { detail: { code: 'EM-1401' } })); });
     await waitFor(() => { if (!el('lib.assets.error')) throw new Error('no error'); }); sweep();
     // Private Mode banner
     await act(async () => { fireEvent.click(el('agent.output.private')!); });

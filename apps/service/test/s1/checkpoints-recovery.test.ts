@@ -93,6 +93,7 @@ describe('crash recovery on start', () => {
     ckptHash = await headHash(s, pid);
     await s.json(`/projects/${pid}/composition/undo`, { method: 'POST' });       // head moves, autosave not yet written
     s1(s.ctx).checkpoints.autosave.cancel(pid);
+    s1(s.ctx).checkpoints.checkpointDirty = () => [];                              // a crash skips the shutdown checkpoint (FR-165)
     await s.close();
     expect(fs.existsSync(path.join(dataDir, 'data', RUNNING_FLAG))).toBe(false);   // clean stop clears the flag
     fs.writeFileSync(path.join(dataDir, 'data', RUNNING_FLAG), '1');               // …simulate a crash instead

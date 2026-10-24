@@ -77,7 +77,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.menu.home` | Home | Switches Library Panel to Home mode (`lib.text.*`). |
 | `hdr.menu.design` | Design | Switches Library Panel to Design mode (`lib.catalogue.*`). |
 | `hdr.menu.tools` | Tools | Switches Library Panel to Tools mode (`lib.generator.*`). |
-| `hdr.menu.help` | Help | Help menu: `hdr.menu.help.tour`, `.diagnostics`, `.license`, `.about`, `.docs`. |
+| `hdr.menu.help` | Help | Help menu: `hdr.menu.help.tour`, `.onboarding`, `.diagnostics`, `.license`, `.about`, `.docs`. |
 | `hdr.title` | "Untitled" | Editable Project Title; blur or Enter saves. |
 | `hdr.title.dirty` | (dot after title) | Unsaved-changes indicator. |
 | `hdr.action.hardware` | display icon | Hardware Monitor popover (`scr.hardware`). |
@@ -112,7 +112,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `lib.text.align` | (added per brief) | Left / centre / right. |
 | `lib.text.effect` | Home ▸ Text Effect | Text animation presets (rough-notation, kinetic). |
 | `lib.text.variant` | Home ▸ Text Style | Title / Subtitle / Lower third / Callout variants (`preset:text.*`). |
-| `lib.text.add` | Home ▸ Add Text | Opens `lib.text.add.input` (text entry + variant) and adds a Text Layer at the playhead with current picks on confirm (`lib.text.add.confirm`). |
+| `lib.text.add` | Home ▸ Add Text | FR-027: adds a "Your text" ("Teks kamu") Text Layer at the playhead (3000 ms, clamped to the Sequence end) with the current picks and the chosen variant, selects it and focuses `lib.text.add.input` (content of the selected Text Layer; `lib.text.add.confirm` applies `op:text.setContent`). |
 | `lib.text.opacity` | Home ▸ Opacity | Opacity for the selected element. |
 | `lib.text.ratio` | Home ▸ Ratio Setting | Shortcut to `agent.output.ratio.*`. |
 | `lib.text.videosize` | Home ▸ Video Size | Shortcut to `agent.output.resolution.*`. |
@@ -131,7 +131,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `lib.assets.card.state.unsupported` | (state) | Unsupported file with reason (`EM-1xxx`). |
 | `lib.assets.insert` | Insert | Inserts selected Assets in Sequence Badge order. Disabled when nothing selected. |
 | `lib.assets.empty` | (state) | Empty-state copy with import hint. |
-| `lib.assets.error` | (state) | Import error banner. |
+| `lib.assets.error` | (state) | Import-level error banner (FR-053: EM-6401, EM-6005, EM-1401, EM-1010) with a recovery action; per-file errors stay on the card. |
 
 ## Stage (`stage.*`)
 
@@ -192,9 +192,9 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 |---|---|
 | `scr.onboarding` | First-run wizard: `.welcome`, `.license`, `.provider`, `.models`, `.hardware`, `.tour`, `.done`. |
 | `scr.license` | Licence entry / status / purchase link; `.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.trial.continue`, `.remove`, `.rebind`, `.error`. |
-| `scr.providers` | Provider Connections: `.list`, `.add`, `.provider.select`, `.key.input`, `.validate`, `.models.list`, `.assign.brainstorm`, `.assign.editor`, `.budget.project`, `.budget.month`, `.test`, `.save`. |
-| `scr.models` | Model Manager: `.list`, `.row`, `.row.install`, `.row.remove`, `.row.progress`, `.tier`. |
-| `scr.hardware` | Hardware Monitor popover: `.cpu`, `.ram`, `.procmem`, `.disk`, `.gpu`, `.workload`. |
+| `scr.providers` | Provider Connections: `.list`, `.add`, `.provider.select`, `.key.input`, `.validate`, `.models.list`, `.assign.brainstorm`, `.assign.editor`, `.budget.project`, `.budget.month`, `.test`, `.save`. FR-109…FR-119 additions: `.row` (one connection), `.row.usage`, `.row.isdefault`, `.row.edit`, `.row.test`, `.row.default` (Set default), `.row.remove`, `.row.remove.confirm`, `.row.remove.yes`, `.edit`, `.edit.save`, `.add.open`, `.cancel`, `.label.input`, `.provider.disclosure` (what is sent + terms link), `.key.toggle` (show/hide), `.key.shape`, `.locked`, `.models.search`, `.models.refresh`, `.assign.note` (EM-4005 / image-input note), `.budget.warn` (EM-4202), `.test.result`. |
+| `scr.models` | Model Manager: `.list`, `.row`, `.row.install`, `.row.remove`, `.row.progress`, `.tier`. FR-120…FR-126 additions: `.filter`, `.filter.purpose`, `.filter.installed`, `.filter.fits`, `.row.expand`, `.row.card`, `.row.notice` (engine licence notice), `.row.recommended`, `.row.tier`, `.row.status`, `.row.pause`, `.row.cancel`, `.row.install.confirm` (EM-7005), `.row.install.anyway`, `.row.remove.confirm`, `.row.remove.yes`, `.footer`, `.folder` (per-engine open folder), `.registry` (EM-7111). |
+| `scr.hardware` | Hardware Monitor popover: `.cpu`, `.ram`, `.procmem`, `.disk`, `.gpu`, `.workload`. FR-127…FR-130 additions: `.output` (output drive), `.vram`, `.tier`, `.recheck`, `.workload.item`, `.workload.cancel`. |
 | `scr.project.new` / `.open` / `.settings` / `.recover` | Project dialogs; open has `.list`, `.delete` (confirmation); settings has `.name`, `.fps`, `.ratio`, `.resolution`, `.duration.policy`, `.output.folder`; recover has `.list`, `.restore`. |
 | `scr.ratio.custom` | Custom ratio dialog: `.width`, `.height`, `.preview`, `.apply` (clamped 1:3 … 3:1). |
 | `scr.backup` | Backup/Restore dialogs: `.backup.passphrase`, `.backup.plain` (warning), `.backup.start`, `.restore.file`, `.restore.passphrase`, `.restore.start`, `.progress`. |
@@ -223,7 +223,18 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.menu.file.recent.item` | one Recent project row | Opens that Project. |
 | `lib.catalogue` | Catalogue grid container | Holds the category tabs and Catalogue Cards. |
 | `lib.text.size.preset` | one font-size preset chip | Text Panel size pick (deterministic, Compile path). |
-| `lib.text.weight.italic` | italic toggle | Disabled: the text style has no italic field yet. |
+| `lib.text.weight.italic` | "Italic" style option | FR-022: italic, regular weight (`italic` field of `op:text.setStyle` / `op:theme.setTextDefaults`; bundled italic fonts). |
+| `lib.text.weight.regular` | "Regular" style option | FR-022: weight 400, not italic. |
+| `lib.text.weight.bold` | "Bold" style option | FR-022: weight 800, not italic. |
+| `lib.text.weight.bolditalic` | "Bold Italic" style option | FR-022: weight 800, italic. |
+| `lib.text.font.sample` | one font sample card in `lib.text.font` | FR-020: rendered sample in that bundled font; click = font pick (`data-font` = family). |
+| `lib.text.colour.hex` | custom hex input | FR-023: `#RRGGBB`, applied on Enter/blur. |
+| `lib.text.colour.contrast` | "Low contrast" hint | FR-023: shown when the text colour has < 4.5:1 contrast with the background; warn only, the pick still applies. |
+| `lib.catalogue.empty.clear` | "Clear search" in the empty state | FR-040: clears the Catalogue Search. |
+| `lib.assets.card.state.missing` | missing-file state on an Asset card | FR-048: the stored original is not on disk (EM-1301); Locate and Remove actions. |
+| `lib.assets.card.action.locate` | "Locate…" on a missing Asset | FR-048: OS picker → R-036 re-links by hash (EM-1302 when the file differs). |
+| `lib.assets.error.action` | recovery button in `lib.assets.error` | FR-053: "Try again" (EM-6401, EM-6005) or "OK" (EM-1401, EM-1010). |
+| `stage.timeline.element.missing` | "missing" marker on a Timeline Element | FR-048: the element's Asset file is missing; the Player shows a placeholder frame. |
 | `stage.player.menu.safearea` | Player menu item | Toggles the safe-area overlay. |
 | `stage.player.menu.draft` | Player menu item | Draft / full preview quality. |
 | `stage.player.menu.loop` | Player menu item | Loop playback. |
@@ -246,6 +257,20 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `lib.catalogue.params.apply` | "Apply with these settings" | Design Pick with the edited `params` (Compile path). |
 | `lib.catalogue.params.reset` | "Reset to defaults" | Restores the preset defaults in the form. |
 | `agent.editor.intentqueue.group` | "Applied in v5 (3)" row | Collapsed group of the items executed in one older version; `aria-expanded` toggles. |
+| `stage.player.state.error.reload` / `stage.player.state.error.recovery` | Player error card actions | FR-062: "Reload preview" re-issues the media grant and remounts the Player; "Open Recovery" opens `scr.project.recover`. |
+| `stage.player.state.loading` (overlay) | Player loading overlay | FR-061: covers the frame while a newer Composition Version is fetched (`composition.updated`) or media buffers; no older frame is shown as current. |
+| `stage.timeline.element.generated` | "generated" badge on a bar | FR-064: the element's Asset came from a generator job (voice, music, thumbnail). |
+| `agent.brainstorm.message.copy` / `agent.editor.message.copy` | copy icon under a message | FR-077: copies the message text to the clipboard. |
+| `agent.brainstorm.message.retry` / `agent.editor.message.retry` | "Try again" on a saved failure | FR-077: a persisted system message keeps its EM code and inline recovery after a restart. |
+| `agent.editor.message.applied` | "Applied directly: …" line | FR-085: a deterministic pick compiled and applied without any model, in thread order. |
+| `agent.brainstorm.attach.file` / `agent.editor.attach.file` | "Image from this computer" in the attach menu | FR-072: imports a PNG/JPEG/WebP ≤ 10 MB (EM-1002 above) and attaches it. |
+| `agent.brainstorm.attach.error` / `agent.editor.attach.error` | inline attachment notice | FR-072: EM-4307 (model cannot read images) or EM-1002 with Remove attachment / Switch model. |
+| `agent.brainstorm.footer.model.option` / `agent.editor.footer.model.option` | one model row in the footer picker | FR-073: lists models of every validated connection with context, tools, image and price columns; applies to the next request of that agent only. |
+| `agent.editor.plancard.step.ops` / `agent.editor.plancard.model` / `agent.editor.plancard.result` | Plan Card details | FR-081 ops count per step and model name; FR-086 diff summary ("3 added, 1 modified") once executed. |
+| `agent.output.ratio.help.table` | pixel table in the ratio help popover | FR-087/FR-096: PERFORMANCE §3 pixels for every ratio × resolution, computed. |
+| `agent.output.ratio.auto.hint` | "applies after the first insert" | FR-088: Auto is on but there is no Clip yet. |
+| `agent.output.profile.help.learnmore` | "Learn more" next to the profile help | FR-091: what each profile changes (PERFORMANCE §2), shown locally. |
+| `scr.ratio.custom.preset` | extra ratio chip (21:9, 2:1, 1.91:1, 3:2, 2:3, 1:2, 9:21) | FR-092: fills width and height. |
 | `sys.tour` | Tour card | Card of the in-app tour (ONBOARDING_TOUR.md §3); `data-step` = 1…10, `data-phase` = choose/preparing/step/done. |
 | `sys.tour.next` | Tour "Next" | Next step (each step also advances on its real trigger). |
 | `sys.tour.back` | Tour "Back" | Previous step. |
@@ -257,6 +282,94 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `sys.tour.done.own` | Closing card "Start my own project" | Ends the tour and opens `scr.project.new`. |
 
 State variants (UI implementation rule): a superseded queue row uses `agent.editor.intentqueue.item.superseded`; a stale base version `agent.editor.baseversion.stale`; the play button swaps to `stage.player.controls.pause` while playing. Other states keep the base id and use `data-variant`, `aria-pressed` or `aria-selected`. Timeline Elements use `stage.timeline.element` with `data-kind="clip|transition|text|caption|audio|shape|image"`.
+
+## Additions for the project lifecycle (FR-002, FR-004…FR-019, FR-164…FR-178 gap closure, 2026-10-24)
+
+| ID | Element | Behaviour |
+|---|---|---|
+| `hdr.menu.help.onboarding` | Help ▸ Resume onboarding | Reopens `scr.onboarding` at the last step reached (FR-004). |
+| `scr.onboarding.skip` | per-step "Skip" ("Lewati") | On Licence, Provider, Models, Hardware: records the step in the onboarding record and moves on. |
+| `scr.onboarding.provider.consequence` | Provider step note | "Agents stay off until a provider is connected" (FR-007). |
+| `scr.onboarding.hardware.disk` | Hardware step free disk | Free space on the data drive (FR-006). |
+| `scr.onboarding.hardware.recheck` | Hardware step "Check again" | Re-runs the hardware check (R-151) and a live reading (R-152). |
+| `scr.onboarding.done.open` | Done step "Open a new project" | Stores the onboarding record (settings) and opens `scr.project.new` prefilled "Untitled" (FR-008). |
+| `scr.project.new.fps` / `scr.project.new.ratio` / `scr.project.new.resolution` / `scr.project.new.duration.policy` / `scr.project.new.duration.fixed` / `scr.project.new.output.folder` / `scr.project.new.create` | New Project fields | FR-009 defaults: 30 fps, Auto/9:16, 1080p, fit-content, the app output folder. |
+| `scr.project.saveas.create` | Save As "Save copy" | Duplicates the open Project (R-019) and switches to the copy (FR-013). |
+| `scr.project.settings.duration.fixed` | Project Settings fixed length (s) | Shown when the duration policy is fixed; 1–1800 s (FR-015). |
+| `scr.project.open.thumb` | Open dialog thumbnail | First clip thumbnail of the head version (R-027); placeholder icon when none (FR-010). |
+| `scr.project.open.usage` | Open dialog per-project size | Media + checkpoints + Outputs on disk (R-026, FR-178). |
+| `scr.project.open.usage.total` | Open dialog total | Total used by projects and free space on the data drive. |
+| `scr.project.open.delete.confirm` | Delete confirmation button | Permanent delete (R-015 `permanent=true`); typed name required when the Project has Outputs. |
+| `scr.project.open.delete.keepoutputs` | "Keep the exported videos" checkbox | Checked by default; unchecked removes the Output files too (FR-178). |
+| `scr.project.recover.hash` | Recovery row version hash | First 6 characters of the checkpoint's version hash (FR-016); the row also shows the file size. |
+| `scr.backup.backup.folder` | Backup location | Folder field + Browse; defaults to the output folder (FR-017). |
+| `scr.backup.backup.estimate` | Backup size estimate | Originals + versions (+ Outputs when included) against free space (R-026). |
+| `scr.unsaved` | Unsaved changes prompt | `.save`, `.discard` ("Don't save"), `.cancel`; shown before New, Open, Recent and window close when the title / layout state is dirty; states that the composition is already stored (FR-174). |
+| `scr.close.render` | Close during an export | `.cancel` ("Cancel render and close"), `.keep` ("Keep rendering"); EM-8304 (FR-002). |
+
+## Additions: licence, export, help, diagnostics, updates, generators (FR gap closure, 2026-10-24)
+
+| ID | Element | Behaviour |
+|---|---|---|
+| `scr.help` | Offline help (Help ▸ Documentation) | Bundled in the Editor build, works without internet (FR-148); `.sections` holds the topics. |
+| `scr.help.sections` | Offline help topics | Collapsible sections (getting started, import, design, agents, export, Private Mode, licence, troubleshooting). |
+| `scr.help.online` | Online documentation link | Opens the system browser; in Private Mode shows `.blocked` (EM-8202) with the URL to copy instead. |
+| `scr.help.online.blocked` | EM-8202 note with copyable URL | Shown instead of opening the browser while Private Mode is on. |
+| `scr.license.buy.blocked` | EM-8202 note on the buy link | Private Mode: the storefront URL with Copy instead of opening the browser (FR-132). |
+| `scr.license.clock` | "Clock changed" badge | EM-5007, informational; licence state unchanged (FR-134). Also in the header licence popover. |
+| `scr.export.still.time` | PNG frame time (s) | Chosen time for the PNG still (`stillAtMs`), default the playhead; "Use playhead" resets it (FR-138, FR-147). |
+| `scr.export.preflight.fix` | Recovery button of a preflight row | Choose folder, Use Standard, Open Output Settings, Go to assets, Open Diagnostics, Enter licence key, View progress or Check again (FR-139). |
+| `scr.export.preflight.recheck` | "Check again" | Re-runs R-110. |
+| `scr.export.private` | "Private Mode on" row | Context only; exporting works unchanged (FR-163). |
+| `scr.export.elapsed` | Elapsed time | Time since the job started, next to `.eta` (FR-141). |
+| `scr.export.done.thumb` | Done thumbnail | Output thumbnail (R-041 `thumb`, PNG stills show the file) (FR-146). |
+| `scr.export.done.play` | Play | Opens the Output with the system player (`openPath`). |
+| `scr.export.done.copypath` | Copy path | Copies the Output's absolute path. |
+| `scr.export.again` | Export another | Back to the setup state. |
+| `scr.export.diagnostics` | Open Diagnostics on failure | Next to Try again in the failed state (FR-143). |
+| `scr.diagnostics.licence` | Licence state row | Status and code, never the key (FR-150); `.private` appears while Private Mode is on (FR-163). |
+| `scr.diagnostics.private` | "Private Mode on" | Context in Diagnostics (FR-163). |
+| `scr.diagnostics.codes` | Recent EM codes | R-182 list with time, source and job/run id (FR-150). |
+| `scr.diagnostics.bundle.path` | Bundle path | Path of the written zip (copied automatically) with Copy and Open folder. |
+| `scr.about.builddate` | Build date | From R-001 `buildDate` (FR-151). |
+| `scr.about.remotion` | Remotion licence statement | How the Engine is licensed (FR-151). |
+| `scr.about.notices.list` | Third-party notices list | Every bundled Engine Binary and the font licence (FR-151). |
+| `scr.about.gpl` | GPL source offer | Written offer for the GPL components (espeak-ng, compositor FFmpeg; RISK-030, BRD-019). |
+| `sys.update.download` | Update "Download" | Consent to download an available update (FR-152). |
+| `sys.update.restart` | Update "Restart now" | EM-8105; disabled while an export runs, the Shell also defers the install until the queue is empty. |
+| `sys.update.later` | Update "Later" | Hides the banner; the update stays downloaded. |
+| `scr.generate.voice.voice` | Voice picker | Installed Piper/Kokoro voices (FR-101). |
+| `scr.generate.voice.speed` | Speed slider | 0.8–1.2 (FR-101). |
+| `scr.generate.voice.preview` | Audio preview | Plays the generated audio before Insert (FR-101, FR-102). |
+| `scr.generate.voice.install` | Install model | Inline Model Download with size and progress (FR-107). |
+| `scr.generate.voice.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
+| `scr.generate.voice.generated.insert` | Insert a listed result | R-134 (FR-108). |
+| `scr.generate.voice.generated.delete` | Delete a listed result | R-137 (FR-108). |
+| `scr.generate.music.duration` | Music length | 10–120 s (FR-102). |
+| `scr.generate.music.instrumental` | Instrumental toggle | Default on (FR-102). |
+| `scr.generate.music.cc0` | CC0 loop library note | T0 or the loop library chosen (FR-102). |
+| `scr.generate.music.preview` | Audio preview | Plays the generated audio before Insert (FR-101, FR-102). |
+| `scr.generate.music.install` | Install model | Inline Model Download with size and progress (FR-107). |
+| `scr.generate.music.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
+| `scr.generate.music.generated.insert` | Insert a listed result | R-134 (FR-108). |
+| `scr.generate.music.generated.delete` | Delete a listed result | R-137 (FR-108). |
+| `scr.generate.thumbnail.prompt` | Thumbnail image prompt | Optional; empty uses the playhead frame (FR-103). |
+| `scr.generate.thumbnail.count` | Count | Thumbnail candidates 1–4, hashtags 10–20 (FR-103, FR-105). |
+| `scr.generate.thumbnail.candidate` | Thumbnail candidate | Selectable image (FR-103). |
+| `scr.generate.thumbnail.saveoutput` | Save to Outputs | R-136 for the chosen candidate (FR-103). |
+| `scr.generate.thumbnail.install` | Install model | Inline Model Download with size and progress (FR-107). |
+| `scr.generate.thumbnail.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
+| `scr.generate.thumbnail.generated.delete` | Delete a listed result | R-137 (FR-108). |
+| `scr.generate.captions.pages` | Editable caption preview | One text field per caption page; edits are sent with Insert (FR-104). |
+| `scr.generate.captions.install` | Install model | Inline Model Download with size and progress (FR-107). |
+| `scr.generate.captions.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
+| `scr.generate.captions.generated.insert` | Insert a listed result | R-134 (FR-108). |
+| `scr.generate.captions.generated.delete` | Delete a listed result | R-137 (FR-108). |
+| `scr.generate.hashtags.platform` | Platform | TikTok / Instagram / YouTube (FR-105). |
+| `scr.generate.hashtags.count` | Count | Thumbnail candidates 1–4, hashtags 10–20 (FR-103, FR-105). |
+| `scr.generate.hashtags.copycaption` | Copy caption + hashtags | Copies the social caption text with the hashtags (FR-105). |
+| `scr.generate.hashtags.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
+| `scr.generate.hashtags.generated.delete` | Delete a listed result | R-137 (FR-108). |
 
 ## Assumptions where the mockup does not define behaviour
 

@@ -54,7 +54,8 @@ try {
   const ins = await api(`/projects/${pid}/assets/insert`, { method: 'POST', body: JSON.stringify({ assetIds: assets.map((a) => a.id), order: 'given' }) });
   check('insert', ins.status === 200, { status: ins.status, body: JSON.stringify(ins.body).slice(0, 300) });
 
-  // 4. Editor in headless Chrome
+  // 4. Editor in headless Chrome. Returning Creator: onboarding done is recorded server-side (FR-004, R-171).
+  check('onboarding recorded', (await api('/settings', { method: 'PUT', body: JSON.stringify({ onboardingDone: true }) })).status === 200);
   chrome = await launch(9333);
   let page = await openPage(chrome.port, 'http://127.0.0.1:4120/', { width: 1600, height: 900 });
   // Returning Creator: onboarding already done (prefs live in the Editor origin's localStorage).

@@ -21,7 +21,8 @@ import { ModelsScreen } from './screens/Models.js';
 import { CustomRatioDialog, HistoryScreen, NewProjectDialog, OpenProjectDialog, ProjectSettingsDialog, RecoverDialog } from './screens/ProjectDialogs.js';
 import { ExportDialog } from './screens/Export.js';
 import { GenerateSheet } from './screens/Generate.js';
-import { AboutScreen, BackupDialog, ConfirmModal, DiagnosticsScreen, ShortcutSheet } from './screens/Misc.js';
+import { AboutScreen, BackupDialog, ConfirmModal, DiagnosticsScreen, HelpScreen, ShortcutSheet } from './screens/Misc.js';
+import { CloseRenderDialog, LifecycleEffects, UnsavedDialog } from './screens/Lifecycle.js';
 import type { LibMode } from './state/reducer.js';
 import { Splitter } from './components/Splitter.js';
 import { LAYOUT, bucketFor, clamp, defaultSizes, resolveColumns, timelineMax } from './layout.js';
@@ -67,6 +68,7 @@ export function App() {
     setPrefs({ panelSizes: { ...prefs.panelSizes, [bucket]: rest } });
   };
   useShortcuts(collapse);
+  useUpdateBridge();
   const warned = useRef(false);
   useEffect(() => { if (tiny && !warned.current) { warned.current = true; actions.toast('info', 'ui.window.small'); } }, [tiny, actions]);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
@@ -107,6 +109,7 @@ export function App() {
         <Toasts />
         <LiveRegion />
         <Screens />
+        <LifecycleEffects />
         <Tour />
       </div>
     </I18nContext.Provider>
@@ -133,12 +136,7 @@ function Banners() {
   const { state, actions, runtime, dispatch, t } = useStore();
   return (
     <>
-      {state.update && (
-        <div data-el="sys.update" role="region" aria-live="polite" className="z-50 flex items-center gap-2 border-b border-em-info/60 bg-em-panel px-3 py-1.5 text-em-info">
-          <span className="flex-1">{state.update.downloaded ? t('ui.sys.update.restart') : t('ui.sys.update.available', { version: state.update.version })}</span>
-          <IconButton label={t('ui.common.dismiss')} icon={<X size={14} />} size={28} onClick={() => dispatch({ type: 'dismissUpdate' })} />
-        </div>
-      )}
+      {state.update && <UpdateBanner />}
       {state.stream === 'offline' && (
         <div data-el="sys.offline" role="region" aria-live="assertive" className="z-50 flex items-center gap-2 border-b border-em-warn bg-em-panel px-3 py-1.5 text-em-warn">
           <WifiOff size={16} /><span className="font-semibold">{t('ui.sys.offline.title')}</span><span className="flex-1 text-em-text-2">{t('ui.sys.offline.body', { n: Math.min(3, state.streamAttempt) })}</span>
@@ -155,6 +153,48 @@ function Banners() {
   );
 }
 
+/** FR-154: info/success auto-dismiss after 6 s (the "Saved" tick after 1.5 s); warn and error stay until dismissed. */
+export const toastDismissMs = (toast: { kind: string; textKey: string; sticky: boolean }): number | null =>
+  toast.sticky || toast.kind === 'warn' || toast.kind === 'danger' ? null : toast.textKey === 'ui.sys.toast.saved' ? 1500 : 6000;
+
+/** sys.update (FR-152, FR-162): consent to download, EM-8105 Restart now / Later, deferred while a render runs, paused by Private Mode. */
+function UpdateBanner() {
+  const { state, dispatch, t } = useStore();
+  const u = state.update!;
+  const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
+  const act = (a: 'download' | 'restart' | 'later') => { void shell?.updateAction?.(a); if (a === 'later') dispatch({ type: 'dismissUpdate' }); };
+  const status = state.settings?.privateMode ? 'paused' : (u.status ?? (u.downloaded ? 'downloaded' : 'available'));
+  const rendering = state.renders.some((j) => j.status === 'rendering' || j.status === 'queued');
+  return (
+    <div data-el="sys.update" data-status={status} role="region" aria-live="polite" className={cx('z-50 flex items-center gap-2 border-b bg-em-panel px-3 py-1.5', status === 'paused' ? 'border-em-private/60 text-em-private' : status === 'error' ? 'border-em-danger text-em-danger' : 'border-em-info/60 text-em-info')}>
+      <span className="flex-1">
+        {status === 'paused' ? t('ui.sys.update.paused')
+          : status === 'downloading' ? t('ui.sys.update.downloading', { version: u.version, percent: u.percent ?? 0 })
+            : status === 'downloaded' ? t('err.EM-8105.body', { version: u.version })
+              : status === 'deferred' ? t('ui.sys.update.deferred', { version: u.version })
+                : status === 'error' ? `${t(`err.${u.code ?? 'EM-8101'}.title`)} · ${u.code ?? 'EM-8101'}`
+                  : t('ui.sys.update.available', { version: u.version })}
+      </span>
+      {status === 'available' && <Button el="sys.update.download" size={28} onClick={() => act('download')}>{t('ui.sys.update.download')}</Button>}
+      {status === 'downloaded' && <Button el="sys.update.restart" size={28} variant="primary" disabledReason={rendering ? t('ui.sys.update.wait') : null} onClick={() => act('restart')}>{t('ui.sys.update.restartnow')}</Button>}
+      {(status === 'downloaded' || status === 'available') && <Button el="sys.update.later" size={28} variant="ghost" onClick={() => act('later')}>{t('ui.sys.update.later')}</Button>}
+      <IconButton label={t('ui.common.dismiss')} icon={<X size={14} />} size={28} onClick={() => dispatch({ type: 'dismissUpdate' })} />
+    </div>
+  );
+}
+
+/** Subscribes to the Shell's updater state (absent in the browser dev build). */
+function useUpdateBridge() {
+  const { dispatch } = useStore();
+  useEffect(() => {
+    const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
+    if (!shell?.onUpdateState) return;
+    void shell.getUpdateState?.().then((u) => { if (u) dispatch({ type: 'update', update: u }); }).catch(() => undefined);
+    const off = shell.onUpdateState((u) => dispatch({ type: 'update', update: u }));
+    return () => { if (typeof off === 'function') off(); };
+  }, [dispatch]);
+}
+
 function Toasts() {
   const { state, dispatch, t } = useStore();
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -163,14 +203,14 @@ function Toasts() {
     timers.current.set(id, setTimeout(() => { timers.current.delete(id); dispatch({ type: 'dismissToast', id }); }, ms));
   }, [dispatch]);
   useEffect(() => {
-    for (const toast of state.toasts) if (!toast.sticky) schedule(toast.id, toast.kind === 'success' ? 6000 : toast.kind === 'warn' ? 8000 : toast.textKey === 'ui.sys.toast.saved' ? 1500 : 4000);
+    for (const toast of state.toasts) { const ms = toastDismissMs(toast); if (ms !== null) schedule(toast.id, ms); }
   }, [state.toasts, schedule]);
   const pause = (id: string) => { const h = timers.current.get(id); if (h) { clearTimeout(h); timers.current.delete(id); } };
   const tone = { info: 'border-em-info', success: 'border-em-success', warn: 'border-em-warn', danger: 'border-em-danger' } as const;
   return (
     <div className="pointer-events-none fixed bottom-[260px] right-4 z-40 flex w-[340px] flex-col gap-2">
-      {state.toasts.map((toast) => (
-        <div key={toast.id} data-el="sys.toast" role={toast.kind === 'danger' ? 'alert' : 'status'} onMouseEnter={() => pause(toast.id)} onMouseLeave={() => { if (!toast.sticky) schedule(toast.id, 3000); }}
+      {[...state.toasts].reverse().map((toast) => (
+        <div key={toast.id} data-el="sys.toast" role={toast.kind === 'danger' ? 'alert' : 'status'} onMouseEnter={() => pause(toast.id)} onMouseLeave={() => { if (toastDismissMs(toast) !== null) schedule(toast.id, 3000); }}
           className={cx('pointer-events-auto flex items-start gap-2 rounded-[8px] border-l-2 bg-em-panel px-3 py-2', tone[toast.kind])} style={{ boxShadow: 'var(--sh-2)' }}>
           <div className="flex-1">
             <div>{t(toast.textKey, toast.vars)}{toast.count > 1 && <span className="t-mono ml-1 text-em-muted">×{toast.count}</span>}</div>
@@ -210,8 +250,10 @@ function Screens() {
     case 'onboarding': return <Onboarding onClose={close} />;
     case 'license': return <LicenseScreen onClose={close} />;
     case 'providers': return <ProvidersScreen onClose={close} />;
-    case 'models': return <ModelsScreen onClose={close} />;
-    case 'project.new': return <NewProjectDialog onClose={close} />;
+    case 'models': return <ModelsScreen onClose={close} {...(s.focus ? { focus: s.focus } : {})} />;
+    case 'project.new': return <NewProjectDialog onClose={close} saveAs={s.saveAs === true} />;
+    case 'unsaved': return <UnsavedDialog screen={s} onClose={close} />;
+    case 'close.render': return <CloseRenderDialog screen={s} onClose={close} />;
     case 'project.open': return <OpenProjectDialog onClose={close} />;
     case 'project.settings': return <ProjectSettingsDialog onClose={close} />;
     case 'project.recover': return <RecoverDialog onClose={close} />;
@@ -219,6 +261,7 @@ function Screens() {
     case 'generate': return <GenerateSheet kind={s.generator} onClose={close} />;
     case 'diagnostics': return <DiagnosticsScreen onClose={close} />;
     case 'about': return <AboutScreen onClose={close} />;
+    case 'help': return <HelpScreen onClose={close} />;
     case 'backup': return <BackupDialog mode="backup" onClose={close} />;
     case 'restore': return <BackupDialog mode="restore" onClose={close} />;
     case 'ratio.custom': return <CustomRatioDialog onClose={close} />;

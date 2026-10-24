@@ -15,6 +15,8 @@ export const SettingsSchema = z.object({
   telemetry: z.literal(false).default(false),
   updateChannel: z.enum(['stable', 'off']).default('stable'),
   onboardingDone: z.boolean().default(false),
+  // FR-004 onboarding record {completed, skippedSteps[]}: completion and skipped steps live here so they survive a reinstall of the UI cache.
+  onboardingSkippedSteps: z.array(z.enum(['license', 'provider', 'models', 'hardware', 'tour'])).max(5).default([]),
   // SettingsDto fields (API_SPECIFICATION §4): defaults for new Projects and app behaviour.
   theme: z.enum(['dark', 'light', 'system']).default('dark'),
   defaultPerformanceProfile: z.enum(['standard', 'accelerated', 'turbo']).default('standard'),

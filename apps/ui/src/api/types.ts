@@ -34,7 +34,10 @@ export type MediaVariant = 'original' | 'playable' | 'proxy' | 'thumb' | 'filmst
 export interface AssetDto {
   id: Id; projectId: Id; kind: AssetKind; name: string; bytes: number; sha256: string; status: 'ingesting' | 'ready' | 'failed'; progress: number;
   errorCode: string | null; durationMs: number | null; width: number | null; height: number | null; fps: number | null; hasAudio: boolean | null;
-  sequenceBadge: number | null; media: { original: true; playable: boolean; proxy: boolean; thumb: boolean; filmstrip: boolean; waveform: boolean };
+  sequenceBadge: number | null;
+  /** FR-043 codec label ("H.264"); FR-048 the stored original is missing on disk. Optional: older services omit them. */
+  codec?: string | null; missing?: boolean;
+  media: { original: true; playable: boolean; proxy: boolean; thumb: boolean; filmstrip: boolean; waveform: boolean };
   probe?: Record<string, unknown>; createdAt: Iso; updatedAt: Iso;
 }
 
@@ -61,7 +64,7 @@ export interface EditIntent {
 }
 export interface IntentQueueDto { projectId: Id; headHash: string; items: EditIntent[]; lockedKeys: string[] }
 
-export interface PlanStep { n: number; tool: string; ops: OperationT[]; args: Record<string, unknown>; expectedDiff: string; dependsOn: number[] }
+export interface PlanStep { n: number; tool: string; ops: OperationT[]; args: Record<string, unknown>; expectedDiff: string; dependsOn: number[]; /** ops omitted (withOps=false) */ opCount?: number }
 export interface Risk { code: string; message: string; severity: 'info' | 'warn' | 'block' }
 export interface Usage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean }
 export type PlanStatus = 'draft' | 'valid' | 'invalid' | 'stale' | 'executing' | 'executed' | 'failed' | 'cancelled';
@@ -70,23 +73,45 @@ export interface PlanDto {
   notes?: string; status: PlanStatus; validation: Array<{ path: string; message: string; code: string }>; usage?: Usage; stale?: boolean; headHash?: string;
   /** Error code of a failed execution or interrupted run (Editor-side; filled from plan.invalid / ExecutionResult). */
   errorCode?: string;
+  /** FR-086: summary of the ExecutionResult once executed (R-071 PlanDto `result`). */
+  result?: PlanResultSummary | null;
 }
+export interface PlanResultSummary { ok: boolean; toVersion: string | null; appliedOps: number; added: number; removed: number; modified: number }
 export interface ExecutionResult {
   planId: Id; ok: boolean; fromVersion: string; toVersion?: string; appliedOps: number; diff: ElementDiff[];
   error?: { code: string; message: string; step?: number; path?: string }; rollback?: { performed: boolean; toVersion: string }; durationMs: number; notice?: string;
 }
 export interface ElementDiff { elementId: string; change: 'added' | 'removed' | 'modified'; fields: string[] }
-export interface CheckpointDto { id: Id; projectId: Id; versionId: Id; reason: 'autosave' | 'pre-execute' | 'pre-render' | 'manual'; createdAt: Iso; durationMs: number }
+export interface CheckpointDto { id: Id; projectId: Id; versionId: Id; reason: 'autosave' | 'pre-execute' | 'pre-render' | 'manual'; createdAt: Iso; durationMs: number; hash?: string; bytes?: number }
+/** R-017/R-018 fields beside ProjectSettings (FR-009, FR-015). */
+export interface ProjectSettingsExtras { durationPolicy?: 'fit-content' | 'fixed'; fixedDurationMs?: number; outputFolder?: string | null }
+/** R-026 (FR-178, FR-017). */
+export interface DiskUsageItem { projectId: Id; mediaBytes: number; checkpointBytes: number; outputsBytes: number; outputCount: number; totalBytes: number; backupBytes: number; backupOutputsBytes: number }
+export interface DiskUsageDto { items: DiskUsageItem[]; totalBytes: number; freeBytes: number }
+/** R-003 restart recovery summary (FR-171, FR-172). */
+export interface RecoverySummaryDto {
+  startedAt: Iso; unclean: boolean; renders: Array<{ jobId: Id; projectId: Id }>; agentRuns: Array<{ runId: Id; projectId: Id; agent: string }>;
+  ingests: Array<{ assetId: Id; projectId: Id; name: string }>; plans: Array<{ planId: Id; projectId: Id }>; checkpoints: { offered: Id[]; imported: Id[] };
+}
 
 export type ProviderKind = 'openrouter' | 'openai' | 'anthropic' | 'google' | 'custom';
 export interface ConnectionDto {
   id: Id; provider: ProviderKind; label: string; baseUrl: string | null; secretHint: string; status: 'unvalidated' | 'valid' | 'invalid'; validatedAt: Iso | null;
   modelsFetchedAt: Iso | null; budgetMonthUsd: number | null; createdAt: Iso; updatedAt: Iso;
+  /** FR-109: rows in the cached Capability Table (null = never fetched). */
+  modelCount?: number | null;
 }
+/** Capability Table row (FR-114): capability facts are tri-state; `null` = the provider did not report it ("?", never guessed). */
 export interface CapabilityRow {
-  modelId: string; label: string; contextLength: number | null; toolCalling: boolean; structuredOutput: boolean; streaming: boolean; imageInput: boolean;
+  modelId: string; label: string; contextLength: number | null; toolCalling: boolean | null; structuredOutput: boolean | null; streaming: boolean | null; imageInput: boolean | null;
   pricePerMInput: number | null; pricePerMOutput: number | null;
 }
+/** R-103 provider facts for the Add form (FR-111, FR-112). */
+export interface ProviderKindInfo { provider: ProviderKind; enabled: boolean; priority: 'P0' | 'P1' | 'P2'; termsUrl: string | null; keyPattern: string | null; keyExample: string | null }
+/** R-102 one row per agent (FR-116). */
+export interface ProbeResultDto { agent: AgentKind; modelId: string; ok: boolean; latencyMs: number; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; code?: string }
+/** FR-130 workload row (inside HardwareTickDto.workload.items). */
+export interface WorkloadItemDto { kind: 'render' | 'download' | 'ingest' | 'generator' | 'agent'; id: string; label: string; status: string; progress: number | null; cancellable: boolean; pausedReason: 'render' | null }
 export interface AssignmentDto { agent: AgentKind; connectionId: Id; modelId: string; settings: { temperature?: number; maxTokens?: number; effort?: 'low' | 'medium' | 'high' } }
 export interface AssignmentsDto { brainstorm: AssignmentDto | null; editor: AssignmentDto | null; defaultConnectionId: Id | null; warnings?: Issue[] }
 export interface UsageNumbers { inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; contextLength: number | null }
@@ -110,30 +135,50 @@ export interface HardwareProfileDto {
 }
 export interface HardwareTickDto {
   at: Iso; cpuPercent: number; ramFreeMb: number; ramTotalMb: number; processMb: number; chromeMb: number | null; diskFreeMb: number | null; gpuPercent: number | null;
-  workload: { rendering: boolean; ingesting: number; downloading: number; agentRuns: number };
+  /** FR-127: free space on the drive of the output folder. */
+  outputDiskFreeMb?: number | null;
+  workload: { rendering: boolean; ingesting: number; downloading: number; agentRuns: number; items?: WorkloadItemDto[] };
 }
 export interface LicenseDto {
-  status: 'trial' | 'active' | 'revoked' | 'invalid'; tier: string | null; licenseeHash: string | null; updatesUntil: Iso | null; updatesEligible: boolean; machineCode: string;
-  limits: { watermark: boolean; maxResolution: Resolution }; warnings?: string[];
+  status: 'trial' | 'active' | 'revoked' | 'invalid' | 'updates-expired'; tier: string | null; licenseeHash: string | null; updatesUntil: Iso | null; updatesEligible: boolean; machineCode: string;
+  limits: { watermark: boolean; maxResolution: Resolution }; warnings?: string[]; code?: string | null; licenseeName?: string | null; clockAnomaly?: boolean;
 }
 export interface SettingsDto {
   privateMode: boolean; outputFolder: string; autoPlan: boolean; uiLanguage: Lang; theme: 'dark' | 'light' | 'system'; defaultPerformanceProfile: PerformanceProfile;
   defaultRatio: Ratio; defaultResolution: Resolution; defaultFps: Fps; checkUpdates: boolean; diagnosticsIncludeStructure: boolean;
+  /** FR-004 onboarding record (server-side); absent on older services / the mock. */
+  onboardingDone?: boolean; onboardingSkippedSteps?: OnboardingStep[];
 }
+export type OnboardingStep = 'license' | 'provider' | 'models' | 'hardware' | 'tour';
 export type ModelTask = 'stt' | 'tts' | 'image' | 'music';
 export interface ModelStateDto {
   key: string; engine: string; version: string; task: ModelTask; label: string; licence: { name: string; url: string }; tiers: Tier[]; bytesTotal: number; bytesDone: number;
-  status: 'not-installed' | 'downloading' | 'verifying' | 'installed' | 'failed'; errorCode: string | null; installedAt: Iso | null;
+  status: 'not-installed' | 'downloading' | 'verifying' | 'paused' | 'installed' | 'failed'; errorCode: string | null; installedAt: Iso | null;
+  // FR-120…FR-124 model card (optional: older services omit them)
+  pausedReason?: 'render' | null; recommended?: boolean; priority?: 'P1' | 'P2'; languages?: string[]; notes?: string[]; commercialUse?: 'yes' | 'conditional' | 'no';
+  licenceDetail?: { spdx: string | null; redistribution: 'yes' | 'no' | 'verify'; useRestrictions: string | null }; sourceUrl?: string; hashes?: Array<{ name: string; sha256: string | null }>;
+  pathLabel?: string; usedBy?: { generators: string[]; presets: string[] }; engineNotices?: Array<{ label: string; licence: string; spdx: string | null; url: string }>;
 }
+/** R-140 `registry` (SEC-072): which model list is in use. */
+export interface ModelRegistrySource { source: 'built-in' | 'signed'; seq: number; code: string | null; reason: string | null }
 export type GeneratorKind = 'voice' | 'music' | 'thumbnail' | 'captions' | 'hashtags';
 export interface GeneratorJobDto {
   id: Id; projectId: Id; kind: GeneratorKind; status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'; progress: number; modelKey: string | null; resultAssetId: Id | null;
   result: Record<string, unknown> | null; errorCode: string | null; createdAt: Iso; startedAt: Iso | null; finishedAt: Iso | null;
 }
 
+/** R-135 Generator Card (FR-100, FR-107). */
+export interface GeneratorModelDto { key: string; label: string; bytes: number; installed: boolean; languages: string[]; minTier: Tier; belowTier: boolean; cc0: boolean }
+export interface GeneratorCardDto {
+  kind: GeneratorKind; enabled: boolean; priority: 'P1' | 'P2'; llm: boolean; tierHint: 'ok' | 'slow'; model: GeneratorModelDto | null; models: GeneratorModelDto[]; tier?: Tier;
+}
+/** R-182 recent EM codes (FR-150). */
+export interface RecentCodeDto { at: Iso; code: string; source: 'render' | 'generator' | 'agent' | 'log'; ref: string | null }
+
 export interface HealthDto {
   status: 'ok'; version: string; mode: 'production' | 'development'; uptimeMs: number; tier?: Tier; licence?: Pick<LicenseDto, 'status' | 'tier' | 'updatesEligible'>;
-  privateMode?: boolean; engine?: { bundleVersion: string; remotionVersion: string; browserReady: boolean; ffmpeg: boolean }; db?: { schemaVersion: number; ok: boolean };
+  privateMode?: boolean; engine?: { bundleVersion: string; remotionVersion: string | null; browserReady: boolean; ffmpeg: boolean; ok?: boolean; code?: string }; db?: { schemaVersion: number | null; ok: boolean };
+  buildDate?: string;
   workload?: { rendering: boolean; ingesting: number; agentRuns: number; downloading: number }; seq?: number;
 }
 
@@ -141,6 +186,14 @@ export interface HealthDto {
 export interface DesignPickInput {
   source: 'ui' | 'chat'; category: IntentCategory; presetId?: string; params?: Record<string, unknown>; target: ElementRefT; selection?: ElementRefT[]; playheadMs?: number;
   instruction?: string; baseVersion: string; plan?: 'auto' | 'none';
+  /** Output Settings pick (FR-087…FR-097): compiled to op:output.setRatio / .setResolution / .setAutoRatio. */
+  output?: { kind: 'ratio' | 'resolution' | 'fps' | 'autoRatio'; value: unknown; customRatio?: { w: number; h: number } };
+  /** FR-068 (P1): Timeline drag on the video Track. */
+  clipEdit?: { clipId: Id; toIndex?: number; trimBeforeMs?: number; durationMs?: number };
+  /** Deterministic Text Panel field pick (FR-020…FR-028; `content` edits the selected text, FR-027). */
+  field?: string; value?: unknown;
+  /** FR-027 Add Text content (with a `preset:text.*` variant). */
+  text?: string;
 }
 export interface IntentCreateResponse { intent: EditIntent; queue: IntentQueueDto; superseded: string[]; appliedVersion: VersionDto | null; planId: Id | null; notices: Array<{ code: string }> }
 export interface OpenProjectResponse {
@@ -148,17 +201,18 @@ export interface OpenProjectResponse {
 }
 export interface CompositionHeadResponse { head: VersionDto; canUndo: boolean; canRedo: boolean; timing: { durationMs: number; cutStartMs: number[] }; issues: Issue[] }
 export interface RenderCreateInput { projectId: Id; versionId?: Id; outputProfile: OutputProfile; performanceProfile: PerformanceProfile; fileName?: string; folder?: string }
-export type PreflightCheckName = 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence';
+export type PreflightCheckName = 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence' | 'folder';
 export interface RenderEstimate {
   ok: boolean; dimensions: { width: number; height: number }; totalFrames: number; durationMs: number;
   estimate: { seconds: number | null; bytes: number | null; confidence: 'low' | 'medium' | 'high' };
   checks: Array<{ check: PreflightCheckName; ok: boolean; code?: string; details?: unknown }>; effectiveProfile: OutputProfile; watermark: boolean; warnings: Issue[];
+  notices?: string[]; defaultFileName?: string; privateMode?: boolean; queue?: { active: Id | null; queued: number };
 }
 export interface CatalogueItemDto {
   id: string; category: string; label: { en: string; id: string }; tags: string[]; propertyClass: string; priority: string; flags: string[]; preview: string;
   paramsSchema: Record<string, unknown>; defaults: Record<string, unknown>; availability: { ok: boolean; reason?: 'gpu' | 'webgpu' | 'model-missing' | 'licence'; code?: string };
 }
-export interface ProjectCreateInput { name: string; settings?: Partial<ProjectSettingsT>; language?: Lang; theme?: Partial<ThemeT> }
+export interface ProjectCreateInput { name: string; settings?: Partial<ProjectSettingsT>; language?: Lang; theme?: Partial<ThemeT>; durationPolicy?: 'fit-content' | 'fixed'; fixedDurationMs?: number; outputFolder?: string }
 
 // ── SSE ──
 export interface EventEnvelope { seq: number; at: Iso; projectId?: Id }
@@ -179,7 +233,7 @@ export interface EventMap {
   'agent.run.delta': { runId: Id; agent: AgentKind; delta: string; toolCall?: { name: string; input: unknown } };
   'agent.run.done': { run: AgentRunDto; message: MessageDto; usage: UsageNumbers | null; contextUsage: { usedTokens: number; contextLength: number } | null };
   'agent.run.failed': { runId: Id; agent: AgentKind; code: string; retryable: boolean };
-  'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' };
+  'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render' };
   'model.installed': { model: ModelStateDto };
   'model.failed': { key: string; code: string };
   'hardware.tick': HardwareTickDto;

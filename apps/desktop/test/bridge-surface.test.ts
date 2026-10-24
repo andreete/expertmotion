@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { BRIDGE_KEYS, isAllowedExternal } from '../src/lib/constants.js';
+import { BRIDGE_KEYS, isAllowedExternal, isPlayableOutput } from '../src/lib/constants.js';
 
 // SEC-003 / SEC-031: window.expertmotion has exactly the documented keys. The preload builds the
 // object from the same closed set; we assert the set here without importing electron.
 describe('preload bridge surface (SEC-031)', () => {
   it('exposes exactly the documented keys', () => {
-    expect([...BRIDGE_KEYS].sort()).toEqual(['getBootstrap', 'getPathsForFiles', 'onServiceState', 'openExternal', 'openFolder', 'pickFiles', 'pickFolder', 'pickSavePath'].sort());
+    expect([...BRIDGE_KEYS].sort()).toEqual(['getBootstrap', 'getPathsForFiles', 'onServiceState', 'openExternal', 'openFolder', 'pickFiles', 'pickFolder', 'pickSavePath',
+      'onUpdateState', 'getUpdateState', 'updateAction', 'openPath'].sort());
   });
 
   it('exposes no generic invoke pass-through', () => {
@@ -17,5 +18,10 @@ describe('preload bridge surface (SEC-031)', () => {
     expect(isAllowedExternal('https://expertmotion.app/buy')).toBe(true);
     expect(isAllowedExternal('https://shop.expertmotion.app/x')).toBe(true);
     for (const u of ['http://expertmotion.app/buy', 'https://expertmotion.app.evil.com/', 'file:///C:/Windows/system32/calc.exe', 'https://user:pw@expertmotion.app/', 'javascript:alert(1)', 'ms-settings:']) expect(isAllowedExternal(u)).toBe(false);
+  });
+
+  it('openPath only opens rendered media files (FR-146 Play)', () => {
+    for (const p of ['C:\\Users\\a\\Videos\\kopi-9x16-1080p-20261024-0705.mp4', '/home/a/out.gif', 'x.PNG']) expect(isPlayableOutput(p)).toBe(true);
+    for (const p of ['C:\\Windows\\system32\\calc.exe', 'run.bat', 'https://x/y.mp4', 'notes.txt', 'evil.mp4.lnk']) expect(isPlayableOutput(p)).toBe(false);
   });
 });

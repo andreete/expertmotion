@@ -63,6 +63,27 @@ describe('agents module', () => {
     expect(sys).toContain('Bahasa Indonesia');
   });
 
+  it('FR-075: streams agent.run.delta with reply text only, runs read-only tools, never emits composition.updated', async () => {
+    const before = provider;
+    provider = fakeProvider(['{"tool":"catalogue.search","input":{"query":"pudar"}}', JSON.stringify({ reply: 'Coba transisi Pudar yang lembut di setiap potongan.' })]);
+    const sse = collectSse(`${s.base}/api/v1/events?token=${s.token}&projectId=${otherProject}`, (ev) => ev.some((e) => e.event === 'agent.run.done'));
+    await new Promise((r) => setTimeout(r, 50));
+    const r = await s.api(`/projects/${otherProject}/conversations/brainstorm/messages`, { method: 'POST', json: { text: 'transisi halus?', baseVersion: 'v1' } });
+    expect(r.status).toBe(202);
+    const events = await sse;
+    const deltas = events.filter((e) => e.event === 'agent.run.delta').map((e) => String(e.data['delta']));
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(deltas.join('')).toBe('Coba transisi Pudar yang lembut di setiap potongan.');
+    expect(events.map((e) => e.event)).not.toContain('composition.updated');
+    const t = await body<{ messages: { items: Msg[] } }>(await s.api(`/projects/${otherProject}/conversations/brainstorm`));
+    const blocks = t.messages.items.at(-1)!.blocks;
+    expect(blocks[0]).toMatchObject({ type: 'tool_result', name: 'catalogue.search' });
+    expect(blocks.find((b) => b.type === 'text')?.text).toContain('Pudar');
+    const second = (provider as ReturnType<typeof fakeProvider>).calls[1]!;
+    expect(second.messages.at(-1)!.content).toContain('preset:transition.fade');
+    provider = before;
+  });
+
   it('handoff: stale base → EM-2301; converts proposals into EditIntents, rejects what cannot be placed, stores the payload without an enqueue hook', async () => {
     const msg = (await thread()).messages.items[1]!;
     const stale = await s.api(`/projects/${projectId}/conversations/brainstorm/handoff`, { method: 'POST', json: { messageId: msg.id, baseVersion: 'v0' } });

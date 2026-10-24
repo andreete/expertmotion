@@ -235,6 +235,7 @@ Column key: **Diag** = the error card offers "Open Diagnostics" (`scr.diagnostic
 | EM-7108 | error | Model file damaged / File model rusak | The installed {model} file is damaged. Remove and reinstall it from the Model Manager. | File {model} yang terpasang rusak. Hapus dan pasang ulang dari Model Manager. | Reinstall / Pasang ulang → remove + download | modelId, hashCheck | yes | FR-124, FR-125 |
 | EM-7109 | error | Not enough memory for this model / Memori tidak cukup untuk model ini | {tool} needs about {need} GB of free memory for {model}; {have} GB is free now. Close other apps or choose the smaller model. | {tool} membutuhkan sekitar {need} GB memori kosong untuk {model}; saat ini tersedia {have} GB. Tutup aplikasi lain atau pilih model yang lebih kecil. | Use smaller model / Pakai model lebih kecil | model, needBytes, freeBytes, tier | no | LOCAL_AI_MODELS §5 |
 | EM-7110 | info | Model not available yet / Model belum tersedia | {model} is listed but not yet released for download in this version. It will become available in an update. | {model} sudah terdaftar tetapi belum dirilis untuk diunduh di versi ini. Model akan tersedia lewat pembaruan. | OK / Oke | model, reason | no | SEC-074, LOCAL_AI_MODELS §6 |
+| EM-7111 | warn | Model list update not trusted / Pembaruan daftar model tidak tepercaya | The downloaded model list failed its signature check, so Expertmotion keeps using the list built into this version. Models on that list still install normally. | Daftar model yang diunduh gagal pemeriksaan tanda tangan, jadi Expertmotion tetap memakai daftar bawaan versi ini. Model di daftar itu tetap bisa dipasang seperti biasa. | OK / Oke | reason (no-keys, unsigned, malformed-signature, unknown-kid, bad-signature, malformed, stale), kid, seq | no | SEC-072, FR-120 |
 
 ### 6.8 EM-8xxx Desktop Shell, Local Service, updater, network, Private Mode
 
@@ -284,10 +285,10 @@ Column key: **Diag** = the error card offers "Open Diagnostics" (`scr.diagnostic
 | EM-4xxx | 30 | EM-4101, EM-4102, EM-4201, EM-4301; EM-4501…4507 adopted from MCP_AND_TOOLING.md |
 | EM-5xxx | 9 | EM-5001…EM-5006; EM-5009 adopted from LICENSE_OPERATIONS.md |
 | EM-6xxx | 21 (2 deprecated aliases) | EM-6006, EM-6007 cited by LOCAL_AI_MODELS.md → mapped to EM-7006, EM-7004 |
-| EM-7xxx | 14 | — |
+| EM-7xxx | 15 | — |
 | EM-8xxx | 20 | EM-8203 adopted from MCP_AND_TOOLING.md |
 | EM-9xxx | 7 | — |
-| **Total** | **159** (157 live + 2 deprecated aliases) | 11 reserved + 10 adopted |
+| **Total** | **160** (158 live + 2 deprecated aliases) | 11 reserved + 10 adopted |
 
 ## 8. Placeholder vocabulary
 

@@ -25,7 +25,7 @@ export const Theme = z.object({
   defaultEasingId: PresetId,
   textDefaults: z.object({
     fontFamily: z.string().optional(), fontSize: z.number(), weight: z.number(), colour: Hex,
-    align: z.enum(['left', 'center', 'right']), opacity: z.number().min(0).max(1),
+    align: z.enum(['left', 'center', 'right']), opacity: z.number().min(0).max(1), italic: z.boolean().optional(),
   }),
 });
 
@@ -62,7 +62,7 @@ export const TextLayer = z.object({
   timing: Timing, position: Position, maxWidth: z.number().optional(),
   style: z.object({
     fontFamily: z.string().optional(), fontSize: z.number().optional(), weight: z.number().optional(), colour: Hex.optional(),
-    align: z.enum(['left', 'center', 'right']).optional(), opacity: z.number().optional(),
+    align: z.enum(['left', 'center', 'right']).optional(), opacity: z.number().optional(), italic: z.boolean().optional(),
   }),
   effect: z.object({ presetId: PresetId, params: Params.default({}) }).nullable(),
   motion: Motion.nullable(),
@@ -74,7 +74,7 @@ export const OverlayImage = z.object({
 });
 export const OverlayShape = z.object({
   kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, position: Position, size: Size,
-  fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), params: Params.default({}), motion: Motion.nullable(),
+  fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional(), params: Params.default({}), motion: Motion.nullable(),
 });
 export const OverlayElement = z.discriminatedUnion('kind', [OverlayImage, OverlayShape]);
 

@@ -21,8 +21,8 @@ const ms = z.number().int().min(0);
 const dur = z.number().int().min(100);
 const NamedPosition = z.enum(['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 const TextStyle = z.object({
-  fontFamily: z.string().min(1).max(100).optional(), fontSize: z.number().min(34).max(400).optional(), weight: z.number().int().min(100).max(900).optional(),
-  colour: Hex.optional(), align: z.enum(['left', 'center', 'right']).optional(), opacity: z.number().min(0).max(1).optional(),
+  fontFamily: z.string().min(1).max(100).optional(), fontSize: z.number().min(16).max(200).optional(), weight: z.number().int().min(100).max(900).optional(),
+  italic: z.boolean().optional(), colour: Hex.optional(), align: z.enum(['left', 'center', 'right']).optional(), opacity: z.number().min(0).max(1).optional(),
 }).strict();
 
 export type PropertyClass = 'scalar' | 'list' | 'exclusive-group';
@@ -42,7 +42,8 @@ export const OPERATIONS = {
   'op:transition.clear': def({}, ['cut'], null),
   'op:text.add': def({ text: z.string().min(1).max(500), variant: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), styleOverrides: TextStyle.optional() }, null, 'list'),
   'op:text.setContent': def({ text: z.string().min(1).max(500) }, ['text'], 'scalar'),
-  'op:text.setStyle': def(TextStyle.shape, ['text'], 'scalar'),
+  // FR-025: `variant` re-applies a text variant to an existing layer (variantId, variant position; size/weight/align follow the variant).
+  'op:text.setStyle': def({ ...TextStyle.shape, variant: PresetId.optional() }, ['text'], 'scalar'),
   'op:text.setEffect': def({ presetId: PresetId, params: Params.optional() }, ['text'], 'exclusive-group'),
   'op:text.setTiming': def({ atMs: ms, durationMs: dur }, ['text'], 'scalar'),
   'op:text.remove': def({}, ['text'], null, true),
@@ -63,6 +64,8 @@ export const OPERATIONS = {
   // ADR-020 addition (Stage 3): image overlays (FR-029 "Insert Image", logo/product photo). size = width in u; height follows the image aspect.
   'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional() }, null, 'list'),
   'op:overlay.remove': def({}, ['image'], null, true),
+  // FR-028 addition (Stage 3): opacity of an overlay image or a Shape on the overlay Track.
+  'op:overlay.setOpacity': def({ opacity: z.number().min(0).max(1) }, ['image', 'shape'], 'scalar'),
   'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),
   'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, null, 'list'),
   'op:audio.setDucking': def({ presetId: PresetId, params: Params.optional() }, ['audio'], 'exclusive-group'),
@@ -72,6 +75,8 @@ export const OPERATIONS = {
   'op:theme.setTextDefaults': def(TextStyle.shape, ['project'], 'scalar'),
   'op:output.setRatio': def({ ratio: z.enum(RATIOS), customRatio: z.object({ w: z.number().int().min(1), h: z.number().int().min(1) }).strict().optional() }, ['project'], 'scalar'),
   'op:output.setResolution': def({ preset: z.enum(RESOLUTIONS) }, ['project'], 'scalar'),
+  // FR-088: Auto ratio on/off as a Composition Version (on = ratio follows the first Clip's probe; a manual setRatio turns it off).
+  'op:output.setAutoRatio': def({ on: z.boolean() }, ['project'], 'scalar'),
   'op:project.setFps': def({ fps: z.union([z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]) }, ['project'], 'scalar'),
   'op:project.setDurationPolicy': def({ policy: z.enum(['fit-content', 'fixed']), fixedMs: z.number().int().min(1000).max(1_800_000).optional() }, ['project'], 'scalar'),
   'op:generated.insert': def({ kind: z.enum(['voice', 'music', 'thumbnail', 'captions']), jobId: z.string(), atMs: ms.optional() }, ['project'], 'list'),
@@ -95,7 +100,7 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:clip.setFit': return [`${el}.fit`];
     case 'op:transition.set': case 'op:transition.clear': return [`cut:${t?.index ?? ''}.transition`];
     case 'op:text.setContent': return [`${el}.content`];
-    case 'op:text.setStyle': return fields(['fontFamily', 'fontSize', 'weight', 'colour', 'align', 'opacity']).map((f) => `${el}.${f}`);
+    case 'op:text.setStyle': return fields(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity', 'variant']).map((f) => `${el}.${f}`);
     case 'op:text.setEffect': return [`${el}.effect`];
     case 'op:text.setTiming': return [`${el}.timing`];
     case 'op:text.remove': case 'op:shape.remove': case 'op:audio.remove': case 'op:overlay.remove': return [el];
@@ -108,10 +113,12 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:effect.add': case 'op:effect.remove': case 'op:effect.setParams': return [`${el}.effects.${String(a['presetId'])}`];
     case 'op:audio.setDucking': return [`${el}.ducking`];
     case 'op:audio.setFades': return fields(['fadeInMs', 'fadeOutMs']).map((f) => `${el}.${f}`);
+    case 'op:overlay.setOpacity': return [`${el}.opacity`];
     case 'op:theme.set': return fields(['paletteId', 'fontPairId', 'defaultEasingId']).map((f) => `theme.${f}`);
-    case 'op:theme.setTextDefaults': return fields(['fontFamily', 'fontSize', 'weight', 'colour', 'align', 'opacity']).map((f) => `theme.textDefaults.${f}`);
+    case 'op:theme.setTextDefaults': return fields(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity']).map((f) => `theme.textDefaults.${f}`);
     case 'op:output.setRatio': return ['project.ratio'];
     case 'op:output.setResolution': return ['project.resolution'];
+    case 'op:output.setAutoRatio': return ['project.ratioAuto'];
     case 'op:project.setFps': return ['project.fps'];
     case 'op:project.setDurationPolicy': return ['project.durationPolicy'];
     default: return [];                                         // list additions (text.add, shape.add, audio.add*, generated.insert) touch no existing key

@@ -10,14 +10,19 @@ import { PROJECT_SELECT, decodeCursor, encodeCursor, planDto, projectDto, versio
 import type { Checkpoints } from './checkpoints.js';
 import type { CompositionStore } from './store.js';
 import type { Workflow } from './workflow.js';
+import { checkOutputFolder } from '../modules/settings.js';
+import { outputAbsPath } from '../s2/render-repo.js';
+import { freeBytes } from '../s2/common.js';
 
 export const PURGE_AFTER_MS = 30 * 24 * 3_600_000;
+/** R-017/R-018 fields beside ProjectSettings: duration policy (model) and the per-project output folder (FR-009, FR-015). */
+export interface ProjectExtras { durationPolicy: 'fit-content' | 'fixed'; fixedDurationMs?: number; outputFolder: string | null }
 const ASSET_PATH_COLS = ['original_path', 'playable_path', 'proxy_path', 'thumb_path', 'filmstrip_path', 'waveform_path'] as const;
 
 export class Projects {
   constructor(private readonly ctx: ServiceContext, private readonly store: CompositionStore, private readonly ckpt: Checkpoints, private readonly wf: Workflow) {}
 
-  create(input: { name: string; settings?: object | undefined; language: 'id' | 'en'; theme?: object | undefined }) {
+  create(input: { name: string; settings?: object | undefined; language: 'id' | 'en'; theme?: object | undefined; durationPolicy?: 'fit-content' | 'fixed' | undefined; fixedDurationMs?: number | undefined; outputFolder?: string | undefined }) {
     this.store.assertNameFree(input.name);
     const id = this.ctx.newId(), now = this.ctx.now();
     const defined = (o: object | undefined) => Object.fromEntries(Object.entries(o ?? {}).filter(([, v]) => v !== undefined));
@@ -28,7 +33,15 @@ export class Projects {
     let model: CompositionModelT;
     try { model = createEmptyModel(id, settings, theme); } catch (e) { throw new EmError('EM-9002', 'Invalid request: project settings.', { status: 400, path: 'body.settings', cause: e }); }
     this.checkCustomRatio(model.settings);
-    this.insertProject(id, input.name.trim(), model, input.language, now);
+    // FR-009: duration policy and output folder are chosen in the New dialog (v1 carries the policy; the folder is a project setting).
+    if (input.durationPolicy === 'fixed') {
+      if (!input.fixedDurationMs) throw new EmError('EM-9002', 'Invalid request: a fixed duration needs fixedDurationMs.', { status: 400, path: 'body.fixedDurationMs' });
+      model.durationPolicy = 'fixed'; model.fixedDurationMs = input.fixedDurationMs;
+    }
+    const folder = input.outputFolder ? checkOutputFolder(input.outputFolder) : null;
+    this.insertProject(id, input.name.trim(), model, input.language, now, folder ? () => {
+      this.ctx.db.prepare("UPDATE projects SET settings_json = json_set(settings_json, '$.outputFolder', ?) WHERE id = ?").run(folder, id);
+    } : undefined);
     try { fs.mkdirSync(path.join(this.ctx.paths.media, id), { recursive: true }); } catch (e) {
       throw new EmError((e as NodeJS.ErrnoException).code === 'ENOSPC' ? 'EM-6005' : 'EM-6401', 'The project media folder could not be created.', { cause: e });
     }
@@ -98,9 +111,11 @@ export class Projects {
    * them), media folder and checkpoint files. Used by the 30-day purge and for the Sample Project (R-025). Returns false (and
    * keeps the project) when a render or agent run is active or the delete fails.
    */
-  hardDelete(id: string): boolean {
-    const busy = this.ctx.db.prepare("SELECT (SELECT count(*) FROM render_jobs WHERE project_id = ? AND status IN ('queued','rendering')) + (SELECT count(*) FROM agent_runs WHERE project_id = ? AND status = 'running') AS n").get(id, id) as { n: number };
-    if (busy.n > 0 || this.wf.activeRun(id)) { this.ctx.log.warn({ projectId: id }, 'hard delete skipped: project busy'); return false; }
+  hardDelete(id: string, opts: { keepOutputs?: boolean } = {}): boolean {
+    if (this.busy(id)) { this.ctx.log.warn({ projectId: id }, 'hard delete skipped: project busy'); return false; }
+    // Output files are kept unless the Creator chose otherwise (FR-175: Outputs until deleted by the Creator; FR-178 option).
+    const outFiles = opts.keepOutputs === false ? (this.ctx.db.prepare('SELECT path, thumb_path FROM outputs WHERE project_id = ?').all(id) as Array<{ path: string; thumb_path: string | null }>)
+      .flatMap((o) => [o.path, ...(o.thumb_path ? [o.thumb_path] : [])].map((x) => outputAbsPath(this.ctx, x))) : [];
     try {
       this.ctx.db.transaction(() => {
         for (const t of ['operations_history', 'usage_records', 'outputs', 'render_jobs', 'generator_jobs', 'edit_plans', 'recovery_checkpoints', 'edit_intents', 'messages', 'conversations', 'agent_runs']) {
@@ -117,8 +132,53 @@ export class Projects {
       this.store.forget(id);
       fs.rmSync(path.join(this.ctx.paths.media, id), { recursive: true, force: true });
       this.ckpt.removeProjectFiles(id);
+      for (const f of outFiles) { try { fs.rmSync(f, { force: true }); } catch { /* ignore */ } }
+      if (opts.keepOutputs === false) { try { fs.rmSync(path.join(this.ctx.paths.outputs, id), { recursive: true, force: true }); } catch { /* ignore */ } }
       return true;
     } catch (e) { this.ctx.log.warn({ projectId: id, err: String(e) }, 'hard delete failed'); return false; }
+  }
+
+  private busy(id: string): boolean {
+    const busy = this.ctx.db.prepare("SELECT (SELECT count(*) FROM render_jobs WHERE project_id = ? AND status IN ('queued','rendering')) + (SELECT count(*) FROM agent_runs WHERE project_id = ? AND status = 'running') AS n").get(id, id) as { n: number };
+    return busy.n > 0 || this.wf.activeRun(id) !== undefined;
+  }
+
+  /** R-015 `permanent=true` (FR-178, Open ▸ Delete): rows, media and checkpoints now; Output files only when keepOutputs is false. */
+  deletePermanently(id: string, keepOutputs: boolean): void {
+    this.store.projectRow(id, { includeDeleted: true });
+    if (this.busy(id)) throw new EmError('EM-2309', 'A render or agent request is running for this project. Wait for it to finish, then try again.', { details: { projectId: id } });
+    if (!this.hardDelete(id, { keepOutputs })) throw new EmError('EM-6401', 'The project could not be deleted.', { details: { projectId: id } });
+  }
+
+  /**
+   * R-026 (FR-178, FR-017): disk use per project (media folder, checkpoints, Output files) with a backup size estimate
+   * (original media + Outputs listed separately, plus the JSON parts), the total, and free space on the data drive.
+   */
+  async diskUsage(projectId?: string) {
+    const db = this.ctx.db;
+    const ids = projectId ? [this.store.projectRow(projectId).id]
+      : (db.prepare('SELECT id FROM projects WHERE deleted_at IS NULL ORDER BY updated_at DESC').all() as Array<{ id: string }>).map((r) => r.id);
+    const items = ids.map((id) => {
+      const mediaBytes = dirBytes(path.join(this.ctx.paths.media, id));
+      const checkpointBytes = dirBytes(path.join(this.ctx.paths.checkpoints, id));
+      const o = db.prepare('SELECT count(*) AS n, coalesce(sum(bytes), 0) AS b FROM outputs WHERE project_id = ?').get(id) as { n: number; b: number };
+      const originals = (db.prepare('SELECT coalesce(sum(bytes), 0) AS b FROM assets WHERE project_id = ?').get(id) as { b: number }).b;
+      const json = (db.prepare('SELECT coalesce(sum(length(model_json)), 0) AS b FROM (SELECT model_json FROM composition_versions WHERE project_id = ? ORDER BY created_at DESC LIMIT 50)').get(id) as { b: number }).b;
+      return { projectId: id, mediaBytes, checkpointBytes, outputsBytes: o.b, outputCount: o.n, totalBytes: mediaBytes + checkpointBytes + o.b, backupBytes: originals + json + 64_000, backupOutputsBytes: o.b };
+    });
+    return { items, totalBytes: items.reduce((n, i) => n + i.totalBytes, 0), freeBytes: await freeBytes(this.ctx.paths.data) };
+  }
+
+  /** R-027 (FR-010): the Open dialog thumbnail: the first clip's thumbnail of the head version, else any asset thumbnail. */
+  thumbnailFile(id: string): string | null {
+    this.store.projectRow(id);
+    let first: string | undefined;
+    try { first = this.store.head(id).model.tracks.video[0]?.assetId; } catch { /* unreadable head: fall back */ }
+    const rows = this.ctx.db.prepare('SELECT id, thumb_path FROM assets WHERE project_id = ? AND thumb_path IS NOT NULL ORDER BY created_at').all(id) as Array<{ id: string; thumb_path: string }>;
+    const pick = rows.find((r) => r.id === first) ?? rows[0];
+    if (!pick) return null;
+    const root = path.resolve(this.ctx.paths.media), abs = path.resolve(root, pick.thumb_path);
+    return abs.startsWith(root + path.sep) && fs.existsSync(abs) ? abs : null;
   }
 
   /** R-016: one call restores the Editor state. Lazy model migration; corrupt head → newest valid checkpoint (FR-166). */
@@ -151,18 +211,19 @@ export class Projects {
     };
   }
 
-  getSettings(id: string): ProjectSettingsT {
+  getSettings(id: string): ProjectSettingsT & ProjectExtras {
     const p = this.store.projectRow(id);
     const h = this.store.head(id);
-    const s = JSON.parse(p.settings_json) as ProjectSettingsT;
+    const s = JSON.parse(p.settings_json) as ProjectSettingsT & { outputFolder?: string };
     const m = h.model.settings;
-    const out: ProjectSettingsT = { ...s, fps: m.fps, ratio: m.ratio, resolution: m.resolution, autoRatio: s.autoRatio ?? m.autoRatio, language: s.language ?? p.language };
+    // FR-015: the duration policy lives on the model (op:project.setDurationPolicy); the output folder is a stored project setting.
+    const out: ProjectSettingsT & ProjectExtras = { durationPolicy: h.model.durationPolicy, ...(h.model.fixedDurationMs ? { fixedDurationMs: h.model.fixedDurationMs } : {}), outputFolder: s.outputFolder ?? null, ...s, fps: m.fps, ratio: m.ratio, resolution: m.resolution, autoRatio: m.autoRatio, language: s.language ?? p.language };
     if (m.customRatio) out.customRatio = m.customRatio; else delete out.customRatio;
     return out;
   }
 
   /** R-018: fps / ratio / resolution changes become system-source intents compiled into ops (UX-010); others are stored. */
-  putSettings(id: string, body: ProjectSettingsT) {
+  putSettings(id: string, body: ProjectSettingsT & { durationPolicy?: ProjectExtras['durationPolicy'] | undefined; fixedDurationMs?: number | undefined; outputFolder?: string | null | undefined }) {
     this.store.projectRow(id);
     this.checkCustomRatio(body);
     const head = this.store.head(id), cur = head.model.settings;
@@ -171,6 +232,17 @@ export class Projects {
     if (body.ratio !== cur.ratio || JSON.stringify(body.customRatio ?? null) !== JSON.stringify(cur.ratio === 'custom' ? cur.customRatio ?? null : null))
       picks.push({ projectId: id, source: 'system', output: { kind: 'ratio', value: body.ratio, ...(body.ratio === 'custom' && body.customRatio ? { customRatio: body.customRatio } : {}) } });
     if (body.resolution !== cur.resolution) picks.push({ projectId: id, source: 'system', output: { kind: 'resolution', value: body.resolution } });
+    // FR-088/FR-095: Auto is a model setting; a ratio change turns it off, so compare against what the ratio op leaves behind.
+    const autoAfterRatio = picks.some((pk) => pk.output?.kind === 'ratio') ? false : cur.autoRatio;
+    if (body.autoRatio !== undefined && body.autoRatio !== autoAfterRatio) picks.push({ projectId: id, source: 'system', output: { kind: 'autoRatio', value: body.autoRatio } });
+    // FR-015: output / project.durationPolicy / scalar → op:project.setDurationPolicy (Edit Intent, Compile path).
+    if (body.durationPolicy !== undefined) {
+      if (body.durationPolicy === 'fixed' && !body.fixedDurationMs && !head.model.fixedDurationMs) throw new EmError('EM-9002', 'Invalid request: a fixed duration needs fixedDurationMs.', { status: 400, path: 'body.fixedDurationMs' });
+      const fixedMs = body.durationPolicy === 'fixed' ? body.fixedDurationMs ?? head.model.fixedDurationMs : undefined;
+      if (body.durationPolicy !== head.model.durationPolicy || (fixedMs !== undefined && fixedMs !== head.model.fixedDurationMs))
+        picks.push({ projectId: id, source: 'system', output: { kind: 'durationPolicy', value: body.durationPolicy, ...(fixedMs !== undefined ? { fixedMs } : {}) } });
+    }
+    const folder = body.outputFolder === undefined ? undefined : body.outputFolder === null || body.outputFolder === '' ? null : checkOutputFolder(body.outputFolder);
     let version = null;
     if (picks.length) {
       const incoming: EditIntentT[] = [];
@@ -181,7 +253,8 @@ export class Projects {
       version = this.wf.applyNow(id, incoming.map((i) => i.id), { reason: 'compiled', goal: 'Project settings' }).version;
     }
     const p = this.store.projectRow(id);
-    const stored = { ...(JSON.parse(p.settings_json) as Record<string, unknown>), autoRatio: body.autoRatio, language: body.language };
+    const stored: Record<string, unknown> = { ...(JSON.parse(p.settings_json) as Record<string, unknown>), language: body.language };
+    if (folder === null) delete stored['outputFolder']; else if (folder !== undefined) stored['outputFolder'] = folder;
     this.ctx.db.prepare('UPDATE projects SET settings_json = ?, language = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(stored), body.language, this.ctx.now(), id);
     const warnings = this.ctx.hooks.tier() === 'T0' && (body.resolution === '2k' || body.resolution === '2160p')
       ? [{ code: 'EM-3105', path: 'settings.resolution', message: `${body.resolution} is not available on this computer; export will offer 1080p.`, severity: 'warn' }] : [];
@@ -268,6 +341,17 @@ export class Projects {
     try { this.ctx.hooks.headChanged(nid, h.versionId); } catch { /* ignore */ }
     return this.store.projectDto(nid);
   }
+}
+
+/** Bytes under a folder (no symlinks, bounded depth); 0 when missing. */
+export function dirBytes(p: string, depth = 0): number {
+  try {
+    const st = fs.lstatSync(p);
+    if (st.isSymbolicLink()) return 0;
+    if (!st.isDirectory()) return st.size;
+    if (depth > 8) return 0;
+    return fs.readdirSync(p).reduce((n, f) => n + dirBytes(path.join(p, f), depth + 1), 0);
+  } catch { return 0; }
 }
 
 function renderJobDto(r: Record<string, unknown>) {

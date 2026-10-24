@@ -327,7 +327,7 @@ export const Theme = z.object({
   paletteId: PresetId,                        // preset:palette.*
   fontPairId: PresetId,                       // preset:fontpair.*
   defaultEasingId: PresetId,                  // preset:easing.* (op:theme.set)
-  textDefaults: z.object({ fontFamily: z.string().optional(), fontSize: z.number(), weight: z.number(), colour: Hex, align: z.enum(['left','center','right']), opacity: z.number().min(0).max(1) }), // op:theme.setTextDefaults
+  textDefaults: z.object({ fontFamily: z.string().optional(), fontSize: z.number(), weight: z.number(), colour: Hex, align: z.enum(['left','center','right']), opacity: z.number().min(0).max(1), italic: z.boolean().optional() }), // op:theme.setTextDefaults
 });
 
 const Position = z.object({ x: z.number(), y: z.number() });      // in u (layout units), origin centre of frame
@@ -355,14 +355,14 @@ export const TextLayer = z.object({
   id: z.string(), variantId: PresetId,          // preset:text.*
   text: z.string().min(1).max(500),
   timing: Timing, position: Position, maxWidth: z.number().optional(),
-  style: z.object({ fontFamily: z.string().optional(), fontSize: z.number().optional(), weight: z.number().optional(), colour: Hex.optional(), align: z.enum(['left','center','right']).optional(), opacity: z.number().optional() }),
+  style: z.object({ fontFamily: z.string().optional(), fontSize: z.number().optional(), weight: z.number().optional(), colour: Hex.optional(), align: z.enum(['left','center','right']).optional(), opacity: z.number().optional(), italic: z.boolean().optional() }),
   effect: z.object({ presetId: PresetId, params: z.record(z.unknown()).default({}) }).nullable(),
   motion: Motion.nullable(),
 });
 
 export const OverlayElement = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, position: Position, size: Size, objectFit: z.enum(['cover','contain']), opacity: z.number(), motion: Motion.nullable(), effects: z.array(EffectInstance).max(3) }),
-  z.object({ kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, position: Position, size: Size, fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), params: z.record(z.unknown()).default({}), motion: Motion.nullable() }),
+  z.object({ kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, position: Position, size: Size, fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional() /* op:overlay.setOpacity */, params: z.record(z.unknown()).default({}), motion: Motion.nullable() }),
 ]);
 
 export const CaptionPage = z.object({ text: z.string(), startMs: z.number().int(), durationMs: z.number().int(), tokens: z.array(z.object({ text: z.string(), fromMs: z.number().int(), toMs: z.number().int() })) });
@@ -418,6 +418,7 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 | 1 | init | the §3 DDL |
 | 10 | s1_versions_plans | replaces the unique index on `composition_versions(project_id, hash)` with a plain index (undo/redo append a row that copies an earlier model, so hashes repeat); `edit_plans` gains `intent_ids_json`, `message`, `result_json`, `idempotency_key`. Note: `projects.head_version_id` is not declared as a foreign key in §3 (circular reference); the service keeps it consistent in the commit transaction |
 | 11 | s1_sample_project | `projects.is_sample INTEGER NOT NULL DEFAULT 0 CHECK(is_sample IN (0,1))` and a partial index on it: flags the onboarding Sample Project (API R-025) so it is found again (idempotent create) and hard-deleted when the Creator creates or opens another project. Duplicates (R-019) and restored backups are never samples |
+| 12 | s1_redo_stack | `projects.redo_json TEXT` (JSON array of version ids, newest last; NULL = empty): the Redo stack (FR-168, R-054) survives a Service restart; written in the same transaction as the undo/redo version and cleared by any other new version |
 | 30 | s3_budgets_defaults_handoffs | `project_budgets(project_id, limit_usd, updated_at)` (per-project AI cap per calendar month, NULL or 0 = no limit, FR-117); `provider_defaults(default_connection_id)` (R-097); `brainstorm_handoffs(id, project_id, message_id, intents_json, status pending/enqueued, created_at)` (R-082 payloads until the intents module enqueues them); `agent_runs.plan_id`; indexes on runs and `usage_records` |
 
 Later migrations append rows here (ADR-024).
@@ -441,7 +442,8 @@ Later migrations append rows here (ADR-024).
 ## 8. Retention and disk management
 
 - Versions: unlimited rows (small); checkpoints 20 files/project; outputs kept until the Creator deletes; proxies/thumbs regenerable (cache; "Clear caches" in Settings).
-- Deleted projects purged after 30 days (`deleted_at`), media removed with them.
+- Deleted projects purged after 30 days (`deleted_at`), media removed with them; Open ▸ Delete (R-015 `permanent=true`, FR-178) removes rows, media and checkpoints at once and keeps Output files unless the Creator unticks "keep".
+- Housekeeping at start (FR-175, `apps/service/src/s1/retention.ts`): generator results never inserted into the composition are deleted 7 days after the job finished (with their result asset when no version references it); Usage Records older than 12 months are deleted. Logs keep 7 days (logger), checkpoints 20 per project (on write).
 - Disk check before ingest/render (PERFORMANCE.md §7); Model Manager shows per-model size and total.
 
 ## 9. Example (abbreviated) Composition Model
