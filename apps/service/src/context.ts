@@ -17,7 +17,8 @@ export interface Resources {
   binariesDirectory?: string;           // Remotion compositor (packaged: resources/engine/compositor)
   ffmpeg: string; ffprobe: string;      // ingestion binaries (ADR-019)
   loopsDir: string;
-  licenseDir: string;                   // resources/license (embedded revoked.json + .sig)                     // resources/catalogue (<category>/<name>.webm, DESIGN_CATALOGUE §2)
+  licenseDir: string;
+  enginesDir: string;                   // resources/engines/<engine>/<version>/ (whisper.cpp, sherpa-onnx, sd.cpp; LOCAL_AI_MODELS §3)                   // resources/license (embedded revoked.json + .sig)                     // resources/catalogue (<category>/<name>.webm, DESIGN_CATALOGUE §2)
 }
 
 export interface Hooks {

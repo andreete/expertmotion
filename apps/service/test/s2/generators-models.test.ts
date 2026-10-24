@@ -59,7 +59,7 @@ describe('Model Manager (R-140…R-144) through the egress module', () => {
     expect(ev.data['code']).toBe('EM-7003');
     expect((await json<ModelDto>(await s.api('/models/voice-bad'))).errorCode).toBe('EM-7003');
     const u = await s.api('/models/unpinned/install', { method: 'POST' });
-    expect(u.status).toBe(422); expect((await json<{ error: { code: string } }>(u)).error.code).toBe('EM-7003');
+    expect(u.status).toBe(422); expect((await json<{ error: { code: string } }>(u)).error.code).toBe('EM-7110');
     expect((await s.api('/models/nope/install', { method: 'POST' })).status).toBe(404);
   });
   it('Private Mode blocks downloads with 423 EM-8202 and nothing is fetched', async () => {

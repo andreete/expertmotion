@@ -89,7 +89,7 @@ export function normalizeProbe(kind: AssetKind, p: ProbeJson): MediaFacts {
 }
 
 /** §1/§2 limits after probe. Returns an EM code + reason, or null. */
-export function checkLimits(f: MediaFacts): { code: 'EM-1001' | 'EM-1008'; reason: string } | null {
+export function checkLimits(f: MediaFacts): { code: 'EM-1001' | 'EM-1008' | 'EM-1011'; reason: string } | null {
   if (f.kind === 'image') {
     if (!f.width || !f.height) return { code: 'EM-1001', reason: 'no-image' };
     if (f.width > MAX_IMAGE_SIDE || f.height > MAX_IMAGE_SIDE) return { code: 'EM-1008', reason: 'dimensions' };
@@ -100,7 +100,7 @@ export function checkLimits(f: MediaFacts): { code: 'EM-1001' | 'EM-1008'; reaso
     if (f.width < 64 || f.height < 64 || Math.max(f.width, f.height) > 7680 || Math.min(f.width, f.height) > 4320) return { code: 'EM-1001', reason: 'dimensions' };
   }
   if (f.kind === 'audio' && !f.hasAudio) return { code: 'EM-1001', reason: 'no-audio-stream' };
-  if (f.durationMs !== null && f.durationMs > MAX_DURATION_MS) return { code: 'EM-1001', reason: 'duration' };
+  if (f.durationMs !== null && f.durationMs > MAX_DURATION_MS) return { code: 'EM-1011', reason: 'duration' };
   return null;
 }
 

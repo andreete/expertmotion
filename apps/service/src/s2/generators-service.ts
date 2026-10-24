@@ -104,7 +104,7 @@ export class GeneratorsService {
   recover(): number {
     return this.ctx.db.prepare("UPDATE generator_jobs SET status = 'failed', error_code = 'EM-8003', finished_at = ? WHERE status IN ('queued','running')").run(this.ctx.now()).changes;
   }
-  enginesDir(): string { return this.opts.enginesDir ?? process.env['EM_ENGINES'] ?? path.resolve(path.dirname(path.dirname(this.ctx.resources.engineBundle)), 'engines'); }
+  enginesDir(): string { return this.opts.enginesDir ?? this.ctx.resources.enginesDir; }
   /** `<engines>/<engine>/` or its single version sub-folder (LOCAL_AI_MODELS §3.1 `resources/engines/<engine>/<version>/`). */
   engineDir(engine: string): string {
     const d = path.join(this.enginesDir(), engine);
@@ -191,7 +191,7 @@ export class GeneratorsService {
       if (!asset) throw em('EM-9003', 'Not found.');
       if (asset.status !== 'ready') throw em('EM-1301', `"${asset.name}" is not ready yet.`, { status: 422 });
       if (asset.has_audio !== 1) throw em('EM-7103', `"${asset.name}" has no audio to transcribe.`, { details: { tool: 'captions.generate', reason: 'no-audio' } });
-      if ((asset.duration_ms ?? 0) > 1_800_000) throw em('EM-1001', 'This clip is longer than 30 minutes.', { details: { reason: 'duration' } });
+      if ((asset.duration_ms ?? 0) > 1_800_000) throw em('EM-1011', 'This clip is longer than 30 minutes.', { details: { reason: 'duration' } });
       const key = typeof b['modelKey'] === 'string' ? b['modelKey'] : defaultModelFor('stt', tier);
       const def = await this.requireInstalled(key, 'Generate Captions');
       const src = path.resolve(ctx.paths.media, asset.playable_path ?? asset.original_path);

@@ -57,7 +57,7 @@ export class ModelsService {
     const ctx = this.ctx; const def = this.require(key);
     if (ctx.settings.get().privateMode) throw em('EM-8202', 'Private Mode is on, so the model download was not started.', { details: { action: 'model download' } });
     if (this.live.has(def.key) || this.queue.has(def.key)) throw em('EM-7104', `${def.label} is already being downloaded.`, { status: 409, details: { modelId: def.key } });
-    if (!isPinned(def)) throw em('EM-7003', `${def.label} has no pinned checksum yet, so it cannot be verified.`, { details: { modelId: def.key, reason: 'unpinned' } });
+    if (!isPinned(def)) throw em('EM-7110', `${def.label} has no pinned checksum yet, so it cannot be verified.`, { details: { modelId: def.key, reason: 'unpinned' } });
     const st = await readInstallState(def, ctx.paths.models);
     if (st.manifest?.state === 'installed') return this.dto(def);
     const free = await (this.opts.freeBytes ?? freeBytes)(ctx.paths.models);
