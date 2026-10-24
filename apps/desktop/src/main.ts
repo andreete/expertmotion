@@ -18,7 +18,7 @@
  * The decision logic is in ./lib/* (pure, unit-tested on Linux). This file wires Electron to it.
  * Electron cannot run on the Linux dev server, so this file is typecheck-only here; see README.
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, safeStorage, session, shell, Tray, utilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, safeStorage, screen, session, shell, Tray, utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { randomBytes, createHash, verify as nodeVerify } from 'node:crypto';
@@ -31,6 +31,7 @@ import {
   SHUTDOWN_KILL_AFTER_MS, SHUTDOWN_REQUEST_WAIT_MS,
 } from './lib/constants.js';
 import { pickPort } from './lib/port.js';
+import { MIN_HEIGHT, MIN_WIDTH, parseWindowState, restoreBounds, type WindowState } from './lib/window-state.js';
 import { initialRestartState, onFailure, onReady, type RestartState } from './lib/backoff.js';
 import { buildCsp } from './lib/csp.js';
 import { resolveAppUrl } from './lib/protocol.js';
@@ -271,12 +272,20 @@ function contentType(path: string): string {
 // ---------------------------------------------------------------------------------------------
 // BrowserWindow hardening (SEC-020…027, SEC-029).
 // ---------------------------------------------------------------------------------------------
+function windowStateFile(): string { return join(layout.data, 'window-state.json'); }
+function readWindowState(): WindowState {
+  try { return parseWindowState(JSON.parse(readFileSync(windowStateFile(), 'utf8'))); } catch { return { maximized: false }; }
+}
+function writeWindowState(win: BrowserWindow): void {
+  try { writeFileSync(windowStateFile(), JSON.stringify({ bounds: win.getNormalBounds(), maximized: win.isMaximized() })); } catch { /* best effort */ }
+}
+
 function createWindow(): void {
+  const saved = readWindowState();
   const win = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 640,
+    ...restoreBounds(saved, screen.getAllDisplays().map((d) => d.workArea)),
+    minWidth: MIN_WIDTH,     // FR-155: 1280×720 minimum
+    minHeight: MIN_HEIGHT,
     show: false,
     backgroundColor: '#0b0b0f',
     webPreferences: {
@@ -297,7 +306,11 @@ function createWindow(): void {
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(`${APP_ORIGIN}/`) && !devRules.devOrigins.some((o) => url.startsWith(o))) e.preventDefault(); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-attach-webview', (e) => e.preventDefault());
-  win.once('ready-to-show', () => { win.show(); scheduleUpdateCheck(); });
+  win.once('ready-to-show', () => { if (saved.maximized) win.maximize(); win.show(); scheduleUpdateCheck(); });
+  let saveTimer: NodeJS.Timeout | undefined;
+  const saveSoon = () => { if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(() => writeWindowState(win), 500); };
+  win.on('resize', saveSoon); win.on('move', saveSoon);
+  win.on('close', () => { if (saveTimer) clearTimeout(saveTimer); writeWindowState(win); });
   win.on('closed', () => { mainWindow = null; });
 
   void win.loadURL(editorEntryUrl(app.isPackaged, process.env));
