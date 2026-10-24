@@ -17,6 +17,8 @@ cd "$(dirname "$0")/.."
 export EM_ENGINE_PUBLIC_KEY_B64
 export EM_RELEASE_PRIVATE_KEY_PEM="$(cat "$EM_RELEASE_PRIVATE_KEY_PEM_FILE")"
 
+# Test build: placeholders (licence/manifest keys, TO_PIN, publisher) are listed but allowed; never ship this output.
+node scripts/release-check.mjs --allow-placeholders
 npm run build:release -w @expertmotion/service         # prompts → dist/assets.enc (half A in service, half B for main)
 npm run build:main -w @expertmotion/desktop             # embeds the integrity public key and prompt key half B
 node scripts/stage-desktop.mjs --platform=win32 --check

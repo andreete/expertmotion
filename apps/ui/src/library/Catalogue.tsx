@@ -7,7 +7,8 @@ import { Bookmark, Cpu, DownloadCloud, Info } from 'lucide-react';
 import { PresetParams } from './PresetParams.js';
 import { SUGGESTED_QUERIES, listPresets, searchPresets, type Category, type PresetDef } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
-import type { CatalogueItemDto } from '../api/types.js';
+import type { CatalogueItemDto, EditIntent } from '../api/types.js';
+import type { ElementRefT } from '@expertmotion/composition-model';
 import { PresetSwatch } from './presetVisual.js';
 import { Button, Empty, cx } from '../components/ui.js';
 
@@ -21,6 +22,32 @@ export const activeQuery = (q: string): string => (q.trim().length >= MIN_QUERY 
 /** FR-038: EM-2103 is shown once per session (page lifetime), then GPU picks apply silently. */
 let gpuWarned = false;
 export const resetGpuWarning = (): void => { gpuWarned = false; };
+
+const LIVE = new Set(['queued', 'planned', 'executed', 'compiled']);
+const sameRef = (a: ElementRefT, b: ElementRefT) => a.kind === b.kind && (a.id ?? null) === (b.id ?? null) && (a.index ?? null) === (b.index ?? null);
+/**
+ * FR-039: presets whose pick holds the current target — queued or applied (head state), not superseded/removed/held.
+ * With a selection the current target is the selected elements (a selected Clip also stands for the Cut after it, as Target
+ * Resolution does for transitions); project-wide picks always count. Without a selection it is the default target, i.e. picks
+ * made without an explicit element. Supersession keeps one live pick per property key, so an exclusive group shows one card.
+ */
+export function selectedPresetIds(items: readonly EditIntent[], selection: readonly ElementRefT[], clips: ReadonlyArray<{ id: string }>): Set<string> {
+  const out = new Set<string>();
+  const live = items.filter((i) => i.presetId && LIVE.has(i.status));
+  if (!selection.length) {
+    for (const i of live) if (!i.parentIntentId && ['selection', 'playhead', 'project', 'sequence'].includes(i.target.kind)) out.add(i.presetId!);
+    return out;
+  }
+  const refs: ElementRefT[] = [...selection];
+  for (const s of selection) if (s.kind === 'clip') { const k = clips.findIndex((c) => c.id === s.id); if (k >= 0 && k < clips.length - 1) refs.push({ kind: 'cut', index: k }); }
+  for (const i of live) {
+    if (i.propertyKey.startsWith('group:')) continue;                                   // parents: their children carry the targets
+    const ts = i.resolvedTargets;
+    if (!ts.length || ts.every((x) => x.kind === 'project')) { out.add(i.presetId!); continue; }
+    if (ts.some((x) => refs.some((r) => sameRef(r, x)))) out.add(i.presetId!);
+  }
+  return out;
+}
 
 export function Catalogue({ query, tab, onTab, onSuggest, onClear }: { query: string; tab: Category; onTab: (c: Category) => void; onSuggest: (q: string, category: Category) => void; onClear: () => void }) {
   const { state, runtime, t, lang } = useStore();
@@ -41,7 +68,7 @@ export function Catalogue({ query, tab, onTab, onSuggest, onClear }: { query: st
     return showUpcoming ? ordered : ordered.filter((p) => p.priority === 'p0');
   }, [q, tab, showUpcoming, lang]);
 
-  const selectedIds = useMemo(() => new Set((state.queue?.items ?? []).filter((i) => i.presetId && ['queued', 'planned', 'executed', 'compiled'].includes(i.status) && !i.parentIntentId).map((i) => i.presetId!)), [state.queue]);
+  const selectedIds = useMemo(() => selectedPresetIds(state.queue?.items ?? [], state.selection, state.head?.model?.tracks.video ?? []), [state.queue, state.selection, state.head?.model?.tracks.video]);
   const counts = useMemo(() => Object.fromEntries(CATALOGUE_TABS.map((c) => [c, listPresets({ category: c, priority: ['p0'] }).length])), []);
   const tabLabel = t(`ui.lib.catalogue.tab.${tab}`);
   // FR-040: a tab whose presets are all P1/P2 in this build shows EM-9004 copy instead of "no matches".
@@ -127,13 +154,9 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
   const openModel = () => actions.setScreen({ kind: 'models', ...(modelKey ? { focus: modelKey } : {}) });
   const click = () => {
     if (reason) return;
-    if (modelMissing && modelKey) {
-      // FR-037: the card stays clickable; the pick is held with EM-2104 until the model is installed.
-      actions.holdPick(preset.id, modelKey);
-      actions.toast('warn', 'err.EM-2104.title', undefined, { code: 'EM-2104', action: { labelKey: 'err.EM-2104.action', run: openModel } });
-      actions.announce(t('ui.lib.catalogue.model.held', { model: modelKey }));
-      return;
-    }
+    // FR-037: with the model missing the card stays clickable; the Service holds the pick (status `held`, EM-2104, persisted) and
+    // applies it when the model is installed — the store shows the EM-2104 toast with "Open Model Manager".
+    if (modelMissing && modelKey) { void actions.pick(preset.id); return; }
     if (gpu && !gpuWarned) { gpuWarned = true; actions.toast('warn', 'err.EM-2103.title', undefined, { code: 'EM-2103' }); }
     void actions.pick(preset.id);
   };

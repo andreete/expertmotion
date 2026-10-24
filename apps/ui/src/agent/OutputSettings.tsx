@@ -42,24 +42,24 @@ function RatioHelp({ current, customRatio }: { current: Resolution; customRatio:
     </span>
   );
 }
-/** FR-091: the PERFORMANCE §2 tooltip copy verbatim, plus "Learn more" with what each profile actually changes (local help, no web link). */
-function ProfileHelp() {
+/** PERFORMANCE §2 in plain words: what each profile actually changes (shown in Help ▸ Performance profiles). */
+export function ProfileTable() {
   const { t } = useStore();
-  const [open, setOpen] = useState(false);
   const rows = ['concurrency', 'preview', 'memory', 'availability'] as const;
+  return (
+    <table data-el="scr.help.performance.table" className="mt-1.5 w-full text-[11px]">
+      <thead><tr className="text-em-muted"><th />{(['standard', 'accelerated', 'turbo'] as const).map((p) => <th key={p} className="text-left font-normal">{t(`ui.agent.output.profile.${p}`)}</th>)}</tr></thead>
+      <tbody>{rows.map((r) => <tr key={r}><td className="pr-1 text-em-muted">{t(`ui.agent.output.profile.learn.${r}`)}</td>{(['standard', 'accelerated', 'turbo'] as const).map((p) => <td key={p}>{t(`ui.agent.output.profile.learn.${r}.${p}`)}</td>)}</tr>)}</tbody>
+    </table>
+  );
+}
+/** FR-091: the PERFORMANCE §2 tooltip copy verbatim, plus "Learn more", which opens the offline Help at Performance profiles. */
+function ProfileHelp() {
+  const { t, actions } = useStore();
   return (
     <span className="relative inline-flex items-center gap-1">
       <Help el="agent.output.profile.help" text={t('ui.agent.output.profile.help')} />
-      <button type="button" data-el="agent.output.profile.help.learnmore" data-popover-trigger="" aria-expanded={open} className="text-[11px] font-normal text-em-accent underline" onClick={() => setOpen((o) => !o)}>{t('ui.agent.output.profile.learnmore')}</button>
-      {open && (
-        <Popover onClose={() => setOpen(false)} width={340} label={t('ui.agent.output.profile.learnmore')}>
-          <p className="mb-1.5 text-[12px] text-em-text-2">{t('ui.agent.output.profile.help')}</p>
-          <table className="w-full text-[11px]">
-            <thead><tr className="text-em-muted"><th />{(['standard', 'accelerated', 'turbo'] as const).map((p) => <th key={p} className="text-left font-normal">{t(`ui.agent.output.profile.${p}`)}</th>)}</tr></thead>
-            <tbody>{rows.map((r) => <tr key={r}><td className="pr-1 text-em-muted">{t(`ui.agent.output.profile.learn.${r}`)}</td>{(['standard', 'accelerated', 'turbo'] as const).map((p) => <td key={p}>{t(`ui.agent.output.profile.learn.${r}.${p}`)}</td>)}</tr>)}</tbody>
-          </table>
-        </Popover>
-      )}
+      <button type="button" data-el="agent.output.profile.help.learnmore" className="text-[11px] font-normal text-em-accent underline" onClick={() => actions.setScreen({ kind: 'help', topic: 'performance' })}>{t('ui.agent.output.profile.learnmore')}</button>
     </span>
   );
 }
@@ -68,8 +68,9 @@ function Row({ label, help, right, children }: { label: string; help?: ReactNode
 }
 
 export function OutputSettings() {
-  const { state, actions, t } = useStore();
-  const [open, setOpen] = useState(true);
+  const { state, actions, t, prefs, setPrefs } = useStore();
+  const open = !prefs.outputCollapsed;                                         // FR-099: collapsed state persisted with the layout
+  const setOpen = (f: (o: boolean) => boolean) => setPrefs({ outputCollapsed: !f(open) });
   const s = state.head?.model?.settings ?? state.project?.settings;
   const tier = state.hardware?.tier ?? 'T0';
   const trial = state.licence?.status !== 'active';

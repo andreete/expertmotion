@@ -5,6 +5,7 @@
 // Hashing only runs on a size/mtime change, so opening a project never re-reads gigabytes of unchanged media.
 import fs from 'node:fs';
 import path from 'node:path';
+import type { CompositionModelT } from '@expertmotion/composition-model';
 import type { ServiceContext } from '../context.js';
 import { listAssets } from './assets-repo.js';
 import { emit, isInside } from './common.js';
@@ -46,11 +47,42 @@ export function isMissing(ctx: ServiceContext, r: { status: string; original_pat
 export const FAILED_TTL_MS = 24 * 60 * 60 * 1000;
 export function purgeExpiredFailed(ctx: ServiceContext, projectId: string): string[] {
   const cutoff = new Date(Date.parse(ctx.now()) - FAILED_TTL_MS).toISOString();
-  const rows = ctx.db.prepare("SELECT id FROM assets WHERE project_id = ? AND status = 'failed' AND updated_at < ?").all(projectId, cutoff) as Array<{ id: string }>;
+  const rows = ctx.db.prepare("SELECT id FROM assets WHERE project_id = ? AND status = 'failed' AND deleted_at IS NULL AND updated_at < ?").all(projectId, cutoff) as Array<{ id: string }>;
   for (const { id } of rows) {
     ctx.db.prepare('UPDATE generator_jobs SET result_asset_id = NULL WHERE result_asset_id = ?').run(id);
     ctx.db.prepare('DELETE FROM assets WHERE id = ?').run(id);
     fs.rmSync(assetDir(ctx, projectId, id), { recursive: true, force: true });
   }
   return rows.map((r) => r.id);
+}
+
+/** FR-052: does any Composition Version of the project still reference the asset (Undo could bring its Clips back)? */
+export function versionsReference(ctx: ServiceContext, projectId: string, assetId: string): boolean {
+  return !!ctx.db.prepare('SELECT 1 FROM composition_versions WHERE project_id = ? AND instr(model_json, ?) > 0 LIMIT 1').get(projectId, `"${assetId}"`);
+}
+
+/** FR-052: removed (soft-deleted) assets that no version references any more lose their row and media for good. */
+export function purgeRemoved(ctx: ServiceContext, projectId: string): string[] {
+  const rows = ctx.db.prepare('SELECT id FROM assets WHERE project_id = ? AND deleted_at IS NOT NULL').all(projectId) as Array<{ id: string }>;
+  const gone: string[] = [];
+  for (const { id } of rows) {
+    if (versionsReference(ctx, projectId, id)) continue;
+    ctx.db.prepare('UPDATE generator_jobs SET result_asset_id = NULL WHERE result_asset_id = ?').run(id);
+    ctx.db.prepare('DELETE FROM assets WHERE id = ?').run(id);
+    fs.rmSync(assetDir(ctx, projectId, id), { recursive: true, force: true });
+    gone.push(id);
+  }
+  return gone;
+}
+
+/** FR-052: a new head (Undo, Redo, restore) that uses removed assets brings them back into the Asset Panel; returns their ids. */
+export function restoreReferenced(ctx: ServiceContext, projectId: string, model: CompositionModelT): string[] {
+  const removed = ctx.db.prepare('SELECT id FROM assets WHERE project_id = ? AND deleted_at IS NOT NULL').all(projectId) as Array<{ id: string }>;
+  if (!removed.length) return [];
+  const used = new Set<string>([...model.tracks.video.map((c) => c.assetId), ...model.tracks.audio.map((a) => a.assetId),
+    ...model.tracks.overlay.flatMap((o) => (o.kind === 'image' ? [o.assetId] : [])), ...(model.tracks.caption.sourceAssetId ? [model.tracks.caption.sourceAssetId] : [])]);
+  const back = removed.map((r) => r.id).filter((id) => used.has(id));
+  const up = ctx.db.prepare('UPDATE assets SET deleted_at = NULL, updated_at = ? WHERE id = ?');
+  for (const id of back) up.run(ctx.now(), id);
+  return back;
 }

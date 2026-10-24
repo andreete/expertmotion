@@ -25,7 +25,11 @@ export interface ProjectDto {
   assetCount: number; createdAt: Iso; updatedAt: Iso; openedAt: Iso | null; dirty: boolean; warnings?: string[];
   /** R-025 sample project for the tour ("Sample · Kafe Senja" / "Contoh · Kafe Senja"); absent on ordinary projects. */
   isSample?: boolean;
+  /** FR-012: Editor UI state stored by Save (R-014 `uiState`); absent until the first Save. */
+  uiState?: ProjectUiState;
 }
+/** FR-012: what Save persists per project besides settings, head and title (not part of the Composition Model). */
+export interface ProjectUiState { libMode?: 'home' | 'design' | 'tools'; playheadMs?: number; selection?: ElementRefT[]; assetSelection?: Id[] }
 export type VersionCause = 'insert' | 'compile' | 'execute' | 'undo' | 'redo' | 'restore' | 'system';
 export interface VersionDto { id: Id; projectId: Id; parentId: Id | null; hash: string; cause: VersionCause; planId: Id | null; durationMs: number; createdAt: Iso; model?: CompositionModelT }
 
@@ -56,7 +60,8 @@ export interface OutputDto {
 export interface MediaGrantDto { grant: string; projectId: Id; kind: 'preview'; expiresAt: Iso; baseUrl: string }
 
 export type IntentCategory = 'transition' | 'caption' | 'background' | 'motion' | 'shape' | 'easing' | 'effect' | 'audio' | 'text' | 'layout' | 'output' | 'asset' | 'generate';
-export type IntentStatus = 'queued' | 'superseded' | 'compiled' | 'planned' | 'executed' | 'rejected' | 'removed';
+/** `held` (FR-037): waits for a model that is not installed (EM-2104); resumes on model.installed. */
+export type IntentStatus = 'queued' | 'superseded' | 'compiled' | 'planned' | 'executed' | 'rejected' | 'removed' | 'held';
 export interface EditIntent {
   id: Id; projectId: Id; source: 'ui' | 'brainstorm' | 'chat' | 'system'; createdAt: Iso; category: IntentCategory; presetId?: string; params: Record<string, unknown>;
   target: ElementRefT; resolvedTargets: ElementRefT[]; propertyKey: string; parentIntentId?: string; propertyClass: 'scalar' | 'list' | 'exclusive-group';
@@ -65,6 +70,8 @@ export interface EditIntent {
   appliedVersion?: number;
   /** AI_WORKFLOW §3: hash of that Composition Version (FR-085 shows it short). */
   appliedHash?: string;
+  /** FR-167 (R-061): the applying version left the head's lineage (Undo) — the queue chip shows "undone". */
+  undone?: boolean;
 }
 export interface IntentQueueDto { projectId: Id; headHash: string; items: EditIntent[]; lockedKeys: string[] }
 
@@ -138,7 +145,7 @@ export interface HardwareProfileDto {
   detectedAt: Iso; warnings: string[];
 }
 export interface HardwareTickDto {
-  at: Iso; cpuPercent: number; ramFreeMb: number; ramTotalMb: number; processMb: number; chromeMb: number | null; diskFreeMb: number | null; gpuPercent: number | null;
+  at: Iso; cpuPercent: number; ramFreeMb: number; ramTotalMb: number; processMb: number; chromeMb: number | null; shellMb?: number | null; diskFreeMb: number | null; gpuPercent: number | null;
   /** FR-127: free space on the drive of the output folder. */
   outputDiskFreeMb?: number | null;
   workload: { rendering: boolean; ingesting: number; downloading: number; agentRuns: number; items?: WorkloadItemDto[] };
@@ -152,6 +159,8 @@ export interface SettingsDto {
   defaultRatio: Ratio; defaultResolution: Resolution; defaultFps: Fps; checkUpdates: boolean; diagnosticsIncludeStructure: boolean;
   /** FR-004 onboarding record (server-side); absent on older services / the mock. */
   onboardingDone?: boolean; onboardingSkippedSteps?: OnboardingStep[];
+  /** FR-099 / FR-155: Editor layout (panel sizes per window-width bucket, collapsed panels); absent until first saved. */
+  layout?: { panelSizes: Partial<Record<'narrow' | 'standard' | 'wide', { lib?: number; agent?: number; timeline?: number }>>; libCollapsed: boolean; agentCollapsed: boolean; outputCollapsed: boolean };
 }
 export type OnboardingStep = 'license' | 'provider' | 'models' | 'hardware' | 'tour';
 export type ModelTask = 'stt' | 'tts' | 'image' | 'music';
@@ -232,7 +241,7 @@ export interface EventMap {
   'render.cancelled': { jobId: Id; percent: number };
   'ingest.progress': { assetId: Id; stage: string; progress: number };
   'ingest.done': { asset: AssetDto };
-  'ingest.failed': { assetId: Id; code: string; name: string };
+  'ingest.failed': { assetId: Id; code: string; name: string; existingAssetId?: Id };
   'agent.run.started': { run: AgentRunDto; agent: AgentKind; modelId: string; planId?: Id };
   'agent.run.delta': { runId: Id; agent: AgentKind; delta: string; toolCall?: { name: string; input: unknown } };
   'agent.run.done': { run: AgentRunDto; message: MessageDto; usage: UsageNumbers | null; contextUsage: { usedTokens: number; contextLength: number } | null };

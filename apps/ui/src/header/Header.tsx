@@ -133,7 +133,7 @@ export function Header() {
         </div>
         <IconButton el="hdr.action.undo" label={t('ui.hdr.action.undo')} icon={<Undo2 size={16} />} disabledReason={state.canUndo ? null : t('ui.hdr.action.undo.none')} onClick={() => void actions.undo()} />
         <IconButton el="hdr.action.redo" label={t('ui.hdr.action.redo')} icon={<Redo2 size={16} />} disabledReason={state.canRedo ? null : t('ui.hdr.action.redo.none')} onClick={() => void actions.redo()} />
-        <IconButton el="hdr.action.save" label={t('ui.hdr.action.save')} icon={<Save size={16} />} disabledReason={p?.dirty ? null : t('ui.hdr.action.save.clean')} onClick={() => void actions.save()} />
+        <IconButton el="hdr.action.save" label={t('ui.hdr.action.save')} icon={<Save size={16} />} disabledReason={p ? null : t('ui.common.noproject')} onClick={() => void actions.save()} />
         <IconButton el="hdr.action.backup" label={t('ui.hdr.action.backup')} icon={<Archive size={16} />} disabledReason={p ? null : t('ui.common.noproject')} onClick={() => actions.setScreen({ kind: 'backup' })} />
         <IconButton el="hdr.action.restore" label={t('ui.hdr.action.restore')} icon={<ArchiveRestore size={16} />} onClick={() => actions.setScreen({ kind: 'restore' })} />
         <IconButton el="hdr.action.models" label={t('ui.hdr.action.models')} icon={<Boxes size={16} />} onClick={() => actions.setScreen({ kind: 'models' })}

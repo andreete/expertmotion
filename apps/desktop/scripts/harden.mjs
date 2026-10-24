@@ -16,8 +16,12 @@
  *      resources/engine/bundle/*.js (debugProtection off, headless). Render-safe options.
  *   3. AES-256-GCM encryption of the prompts module; key split across the service bytecode and a
  *      build constant (src/lib/keysplit.ts). Decrypted in memory only.
- *   4. Integrity manifest: sha256 of service.jsc, the engine bundle index and resources/bin
- *      binaries, signed Ed25519 with the release key; public key embedded in the bytecode.
+ *   4. Integrity manifest: sha256 of service.jsc, the engine bundle index, the Chrome Headless Shell
+ *      and compositor executables (resources/engine/chrome, resources/engine/compositor; SEC-061) and
+ *      resources/bin binaries, signed Ed25519 with the release key; public key embedded in the bytecode.
+ *      The release key comes from EM_RELEASE_PRIVATE_KEY_PEM; without it the script FAILS (a release
+ *      must never be signed with a throwaway key). `--dry-run` alone allows an ephemeral key for a
+ *      local rehearsal, and the output is then not shippable.
  *
  * Dry run on Linux: `node scripts/harden.mjs --plan` prints the plan (bytecode steps marked skipped
  * off-Windows) without touching files.
@@ -40,6 +44,13 @@ const flags = {
   isWindows: process.platform === 'win32',
 };
 const planOnly = args.has('--plan');
+const dryRun = args.has('--dry-run');
+// Release safety: refuse early (before any file is touched) when the release key is missing.
+if (!planOnly && flags.integrity && !process.env.EM_RELEASE_PRIVATE_KEY_PEM && !dryRun) {
+  console.error('harden: EM_RELEASE_PRIVATE_KEY_PEM is not set. The integrity manifest must be signed with the Operator\'s release key.\n'
+    + '  Set EM_RELEASE_PRIVATE_KEY_PEM (and EM_ENGINE_PUBLIC_KEY_B64), or pass --dry-run for a local rehearsal (output not shippable).');
+  process.exit(2);
+}
 
 // Compile the pure planning/config modules so this JS script can import them.
 async function loadLib() {
@@ -116,6 +127,11 @@ for (const step of steps) {
       add(join(root, 'dist/service/service.cjs'), 'dist/service/service.cjs');
       add(join(root, 'dist/service/assets.enc'), 'dist/service/assets.enc');
       add(join(root, 'resources/engine/bundle/index.html'), 'engine/bundle/index.html');
+      // SEC-061: the Engine executables the Service spawns (Chrome Headless Shell, compositor + its FFmpeg).
+      for (const sub of ['chrome', 'compositor']) {
+        const base = join(root, 'resources/engine', sub);
+        for (const f of listBinaries(base).filter((f) => lib.isEngineExecutable(f))) add(f, `engine/${sub}/${relative(base, f).split(/[\\/]/).join('/')}`);
+      }
       for (const bin of listBinaries(join(root, 'resources/bin'))) add(bin, `bin/${relative(join(root, 'resources/bin'), bin).split(/[\\/]/).join('/')}`);
       const manifest = lib.buildManifest({ appVersion: JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version, builtAt: new Date().toISOString(), entries });
 
@@ -124,6 +140,7 @@ for (const step of steps) {
       let privPem = process.env.EM_RELEASE_PRIVATE_KEY_PEM;
       let pubB64 = process.env.EM_ENGINE_PUBLIC_KEY_B64;
       if (!privPem) {
+        if (!dryRun) throw new Error('integrity: EM_RELEASE_PRIVATE_KEY_PEM missing (checked at start; pass --dry-run for a rehearsal)');
         const pair = generateKeyPairSync('ed25519');
         privPem = pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
         pubB64 = pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64');

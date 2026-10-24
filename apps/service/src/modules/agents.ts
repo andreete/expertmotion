@@ -2,11 +2,13 @@
 // Brainstorm replies come from runBrainstorm; editor messages go through ctx.hooks.createPlan (intents module owns plans).
 // R-082 turns proposed intents into EditIntent objects (createIntents) and hands them to the intents module via the optional
 // `enqueueIntents` hook; without it the payload is stored in brainstorm_handoffs for the intents module to pick up.
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Router } from 'express';
 import { z } from 'zod';
 import { EmError, errorMessage } from '@expertmotion/shared';
-import { hashModel, summarizeForAgent, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
-import { BrainstormTurn, createIntents, runBrainstorm, type ChatMessage, type ChatUsage, type DesignPick, type EditIntentT, type IntentCategory, type ToolHandlers } from '@expertmotion/agents';
+import { ElementRef, hashModel, summarizeForAgent, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
+import { BrainstormTurn, createIntents, runBrainstorm, type ChatImage, type ChatMessage, type ChatUsage, type DesignPick, type EditIntentT, type IntentCategory, type ToolHandlers } from '@expertmotion/agents';
 import { availableOnTier, searchPresets, type Category } from '@expertmotion/catalogue';
 import { renderServiceOf } from '../s2/render-service.js';
 import type { ServiceContext } from '../context.js';
@@ -113,6 +115,16 @@ export function brainstormTools(ctx: ServiceContext, projectId: string, language
     'composition.get': () => { try { const h = ctx.hooks.composition(projectId); return summarizeForAgent(h.model, ctx.hooks.assetFacts(projectId), 2000); } catch { return null; } },
     'assets.list': () => ctx.hooks.assetFacts(projectId).filter((a) => a.status === 'ready').slice(0, 100)
       .map((a) => ({ id: a.id, kind: a.kind, name: a.name ?? a.id, ...(a.durationMs !== undefined ? { durationMs: a.durationMs } : {}), ...(a.width ? { width: a.width, height: a.height } : {}), ...(a.hasAudio !== undefined ? { hasAudio: a.hasAudio } : {}) })),
+    'assets.probe': (i) => {
+      const r = ctx.db.prepare('SELECT id, kind, duration_ms, width, height, fps, has_audio, probe_json FROM assets WHERE id = ? AND project_id = ?').get(String(i['assetId']), projectId) as { id: string; kind: string; duration_ms: number | null; width: number | null; height: number | null; fps: number | null; has_audio: number | null; probe_json: string | null } | undefined;
+      if (!r) return { error: { code: 'EM-1301', message: 'No asset with that id in this project.' } };
+      let streams: Array<Record<string, unknown>> = [];
+      try {
+        const j = r.probe_json ? JSON.parse(r.probe_json) as { streams?: Array<Record<string, unknown>> } : {};
+        streams = (j.streams ?? []).slice(0, 4).map((st) => ({ type: st['codec_type'], codec: st['codec_name'], ...(st['channels'] !== undefined ? { channels: st['channels'], sampleRate: st['sample_rate'] } : {}), ...(st['width'] !== undefined ? { width: st['width'], height: st['height'], frameRate: st['avg_frame_rate'] } : {}) }));
+      } catch { /* probe unreadable: facts only */ }
+      return { id: r.id, kind: r.kind, durationMs: r.duration_ms, width: r.width, height: r.height, fps: r.fps, hasAudio: r.has_audio === null ? null : r.has_audio === 1, streams };
+    },
     'catalogue.search': (i) => {
       const tier = ctx.hooks.tier();
       return searchPresets(String(i['query'] ?? ''), language, i['category'] as Category | undefined).filter((p) => p.priority !== 'p2' && availableOnTier(p, tier)).slice(0, 20)
@@ -133,18 +145,33 @@ export function brainstormTools(ctx: ServiceContext, projectId: string, language
 }
 
 /** Streamed deltas are coalesced (≥ 40 chars or 80 ms) so a fast provider cannot flood the SSE stream. */
-function deltaEmitter(ctx: ServiceContext, projectId: string, runId: string, agent: AgentT) {
+export function deltaEmitter(ctx: ServiceContext, projectId: string, runId: string, agent: AgentT) {
   let buf = ''; let timer: NodeJS.Timeout | null = null;
   const flush = () => { if (timer) { clearTimeout(timer); timer = null; } if (buf) { const delta = buf; buf = ''; emit(ctx, 'agent.run.delta', { projectId, runId, agent, delta }); } };
   return { push(d: string) { buf += d; if (buf.length >= 40) flush(); else if (!timer) timer = setTimeout(flush, 80); }, flush };
 }
 
-async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: string, project: { id: string; name: string; language: 'id' | 'en' }, signal: AbortSignal) {
+const IMAGE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+/** FR-072: an attached image Asset as an image part (base64 of the stored original, ≤ 10 MB, PNG/JPEG/WebP/GIF). */
+function imagePart(ctx: ServiceContext, projectId: string, assetId: string): ChatImage {
+  const r = ctx.db.prepare('SELECT name, original_path, bytes FROM assets WHERE id = ? AND project_id = ?').get(assetId, projectId) as { name: string; original_path: string; bytes: number } | undefined;
+  if (!r) throw new EmError('EM-9003', 'An attached asset no longer exists.', { path: 'body.attachments' });
+  const mediaType = IMAGE_MIME[path.extname(r.original_path || r.name).toLowerCase()];
+  if (!mediaType) throw new EmError('EM-1002', `This file is ${r.name}; the limit is PNG/JPEG/WebP.`, { status: 422, path: 'body.attachments', details: { fileName: r.name, bytes: r.bytes, limitBytes: MAX_IMAGE_BYTES } });
+  if (r.bytes > MAX_IMAGE_BYTES) throw new EmError('EM-1002', `This file is ${(r.bytes / 1048576).toFixed(1)} MB; the limit is 10 MB.`, { status: 422, path: 'body.attachments', details: { fileName: r.name, bytes: r.bytes, limitBytes: MAX_IMAGE_BYTES } });
+  let data: Buffer;
+  try { data = fs.readFileSync(path.resolve(ctx.paths.media, r.original_path)); } catch { throw new EmError('EM-9003', 'An attached image is missing on disk.', { path: 'body.attachments' }); }
+  if (data.length > MAX_IMAGE_BYTES) throw new EmError('EM-1002', `This file is ${(data.length / 1048576).toFixed(1)} MB; the limit is 10 MB.`, { status: 422, path: 'body.attachments', details: { fileName: r.name, bytes: data.length, limitBytes: MAX_IMAGE_BYTES } });
+  return { mediaType, data: data.toString('base64'), name: r.name };
+}
+
+async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: string, project: { id: string; name: string; language: 'id' | 'en' }, signal: AbortSignal, images: ChatImage[] = []) {
   const provider = ctx.hooks.providerFor('brainstorm', project.id);
   const deltas = deltaEmitter(ctx, project.id, run.id, 'brainstorm');
   const r = await runBrainstorm(historyOf(ctx, convId), brainstormContext(ctx, project), project.language, provider, {
     signal, budgetCheck: () => ctx.hooks.budgetCheck(project.id), contextLength: contextLengthOf(ctx, run.connection_id, run.model_id),
-    tools: brainstormTools(ctx, project.id, project.language), onDelta: (d) => { if (!signal.aborted) deltas.push(d); },
+    tools: brainstormTools(ctx, project.id, project.language), onDelta: (d) => { if (!signal.aborted) deltas.push(d); }, ...(images.length ? { images } : {}),
   }).finally(() => deltas.flush());
   record(ctx, project.id, 'brainstorm', run.id, r.usage);
   if (signal.aborted) return;
@@ -160,9 +187,15 @@ async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: strin
   emit(ctx, 'agent.run.done', { projectId: project.id, run: runDto(ctx, done), message: msgDto(msg), usage: runDto(ctx, done).usage, contextUsage: contextUsage(ctx, project.id, 'brainstorm') });
 }
 
-async function executeEditor(ctx: ServiceContext, run: RunRow, convId: string, projectId: string, text: string, signal: AbortSignal) {
-  const plan = await ctx.hooks.createPlan(projectId, { instruction: text, mode: 'agent', signal }) as Awaited<ReturnType<ServiceContext['hooks']['createPlan']>> & { runId?: string };
-  // The intents module records usage under its own run when it reports one (S1 behaviour); otherwise record here once.
+/** FR-080: the intents module enqueues the message as a chat Edit Intent once the run can start; the Editor Agent plans every queued intent with it. */
+interface EditorTurn { messageId: string; text: string; target?: ElementRefT | undefined; selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images: ChatImage[]; attachments: string[] }
+async function executeEditor(ctx: ServiceContext, run: RunRow, convId: string, projectId: string, turn: EditorTurn, signal: AbortSignal) {
+  const deltas = deltaEmitter(ctx, projectId, run.id, 'editor');
+  const plan = await ctx.hooks.createPlan(projectId, { instruction: turn.text, mode: 'agent', signal, runId: run.id, chat: { messageId: turn.messageId, ...(turn.target ? { target: turn.target } : {}) },
+    ...(turn.selection?.length || turn.target ? { selection: turn.target ? [turn.target, ...(turn.selection ?? [])] : turn.selection! } : {}), ...(turn.playheadMs !== undefined ? { playheadMs: turn.playheadMs } : {}),
+    ...(turn.attachments.length ? { attachments: turn.attachments } : {}), ...(turn.images.length ? { images: turn.images } : {}), onDelta: (d) => { if (!signal.aborted) deltas.push(d); } })
+    .finally(() => deltas.flush()) as Awaited<ReturnType<ServiceContext['hooks']['createPlan']>> & { runId?: string };
+  // Usage is recorded by the intents module under this run (FR-074); only a module without a run id leaves it to us.
   if (plan.usage && !plan.runId) record(ctx, projectId, 'editor', run.id, [plan.usage]);
   if (signal.aborted) return;
   const msg = insertMessage(ctx, convId, 'assistant', [{ type: 'text', text: plan.goal }, { type: 'tool_result', name: 'plan', output: { planId: plan.planId, planRunId: plan.runId ?? null, status: plan.status, steps: plan.steps.length, risks: plan.risks } }], run.id);
@@ -176,7 +209,9 @@ function record(ctx: ServiceContext, projectId: string, agent: AgentT, runId: st
 }
 
 const AgentParams = z.object({ id: Id, agent: Agent });
-const SendBody = z.object({ text: z.string().min(1).max(8000), attachments: z.array(z.object({ assetId: Id })).max(4).default([]), intentIds: z.array(Id).max(100).optional(), baseVersion: z.string().min(1).max(128) }).strict();
+const SendBody = z.object({ text: z.string().min(1).max(8000), attachments: z.array(z.object({ assetId: Id })).max(4).default([]), intentIds: z.array(Id).max(100).optional(), baseVersion: z.string().min(1).max(128),
+  /** FR-067: the element "Ask Editor Agent" referenced; FR-080: the Timeline selection and playhead at send time (Editor only). */
+  target: ElementRef.optional(), selection: z.array(ElementRef).max(50).optional(), playheadMs: z.number().int().min(0).max(36_000_000).optional() }).strict();
 const HandoffBody = z.object({ messageId: Id, intentIds: z.array(Id).max(12).optional(), baseVersion: z.string().min(1).max(128) }).strict();
 
 export const agentsModule: ServiceModule = {
@@ -215,7 +250,9 @@ export const agentsModule: ServiceModule = {
       const a = getAssignment(ctx, agent);
       const cap = a ? cachedModels(ctx, a.connectionId)?.find((m) => m.modelId === a.modelId) : undefined;
       if (cap?.contextLength && Math.ceil(body.text.length / 4) > 0.6 * cap.contextLength) throw new EmError('EM-4306', `This message does not fit the model's memory (${cap.contextLength} tokens). Shorten it or start a new chat.`, { status: 422 });
-      if (body.attachments.length && cap && cap.imageInput === false) throw new EmError('EM-4307', `"${provider.model}" cannot read images. Describe the image in words, or switch to a model that can.`, { status: 422 });
+      // FR-072: image attachments go to the model only when its Capability Table row says it has image input (unknown counts as no).
+      const kinds = body.attachments.map((x) => (ctx.db.prepare('SELECT kind FROM assets WHERE id = ? AND project_id = ?').get(x.assetId, project.id) as { kind: string } | undefined)?.kind);
+      if (kinds.some((k) => k === 'image') && cap?.imageInput !== true) throw new EmError('EM-4307', `"${provider.model}" cannot read images. Describe the image in words, or switch to a model with image input.`, { status: 422, details: { modelId: provider.model, attachmentKind: 'image' } });
       if (agent === 'editor') {
         let head: { versionId: string; hash: string } | null = null;
         try { head = headOf(ctx, project.id); } catch { /* composition module absent: createPlan checks the base */ }
@@ -226,6 +263,7 @@ export const agentsModule: ServiceModule = {
         if (!as) throw new EmError('EM-9003', 'An attached asset no longer exists.', { path: 'body.attachments' });
         return { type: 'attachment', assetId: x.assetId, mime: as.kind === 'image' ? 'image/*' : `${as.kind}/*`, name: as.name };
       });
+      const images = body.attachments.filter((_, i) => kinds[i] === 'image').map((x) => imagePart(ctx, project.id, x.assetId));
       const convId = conversationId(ctx, project.id, agent);
       const runId = ctx.newId(); const now = ctx.now();
       const run: RunRow = { id: runId, project_id: project.id, agent, connection_id: a?.connectionId ?? null, model_id: provider.model, status: 'running', error_code: null, started_at: now, finished_at: null, plan_id: null };
@@ -236,7 +274,9 @@ export const agentsModule: ServiceModule = {
       const controller = new AbortController();
       s3(ctx).runs.set(runId, { controller, projectId: project.id, agent });
       emit(ctx, 'agent.run.started', { projectId: project.id, run: runDto(ctx, run), agent, modelId: run.model_id });
-      const work = agent === 'brainstorm' ? executeBrainstorm(ctx, run, convId, project, controller.signal) : executeEditor(ctx, run, convId, project.id, body.text, controller.signal);
+      const names = attachments.flatMap((b) => (b.type === 'attachment' ? [b.name] : []));
+      const work = agent === 'brainstorm' ? executeBrainstorm(ctx, run, convId, project, controller.signal, images)
+        : executeEditor(ctx, run, convId, project.id, { messageId: msg.id, text: body.text, target: body.target, selection: body.selection, playheadMs: body.playheadMs, images, attachments: names }, controller.signal);
       void track(ctx, work.catch((e: unknown) => { if (!controller.signal.aborted) failRun(ctx, run, convId, e); }));
       return { message: msgDto(msg), runId, planId: null };
     });

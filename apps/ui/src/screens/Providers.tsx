@@ -8,6 +8,7 @@ import type { AgentKind, AssignmentDto, CapabilityRow, ConnectionDto, ProbeResul
 import { Badge, Button, ErrorBox, Field, IconButton, Modal, cx, inputCls } from '../components/ui.js';
 import { formatMoney, formatNumber, formatTokens } from '../i18n/index.js';
 import { EmError } from '@expertmotion/shared';
+import type { BudgetFocus } from '../state/reducer.js';
 
 const PROVIDERS: ProviderKind[] = ['openrouter', 'openai', 'anthropic', 'google', 'custom'];
 const AGENTS: AgentKind[] = ['brainstorm', 'editor'];
@@ -177,7 +178,7 @@ function AssignFields({ rows, assign, setAssign }: { rows: CapabilityRow[]; assi
 function BudgetFields({ connectionId, month, setMonth, project, setProject, budget }: { connectionId: string | null; month: string; setMonth: (v: string) => void; project: string; setProject: (v: string) => void; budget: Budget | null }) {
   const { state, t, lang } = useStore();
   const c = budget?.connections.find((x) => x.connectionId === connectionId);
-  const p = state.project ? budget?.projects.find((x) => x.projectId === state.project!.id) : undefined;
+  const p = state.project ? budget?.projects.find((x) => x.projectId === state.project!.id && x.connectionId === connectionId) : undefined;
   const warn = (spent: number, limit: number | null) => limit !== null && limit > 0 && spent >= 0.8 * limit;
   return (
     <div className="flex flex-col gap-1">
@@ -210,7 +211,7 @@ function TestResults({ items }: { items: ProbeResultDto[] }) {
 }
 
 /** Assignments + budgets + Test for a stored connection (onboarding Models step and the Providers screen). */
-export function AssignForm({ onSaved, showBudgets = true, connectionId }: { onSaved?: () => void; showBudgets?: boolean; connectionId?: string }) {
+export function AssignForm({ onSaved, showBudgets = true, connectionId, focusField }: { onSaved?: () => void; showBudgets?: boolean; connectionId?: string; focusField?: BudgetFocus['field'] }) {
   const { state, runtime, actions, dispatch, t } = useStore();
   const conn = state.connections.find((c) => c.id === (connectionId ?? state.assignments?.defaultConnectionId)) ?? state.connections[0];
   const rows: CapabilityRow[] = conn ? state.capabilities[conn.id] ?? [] : [];
@@ -222,9 +223,17 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId }: { onSa
   const [testing, setTesting] = useState(false);
   const [tested, setTested] = useState<ProbeResultDto[] | string | null>(null);
   useEffect(() => {                                                                                     // FR-117: prefill the project cap
-    const p = state.project ? budget?.projects.find((x) => x.projectId === state.project!.id) : undefined;
+    const p = state.project ? budget?.projects.find((x) => x.projectId === state.project!.id && x.connectionId === conn?.id) : undefined;
     if (p?.limitUsd != null) setProjectBudget((v) => v || String(p.limitUsd));
-  }, [budget, state.project]);
+  }, [budget, state.project, conn?.id]);
+  useEffect(() => {                                                                                     // AI-016: EM-4201 "Change budget" lands on the field
+    if (!showBudgets || !focusField || !conn) return;
+    const h = setTimeout(() => {                                                                        // after the Modal's own initial focus
+      const el = document.getElementById(focusField === 'project' && state.project ? 'em-bp' : 'em-bm') as HTMLInputElement | null;
+      el?.scrollIntoView?.({ block: 'center' }); el?.focus(); el?.select?.();
+    }, 60);
+    return () => clearTimeout(h);
+  }, [focusField, showBudgets, conn?.id, state.project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!conn || state.capabilities[conn.id]) return;
     runtime.api.connectionModels(conn.id).then((r) => dispatch({ type: 'capabilities', connectionId: conn.id, rows: r.items })).catch(() => undefined);
@@ -242,7 +251,7 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId }: { onSa
       const a = await runtime.api.putAssignments({ brainstorm: mk('brainstorm'), editor: mk('editor'), defaultConnectionId: state.assignments?.defaultConnectionId ?? conn.id });
       dispatch({ type: 'providers', assignments: a });
       if (showBudgets) {
-        await runtime.api.putBudget({ connections: [{ connectionId: conn.id, budgetMonthUsd: toLimit(month) }], ...(state.project ? { projects: [{ projectId: state.project.id, limitUsd: toLimit(projectBudget) }] } : {}) });
+        await runtime.api.putBudget({ connections: [{ connectionId: conn.id, budgetMonthUsd: toLimit(month) }], ...(state.project ? { projects: [{ projectId: state.project.id, connectionId: conn.id, limitUsd: toLimit(projectBudget) }] } : {}) });
         reloadBudget();
       }
       await actions.loadProviders();
@@ -313,7 +322,7 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
       const body: Parameters<typeof runtime.api.putAssignments>[0] = {};
       for (const a of AGENTS) if (assign[a]) body[a] = { agent: a, connectionId: c.id, modelId: assign[a], settings: {} };
       if (Object.keys(body).length) dispatch({ type: 'providers', assignments: await runtime.api.putAssignments(body) });
-      await runtime.api.putBudget({ connections: [{ connectionId: c.id, budgetMonthUsd: toLimit(month) }], ...(state.project && project.trim() ? { projects: [{ projectId: state.project.id, limitUsd: toLimit(project) }] } : {}) });
+      await runtime.api.putBudget({ connections: [{ connectionId: c.id, budgetMonthUsd: toLimit(month) }], ...(state.project && project.trim() ? { projects: [{ projectId: state.project.id, connectionId: c.id, limitUsd: toLimit(project) }] } : {}) });
       await actions.loadProviders();
       actions.toast('success', 'ui.scr.providers.saved');
       onDone();
@@ -429,10 +438,20 @@ function ConnectionRow({ c, budget, onChanged }: { c: ConnectionDto; budget: Bud
   );
 }
 
-export function ProvidersScreen({ onClose }: { onClose: () => void }) {
+/** The connection an EM-4201 focus points at: the one in the error details, else the first whose cap is used up (FR-117). */
+export function breachedConnection(budget: Budget | null, projectId: string | null, focus: BudgetFocus): string | undefined {
+  if (focus.connectionId) return focus.connectionId;
+  if (!budget) return undefined;
+  const over = (spent: number, limit: number | null) => limit !== null && limit > 0 && spent >= limit;
+  if (focus.field === 'month') return budget.connections.find((c) => over(c.spentMonthUsd, c.budgetMonthUsd))?.connectionId;
+  return budget.projects.find((p) => p.projectId === projectId && p.connectionId && over(p.spentUsd, p.limitUsd))?.connectionId ?? undefined;
+}
+
+export function ProvidersScreen({ onClose, focus }: { onClose: () => void; focus?: BudgetFocus }) {
   const { state, actions, t } = useStore();
   const [adding, setAdding] = useState(false);
   const [budget, reloadBudget] = useBudget();
+  const focusConn = focus ? breachedConnection(budget, state.project?.id ?? null, focus) : undefined;
   useEffect(() => { void actions.loadProviders(); }, [actions]);
   const showAdd = adding || state.connections.length === 0;
   return (
@@ -444,7 +463,7 @@ export function ProvidersScreen({ onClose }: { onClose: () => void }) {
         </ul>
         {showAdd ? <AddConnectionForm onDone={() => { setAdding(false); reloadBudget(); }} />
           : <div><Button el="scr.providers.add.open" onClick={() => setAdding(true)}>{t('ui.scr.providers.add')}</Button></div>}
-        {state.connections.length > 0 && !adding && <AssignForm onSaved={() => { reloadBudget(); actions.toast('success', 'ui.scr.providers.saved'); }} />}
+        {state.connections.length > 0 && !adding && <AssignForm key={focusConn ?? 'default'} {...(focusConn ? { connectionId: focusConn } : {})} {...(focus ? { focusField: focus.field } : {})} onSaved={() => { reloadBudget(); actions.toast('success', 'ui.scr.providers.saved'); }} />}
       </div>
     </Modal>
   );

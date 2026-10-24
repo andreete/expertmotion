@@ -1,6 +1,8 @@
 // Ingest pipeline (ASSET_INGESTION.md §3): copy + sha256 → probe → playable copy → proxy → thumbnails → filmstrip → waveform →
-// index + SSE. One job at a time (serial queue) and every FFmpeg step under the Service-wide heavy lock, so ingest never runs
-// beside a render or a generator engine on a small machine. Files are streamed, never buffered in memory.
+// index + SSE. Two jobs in parallel (FR-042, ARCHITECTURE §9) with every FFmpeg step under the Service-wide heavy lock, so at most
+// one FFmpeg runs and ingest never runs beside a render or a generator engine on a small machine; while a Standard/Accelerated
+// render is queued or running, jobs wait between stages (`ingest.progress {stage:'paused'}`, PERFORMANCE §2). Files are streamed,
+// never buffered in memory.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +11,7 @@ import { Transform } from 'node:stream';
 import { EmError, errorMessage, type EmCode } from '@expertmotion/shared';
 import { cuesToPages, parseSubtitles } from '@expertmotion/models';
 import type { ServiceContext } from '../context.js';
-import { SerialQueue, clamp01, emit, freeBytes, throttle } from './common.js';
+import { WorkQueue, clamp01, emit, freeBytes, throttle } from './common.js';
 import { getAsset, toAssetDto, type AssetRow } from './assets-repo.js';
 import { SIZE_LIMIT, WaveformReducer, checkLimits, decidePlayable, ffprobe, isFastStart, kindFromExt, normalizeProbe, readHead, sniffMatches, type AssetKind, type MediaFacts } from './probe.js';
 import { ToolError, runTool } from './proc.js';
@@ -18,7 +20,9 @@ import { s2 } from './state.js';
 export const MAX_ASSETS_PER_PROJECT = 200;
 /** FR-042: poster + 10 filmstrip frames. */
 export const FILMSTRIP_FRAMES = 10;
-export type IngestStage = 'hash' | 'probe' | 'transcode' | 'proxy' | 'thumbs' | 'filmstrip' | 'waveform';
+export type IngestStage = 'hash' | 'probe' | 'transcode' | 'proxy' | 'thumbs' | 'filmstrip' | 'waveform' | 'paused';
+/** FR-042: concurrent ingest jobs. */
+export const INGEST_CONCURRENCY = 2;
 type Outcome = { status: 'ready' | 'failed' | 'duplicate' | 'cancelled'; row?: AssetRow };
 
 /** Source checks before anything is copied (§2 step 1, SEC-067). Throws EM-1001 / EM-1002 / EM-1010. */
@@ -39,8 +43,19 @@ const rel = (projectId: string, assetId: string, file: string): string => `${pro
 const abs = (ctx: ServiceContext, r: string): string => path.resolve(ctx.paths.media, r);
 const displayName = (name: string): string => name.normalize('NFC').replace(/[\u0000-\u001f\\/]/g, '_').slice(-120) || 'file';
 
+/** FR-041: identity of a path import (canonical path + size + mtime), stored as a digest so the path itself is never kept. */
+export function sourceKeyOf(canonicalPath: string, st: { size: number; mtimeMs: number }): string {
+  return crypto.createHash('sha256').update(`${canonicalPath}\0${st.size}\0${Math.round(st.mtimeMs)}`).digest('hex');
+}
+
 export class IngestService {
-  private readonly queue = new SerialQueue();
+  private readonly queue = new WorkQueue(INGEST_CONCURRENCY);
+  /** Poll interval while waiting for a Standard/Accelerated render to finish (tests lower it). */
+  pausePollMs = 1000;
+  /** FR-042 override for tests; default: a Standard/Accelerated Render Job is queued or rendering. */
+  renderBusy: () => boolean = () => {
+    try { return !!this.ctx.db.prepare("SELECT 1 FROM render_jobs WHERE status IN ('queued','rendering') AND performance_profile IN ('standard','accelerated') LIMIT 1").get(); } catch { return false; }
+  };
   private readonly progress = new Map<string, number>();
   private readonly aborts = new Map<string, AbortController>();
   private readonly waiters = new Map<string, Array<(o: Outcome) => void>>();
@@ -52,23 +67,23 @@ export class IngestService {
 
   /** Pre-copy checks that depend on the project (count, disk); throws EM-1401 / EM-6005. */
   async checkCapacity(projectId: string, bytes: number, adding = 1): Promise<void> {
-    const n = (this.ctx.db.prepare('SELECT count(*) AS n FROM assets WHERE project_id = ?').get(projectId) as { n: number }).n;
+    const n = (this.ctx.db.prepare('SELECT count(*) AS n FROM assets WHERE project_id = ? AND deleted_at IS NULL').get(projectId) as { n: number }).n;
     if (n + adding > MAX_ASSETS_PER_PROJECT) throw new EmError('EM-1401', 'A project can hold up to 200 assets.', { details: { count: n, limit: MAX_ASSETS_PER_PROJECT } });
     const free = await freeBytes(this.ctx.paths.media);
     if (free < 2 * bytes + 500_000_000) throw new EmError('EM-6005', 'Not enough disk space to import.', { details: { needBytes: 2 * bytes + 500_000_000, freeBytes: free } });
   }
 
   /** Creates the `ingesting` row and queues copy+hash from `source` (Shell paths, generated files). */
-  importFile(spec: { projectId: string; source: string; name: string; kind: AssetKind; bytes: number; ext: string; move?: boolean }): AssetRow {
+  importFile(spec: { projectId: string; source: string; name: string; kind: AssetKind; bytes: number; ext: string; move?: boolean; sourceKey?: string }): AssetRow {
     const id = this.ctx.newId(); const now = this.ctx.now();
-    this.insertRow({ id, projectId: spec.projectId, kind: spec.kind, name: displayName(spec.name), sha256: `pending-${id}`, bytes: spec.bytes, original: rel(spec.projectId, id, `original${spec.ext}`), now });
+    this.insertRow({ id, projectId: spec.projectId, kind: spec.kind, name: displayName(spec.name), sha256: `pending-${id}`, bytes: spec.bytes, original: rel(spec.projectId, id, `original${spec.ext}`), now, sourceKey: spec.sourceKey ?? null });
     this.enqueue(id, { from: 'hash', source: spec.source, move: spec.move ?? false });
     return getAsset(this.ctx, id)!;
   }
 
   /** Registers an already hashed file (raw dev upload in tmp): dedupe now, then move into place and queue from probe. */
   async importHashed(spec: { projectId: string; tmpFile: string; name: string; kind: AssetKind; bytes: number; ext: string; sha256: string }): Promise<{ row: AssetRow; duplicate: boolean }> {
-    const dup = this.ctx.db.prepare('SELECT id FROM assets WHERE project_id = ? AND sha256 = ?').get(spec.projectId, spec.sha256) as { id: string } | undefined;
+    const dup = this.ctx.db.prepare('SELECT id FROM assets WHERE project_id = ? AND sha256 = ? AND deleted_at IS NULL').get(spec.projectId, spec.sha256) as { id: string } | undefined;
     if (dup) { await fs.promises.rm(spec.tmpFile, { force: true }); return { row: getAsset(this.ctx, dup.id)!, duplicate: true }; }
     const id = this.ctx.newId(); const now = this.ctx.now();
     const original = rel(spec.projectId, id, `original${spec.ext}`);
@@ -79,9 +94,25 @@ export class IngestService {
     return { row: getAsset(this.ctx, id)!, duplicate: false };
   }
 
-  /** Re-runs probe and derived files from the kept original (restart recovery, relocate). */
-  requeue(assetId: string): void {
-    this.ctx.db.prepare("UPDATE assets SET status = 'ingesting', error_code = NULL, updated_at = ? WHERE id = ?").run(this.ctx.now(), assetId);
+  /** FR-041: a live, not-failed asset of the project imported from the same source file (same path, size and mtime). */
+  findBySource(projectId: string, sourceKey: string): AssetRow | undefined {
+    return this.ctx.db.prepare("SELECT * FROM assets WHERE project_id = ? AND source_key = ? AND deleted_at IS NULL AND status != 'failed' ORDER BY created_at LIMIT 1").get(projectId, sourceKey) as AssetRow | undefined;
+  }
+
+  /** FR-050: a per-file import error (unsupported type, too large) stays listed as a failed card for 24 h; no file is kept. */
+  recordFailed(spec: { projectId: string; name: string; code: EmCode; bytes?: number }): AssetRow {
+    const id = this.ctx.newId(); const now = this.ctx.now();
+    const name = displayName(spec.name);
+    const ext = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 9);
+    this.ctx.db.prepare(`INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, status, error_code, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,'failed',?,?,?)`).run(id, spec.projectId, kindFromExt(name) ?? 'video', name, `failed-${id}`, spec.bytes ?? 0, rel(spec.projectId, id, `original${ext}`), spec.code, now, now);
+    return getAsset(this.ctx, id)!;
+  }
+
+  /** Re-runs probe and derived files from the kept original (restart recovery, relocate, restored backups). */
+  requeue(assetId: string, opts: { keepStatus?: boolean } = {}): void {
+    // keepStatus (FR-018 restored backups): the asset stays `ready` (playable from its original) while derived files are rebuilt.
+    if (!opts.keepStatus) this.ctx.db.prepare("UPDATE assets SET status = 'ingesting', error_code = NULL, updated_at = ? WHERE id = ?").run(this.ctx.now(), assetId);
     this.enqueue(assetId, { from: 'probe' });
   }
 
@@ -110,9 +141,9 @@ export class IngestService {
     return out;
   }
 
-  private insertRow(r: { id: string; projectId: string; kind: AssetKind; name: string; sha256: string; bytes: number; original: string; now: string }): void {
-    this.ctx.db.prepare(`INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, status, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,'ingesting',?,?)`).run(r.id, r.projectId, r.kind, r.name, r.sha256, r.bytes, r.original, r.now, r.now);
+  private insertRow(r: { id: string; projectId: string; kind: AssetKind; name: string; sha256: string; bytes: number; original: string; now: string; sourceKey?: string | null }): void {
+    this.ctx.db.prepare(`INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, status, source_key, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,'ingesting',?,?,?)`).run(r.id, r.projectId, r.kind, r.name, r.sha256, r.bytes, r.original, r.sourceKey ?? null, r.now, r.now);
     this.progress.set(r.id, 0);
   }
 
@@ -126,6 +157,17 @@ export class IngestService {
     });
   }
   private settle(assetId: string, o: Outcome): void { const w = this.waiters.get(assetId) ?? []; this.waiters.delete(assetId); w.forEach((f) => f(o)); }
+
+  /** FR-042: waits while a Standard/Accelerated render is queued or running (Turbo leaves ingest running); reports `paused` once. */
+  private async yieldToRender(projectId: string, assetId: string, signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted || !this.renderBusy()) return false;
+    emit(this.ctx, 'ingest.progress', { projectId, assetId, stage: 'paused', progress: this.progress.get(assetId) ?? 0 });
+    await new Promise<void>((resolve) => {
+      const h = setInterval(() => { if (signal.aborted || !this.renderBusy()) { clearInterval(h); resolve(); } }, this.pausePollMs);
+      h.unref?.();
+    });
+    return true;
+  }
 
   private async run(assetId: string, job: { from: 'hash'; source: string; move: boolean } | { from: 'probe' }, signal: AbortSignal): Promise<Outcome> {
     const ctx = this.ctx; const heavy = s2(ctx).heavy;
@@ -148,6 +190,7 @@ export class IngestService {
       return { status: 'failed', ...(getAsset(ctx, assetId) ? { row: getAsset(ctx, assetId)! } : {}) };
     };
 
+    await this.yieldToRender(projectId, assetId, signal);
     // 1. copy + hash (streaming), dedupe within the project
     if (job.from === 'hash') {
       report('hash', 0, true);
@@ -160,7 +203,7 @@ export class IngestService {
         return fail(enospc ? 'EM-6005' : 'EM-1010', false, errorMessage(e));
       }
       if (job.move) await fs.promises.rm(job.source, { force: true });
-      const dup = ctx.db.prepare('SELECT id FROM assets WHERE project_id = ? AND sha256 = ? AND id != ?').get(projectId, sha, assetId) as { id: string } | undefined;
+      const dup = ctx.db.prepare('SELECT id FROM assets WHERE project_id = ? AND sha256 = ? AND id != ? AND deleted_at IS NULL').get(projectId, sha, assetId) as { id: string } | undefined;
       if (dup) {
         await fs.promises.rm(dir, { recursive: true, force: true });
         ctx.db.prepare('DELETE FROM assets WHERE id = ?').run(assetId);
@@ -188,6 +231,7 @@ export class IngestService {
     }
 
     // 2. probe
+    await this.yieldToRender(projectId, assetId, signal);
     report('probe', 0, true);
     let facts: MediaFacts; let probeText: string;
     try {
@@ -199,10 +243,13 @@ export class IngestService {
     if (limit) { ctx.log.info({ assetId, reason: limit.reason }, 'asset rejected'); return fail(limit.code, true); }
     if (signal.aborted) return cancelled();
 
-    const ff = (args: string[], stage: IngestStage, timeoutMs: number, durMs?: number | null) => heavy.run(() => runTool({
-      exe: ctx.resources.ffmpeg, args, cwd: dir, timeoutMs, signal,
-      onStdoutLine: (l) => { const m = /^out_time_us=(\d+)/.exec(l); if (m && durMs) report(stage, Number(m[1]) / 1000 / durMs); },
-    }));
+    const ff = async (args: string[], stage: IngestStage, timeoutMs: number, durMs?: number | null) => {
+      if (await this.yieldToRender(projectId, assetId, signal)) report(stage, 0, true);
+      return heavy.run(() => runTool({
+        exe: ctx.resources.ffmpeg, args, cwd: dir, timeoutMs, signal,
+        onStdoutLine: (l) => { const m = /^out_time_us=(\d+)/.exec(l); if (m && durMs) report(stage, Number(m[1]) / 1000 / durMs); },
+      }));
+    };
     const durMs = facts.durationMs; const durS = (durMs ?? 0) / 1000;
     const longTimeout = Math.max(120_000, 4 * (durMs ?? 0)), shortTimeout = Math.max(60_000, 2 * (durMs ?? 0));
     const cols: Partial<Record<'playable_path' | 'proxy_path' | 'thumb_path' | 'filmstrip_path' | 'waveform_path', string>> = {};
@@ -257,7 +304,7 @@ export class IngestService {
     }
     // 6b. filmstrip (10 frames in one row, FR-042; needs the `fps` and `tile` filters of the full FFmpeg build)
     if (row.kind === 'video' && durS > 0) {
-      if (await optional('filmstrip', () => ff(['-v', 'error', '-nostdin', '-y', '-i', playable, '-vf', `fps=${FILMSTRIP_FRAMES}/${durS.toFixed(3)},scale=160:-2,tile=${FILMSTRIP_FRAMES}x1`, '-frames:v', '1', '-q:v', '4', 'strip.jpg'], 'filmstrip', shortTimeout)))
+      if (await optional('filmstrip', () => ff(['-v', 'error', '-nostdin', '-y', '-i', playable, '-vf', `fps=${(FILMSTRIP_FRAMES / Math.max(durS, 0.1)).toFixed(4)},scale=160:-2,tile=${FILMSTRIP_FRAMES}x1`, '-frames:v', '1', '-q:v', '4', 'strip.jpg'], 'filmstrip', shortTimeout)))
         cols.filmstrip_path = rel(projectId, assetId, 'strip.jpg');
     }
     // 7. waveform

@@ -4,7 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { health } from '../../src/modules/health.js';
 import { createAssetsModule } from '../../src/modules/assets.js';
 import { mediaModule } from '../../src/modules/media.js';
-import { ingestOf } from '../../src/s2/ingest.js';
+import crypto from 'node:crypto';
+import { newId } from '@expertmotion/shared';
+import { INGEST_CONCURRENCY, ingestOf } from '../../src/s2/ingest.js';
+import { WorkQueue } from '../../src/s2/common.js';
 import { WaveformReducer, decidePlayable, normalizeProbe, sniff } from '../../src/s2/probe.js';
 import { tempDir } from '../helpers.js';
 import { ffmpeg, hasFfmpeg, importDir, json, shell, startS2, wavBuffer, type S2Service } from './harness.js';
@@ -39,7 +42,13 @@ describe('assets: import guards, badges, insert, delete (no FFmpeg needed)', () 
   it('rejects wrong content (EM-1001), >50 paths (EM-1010) and multipart', async () => {
     fs.writeFileSync(path.join(src, 'notes.mp4'), 'this is text, not a video');
     const r = await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: [path.join(src, 'notes.mp4')] } });
-    expect(r.status).toBe(422); expect((await json<{ error: { code: string } }>(r)).error.code).toBe('EM-1001');
+    // FR-050: the unsupported file stays listed as a failed card with its reason (no file kept)
+    expect(r.status).toBe(202);
+    const bad = await json<{ items: Asset[]; notices: Array<{ code: string; assetId?: string }> }>(r);
+    expect(bad.items[0]).toMatchObject({ status: 'failed', errorCode: 'EM-1001' });
+    expect(bad.notices[0]).toMatchObject({ code: 'EM-1001', assetId: bad.items[0]!.id });
+    expect(fs.existsSync(path.join(s.ctx.paths.media, pid, bad.items[0]!.id))).toBe(false);
+    await s.api(`/projects/${pid}/assets/${bad.items[0]!.id}`, { method: 'DELETE' });
     const many = await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: Array.from({ length: 51 }, () => path.join(src, 'notes.mp4')) } });
     expect(many.status).toBe(413); expect((await json<{ error: { code: string } }>(many)).error.code).toBe('EM-1010');
     const mp = await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, body: '--x--' });
@@ -51,9 +60,13 @@ describe('assets: import guards, badges, insert, delete (no FFmpeg needed)', () 
     const r = await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: [path.join(src, 'doc.docx'), path.join(src, 'subs.srt')] } });
     expect(r.status).toBe(202);
     const body = await json<{ items: Asset[]; notices: Array<{ code: string }> }>(r);
-    expect(body.items).toHaveLength(1); expect(body.notices[0]!.code).toBe('EM-1001');
+    expect(body.items).toHaveLength(2); expect(body.notices[0]!.code).toBe('EM-1001');
+    expect(body.items[0]).toMatchObject({ status: 'failed', errorCode: 'EM-1001' });                  // FR-050 unsupported card
     await ingestOf(s.ctx).idle();
-    const a = await json<Asset>(await s.api(`/projects/${pid}/assets/${body.items[0]!.id}`));
+    const listed = await json<{ items: Asset[] }>(await s.api(`/projects/${pid}/assets?status=failed`));
+    expect(listed.items.map((x) => x.id)).toContain(body.items[0]!.id);
+    await s.api(`/projects/${pid}/assets/${body.items[0]!.id}`, { method: 'DELETE' });
+    const a = await json<Asset>(await s.api(`/projects/${pid}/assets/${body.items[1]!.id}`));
     expect(a.status).toBe('ready'); expect(a.kind).toBe('subtitle');
     expect(s.ctx.hooks.assetFacts(pid).find((f) => f.id === a.id)?.captionPages?.length).toBeGreaterThan(0);
   });
@@ -103,6 +116,74 @@ describe('assets: import guards, badges, insert, delete (no FFmpeg needed)', () 
     expect((await up()).status).toBe(403);
     s.cfg.dev = true;
   });
+  it('FR-041 the same path twice (one request or later) is EM-1006 with the existing asset, no new card', async () => {
+    fs.writeFileSync(path.join(src, 'twice.srt'), '1\n00:00:00,000 --> 00:00:01,000\nsekali\n');
+    const p = path.join(src, 'twice.srt');
+    const a = await json<{ items: Asset[]; notices: Array<{ code: string; assetId?: string }> }>(await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: [p, p] } }));
+    expect(a.items).toHaveLength(1);
+    expect(a.notices).toEqual([expect.objectContaining({ code: 'EM-1006', assetId: a.items[0]!.id })]);
+    await ingestOf(s.ctx).idle();
+    const b = await json<{ items: Asset[]; notices: Array<{ code: string; assetId?: string }> }>(await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: [p] } }));
+    expect(b.items).toHaveLength(0); expect(b.notices[0]).toMatchObject({ code: 'EM-1006', assetId: a.items[0]!.id });
+    await s.api(`/projects/${pid}/assets/${a.items[0]!.id}`, { method: 'DELETE' });
+  });
+  it('FR-042 ingest runs two jobs in parallel and pauses while a Standard/Accelerated render is queued or running', async () => {
+    const ingest = ingestOf(s.ctx);
+    let busy = true; ingest.renderBusy = () => busy; ingest.pausePollMs = 10;
+    try {
+      fs.writeFileSync(path.join(src, 'paused.srt'), '1\n00:00:00,000 --> 00:00:01,000\njeda\n');
+      const r = await json<{ items: Asset[] }>(await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: [path.join(src, 'paused.srt')] } }));
+      const id = r.items[0]!.id;
+      await s.waitEvent((e) => e.name === 'ingest.progress' && e.data['assetId'] === id && e.data['stage'] === 'paused', 2000);
+      await new Promise((res) => setTimeout(res, 50));
+      expect((s.ctx.db.prepare('SELECT status FROM assets WHERE id = ?').get(id) as { status: string }).status).toBe('ingesting');
+      busy = false;
+      await ingest.idle();
+      expect((s.ctx.db.prepare('SELECT status FROM assets WHERE id = ?').get(id) as { status: string }).status).toBe('ready');
+      await s.api(`/projects/${pid}/assets/${id}`, { method: 'DELETE' });
+    } finally { ingest.renderBusy = () => false; }
+    const q = new WorkQueue(INGEST_CONCURRENCY); let running = 0, peak = 0;
+    const job = () => async () => { running++; peak = Math.max(peak, running); await new Promise((res) => setTimeout(res, 20)); running--; };
+    for (const k of ['a', 'b', 'c', 'd']) q.enqueue(k, job());
+    expect(q.running).toHaveLength(2);
+    await q.idle();
+    expect(peak).toBe(2);
+  });
+  it('FR-049 audio goes in at the playhead; FR-052 Remove keeps the media for Undo, Undo brings the asset back, unreferenced ones are purged', async () => {
+    const now = new Date().toISOString();
+    const mk = (kind: 'audio' | 'image', name: string) => {
+      const id = newId(); const dir = path.join(s.ctx.paths.media, pid, id); fs.mkdirSync(dir, { recursive: true });
+      const file = kind === 'audio' ? 'original.wav' : 'original.png';
+      fs.writeFileSync(path.join(dir, file), kind === 'audio' ? wavBuffer(2000) : Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'));
+      s.ctx.db.prepare(`INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, playable_path, duration_ms, width, height, has_audio, status, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'ready',?,?)`).run(id, pid, kind, name, crypto.randomBytes(32).toString('hex'), 10, `${pid}/${id}/${file}`, `${pid}/${id}/${file}`, kind === 'audio' ? 2000 : 5000, kind === 'image' ? 1080 : null, kind === 'image' ? 1920 : null, kind === 'audio' ? 1 : 0, now, now);
+      return id;
+    };
+    const aud = mk('audio', 'voice.wav'); const img = mk('image', 'cover.png');
+    const ins = await s.api(`/projects/${pid}/assets/insert`, { method: 'POST', json: { assetIds: [img, aud], order: 'given', playheadMs: 1500 } });
+    expect(ins.status).toBe(200);
+    const body = await json<{ ops: Array<{ op: string; args: Record<string, unknown> }> }>(ins);
+    expect(body.ops.find((o) => o.op === 'op:audio.addLayer')!.args['atMs']).toBe(1500);
+    const withClip = s.heads.get(pid)!;
+    expect((await s.api(`/projects/${pid}/assets/${img}?confirm=true`, { method: 'DELETE' })).status).toBe(200);
+    expect(s.heads.get(pid)!.model.tracks.video.some((c) => c.assetId === img)).toBe(false);
+    expect(fs.existsSync(path.join(s.ctx.paths.media, pid, img))).toBe(true);
+    let list = await json<{ items: Asset[] }>(await s.api(`/projects/${pid}/assets`));
+    expect(list.items.some((x) => x.id === img)).toBe(false);
+    expect(s.ctx.hooks.assetFacts(pid).some((f) => f.id === img)).toBe(true);           // still valid for Undo
+    // Undo: the head goes back to the version with the Clip → the asset returns to the panel
+    const back = s.version(pid, withClip.model);
+    s.ctx.hooks.headChanged(pid, back);
+    expect(s.events.some((e) => e.name === 'service.notice' && e.data['kind'] === 'assets-restored' && (e.data['assetIds'] as string[]).includes(img))).toBe(true);
+    list = await json<{ items: Asset[] }>(await s.api(`/projects/${pid}/assets`));
+    expect(list.items.some((x) => x.id === img)).toBe(true);
+    // Remove again, then no version references it any more → purged with its media
+    await s.api(`/projects/${pid}/assets/${img}?confirm=true`, { method: 'DELETE' });
+    s.ctx.db.prepare('UPDATE composition_versions SET model_json = replace(model_json, ?, ?) WHERE project_id = ?').run(`"${img}"`, '"gone"', pid);   // history trimmed
+    await s.api(`/projects/${pid}/assets`);
+    expect(fs.existsSync(path.join(s.ctx.paths.media, pid, img))).toBe(false);
+    expect(s.ctx.db.prepare('SELECT 1 FROM assets WHERE id = ?').get(img)).toBeUndefined();
+  });
   it('restart recovery: a half-copied ingest fails with EM-1201', () => {
     const id = '01ARZ3NDEKTSV4RRFFQ69G5FAZ'; const now = new Date().toISOString();
     s.ctx.db.prepare("INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, status, created_at, updated_at) VALUES (?,?,'video','x.mp4',?,1,?,'ingesting',?,?)")
@@ -146,7 +227,12 @@ describe.skipIf(!hasFfmpeg)('assets: real ingest with the slim FFmpeg', () => {
   });
   it('re-importing the same file is a duplicate (EM-1006), not a new asset', async () => {
     const before = (s.ctx.db.prepare('SELECT count(*) AS n FROM assets').get() as { n: number }).n;
-    await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: [path.join(src, 'clip-a-audio.mp4')] } });
+    // same path → recognised before copying: notice only, no card
+    const same = await json<{ items: Asset[]; notices: Array<{ code: string; assetId?: string }> }>(await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: [path.join(src, 'clip-a-audio.mp4')] } }));
+    expect(same.items).toHaveLength(0); expect(same.notices[0]).toMatchObject({ code: 'EM-1006' });
+    // same content under another name → caught after hashing (ingest.failed EM-1006, row dropped)
+    fs.copyFileSync(path.join(src, 'clip-a-audio.mp4'), path.join(src, 'copy-of-clip.mp4'));
+    await s.api(`/projects/${pid}/assets`, { method: 'POST', headers: shell, json: { paths: [path.join(src, 'copy-of-clip.mp4')] } });
     await ingestOf(s.ctx).idle();
     expect((s.ctx.db.prepare('SELECT count(*) AS n FROM assets').get() as { n: number }).n).toBe(before);
     expect(s.events.some((e) => e.name === 'ingest.failed' && e.data['code'] === 'EM-1006')).toBe(true);
@@ -170,7 +256,9 @@ describe.skipIf(!hasFfmpeg)('assets: real ingest with the slim FFmpeg', () => {
     const ok = await s.api(`/projects/${pid}/assets/${v.id}?confirm=true`, { method: 'DELETE' });
     expect(ok.status).toBe(200);
     expect(s.heads.get(pid)!.model.tracks.video).toHaveLength(0);
-    expect(fs.existsSync(path.join(s.ctx.paths.media, pid, v.id))).toBe(false);
+    // FR-052: older versions still use it, so the media stays for Undo (soft delete)
+    expect(fs.existsSync(path.join(s.ctx.paths.media, pid, v.id))).toBe(true);
+    expect((await s.api(`/projects/${pid}/assets/${v.id}`)).status).toBe(404);
   });
 });
 

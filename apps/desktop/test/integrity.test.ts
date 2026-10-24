@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createHash, generateKeyPairSync, sign, verify } from 'node:crypto';
-import { buildManifest, canonicalManifestBytes, verifyManifest, type Ed25519Verify, type SignedManifest } from '../src/lib/integrity.js';
+import { buildManifest, canonicalManifestBytes, isEngineExecutable, verifyManifest, type Ed25519Verify, type SignedManifest } from '../src/lib/integrity.js';
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
 const pubDer = new Uint8Array(publicKey.export({ type: 'spki', format: 'der' }));
@@ -58,5 +58,14 @@ describe('integrity manifest (SEC-061, SEC-133; hardening item 4)', () => {
 
   it('hashing is sha256 hex (sanity)', () => {
     expect(createHash('sha256').update('x').digest('hex')).toHaveLength(64);
+  });
+});
+
+describe('SEC-061 engine executables in the integrity manifest', () => {
+  it('selects Chrome Headless Shell and compositor binaries, not resources or docs', () => {
+    for (const f of ['C:\\x\\engine\\chrome\\chrome-headless-shell.exe', 'engine/chrome/chrome_elf.dll', 'engine/compositor/remotion.exe', 'engine/compositor/ffmpeg.exe', 'engine/compositor/remotion', 'engine/chrome/chrome-headless-shell'])
+      expect(isEngineExecutable(f), f).toBe(true);
+    for (const f of ['engine/chrome/resources.pak', 'engine/chrome/locales/en-US.pak', 'engine/compositor/package.json', 'engine/chrome/LICENSE'])
+      expect(isEngineExecutable(f), f).toBe(false);
   });
 });

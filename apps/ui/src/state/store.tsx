@@ -6,7 +6,7 @@ import type { ElementRefT, ProjectSettingsT } from '@expertmotion/composition-mo
 import { getPreset } from '@expertmotion/catalogue';
 import { createEventStream, type EventStream } from '../api/events.js';
 import type {
-  AgentKind, AssetDto, IntentCreateResponse, DesignPickInput, EditIntent, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProviderKind, Ratio, RenderCreateInput,
+  AgentKind, AssetDto, IntentCreateResponse, DesignPickInput, EditIntent, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
 } from '../api/types.js';
 import { initialState, reducer, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
@@ -36,13 +36,13 @@ export interface Actions {
   clipEdit(edit: { clipId: string; toIndex?: number; trimBeforeMs?: number; durationMs?: number }, label: string): Promise<void>;
   updateProjectSettings(patch: Partial<ProjectSettingsT>): Promise<void>;
   upload(files: readonly File[]): Promise<AssetDto[]>;
+  /** FR-014 / FR-041: packaged path import (picker or drag-and-drop): the cards appear at once (ingesting / failed) and follow ingest. */
+  importPaths(paths: string[]): Promise<AssetDto[]>;
   setBadge(assetId: string, badge: number | null): Promise<void>;
   /** FR-049: without `opts`, Clips go after the selected Clip (else at the end); FR-029 `asOverlay` + `atMs` places images on the overlay. */
   insert(assetIds: string[], opts?: { asOverlay?: boolean; atMs?: number; atIndex?: number }): Promise<void>;
   /** FR-048: Locate a missing asset's file (Shell picker → R-036, re-link by hash). */
   locateAsset(assetId: string): Promise<void>;
-  /** FR-037: hold a pick whose preset needs a model that is not installed (EM-2104); it runs when `model.installed` arrives. */
-  holdPick(presetId: string, modelKey: string): void;
   removeAsset(assetId: string, confirm?: boolean): Promise<void>;
   setAssetSelection(ids: string[]): void;
   captionsFromAsset(assetId: string): Promise<void>;
@@ -53,7 +53,8 @@ export interface Actions {
   execute(): Promise<void>;
   cancelPlan(): Promise<void>;
   setNotes(notes: string): Promise<void>;
-  send(agent: AgentKind, text: string, attachments?: string[]): Promise<boolean>;
+  /** FR-067 / FR-080: the Editor message carries the inspector target (if any), the selection and the playhead. */
+  send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null): Promise<boolean>;
   handoff(message: MessageDto, intentIds: string[]): Promise<void>;
   dismissHandoff(message: MessageDto): void;
   stopStreaming(agent: AgentKind): void;
@@ -91,6 +92,15 @@ export const errCode = (e: unknown): string => (e instanceof EmError ? e.code : 
 /** FR-053: import-level errors go to the Asset Panel banner (`lib.assets.error`), per-file errors stay on the card. */
 export const IMPORT_LEVEL = new Set(['EM-6401', 'EM-6005', 'EM-1401', 'EM-1010']);
 export const importError = (code: string): void => { window.dispatchEvent(new CustomEvent('em:import-error', { detail: { code } })); };
+/** FR-041 "Show it" (EM-1006): scrolls to the existing Asset card and focuses it. */
+export const focusAssetCard = (assetId: string): void => {
+  const el = document.querySelector<HTMLElement>(`[data-el="lib.assets.card"][data-asset-id="${assetId}"]`);
+  el?.scrollIntoView?.({ block: 'nearest' }); el?.focus();
+};
+/** FR-012: the per-project UI state Save writes (R-014 `uiState`). */
+export const uiStateOf = (s: Pick<AppState, 'libMode' | 'playheadMs' | 'selection' | 'assetSelection'>): ProjectUiState => ({
+  libMode: s.libMode, playheadMs: Math.max(0, Math.round(s.playheadMs)), selection: s.selection.slice(0, 50), assetSelection: s.assetSelection.slice(0, 200),
+});
 const PRESET_CATEGORY_TO_INTENT: Record<string, IntentCategory> = {
   transition: 'transition', caption: 'caption', background: 'background', motion: 'motion', shape: 'shape', easing: 'easing', effect: 'effect', audio: 'audio',
   text: 'text', texteffect: 'text', font: 'text', palette: 'layout', fontpair: 'layout',
@@ -100,7 +110,6 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   const [state, rawDispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
   stateRef.current = state;
-  const heldPicks = useRef(new Map<string, string>());   // FR-037: presetId → model key, held with EM-2104
   const dispatch = useCallback((a: Action) => rawDispatch(a), []);
   const prefsRef = useRef<Prefs>({ ...loadPrefs(), ...(initialPrefs ?? {}) });
   const [prefsVersion, forcePrefs] = useReducer((x: number) => x + 1, 0);
@@ -112,18 +121,29 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   const headHash = () => stateRef.current.head?.hash ?? stateRef.current.project?.headHash ?? '';
 
   const actions = useMemo<Actions>(() => {
-    const toast: Actions['toast'] = (kind, textKey, vars, opts = {}) => dispatch({ type: 'toast', toast: { kind, textKey, ...(vars ? { vars } : {}), ...(opts.code ? { code: opts.code } : {}), ...(opts.action ? { action: opts.action } : {}), sticky: opts.sticky ?? (kind === 'danger' || kind === 'warn') } });
     const announce = (text: string) => dispatch({ type: 'announce', text });
+    const toast: Actions['toast'] = (kind, textKey, vars, opts = {}) => {
+      dispatch({ type: 'toast', toast: { kind, textKey, ...(vars ? { vars } : {}), ...(opts.code ? { code: opts.code } : {}), ...(opts.action ? { action: opts.action } : {}), sticky: opts.sticky ?? (kind === 'danger' || kind === 'warn') } });
+      // FR-154: every toast is announced through the shared hidden live region sys.live (the toast itself is not a live region)
+      const L = stateRef.current.settings?.uiLanguage ?? 'en';
+      announce(`${translate(L, textKey, vars)}${opts.code ? ` · ${opts.code}` : ''}`);
+    };
     const error = (err: unknown) => {
       const code = errCode(err);
       if (code === 'EM-8001' && stateRef.current.stream === 'offline') return;     // sys.offline suppresses other error toasts (§10)
+      if (code === 'EM-4201') {                                                     // FR-117 / AI-016: Change budget → the budget field
+        const d = (err instanceof EmError ? err.details : undefined) as { scope?: string; connectionId?: string } | undefined;
+        const focus = { field: d?.scope === 'month' ? 'month' as const : 'project' as const, ...(d?.connectionId ? { connectionId: d.connectionId } : {}) };
+        toast('danger', 'err.EM-4201.title', undefined, { code, action: { labelKey: 'err.EM-4201.action', run: () => dispatch({ type: 'screen', screen: { kind: 'providers', focus } }) } });
+        return;
+      }
       toast(code.startsWith('EM-5') || code === 'EM-4401' || code === 'EM-4007' || code === 'EM-2403' || code === 'EM-9004' || code === 'EM-7001' ? 'info' : 'danger', `err.${code}.title`, undefined, { code });
     };
     const refreshHead = async () => {
       const id = pid(); if (!id) return;
       try { const c = await api.getComposition(id); if (pid() === id) dispatch({ type: 'head', head: c.head, canUndo: c.canUndo, canRedo: c.canRedo }); } catch (e) { error(e); }
     };
-    const openProject = async (id: string) => {
+    const openProject = async (id: string, keepView = false) => {
       try {
         const open = await api.openProject(id);
         const [assets, brainstorm, editor] = await Promise.all([
@@ -131,13 +151,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           api.getConversation(id, 'brainstorm').catch(() => null),
           api.getConversation(id, 'editor').catch(() => null),
         ]);
-        dispatch({ type: 'projectOpened', open, assets, messages: { brainstorm: brainstorm?.messages.items ?? [], editor: editor?.messages.items ?? [] }, contextUsage: { brainstorm: brainstorm?.contextUsage ?? null, editor: editor?.contextUsage ?? null } });
+        dispatch({ type: 'projectOpened', open, assets, messages: { brainstorm: brainstorm?.messages.items ?? [], editor: editor?.messages.items ?? [] }, contextUsage: { brainstorm: brainstorm?.contextUsage ?? null, editor: editor?.contextUsage ?? null }, keepView });
         if (!open.head.model) await refreshHead();
         api.listOutputs(id).then((o) => dispatch({ type: 'outputs', outputs: o.items })).catch(() => undefined);
         if (open.checkpointNewerThanSave) dispatch({ type: 'screen', screen: { kind: 'project.recover' } });
       } catch (e) { error(e); }
     };
-    const reloadState = async () => { const id = pid(); if (id) await openProject(id); };
+    const reloadState = async () => { const id = pid(); if (id) await openProject(id, true); };   // FR-171: keeps selection and playhead
     const openSampleProject = async (language: Lang): Promise<string | null> => {
       try {
         const p = await api.createSampleProject({ language });
@@ -161,6 +181,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           const code = (res.intent.rejectionReason ?? '').split(':')[0] ?? 'EM-2201';
           announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', `err.${code}.title`));
         }
+        if (res.intent.status === 'held') {
+          // FR-037: the Service holds the pick (EM-2104) until the model is installed; it then applies by itself (model.installed).
+          const flag = String(res.intent.params['__heldFor'] ?? '');
+          const model = flag.startsWith('model:') ? flag.slice(6) : '';
+          toast('warn', 'err.EM-2104.title', undefined, { code: 'EM-2104', action: { labelKey: 'err.EM-2104.action', run: () => setScreen({ kind: 'models', ...(model ? { focus: model } : {}) }) } });
+          announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.lib.catalogue.model.held', { model }));
+        }
         if (res.appliedVersion) {
           await refreshHead();
           toast('success', 'ui.sys.toast.applieddirect', { label }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } });
@@ -176,8 +203,27 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         return null;
       }
     };
-    const undo = async () => { const id = pid(); if (!id) return; try { await api.undo(id); await refreshHead(); } catch (e) { error(e); } };
-    const redo = async () => { const id = pid(); if (!id) return; try { await api.redo(id); await refreshHead(); } catch (e) { error(e); } };
+    // FR-167: Undo/Redo refresh the Intent Queue too, so applied items show "undone" (and back after Redo).
+    const refreshQueue = async (id: string) => { try { const queue = await api.listIntents(id); if (pid() === id) dispatch({ type: 'queue', queue }); } catch { /* the next event refreshes it */ } };
+    // FR-052: Undo/Redo can bring a removed asset back (its Clips return with the version), so the Asset Panel is re-read too.
+    const refreshAssets = async (id: string) => { try { const p = await api.listAssets(id, { limit: 200 }); if (pid() === id) dispatch({ type: 'assets', assets: p.items }); } catch { /* the next event refreshes it */ } };
+    const undo = async () => { const id = pid(); if (!id) return; try { await api.undo(id); await refreshHead(); await refreshQueue(id); await refreshAssets(id); } catch (e) { error(e); } };
+    const redo = async () => { const id = pid(); if (!id) return; try { await api.redo(id); await refreshHead(); await refreshQueue(id); await refreshAssets(id); } catch (e) { error(e); } };
+    /** FR-041 / FR-050 / FR-053: import notices — import-level codes go to the banner, EM-1006 is a toast that can show the existing card,
+     *  per-file errors stay on their failed card; anything else is a toast. */
+    const importNotices = (notices: ReadonlyArray<{ code: string; assetId?: string; name?: string }>, items: readonly AssetDto[]) => {
+      for (const n of notices) {
+        if (!n.code) continue;
+        if (IMPORT_LEVEL.has(n.code)) { importError(n.code); continue; }
+        if (n.code === 'EM-1006') { duplicateToast(n.assetId, n.name); continue; }
+        if (n.assetId && items.some((i) => i.id === n.assetId && i.status === 'failed')) continue;
+        toast('info', `err.${n.code}.title`, undefined, { code: n.code });
+      }
+    };
+    const duplicateToast = (existingId: string | undefined, name?: string) => {
+      const existing = existingId ? stateRef.current.assets.find((a) => a.id === existingId) : undefined;
+      toast('info', 'err.EM-1006.title', { name: existing?.name ?? name ?? '' }, { code: 'EM-1006', ...(existingId ? { action: { labelKey: 'err.EM-1006.action', run: () => focusAssetCard(existingId) } } : {}) });
+    };
     const setScreen = (screen: Screen | null) => dispatch({ type: 'screen', screen });
     const self: Actions = {
       openProject, openSampleProject, refreshHead, reloadState, error, toast, announce, undo, redo, setScreen,
@@ -186,11 +232,19 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       },
       async renameProject(name) {
         const id = pid(); if (!id) return false;
-        try { const p = await api.patchProject(id, { name }); dispatch({ type: 'project', project: { ...p, dirty: stateRef.current.project?.dirty ?? p.dirty } }); return true; } catch (e) { error(e); return false; }
+        try {
+          const p = await api.patchProject(id, { name });
+          dispatch({ type: 'project', project: { ...p, dirty: true } });             // FR-173: a rename is unsaved UI-level state
+          // FR-165: autosave clears it within 10 s; adopt the Service's answer then (Save clears it at once).
+          const wait = 11_000;                                                   // FR-165 autosave window (10 s) + margin
+          setTimeout(() => { if (pid() !== id || !stateRef.current.project?.dirty) return; void api.getProject(id).then((fresh) => { const cur = stateRef.current.project; if (cur && cur.id === id && !fresh.dirty) dispatch({ type: 'project', project: { ...cur, dirty: false } }); }).catch(() => undefined); }, wait);
+          return true;
+        } catch (e) { error(e); return false; }
       },
       async save() {
         const id = pid(); if (!id) return;
-        try { await api.createCheckpoint(id); const p = stateRef.current.project; if (p) dispatch({ type: 'project', project: { ...p, dirty: false } }); toast('info', 'ui.sys.toast.saved'); } catch (e) { error(e); }
+        // FR-012: Save also stores the UI state of this project (Library mode, playhead, selection) on its row.
+        try { await api.patchProject(id, { uiState: uiStateOf(stateRef.current) }); await api.createCheckpoint(id); const p = stateRef.current.project; if (p) dispatch({ type: 'project', project: { ...p, dirty: false } }); toast('info', 'ui.sys.toast.saved'); } catch (e) { error(e); }
       },
       async pick(presetId, opts = {}) {
         const p = getPreset(presetId);
@@ -231,7 +285,18 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           const paths = files.map((f) => (f as File & { path?: string }).path).filter((x): x is string => typeof x === 'string' && x.length > 0);
           const res = runtime.mode === 'live' && paths.length === files.length && window.expertmotion ? await api.importAssetPaths(id, paths) : await api.uploadAssets(id, files);
           dispatch({ type: 'assetsUpsert', assets: res.items });
-          for (const n of res.notices) if (n.code) { if (IMPORT_LEVEL.has(n.code)) importError(n.code); else toast('info', `err.${n.code}.title`, undefined, { code: n.code }); }
+          importNotices(res.notices, res.items);
+          return res.items;
+        } catch (e) { if (IMPORT_LEVEL.has(errCode(e))) importError(errCode(e)); else error(e); return []; }
+      },
+      async importPaths(paths) {
+        const id = pid(); if (!id || !paths.length) return [];
+        try {
+          const res = await api.importAssetPaths(id, paths);
+          dispatch({ type: 'assetsUpsert', assets: res.items });              // the cards appear now; ingest.* events move them through the stages
+          importNotices(res.notices, res.items);
+          const n = res.items.filter((a) => a.status === 'ingesting').length;
+          if (n) toast('info', 'ui.lib.assets.importing', { count: n });
           return res.items;
         } catch (e) { if (IMPORT_LEVEL.has(errCode(e))) importError(errCode(e)); else error(e); return []; }
       },
@@ -252,11 +317,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const selIdx = selClip ? (s0.head?.model?.tracks.video.findIndex((c) => c.id === selClip.id) ?? -1) : -1;
         const place = opts ?? (selIdx >= 0 ? { atIndex: selIdx + 1 } : {});
         try {
-          await api.insertAssets(id, { assetIds, order: 'badge', ...place });
+          // FR-049: audio goes in at the playhead; the Service records the Insert in the Intent Queue ("Insert N clips", applied directly).
+          await api.insertAssets(id, { assetIds, order: 'badge', ...place, playheadMs: Math.round(s0.playheadMs) });
           const assets = await api.listAssets(id, { limit: 200 });
           dispatch({ type: 'assets', assets: assets.items });
           dispatch({ type: 'assetSelection', ids: [] });
           await refreshHead();
+          await refreshQueue(id);
           toast('success', first ? 'ui.sys.toast.firstinsert' : 'ui.sys.toast.inserted', { count: assetIds.length }, first ? { action: { labelKey: 'ui.hdr.menu.design', run: () => dispatch({ type: 'libMode', mode: 'design' }) } } : {});
         } catch (e) { error(e); }
       },
@@ -289,7 +356,6 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.lib.assets.locate.done', { name: a?.name ?? '' }));
         } catch (e) { error(e); }
       },
-      holdPick(presetId, modelKey) { heldPicks.current.set(presetId, modelKey); },
       async captionsFromAsset(assetId) {
         const a = stateRef.current.assets.find((x) => x.id === assetId);
         await createIntent({ source: 'ui', category: 'caption', params: { assetId }, target: { kind: 'project' }, plan: 'auto' }, a?.name ?? 'captions');
@@ -338,6 +404,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
             }
           } catch (e) {
             if (e instanceof EmError && e.code === 'EM-2301') { dispatch({ type: 'plan', plan: { ...plan, status: 'stale' } }); return; }
+            // FR-084: cancelled before the transaction started; the version is unchanged.
+            if (e instanceof EmError && e.code === 'EM-4303') { dispatch({ type: 'plan', plan: { ...plan, status: 'cancelled' } }); toast('info', 'err.EM-4303.title', undefined, { code: 'EM-4303' }); return; }
             dispatch({ type: 'plan', plan: { ...plan, status: 'valid' } });
             error(e);
           }
@@ -350,7 +418,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         try {
           const run = s.streaming.editor;
           if (run) await api.cancelAgentRun(run.runId).catch(() => undefined);
-          if (plan && plan.status !== 'executed') { const p = await api.cancelPlan(plan.id); dispatch({ type: 'plan', plan: { ...plan, ...p, status: 'cancelled' } }); }
+          const live = stateRef.current.plan;                                          // FR-084: may be `executing` by now
+          if (plan && plan.status !== 'executed' && live?.status !== 'executed') { const p = await api.cancelPlan(plan.id); dispatch({ type: 'plan', plan: { ...plan, ...p, status: 'cancelled' } }); }
           dispatch({ type: 'agentError', agent: 'editor', code: null });
           const id = pid(); if (id) dispatch({ type: 'queue', queue: await api.listIntents(id) });
         } catch (e) { error(e); }
@@ -359,11 +428,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const plan = stateRef.current.plan; if (!plan) return;
         try { const p = await api.setPlanNotes(plan.id, notes); dispatch({ type: 'plan', plan: { ...plan, notes: p.notes ?? notes } }); } catch (e) { error(e); }
       },
-      async send(agent, text, attachments = []) {
+      async send(agent, text, attachments = [], target = null) {
         const id = pid(); if (!id) return false;
         try {
           dispatch({ type: 'agentError', agent, code: null });
-          const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), baseVersion: headHash() });
+          const s0 = stateRef.current;
+          const editorCtx = agent === 'editor' ? { ...(target ? { target } : {}), ...(s0.selection.length ? { selection: s0.selection.slice(0, 50) } : {}), playheadMs: Math.max(0, Math.round(s0.playheadMs)) } : {};
+          const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), baseVersion: headHash(), ...editorCtx });
           dispatch({ type: 'messageAdded', agent, message: res.message });
           dispatch({ type: 'streamingStart', agent, runId: res.runId, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '' });
           return true;
@@ -406,6 +477,11 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         if (p === prev) return;
         const apply = (x: PerformanceProfile) => { dispatch({ type: 'performanceProfile', profile: x }); setPrefs({ draft: x !== 'turbo' }); };
         apply(p);
+        // FR-090: Turbo on a T1 machine works but may not be faster — EM-3106 once per install, with "Use Standard".
+        if (p === 'turbo' && stateRef.current.hardware?.tier === 'T1' && !prefsRef.current.turboWarned) {
+          setPrefs({ turboWarned: true });
+          toast('warn', 'err.EM-3106.title', undefined, { code: 'EM-3106', action: { labelKey: 'ui.scr.export.fix.standard', run: () => { void self.setProfile('standard'); } } });
+        }
         const id = pid();
         if (!id) { try { dispatch({ type: 'settings', settings: await api.putSettings({ defaultPerformanceProfile: p }) }); } catch (e) { error(e); } return; }
         const L = stateRef.current.settings?.uiLanguage ?? 'en';
@@ -422,12 +498,23 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       async resetOutput() {
         const id = pid(), s = stateRef.current.head?.model?.settings; if (!id || !s) return;
         const d = outputDefaults(stateRef.current);
+        // R-065: ratio + resolution + Auto off + profile Standard as one unit: every pick recorded in the Intent Queue (superseding
+        // the previous one), one Composition Version, and one Undo of that version restores all of it (the profile moves with it).
+        const project = { kind: 'project' as const };
+        const picks: Array<Omit<DesignPickInput, 'baseVersion'>> = [
+          { source: 'ui', category: 'layout', output: { kind: 'ratio', value: d.ratio }, target: project, plan: 'auto' },
+          { source: 'ui', category: 'layout', output: { kind: 'resolution', value: d.resolution }, target: project, plan: 'auto' },
+          ...(s.autoRatio ? [{ source: 'ui' as const, category: 'layout' as const, output: { kind: 'autoRatio' as const, value: false }, target: project, plan: 'auto' as const }] : []),
+          { source: 'ui', category: 'output', output: { kind: 'performanceProfile', value: 'standard' }, target: project, plan: 'auto' },
+        ];
         try {
-          await api.putProjectSettings(id, { fps: s.fps, language: s.language, ratio: d.ratio, resolution: d.resolution, autoRatio: false });
-          dispatch({ type: 'performanceProfile', profile: 'standard' });
-          await api.putSettings({ defaultPerformanceProfile: 'standard' }).then((x) => dispatch({ type: 'settings', settings: x }));
+          const res = await api.createIntentBatch(id, { baseVersion: headHash(), picks });
+          dispatch({ type: 'queue', queue: res.queue });
+          dispatch({ type: 'performanceProfile', profile: 'standard' }); setPrefs({ draft: true });
           await refreshHead();
-        } catch (e) { error(e); }
+          const L = stateRef.current.settings?.uiLanguage ?? 'en';
+          toast('success', 'ui.sys.toast.applieddirect', { label: translate(L, 'ui.agent.output.reset') }, res.appliedVersion ? { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } } : {});
+        } catch (e) { if (e instanceof EmError && e.code === 'EM-2301') await refreshHead(); error(e); }
       },
       async startRender(input) {
         const id = pid(); if (!id) return null;
@@ -474,11 +561,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         actions.announce(translate(L, 'ui.sys.live.exportfailed'));
         break;
       case 'ingest.done': actions.announce(translate(L, 'ui.sys.live.ingested', { name: ev.data.asset.name })); break;
-      case 'model.installed': {
-        // FR-037: picks held with EM-2104 resume once their model is installed.
-        for (const [presetId, key] of [...heldPicks.current]) if (key === ev.data.model.key) { heldPicks.current.delete(presetId); void actions.pick(presetId); }
+      // FR-041: the same content was already in the project; the card is gone (reducer) and the toast can show the existing one.
+      case 'ingest.failed':
+        if (ev.data.code === 'EM-1006') {
+          const existingId = ev.data.existingAssetId;
+          const existing = existingId ? stateRef.current.assets.find((a) => a.id === existingId) : undefined;
+          actions.toast('info', 'err.EM-1006.title', { name: existing?.name ?? ev.data.name }, { code: 'EM-1006', ...(existingId ? { action: { labelKey: 'err.EM-1006.action', run: () => focusAssetCard(existingId) } } : {}) });
+        }
         break;
-      }
+      // FR-037: held picks resume on the Service before it announces model.installed; intent.updated / composition.updated carry the result.
       case 'plan.ready':
         if (ev.data.plan.status === 'valid' && ev.data.plan.origin === 'editor-agent') actions.announce(translate(L, 'ui.sys.live.planready', { goal: ev.data.plan.goal }));
         break;
@@ -492,7 +583,17 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         // FR-128: the Service sends EM-6402 once per session; the banner stays until dismissed and opens the Hardware Monitor.
         if (ev.data.kind === 'low-disk' || ev.data.kind === 'low-memory') actions.toast('warn', `err.${ev.data.code ?? 'EM-6402'}.title`, typeof ev.data['have'] === 'number' ? { have: ev.data['have'] } : undefined,
           { code: ev.data.code ?? 'EM-6402', sticky: true, action: { labelKey: 'ui.scr.hardware.open', run: () => { window.dispatchEvent(new CustomEvent(OPEN_HARDWARE_EVENT)); } } });
-        if (ev.data.kind === 'restore' && ev.data.done && typeof ev.data.projectId === 'string') void actions.openProject(ev.data.projectId);
+        if (ev.data.kind === 'restore' && ev.data.done && typeof ev.data.projectId === 'string') {
+          const restoredId = ev.data.projectId;
+          void actions.openProject(restoredId);
+          // FR-018: a same-identity project was restored as a renamed copy (EM-6303); nothing was overwritten.
+          if (ev.data.code === 'EM-6303') actions.toast('info', 'err.EM-6303.title', { name: typeof ev.data['name'] === 'string' ? ev.data['name'] : '' }, { code: 'EM-6303', action: { labelKey: 'err.EM-6303.action', run: () => { void actions.openProject(restoredId); } } });
+        }
+        // FR-052: removed assets back in use after Undo/Redo reappear in the Asset Panel.
+        if (ev.data.kind === 'assets-restored' && typeof ev.data.projectId === 'string' && ev.data.projectId === stateRef.current.project?.id) {
+          const id = ev.data.projectId;
+          void runtime.api.listAssets(id, { limit: 200 }).then((p) => { if (stateRef.current.project?.id === id) dispatch({ type: 'assets', assets: p.items }); }).catch(() => undefined);
+        }
         // FR-048: media check on open / before render (missing originals; a changed file was re-ingested).
         if ((ev.data.kind === 'media-missing' || ev.data.kind === 'media-changed') && ev.data.projectId === stateRef.current.project?.id) {
           const id = stateRef.current.project?.id;
@@ -514,10 +615,32 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     }
   }, [actions, dispatch, runtime]);
 
+  // ── Shell service state (FR-171, FR-176): offline banner, new endpoint after a restart, fatal EM-8002 / EM-6001 ──
+  const [bootNonce, rebootNow] = useReducer((x: number) => x + 1, 0);
+  useEffect(() => {
+    const ch = runtime.service;
+    if (!ch) return;
+    let lastEpoch = ch.current().epoch;
+    const apply = (s: ReturnType<typeof ch.current>) => {
+      if (s.status === 'offline') dispatch({ type: 'stream', status: 'offline', attempt: Math.max(1, stateRef.current.streamAttempt) });
+      const fatal = s.status === 'failed' ? { code: s.code ?? 'EM-8002', ...(s.logsDir ? { logsDir: s.logsDir } : {}) } : null;
+      // EM-6001 Restore backup (FR-176): the Shell started empty storage; open Restore once the Service is ready.
+      if (s.status === 'ready' && s.code === 'EM-6001') { actions.toast('warn', 'err.EM-6001.title', undefined, { code: 'EM-6001', sticky: true }); dispatch({ type: 'screen', screen: { kind: 'restore' } }); }
+      dispatch({ type: 'service', epoch: s.epoch, fatal });
+      if (s.status === 'ready' && s.epoch !== lastEpoch) {
+        lastEpoch = s.epoch;
+        if (stateRef.current.boot !== 'ready') rebootNow();       // first boot failed while the Service was (re)starting
+      }
+    };
+    if (ch.current().status === 'failed') apply(ch.current());
+    return ch.subscribe(apply);
+  }, [runtime, dispatch, actions]);
+
   // ── boot ──
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      if (runtime.service?.current().status === 'failed') return;   // sys.fatal is shown instead
       try {
         const [health, settings, licence, hardware] = await Promise.all([
           runtime.api.health(), runtime.api.getSettings(), runtime.api.getLicense(), runtime.api.hardwareProfile().catch(() => null),
@@ -530,6 +653,11 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         if (fresh.length) {
           if (!onboardingPending) for (const c of fresh) actions.toast('warn', `err.${c}.title`, { ram: Math.round((hardware?.ramTotalMb ?? 0) / 1024) }, { code: c });
           setPrefs({ nudgesDismissed: [...prefsRef.current.nudgesDismissed, ...fresh.map((c) => `hw:${c}`)] });
+        }
+        // FR-133: EM-5001 once per install at first launch in Trial Mode (the onboarding Licence step shows it inline instead).
+        if (licence.status === 'trial' && !prefsRef.current.nudgesDismissed.includes('lic:EM-5001')) {
+          if (!onboardingPending) actions.toast('info', 'err.EM-5001.title', undefined, { code: 'EM-5001', sticky: true, action: { labelKey: 'ui.hdr.license.enterkey', run: () => dispatch({ type: 'screen', screen: { kind: 'license' } }) } });
+          setPrefs({ nudgesDismissed: [...prefsRef.current.nudgesDismissed, 'lic:EM-5001'] });
         }
         await actions.loadProviders();
         await actions.loadModels();
@@ -546,13 +674,18 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       }
     })();
     return () => { cancelled = true; };
-  }, [runtime, actions, dispatch, setPrefs]);
+  }, [runtime, actions, dispatch, setPrefs, bootNonce]);
 
   // ── SSE: one stream per open project (projectId filter), reopened on project change ──
   const projectId = state.project?.id;
+  const serviceEpoch = state.serviceEpoch;
   const streamRef = useRef<EventStream | null>(null);
+  const epochSeen = useRef(serviceEpoch);
   useEffect(() => {
     if (state.boot !== 'ready') return;
+    // FR-171: a new endpoint (Service restarted with a new port + token) → fresh stream with the new token, then refetch head/project.
+    const restarted = epochSeen.current !== serviceEpoch;
+    epochSeen.current = serviceEpoch;
     const stream = createEventStream({
       url: runtime.api.eventsUrl(projectId ? { projectId } : {}),
       ...(runtime.createSource ? { createSource: runtime.createSource } : {}),
@@ -563,8 +696,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       storageKey: `expertmotion.seq.${projectId ?? 'global'}`,
     });
     streamRef.current = stream;
+    if (restarted) {
+      try { globalThis.sessionStorage?.removeItem(`expertmotion.seq.${projectId ?? 'global'}`); } catch { /* storage blocked */ }
+      void actions.reloadState();
+      void runtime.api.getSettings().then((settings) => dispatch({ type: 'globals', settings })).catch(() => undefined);
+    }
     return () => { stream.close(); streamRef.current = null; };
-  }, [state.boot, projectId, runtime, onEvent, actions, dispatch]);
+  }, [state.boot, projectId, serviceEpoch, runtime, onEvent, actions, dispatch]);
 
   // prefsVersion: a setPrefs call must re-render consumers even when no Service state changed (Ctrl+B, panel sizes).
   // eslint-disable-next-line react-hooks/exhaustive-deps

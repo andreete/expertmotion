@@ -9,11 +9,11 @@ import { startService, type TestService } from '../helpers.js';
 import { health } from '../../src/modules/health.js';
 import { settingsModule } from '../../src/modules/settings.js';
 import { createHardwareModule } from '../../src/modules/hardware.js';
-import { childTreeRssMb, profileWarnings } from '../../src/s3/hardware.js';
+import { childTreeRssMb, parseTasklistCsv, profileWarnings, shellMemory, WindowsEngineMemory } from '../../src/s3/hardware.js';
 import { s3 } from '../../src/s3/state.js';
 import { addProject, body } from './s3-helpers.js';
 
-type Tick = { diskFreeMb: number | null; outputDiskFreeMb: number | null; chromeMb: number | null; workload: { items: Array<{ kind: string; label: string; status: string; progress: number | null; cancellable: boolean }> } };
+type Tick = { shellMb: number | null; processMb: number; diskFreeMb: number | null; outputDiskFreeMb: number | null; chromeMb: number | null; workload: { items: Array<{ kind: string; label: string; status: string; progress: number | null; cancellable: boolean }> } };
 
 describe('Hardware Monitor service (FR-127…FR-130)', () => {
   let s: TestService; let free = 50_000; const notices: Array<Record<string, unknown>> = [];
@@ -28,6 +28,11 @@ describe('Hardware Monitor service (FR-127…FR-130)', () => {
   it('reports engine child memory and the output drive', async () => {
     const t = await body<Tick>(await s.api('/hardware/live'));
     expect(t.chromeMb).toBe(321);
+    expect(t.shellMb).toBeNull();                                                      // no Shell report yet (dev / tests)
+    shellMemory.set(180);
+    expect((await body<Tick>(await s.api('/hardware/live'))).shellMb).toBe(180);       // FR-127: Shell + Service + Engine
+    expect(shellMemory.get(Date.now() + 120_000)).toBeNull();                          // a stale report is not shown
+    shellMemory.reset();
     expect(t.outputDiskFreeMb).toBe(50_000);
     s.ctx.settings.update({ outputFolder: path.join(os.tmpdir(), 'em-not-yet-created', 'videos') });   // not created yet → nearest existing drive
     expect((await body<Tick>(await s.api('/hardware/live'))).outputDiskFreeMb).toBeGreaterThan(0);
@@ -70,5 +75,25 @@ describe('childTreeRssMb', () => {
     expect(childTreeRssMb(1, 'linux', root)).toBe(3);
     expect(childTreeRssMb(1, 'win32', root)).toBeNull();
     fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe('Windows Engine memory without a per-tick spawn (FR-127, NFR-009)', () => {
+  it('parses tasklist CSV in any digit grouping and counts only Engine images', () => {
+    const csv = ['"System Idle Process","0","Services","0","8 K"', '"chrome-headless-shell.exe","1200","Console","1","102,400 K"',
+      '"chrome-headless-shell.exe","1201","Console","1","51.200 K"', '"ffmpeg.exe","1300","Console","1","20 480 K"', '"notepad.exe","9","Console","1","9,999 K"'].join('\r\n');
+    expect(parseTasklistCsv(csv)).toBe(170);
+  });
+  it('spawns tasklist at most once per 30 s and returns the cached value in between', () => {
+    let t = 0; const calls: string[][] = []; let pending: ((err: Error | null, out: string) => void) | null = null;
+    const w = new WindowsEngineMemory((_exe, args, cb) => { calls.push(args); pending = cb; }, 30_000, () => t);
+    expect(w.sample()).toBeNull();
+    pending!(null, '"ffmpeg.exe","1","Console","1","2,048 K"');
+    for (let i = 0; i < 14; i++) { t += 2000; w.sample(); }                            // 28 s of 2 s ticks
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(['/fo', 'csv', '/nh']);
+    expect(w.sample()).toBe(2);
+    t += 2000; w.sample();
+    expect(calls).toHaveLength(2);
   });
 });

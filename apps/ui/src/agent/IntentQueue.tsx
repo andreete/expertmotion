@@ -1,7 +1,7 @@
 // Intent Queue (agent.editor.intentqueue.*, CMP-15, UI_UX_SPECIFICATION.md §11.3): receipts for every pick; superseded
 // items stay visible struck through with Restore; parent/child expansion ("Fade → all 3 cuts"); IX-17 restore/remove/clear.
 import { useState, type ReactNode } from 'react';
-import { Bookmark, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, History, Lightbulb, MessageCircle, OctagonAlert, X } from 'lucide-react';
+import { Bookmark, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, DownloadCloud, History, Lightbulb, MessageCircle, OctagonAlert, Undo2, X } from 'lucide-react';
 import type { CompositionModelT } from '@expertmotion/composition-model';
 import { getPreset } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
@@ -117,7 +117,7 @@ function IntentItem({ intent: i, all, child }: { intent: EditIntent; all: EditIn
   const replacedBy = all.find((x) => !x.parentIntentId && x.supersedes.some((s) => mine.has(s))) ?? all.find((x) => x.supersedes.some((s) => mine.has(s)));
   const replacedLabel = replacedBy ? (replacedBy.presetId ? getPreset(replacedBy.presetId)?.label[lang] ?? '' : intentTitle(replacedBy, t, lang)) : '';
   const title = `${child ? '' : `${intentTitle(i, t, lang)} → `}${targetText(i, model, t)}`;
-  const rejectionCode = i.rejectionReason?.match(/EM-\d{4}/)?.[0];
+  const rejectionCode = i.status === 'held' ? 'EM-2104' : i.rejectionReason?.match(/EM-\d{4}/)?.[0];
   const version = i.appliedVersion !== undefined ? String(i.appliedVersion) : '';
   const viaCompile = i.status === 'executed' && (i.source === 'ui' || i.source === 'brainstorm') && !i.needsInterpretation;
   let chip: { icon: ReactNode; text: string; tone: string };
@@ -129,10 +129,13 @@ function IntentItem({ intent: i, all, child }: { intent: EditIntent; all: EditIn
     case 'executed': chip = viaCompile ? { icon: <Check size={12} />, text: t('ui.agent.intent.applieddirect', { version }), tone: 'text-em-accent-2' } : { icon: <CheckCircle2 size={12} />, text: t('ui.agent.intent.applied', { version }), tone: 'text-em-success' }; break;
     case 'rejected': chip = { icon: <OctagonAlert size={12} />, text: rejectionCode ? t(`err.${rejectionCode}.title`) : t('ui.agent.intent.rejected'), tone: 'text-em-danger' }; break;
     case 'superseded': chip = { icon: <History size={12} />, text: t('ui.agent.intent.replacedby', { label: replacedLabel || '…' }), tone: 'text-em-muted' }; break;
+    // FR-037: held until the model is installed (EM-2104); it applies by itself after the Model Manager installs it.
+    case 'held': chip = { icon: <DownloadCloud size={12} />, text: t('ui.agent.intent.held', { model: String(i.params['__heldFor'] ?? '').replace(/^model:/, '') }), tone: 'text-em-info' }; break;
     default: chip = { icon: null, text: i.status, tone: 'text-em-muted' };
   }
+  if (i.undone && (i.status === 'executed' || i.status === 'compiled')) chip = { icon: <Undo2 size={12} />, text: t('ui.agent.intent.undone'), tone: 'text-em-muted' };   // FR-167
   const accessible = superseded ? `${title}. ${t('a11y.agent.intent.superseded', { label: replacedLabel || '…' })}` : `${title}. ${chip.text}`;
-  const canRemove = i.status === 'queued' || i.status === 'rejected' || i.status === 'superseded';
+  const canRemove = i.status !== 'executed' && i.status !== 'removed';                       // FR-079: any non-executed item
   const focusElement = () => {
     const r = i.resolvedTargets[0];
     if (i.status === 'executed' && r && (r.kind === 'clip' || r.kind === 'cut' || r.kind === 'text')) actions.select([r]);

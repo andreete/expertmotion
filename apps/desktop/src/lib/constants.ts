@@ -19,9 +19,13 @@ export const RESTART_BUDGET_RESET_MS = 5 * 60 * 1000;
 /** How long the Shell waits for `{type:'ready'}` after the fork. Migrations may run here. */
 export const READY_TIMEOUT_MS = 60_000;
 
+/** FR-127: cadence of the Shell → Service memory report (PERFORMANCE §6: no per-tick sampling of other processes). */
+export const SHELL_METRICS_MS = 30_000;
+
 /** Close flow (ARCHITECTURE.md §5 step 5). */
 export const SHUTDOWN_REQUEST_WAIT_MS = 5_000;
-export const SHUTDOWN_KILL_AFTER_MS = 10_000;
+/** FR-002: the whole stop (forced shutdown request + exit) is bounded by this deadline; then the utility process is killed. */
+export const SHUTDOWN_KILL_AFTER_MS = 5_000;
 
 /** Development Editor (SEC-014, TRD §4 `EM_UI_PORT`). */
 export const DEV_UI_PORT_DEFAULT = 4120;

@@ -9,7 +9,7 @@ const OPENROUTER = 'https://openrouter.ai/api/v1';
 const OPENAI = 'https://api.openai.com/v1';
 const ANTHROPIC = 'https://api.anthropic.com/v1';
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
-const MAX_BODY = 16 * 1024 * 1024;
+const MAX_BODY = 8 * 1024 * 1024;                     // SEC-084: the egress module aborts larger bodies while streaming (4 MB; lists 8 MB)
 export const VALIDATE_TIMEOUT_MS = 15_000;
 export const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 

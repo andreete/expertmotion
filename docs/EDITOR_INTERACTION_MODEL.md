@@ -250,7 +250,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | Click `agent.editor.execute` or Ctrl+Enter while the Editor Chat has focus; enabled only when plan `valid` and `baseVersion` = head. |
+| 1 | Click `agent.editor.execute` or Ctrl+Enter while focus is outside a text field (inside a chat composer Ctrl+Enter sends the message, FR-153); enabled only when plan `valid` and `baseVersion` = head. |
 | 2 | Plan Card badge → "Executing…" / "Menjalankan…" (S3), Execute replaced by progress, `agent.editor.cancel` enabled; steps tick as they complete. |
 | 3 | none new; executes the plan's intents. |
 | 4 | Runtime only: `composition.applyOps` (not callable by the model); sub-agent steps (captions, tts) run as plan steps. |
@@ -259,7 +259,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 7 | Elements in `ExecutionResult.diff` pulse (added = accent, modified = accent-2, removed = fade out 200 ms). |
 | 8 | Intents, plan, ops, result, usage in one transaction (AI_WORKFLOW.md §2 step 14). |
 | 9 | Mid-transaction failure → SQLite rollback, badge "Not applied · EM-2xxx" / "Tidak diterapkan · EM-2xxx" with Details; stale → 409, badge "Composition changed; re-plan" / "Komposisi berubah; susun ulang"; post-validation `block` → rollback with the rule named ("Video would be shorter than 1 second" / "Video akan kurang dari 1 detik"). |
-| 10 | Toast "Applied: 3 changes · v13" / "Diterapkan: 3 perubahan · v13" with **Undo** (moves head to `fromVersion`); `hdr.action.undo` / Ctrl+Z; `hdr.action.redo` / Ctrl+Y. |
+| 10 | Toast "Applied: 3 changes · v13" / "Diterapkan: 3 perubahan · v13" with **Undo** (moves head to `fromVersion`); `hdr.action.undo` / Ctrl+Z; `hdr.action.redo` / Ctrl+Shift+Z (Ctrl+Y). |
 
 ### IX-16 Cancel (agent request or running plan)
 
@@ -436,8 +436,8 @@ Windows keys; `Ctrl` = `Ctrl` (macOS build P2 maps to `Cmd`). Shortcuts are list
 | Ctrl+O / Ctrl+N | Open / New | Global | `hdr.menu.file.open` / `.new` |
 | Ctrl+I | Import | Global | `hdr.menu.file.import` |
 | Ctrl+E | Export | Global | `hdr.action.export` |
-| Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) | Undo / redo (Composition Version head) | Global (text fields keep native undo while focused) | — |
-| Ctrl+Enter | Execute current plan | Agent Panel focused or global when a valid plan exists | `agent.editor.execute` |
+| Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) | Undo / redo (Composition Version head); the shortcut sheet shows Ctrl+Shift+Z (FR-153) | Global (text fields keep native undo while focused) | — |
+| Ctrl+Enter | Send the chat message (FR-153) when a chat composer has focus; otherwise Execute the current plan | composer → send; global (focus outside text fields) when a valid plan exists → Execute | `agent.*.composer`, `agent.editor.execute` |
 | Esc | Cancel running request · close popover/modal · clear selection · exit fullscreen (in that priority) | Global | `agent.editor.cancel`, … |
 | / | Focus Catalogue Search | Editor | `lib.search.input` |
 | 1 / 2 / 3 | Switch to Home / Design / Tools | Editor | `hdr.menu.*` |
@@ -502,7 +502,7 @@ General: drag threshold 4 px; drop targets show a 2 px accent inset outline duri
 | Mode switch | Focus moves to `lib.mode.header`; the first card/control is next in Tab order. |
 | Popover/modal open | Focus trapped inside; first focusable element focused; Esc closes; focus returns to the opener. Modals are `role="dialog"` with `aria-labelledby`. |
 | Toast with action | Not focus-stealing; F6 cycles regions including the toast stack; the toast action is reachable via Alt+T. |
-| Plan Card ready | Focus is not stolen; a live region announces "Plan ready: <goal>" / "Rencana siap: <goal>"; Ctrl+Enter works globally when a valid plan exists. |
+| Plan Card ready | Focus is not stolen; a live region announces "Plan ready: <goal>" / "Rencana siap: <goal>"; Ctrl+Enter (focus outside text fields) Executes when a valid plan exists. |
 | Execute done | Live region announces "Applied, version 13" / "Diterapkan, versi 13"; focus stays. |
 | Error inline | Focus moves to the first errored field in forms; for Intent Queue rejects the item receives focus only if the Creator's last action created it. |
 | Region order (F6) | Header → Library Panel → Stage → Agent Panel → toasts. |

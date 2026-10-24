@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBootstrap, parseServiceMessage, shutdownMessage } from '../src/lib/bootstrap.js';
+import { buildBootstrap, buildMetrics, parseServiceMessage, shutdownMessage } from '../src/lib/bootstrap.js';
 
 const key = 'a'.repeat(64);
 
@@ -33,5 +33,13 @@ describe('bootstrap message (SEC-002, TR-002)', () => {
 
   it('shutdown message is a constant', () => {
     expect(shutdownMessage).toEqual({ type: 'shutdown' });
+  });
+});
+
+describe('Shell memory report (FR-127)', () => {
+  it('sums Electron process working sets except the Local Service utility process', () => {
+    const m = buildMetrics([{ pid: 1, type: 'Browser', memory: { workingSetSize: 102_400 } }, { pid: 2, type: 'Tab', memory: { workingSetSize: 204_800 } },
+      { pid: 3, type: 'GPU', memory: { workingSetSize: 51_200 } }, { pid: 9, type: 'Utility', memory: { workingSetSize: 999_999 } }], 9);
+    expect(m).toEqual({ type: 'metrics', shellMb: 350 });
   });
 });

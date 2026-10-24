@@ -6,6 +6,7 @@ import { useStore } from '../state/store.js';
 import type { PlanDto } from '../api/types.js';
 import { Button, cx } from '../components/ui.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
+import { conflictsWithLocked, propertyKeysOf, type OperationT } from '@expertmotion/composition-model';
 
 /** FR-083: Execute needs a valid plan on the head, no block risk, no run in progress and at least one Clip; else the reason. */
 export function executeDisabledReason(plan: PlanDto | null, headHash: string | undefined, t: (k: string) => string, ctx: { hasClip?: boolean; running?: boolean } = {}): string | null {
@@ -24,6 +25,19 @@ export function diffSummary(r: PlanDto['result'], t: (k: string, v?: Record<stri
   return parts.length ? parts.join(', ') : t('ui.agent.plan.diff.none');
 }
 export const stepOps = (s: PlanDto['steps'][number]): number => (s.ops.length || s.opCount) ?? 0;
+
+/**
+ * FR-081: steps that EM-2302 removed (runner validation entries `droppedSteps[n]`, AI_WORKFLOW §12) and, for a plan that still
+ * touches Locked Keys, the steps whose operations change them. Both are listed struck through on the Plan Card.
+ */
+export function lockedSteps(plan: PlanDto): { dropped: Array<{ n: number; text: string }>; touching: Set<number> } {
+  const dropped = plan.validation.flatMap((v) => { const m = /^droppedSteps\[(\d+)\]$/.exec(v.path); return v.code === 'EM-2302' && m ? [{ n: Number(m[1]), text: v.message.replace(/^\d+\.\s*/, '') }] : []; });
+  const touching = new Set<number>();
+  if (plan.touchesLockedKeys.length) for (const st of plan.steps) {
+    try { if (st.ops.some((o) => conflictsWithLocked(propertyKeysOf(o as OperationT), plan.touchesLockedKeys).length > 0)) touching.add(st.n); } catch { /* summary ops without args */ }
+  }
+  return { dropped, touching };
+}
 
 /** FR-086: an older plan inline in the Editor thread, collapsed: goal, status, version hash, diff summary. */
 export function PlanSummary({ plan }: { plan: PlanDto }) {
@@ -61,6 +75,9 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
     cancelled: { icon: <XCircle size={14} />, text: plan.errorCode === 'EM-4304' ? t('ui.agent.plan.state.interrupted') : t('ui.agent.plan.state.cancelled'), tone: 'text-em-muted', border: 'border-solid border-em-line' },
   };
   const h = header[status] ?? header['draft']!;
+  const locked = lockedSteps(plan);
+  const lockedNotice = locked.dropped.length > 0 || locked.touching.size > 0;
+  const otherValidation = plan.validation.filter((v) => !(v.code === 'EM-2302' && v.path.startsWith('droppedSteps[')));
   if (collapsed) {
     return <div data-el="agent.editor.plancard" data-status="executed" data-collapsed="true" className="flex items-center gap-2 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} /><span className="min-w-0 flex-1 truncate">{plan.goal}</span>
       <span>{t('ui.agent.plan.status.executed')} · v{(plan.result?.toVersion ?? headHash ?? '').slice(0, 6)}{plan.result ? ` · ${diffSummary(plan.result, t)}` : ''}</span><button type="button" className="underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button></div>;
@@ -76,19 +93,33 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
         <button type="button" aria-label={t('ui.agent.plan.history')} title={t('ui.agent.plan.history')} onClick={() => actions.setScreen({ kind: 'history' })} className="text-em-muted hover:text-em-text"><History size={14} /></button>
       </div>
       <div data-el="agent.editor.plancard.goal" className="text-[16px] font-semibold leading-[22px]">{plan.goal || t('ui.agent.plan.goal.pending')}</div>
-      {plan.steps.length > 0 && (
+      {(plan.steps.length > 0 || locked.dropped.length > 0) && (
         <ol className="flex flex-col gap-1 border-t border-em-line pt-2">
-          {plan.steps.map((s) => (
-            <li key={s.n} data-el="agent.editor.plancard.step" className={cx('flex items-start gap-1.5 text-[12px]', s.dependsOn.length > 0 && 'ml-4')}>
-              <span className="t-mono text-em-muted">{s.n}</span>
-              <span data-el="agent.editor.plancard.step.tool" className="t-mono shrink-0 rounded-[4px] border border-em-line px-1 text-[10px] text-em-muted">{s.tool}</span>
-              <span data-el="agent.editor.plancard.step.diff" className="flex-1">{s.expectedDiff}</span>
-              <span data-el="agent.editor.plancard.step.ops" className="t-mono shrink-0 text-[10px] text-em-muted">{t('ui.agent.plan.step.ops', { count: stepOps(s) })}</span>
+          {plan.steps.map((s) => {
+            const off = locked.touching.has(s.n);
+            return (
+              <li key={s.n} data-el="agent.editor.plancard.step" data-locked={off ? 'true' : undefined} className={cx('flex items-start gap-1.5 text-[12px]', s.dependsOn.length > 0 && 'ml-4', off && 'text-em-muted line-through')}>
+                <span className="t-mono text-em-muted">{s.n}</span>
+                <span data-el="agent.editor.plancard.step.tool" className="t-mono shrink-0 rounded-[4px] border border-em-line px-1 text-[10px] text-em-muted">{s.tool}</span>
+                <span data-el="agent.editor.plancard.step.diff" className="flex-1">{s.expectedDiff}</span>
+                <span data-el="agent.editor.plancard.step.ops" className="t-mono shrink-0 text-[10px] text-em-muted">{t('ui.agent.plan.step.ops', { count: stepOps(s) })}</span>
+              </li>
+            );
+          })}
+          {locked.dropped.map((d) => (
+            <li key={`d${d.n}`} data-el="agent.editor.plancard.step.dropped" className="flex items-start gap-1.5 text-[12px] text-em-muted line-through" aria-label={t('ui.agent.plan.step.dropped', { n: d.n, text: d.text })}>
+              <span className="t-mono">{d.n}</span><span className="flex-1">{d.text}</span><span className="t-mono text-[10px] no-underline">EM-2302</span>
             </li>
           ))}
         </ol>
       )}
-      {(plan.risks.length > 0 || plan.validation.length > 0 || plan.touchesLockedKeys.length > 0) && (
+      {lockedNotice && (
+        <div data-el="agent.editor.plancard.locked" role="note" className="rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
+          <div className="flex items-center gap-1.5"><TriangleAlert size={12} className="text-em-warn" /><span className="flex-1 font-semibold">{t('err.EM-2302.title')}</span><span className="t-mono text-em-muted">EM-2302</span></div>
+          <div className="text-em-text-2">{t('err.EM-2302.body', { keys: plan.touchesLockedKeys.length ? plan.touchesLockedKeys.join(', ') : [...new Set(locked.dropped.flatMap((d) => /\(([^()]*)\)$/.exec(d.text)?.[1]?.split(', ') ?? []))].join(', ') })}</div>
+        </div>
+      )}
+      {(plan.risks.length > 0 || otherValidation.length > 0 || plan.touchesLockedKeys.length > 0) && (
         <ul className="flex flex-col gap-1 border-t border-em-line pt-2" aria-label={t('ui.agent.plan.risks')}>
           {plan.risks.map((r, i) => (
             <li key={`r${i}`} data-el="agent.editor.plancard.risk" className="flex items-start gap-1.5 text-[12px]">
@@ -96,7 +127,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
               <span className="flex-1">{r.message} <span className="text-em-muted">· {t(`ui.agent.plan.severity.${r.severity}`)}</span></span>
             </li>
           ))}
-          {plan.validation.map((v, i) => <li key={`v${i}`} data-el="agent.editor.plancard.risk" className="flex gap-1.5 text-[12px] text-em-danger"><OctagonAlert size={14} />{v.message}<span className="t-mono text-em-muted">{v.code}</span></li>)}
+          {otherValidation.map((v, i) => <li key={`v${i}`} data-el="agent.editor.plancard.risk" className="flex gap-1.5 text-[12px] text-em-danger"><OctagonAlert size={14} />{v.message}<span className="t-mono text-em-muted">{v.code}</span></li>)}
           {plan.touchesLockedKeys.map((k) => <li key={k} data-el="agent.editor.plancard.risk" className="flex gap-1.5 text-[12px] text-em-warn"><OctagonAlert size={14} />{t('ui.agent.plan.locked', { key: k })}</li>)}
         </ul>
       )}
@@ -111,6 +142,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
       )}
       <div className="flex items-center gap-2 border-t border-em-line pt-2">
         {status !== 'executed' && status !== 'executing' && <Button size={28} variant="ghost" onClick={() => void actions.cancelPlan()}>{t('ui.agent.plan.discard')}</Button>}
+        {status === 'executing' && <Button size={28} variant="ghost" aria-label={t('ui.agent.plan.cancelexecute')} onClick={() => void actions.cancelPlan()}>{t('ui.common.cancel')}</Button>}
         <span className="flex-1" />
         {(status === 'stale' || status === 'invalid' || status === 'failed' || status === 'cancelled') && (
           <Button el="agent.editor.plancard.replan" size={32} variant={status === 'stale' ? 'primary' : 'secondary'} onClick={() => void actions.plan()}>{status === 'cancelled' ? t('ui.agent.plan.rerun') : t('ui.agent.plan.replan')}</Button>

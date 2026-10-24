@@ -7,7 +7,11 @@ import type { OutputProfile, PreflightCheckName, RenderEstimate } from '../api/t
 import { Button, ErrorBox, Field, Modal, Progress, Segmented, inputCls } from '../components/ui.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
 
-type Format = 'mp4' | 'gif' | 'png';
+type Format = 'mp4' | 'webm' | 'gif' | 'png';
+/** FR-138: WebM with alpha (VP9 + PNG frames) only when the Composition has no background or `preset:background.none`. */
+export function alphaAllowed(model: { background?: { presetId: string } | null } | null | undefined): boolean {
+  return !model?.background || model.background.presetId === 'preset:background.none';
+}
 /** FR-138: Standard = CRF 18, Smaller = CRF 23 (H.264, AAC 192 kbps). */
 export const QUALITY_CRF = { standard: 18, smaller: 23 } as const;
 export type Quality = keyof typeof QUALITY_CRF;
@@ -48,7 +52,10 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const job = state.renders.find((j) => j.id === jobId) ?? null;
   const output = job?.outputId ? state.outputs.find((o) => o.id === job.outputId) : undefined;
   const durationMs = state.head?.durationMs ?? 0;
-  const profile: OutputProfile = { ...currentOutputProfile(state), format, codec: format === 'mp4' ? 'h264' : format, ...(format === 'mp4' ? { crf: QUALITY_CRF[quality] } : {}),
+  const alphaOk = alphaAllowed(state.head?.model as { background?: { presetId: string } | null } | undefined);
+  useEffect(() => { if (format === 'webm' && !alphaOk) setFormat('mp4'); }, [format, alphaOk]);
+  const profile: OutputProfile = { ...currentOutputProfile(state), format, codec: format === 'mp4' ? 'h264' : format === 'webm' ? 'vp9' : format,
+    ...(format === 'mp4' || format === 'webm' ? { crf: QUALITY_CRF[quality] } : {}), ...(format === 'webm' ? { alpha: true } : {}),
     ...(format === 'png' ? { stillAtMs: Math.max(0, Math.min(stillMs, Math.max(0, durationMs - 1))) } : {}) };
   const name = nameTouched ? fileName : (est?.defaultFileName ?? fileName);
   const body = { outputProfile: profile, performanceProfile: state.performanceProfile, ...(nameTouched && fileName.trim() ? { fileName: fileName.trim() } : {}), ...(folder ? { folder } : {}) };
@@ -100,9 +107,12 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           <div data-el="scr.export.profile.summary" className="t-mono rounded-[6px] border border-em-line px-2 py-1.5">{summary}</div>
           {est?.watermark && <p className="rounded-[6px] border border-em-warn px-2 py-1.5 text-em-warn">{t('ui.scr.export.trial')}</p>}
           <div data-el="scr.export.codec"><Segmented<Format> label={t('ui.scr.export.codec')} value={format} onChange={setFormat}
-            options={[{ value: 'mp4', label: 'MP4 (H.264)', el: 'scr.export.codec.mp4' }, { value: 'gif', label: 'GIF', el: 'scr.export.codec.gif' }, { value: 'png', label: t('ui.scr.export.still'), el: 'scr.export.codec.png' }]} /></div>
+            options={[{ value: 'mp4', label: 'MP4 (H.264)', el: 'scr.export.codec.mp4' },
+              { value: 'webm', label: t('ui.scr.export.codec.webm'), el: 'scr.export.codec.webm', disabledReason: alphaOk ? null : t('ui.scr.export.alpha.needsnone') },
+              { value: 'gif', label: 'GIF', el: 'scr.export.codec.gif' }, { value: 'png', label: t('ui.scr.export.still'), el: 'scr.export.codec.png' }]} /></div>
+          {!alphaOk && <p data-el="scr.export.codec.webm.reason" className="-mt-1 text-[12px] text-em-muted">{t('ui.scr.export.alpha.needsnone')}</p>}
           <div className="grid grid-cols-2 gap-2">
-            {format === 'mp4' && (
+            {(format === 'mp4' || format === 'webm') && (
               <Field label={t('ui.scr.export.quality')} htmlFor="em-ex-q"><select id="em-ex-q" data-el="scr.export.quality" className={inputCls} value={quality} onChange={(e) => setQuality(e.target.value as Quality)}>
                 <option value="standard">{t('ui.scr.export.quality.standard')}</option><option value="smaller">{t('ui.scr.export.quality.smaller')}</option></select></Field>
             )}

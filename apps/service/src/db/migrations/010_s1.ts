@@ -38,4 +38,13 @@ CREATE INDEX IF NOT EXISTS idx_projects_sample ON projects(is_sample) WHERE is_s
 ALTER TABLE projects ADD COLUMN redo_json TEXT CHECK(redo_json IS NULL OR json_valid(redo_json));
 `,
   },
+  {
+    version: 13,
+    name: 's1_project_ui_state',
+    // FR-012: Save persists the Editor's UI state for the project (Library mode, playhead, selection, Player toggles) next to the
+    // settings, head pointer and title. Not part of the Composition Model; NULL = never saved (the Editor uses its defaults).
+    sql: `
+ALTER TABLE projects ADD COLUMN ui_state_json TEXT CHECK(ui_state_json IS NULL OR json_valid(ui_state_json));
+`,
+  },
 ];

@@ -189,4 +189,61 @@ describe('Editor screens (mock mode)', () => {
     await waitFor(() => { if (el('sys.update')?.getAttribute('data-status') !== 'paused') throw new Error('not paused'); });
     expect(el('sys.update')!.textContent).toContain('Updates paused by Private Mode');
   });
+
+  it('FR-131: dropping a .emlicense file fills the key and activates; a non-licence file shows EM-5006', async () => {
+    const { runtime } = await renderEditor('sample');
+    const spy = vi.spyOn(runtime.api, 'activateLicense');
+    await act(async () => { fireEvent.click(el('hdr.action.purchase')!); });
+    await waitFor(() => { if (!el('scr.license')) throw new Error('no licence'); });
+    const zone = el('scr.license.input')!.parentElement!;
+    const bad = new File(['hello'], 'notes.pdf', { type: 'application/pdf' });
+    await act(async () => { fireEvent.drop(zone, { dataTransfer: { files: [bad], types: ['Files'] } }); });
+    await waitFor(() => { if (!el('scr.license.error')?.textContent?.includes('EM-5006')) throw new Error('no EM-5006'); });
+    expect(spy).not.toHaveBeenCalled();
+    const key = `EM1.${'B'.repeat(60)}`;
+    const file = new File([`\uFEFF${key}\n`], 'lic-01.emlicense', { type: '' });
+    await act(async () => { fireEvent.drop(zone, { dataTransfer: { files: [file], types: ['Files'] } }); });
+    await waitFor(() => { if (!spy.mock.calls.length) throw new Error('not activated'); });
+    expect(spy).toHaveBeenCalledWith(key);
+    await waitFor(() => { if (el('scr.license')) throw new Error('still open'); });                    // activated → screen closes, Trial limits gone
+  });
+
+  it('FR-133: EM-5001 is shown once at first launch in Trial Mode, with "Enter licence key"', async () => {
+    await renderEditor('sample', { prefs: { nudgesDismissed: [] } });
+    await waitFor(() => { if (!els('sys.toast').some((x) => x.textContent?.includes('EM-5001'))) throw new Error('no EM-5001'); });
+    expect(JSON.parse(localStorage.getItem('expertmotion.prefs.v1')!).nudgesDismissed).toContain('lic:EM-5001');
+    cleanup();
+    await renderEditor('sample', { prefs: { nudgesDismissed: ['lic:EM-5001'] } });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(els('sys.toast').some((x) => x.textContent?.includes('EM-5001'))).toBe(false);
+  });
+
+  it('FR-154: toasts are announced through sys.live and are not live regions themselves', async () => {
+    await renderEditor('sample', { prefs: { nudgesDismissed: [] } });
+    await waitFor(() => { if (!el('sys.live')?.textContent?.includes('EM-5001')) throw new Error(`live: ${el('sys.live')?.textContent}`); });
+    for (const t of els('sys.toast')) { expect(t.getAttribute('role')).toBeNull(); expect(t.getAttribute('aria-live')).toBeNull(); }
+  });
+
+  it('FR-138: WebM (transparent) is offered, disabled with a reason while the background is opaque', async () => {
+    await renderEditor('sample');
+    fireEvent.click(el('hdr.menu.design')!);
+    await waitFor(() => { if (!document.querySelector('[data-el="lib.catalogue.tab"][data-category="background"]')) throw new Error('no tabs'); });
+    fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="background"]')!);
+    await waitFor(() => { if (!document.querySelector('[data-preset-id="preset:background.gradient"]')) throw new Error('no gradient card'); });
+    await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-preset-id="preset:background.gradient"]')!); });
+    await act(async () => { fireEvent.click(el('hdr.action.export')!); });
+    await waitFor(() => { if (el('scr.export.codec.webm')?.getAttribute('aria-disabled') !== 'true') throw new Error('webm not disabled'); });
+    expect(el('scr.export.codec.webm.reason')?.textContent).toContain('background');
+    fireEvent.click(el('scr.export.codec.webm')!);
+    expect(el('scr.export.codec.mp4')!.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('FR-152: an interrupted update (EM-8104) offers Try again', async () => {
+    const s = shell({ onUpdateState: () => () => {}, getUpdateState: async () => ({ status: 'error', version: '1.1.0', code: 'EM-8104' }) });
+    await renderEditor('sample');
+    await waitFor(() => { if (!el('sys.update.retry')) throw new Error('no retry'); });
+    expect(el('sys.update')!.textContent).toContain('EM-8104');
+    fireEvent.click(el('sys.update.retry')!);
+    expect(s.updateAction).toHaveBeenCalledWith('check');
+  });
 });

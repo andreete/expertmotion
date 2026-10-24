@@ -129,6 +129,34 @@ describe('projects R-010…R-019', () => {
     expect(r.body.intent.appliedVersion).toBeGreaterThan(0);
     s.ctx.settings.update({ defaultPerformanceProfile: 'standard' });
   });
+  it('FR-095/FR-097 R-065: Reset = ratio + resolution + profile as one version recorded in the queue; one Undo restores all three, Redo re-applies', async () => {
+    const p = await newProject(s, 'Reset unit');
+    insertClips(s, p.id, ['a1', 'a2']);
+    const pick = async (output: Record<string, unknown>, category = 'layout') => s.json(`/projects/${p.id}/intents`, { method: 'POST', json: { source: 'ui', category, target: { kind: 'project' }, output, baseVersion: await headHash(s, p.id) } });
+    await pick({ kind: 'ratio', value: '1:1' });
+    await pick({ kind: 'resolution', value: '720p' });
+    const turbo = await pick({ kind: 'performanceProfile', value: 'turbo' }, 'output');
+    const versions0 = (await s.json(`/projects/${p.id}/composition/versions`)).body.total;
+    const picks = [{ kind: 'ratio', value: '9:16', category: 'layout' }, { kind: 'resolution', value: '1080p', category: 'layout' }, { kind: 'performanceProfile', value: 'standard', category: 'output' }]
+      .map((o) => ({ source: 'ui', category: o.category, target: { kind: 'project' }, output: { kind: o.kind, value: o.value } }));
+    const r = await s.json(`/projects/${p.id}/intents/batch`, { method: 'POST', json: { baseVersion: await headHash(s, p.id), picks } });
+    expect(r.status).toBe(201);
+    expect(r.body.intents.map((i: any) => i.status)).toEqual(['executed', 'executed', 'executed']);
+    expect(r.body.superseded).toContain(turbo.body.intent.id);
+    const head = (await s.json(`/projects/${p.id}/composition`)).body.head;
+    expect(head.model.settings).toMatchObject({ ratio: '9:16', resolution: '1080p' });
+    expect((await s.json(`/projects/${p.id}/composition/versions`)).body.total).toBe(versions0 + 1);       // one Composition Version
+    expect(r.body.intents[2].appliedHash).toBe(head.hash);
+    expect(s.ctx.settings.get().defaultPerformanceProfile).toBe('standard');
+    await s.json(`/projects/${p.id}/composition/undo`, { method: 'POST' });
+    expect((await s.json(`/projects/${p.id}/composition`)).body.head.model.settings).toMatchObject({ ratio: '1:1', resolution: '720p' });
+    expect(s.ctx.settings.get().defaultPerformanceProfile).toBe('turbo');                                // the profile moved with the version
+    await s.json(`/projects/${p.id}/composition/redo`, { method: 'POST' });
+    expect(s.ctx.settings.get().defaultPerformanceProfile).toBe('standard');
+    const bad = await s.json(`/projects/${p.id}/intents/batch`, { method: 'POST', json: { baseVersion: 'nope', picks } });
+    expect(bad.body.error.code).toBe('EM-2301');
+    s.ctx.settings.update({ defaultPerformanceProfile: 'standard' });
+  });
   it('soft-deletes (204), then the project is gone; delete refuses while an agent run is active', async () => {
     const p = await newProject(s, 'Delete me');
     s.ctx.db.prepare("INSERT INTO agent_runs (id, project_id, agent, model_id, status, started_at) VALUES ('R1', ?, 'editor', 'm', 'running', 'now')").run(p.id);

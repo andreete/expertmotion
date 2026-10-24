@@ -11,9 +11,9 @@ import { EmError, errorMessage, sanitizeFilename, timestamp, type EmCode } from 
 import type { ServiceContext } from '../context.js';
 import { SerialQueue, clamp01, em, emit, freeBytes, isInside, requireProject, throttle } from './common.js';
 import { getAsset } from './assets-repo.js';
-import { ffprobe } from './probe.js';
+import { ffprobe, type ProbeJson } from './probe.js';
 import { moveFile } from './ingest.js';
-import { runTool } from './proc.js';
+import { getEngineLog, runTool } from './proc.js';
 import { getJob, getOutput, outputRelPath, outputRoots, profileDims, toJobDto, toOutputDto, type OutputProfileT, type RenderJobRow } from './render-repo.js';
 import { s2 } from './state.js';
 import { engineBrowserOf, type BrowserLike } from '../services/engine-browser.js';
@@ -51,6 +51,8 @@ export interface RenderOptions {
   wallClockMs?: number;
   /** SEC-011 render starts per minute (default 5). */
   maxStartsPerMinute?: number;
+  /** Dev/tests only: when ffprobe cannot run, keep the Output with `validated: false` instead of failing it (FR-145 default: fail). */
+  acceptUnvalidated?: boolean;
 }
 
 const COMPOSITION_ID = 'ExpertmotionTimeline';
@@ -113,6 +115,9 @@ export class RenderService {
     const watermark = ctx.hooks.isTrial();
     const profile: OutputProfileT = { ...input.outputProfile };
     if (watermark) { if (profile.resolution !== '720p') profile.resolution = '720p'; notices.push('EM-5001'); }
+    // FR-138: WebM with alpha only when the background is None (or absent); the Editor disables the option with a reason
+    if (profile.alpha && profile.format === 'webm' && model.background && model.background.presetId !== 'preset:background.none')
+      throw em('EM-9002', 'A transparent WebM needs the background set to None.', { status: 422, path: 'outputProfile.alpha', details: { reason: 'alpha-needs-background-none', background: model.background.presetId } });
     // FR-138: GIF is capped at 720p (and 15 fps at encode time)
     if (profile.format === 'gif' && profile.resolution !== '720p') { warnings.push({ code: 'EM-3103', path: 'outputProfile.resolution', message: `GIF exports are limited to 720p (${profile.resolution} chosen).`, severity: 'info' }); profile.resolution = '720p'; }
     checks.push({ check: 'licence', ok: true, ...(watermark ? { code: 'EM-5001', details: { watermark: true, maxResolution: '720p' } } : {}) });
@@ -323,7 +328,7 @@ export class RenderService {
         }
         stage = 'validate';
         report(0.98, prep.frames, 'validating', true);
-        const v = await validateOutput(ctx, tmpOut, prep, composition);
+        const v = await validateOutput(ctx, tmpOut, prep, composition, this.opts.acceptUnvalidated);
         if (v.mismatch) {
           const failedDir = path.join(ctx.paths.outputs, '_failed'); fs.mkdirSync(failedDir, { recursive: true });
           await moveFile(tmpOut, path.join(failedDir, `${jobId}.${EXT[f]}`));
@@ -357,6 +362,7 @@ export class RenderService {
           const msg = errorMessage(e);
           const code = e instanceof EmError ? e.code : stage === 'compose' ? 'EM-3002' : /ENOSPC|EACCES|EPERM|write/i.test(msg) && stage !== 'render' ? 'EM-3204' : 'EM-3201';
           ctx.log.error({ jobId, stage, err: msg.slice(0, 500) }, 'render failed');
+          getEngineLog()?.error({ jobId, stage, code, err: msg.slice(0, 4000) }, 'render failed');
           this.finish(job, 'failed', code, stage, {}, stage === 'compose' ? null : failedFrameOf(e, lastFrame));
         }
       } finally {
@@ -379,24 +385,50 @@ export function failedFrameOf(e: unknown, lastFrame: number | null): number | nu
   return m ? Number(m[1]) : lastFrame;
 }
 
-/** SEC-068 / FR-145: dimensions equal, duration ± 1 frame (+50 ms container slack). A missing ffprobe leaves `validated` false. */
-async function validateOutput(ctx: ServiceContext, file: string, prep: Prepared, comp: { width: number; height: number; fps: number }): Promise<{ validated: boolean; mismatch?: string }> {
-  if (!fs.existsSync(file) || fs.statSync(file).size === 0) return { validated: false, mismatch: 'file: empty' };
-  let pj;
-  try { pj = await ffprobe(ctx.resources.ffprobe, file); } catch (e) {
-    if ((e as { reason?: string }).reason === 'spawn') { ctx.log.warn({ err: errorMessage(e) }, 'output not validated (ffprobe unavailable)'); return { validated: false }; }
-    return { validated: false, mismatch: 'probe: unreadable' };
-  }
-  const f = prep.profile.format;
-  const v = pj.streams?.find((s) => s.codec_type === 'video');
-  if (f !== 'wav') {
-    if (!v || v.width !== comp.width || v.height !== comp.height) return { validated: false, mismatch: `dimensions: expected ${comp.width}x${comp.height}, got ${v?.width ?? 0}x${v?.height ?? 0}` };
-  }
+/** FR-145: the Composition Model has audible audio (an audio layer, or an unmuted video clip whose asset has audio). */
+export function modelHasAudio(model: CompositionModelT, assetHasAudio: (assetId: string) => boolean): boolean {
+  return model.tracks.audio.some((a) => a.volume > 0) || model.tracks.video.some((c) => !c.muted && c.volume > 0 && assetHasAudio(c.assetId));
+}
+
+const probeRate = (r?: string): number => { if (!r) return 0; const [a, b] = r.split('/').map(Number); return b ? (a ?? 0) / b : Number(a ?? 0); };
+
+/**
+ * SEC-068 / FR-145 pure check of an ffprobe result: dimensions equal, duration ± 1 frame (+50 ms container slack), fps equal
+ * (video formats), audio stream present when the model has audio. Returns the first mismatch as "field: expected …, got …".
+ */
+export function probeMismatch(pj: ProbeJson, exp: { format: OutputProfileT['format']; width: number; height: number; fps: number; durationMs: number; audio: boolean }): string | null {
+  const f = exp.format;
+  const v = pj.streams?.find((st) => st.codec_type === 'video');
+  if (f !== 'wav' && (!v || v.width !== exp.width || v.height !== exp.height)) return `dimensions: expected ${exp.width}x${exp.height}, got ${v?.width ?? 0}x${v?.height ?? 0}`;
   if (f === 'mp4' || f === 'webm' || f === 'wav') {
     const d = Number(pj.format?.duration ?? NaN) * 1000;
-    if (Number.isFinite(d) && Math.abs(d - prep.durationMs) > 1000 / comp.fps + 50) return { validated: false, mismatch: `duration: expected ${prep.durationMs}, got ${Math.round(d)}` };
+    if (Number.isFinite(d) && Math.abs(d - exp.durationMs) > 1000 / exp.fps + 50) return `duration: expected ${exp.durationMs}, got ${Math.round(d)}`;
   }
-  return { validated: true };
+  if ((f === 'mp4' || f === 'webm') && v) {
+    const got = probeRate(v.avg_frame_rate) || probeRate(v.r_frame_rate);
+    if (!(got > 0) || Math.abs(got - exp.fps) > 0.01) return `fps: expected ${exp.fps}, got ${Math.round(got * 100) / 100}`;
+  }
+  if ((f === 'mp4' || f === 'webm' || f === 'wav') && exp.audio && !pj.streams?.some((st) => st.codec_type === 'audio')) return 'audio: expected an audio stream, got none';
+  return null;
+}
+
+/**
+ * SEC-068 / FR-145 / NFR-026: an Output is marked done only after ffprobe verified it. A missing or unrunnable ffprobe is a
+ * failed check (EM-3205 "probe: unavailable", file kept) unless `acceptUnvalidated` (dev/tests only) keeps `validated` false.
+ */
+async function validateOutput(ctx: ServiceContext, file: string, prep: Prepared, comp: { width: number; height: number; fps: number }, acceptUnvalidated = false): Promise<{ validated: boolean; mismatch?: string }> {
+  if (!fs.existsSync(file) || fs.statSync(file).size === 0) return { validated: false, mismatch: 'file: empty' };
+  let pj: ProbeJson;
+  try { pj = await ffprobe(ctx.resources.ffprobe, file); } catch (e) {
+    if ((e as { reason?: string }).reason === 'spawn') {
+      ctx.log.warn({ err: errorMessage(e) }, 'output not validated (ffprobe unavailable)');
+      return acceptUnvalidated ? { validated: false } : { validated: false, mismatch: 'probe: ffprobe unavailable' };
+    }
+    return { validated: false, mismatch: 'probe: unreadable' };
+  }
+  const audio = modelHasAudio(prep.model, (id) => getAsset(ctx, id)?.has_audio === 1);
+  const mismatch = probeMismatch(pj, { format: prep.profile.format, width: comp.width, height: comp.height, fps: comp.fps, durationMs: prep.durationMs, audio });
+  return mismatch ? { validated: false, mismatch } : { validated: true };
 }
 
 function estimateOf(p: OutputProfileT, dims: { width: number; height: number }, frames: number, durationMs: number, tier: 'T0' | 'T1' | 'T2', perf: PerfProfile): Prepared['estimate'] {

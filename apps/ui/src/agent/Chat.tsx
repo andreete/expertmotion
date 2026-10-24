@@ -97,7 +97,9 @@ export function AgentErrorBubble({ agent, onRetry }: { agent: AgentKind; onRetry
       <div className="text-em-text-2">{t(`err.${code}.body`)}</div>
       <div className="mt-1.5 flex gap-2">
         <Button size={28} onClick={onRetry}>{t('ui.sys.toast.tryagain')}</Button>
-        <Button size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'providers' })}>{t('ui.agent.common.switchmodel')}</Button>
+        {code === 'EM-4201'   /* FR-117 / AI-016: Change budget opens Providers on the budget field */
+          ? <Button el={`agent.${agent}.budget`} size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'providers', focus: { field: 'project' } })}>{t('err.EM-4201.action')}</Button>
+          : <Button size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'providers' })}>{t('ui.agent.common.switchmodel')}</Button>}
       </div>
     </div>
   );
@@ -174,7 +176,7 @@ export function Composer({ agent, placeholder, chip, onClearChip, value, setValu
         </span>
         <textarea ref={ref} data-el={`agent.${agent}.composer`} rows={1} value={value} placeholder={reason ?? placeholder} aria-label={t(`a11y.agent.${agent}.composer`)} aria-describedby={reason ? reasonId : undefined}
           readOnly={Boolean(reason)} onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) { e.preventDefault(); send(); } }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send(); } }}   /* Enter or Ctrl+Enter sends (FR-153) */
           className="min-h-7 flex-1 resize-none bg-transparent px-1 py-1 text-[14px] leading-5 outline-none placeholder:text-em-muted" />
         <IconButton el={`agent.${agent}.send`} label={t('ui.agent.composer.send')} icon={<SendHorizontal size={16} />} size={28} disabledReason={reason ?? (busy ? t('ui.agent.composer.busy') : imageBlocked ? t('err.EM-4307.title') : null)} onClick={send} />
         {extra}

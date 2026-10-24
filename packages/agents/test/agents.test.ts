@@ -79,7 +79,9 @@ describe('Intent Queue (GS-02, GS-03, GS-19)', () => {
     let q = enqueue([], intents(m, { presetId: 'preset:transition.fade' }));
     const r = remove(q, q[0]!.id);
     expect(r.ok && r.value.map((i) => i.status)).toEqual(['removed', 'removed', 'removed']);
-    q = q.map((i) => ({ ...i, status: 'compiled' as const }));
+    expect(remove(q.map((i) => ({ ...i, status: 'compiled' as const })), q[1]!.id).ok).toBe(true);              // FR-079: non-executed → removable
+    expect(remove(q.map((i) => ({ ...i, status: 'planned' as const })), q[1]!.id).ok).toBe(true);
+    q = q.map((i) => ({ ...i, status: 'executed' as const }));
     expect(remove(q, q[1]!.id)).toMatchObject({ ok: false, issues: [{ code: 'EM-2203' }] });
     expect(clearQueue(enqueue([], intents(m, { field: 'weight', value: 700 })))[0]!.status).toBe('removed');
   });
@@ -102,6 +104,12 @@ describe('Compile (AI_WORKFLOW §7)', () => {
     const v = validatePlan(plan, { model: m, baseVersion: hashModel(m), assets: ASSETS, tier: 'T1', lockedKeys: [], newId });
     expect(v.plan.status).toBe('valid');
     expect(v.predicted?.model.transitions.length).toBe(2);
+  });
+  it('FR-098: transition quick params lift durationMs/timing to the op args; the rest stay in params', () => {
+    const m = base();
+    const r = compileIntents(intents(m, { presetId: 'preset:transition.wipe', params: { durationMs: 800, direction: 'from-right' }, selection: [{ kind: 'cut', index: 0 }] }), (i) => pickFromIntent(i), m);
+    expect(r.ok && r.value[0]).toMatchObject({ op: 'op:transition.set', args: { durationMs: 800, timing: 'linear', params: { direction: 'from-right' } } });
+    expect(r.ok && (r.value[0]!.args as { params: Record<string, unknown> }).params['durationMs']).toBeUndefined();
   });
   it('FR-090: a Performance Profile pick is a scalar settings intent that compiles to zero ops and supersedes the previous one', () => {
     const m = base();

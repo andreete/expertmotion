@@ -1,6 +1,7 @@
-// Engine Binary verification (FR-140, FR-003): Chrome Headless Shell, the compositor FFmpeg and the prebuilt Engine bundle.
-// The bundle hash is compared once per launch against resources/engine-manifest.json (written by scripts/stage-desktop.mjs);
-// preflight reuses the cached result plus cheap presence checks. A failure blocks rendering only (EM-3001 missing, EM-3003 damaged).
+// Engine Binary verification (FR-140, FR-003, SEC-061): Chrome Headless Shell, the compositor FFmpeg and the prebuilt Engine bundle.
+// The bundle files and the Chrome Headless Shell / compositor executables are hashed once per launch (background, cached) against
+// resources/engine-manifest.json (written by scripts/stage-desktop.mjs); preflight reuses the cached result plus cheap presence
+// checks. A failure blocks rendering only (EM-3001 missing, EM-3003 damaged).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,7 +30,14 @@ function sha256(file: string): Promise<string> {
   });
 }
 
-/** Hashes every `engine/bundle/**` entry of the manifest (streamed, one file at a time). */
+/** SEC-061: executables under engine/chrome and engine/compositor (same rule as apps/desktop/src/lib/integrity.ts). */
+export function isEngineExecutable(file: string): boolean {
+  const name = file.split(/[\\/]/).pop() ?? '';
+  return /\.(exe|dll|node|so|dylib)$/i.test(name) || /^(chrome-headless-shell|remotion|ffmpeg|ffprobe)$/.test(name);
+}
+const checkedByEngineCheck = (p: string): boolean => p.startsWith('engine/bundle/') || ((p.startsWith('engine/chrome/') || p.startsWith('engine/compositor/')) && isEngineExecutable(p));
+
+/** Hashes every `engine/bundle/**` entry and every Chrome/compositor executable of the manifest (streamed, one file at a time). */
 export async function verifyBundleHash(ctx: ServiceContext): Promise<{ hash: EngineStatus['bundleHash']; mismatched: string[] }> {
   const file = manifestPathOf(ctx);
   if (!fs.existsSync(file)) return { hash: null, mismatched: [] };
@@ -37,7 +45,7 @@ export async function verifyBundleHash(ctx: ServiceContext): Promise<{ hash: Eng
   try { files = (JSON.parse(fs.readFileSync(file, 'utf8')) as { files?: ManifestFile[] }).files ?? []; } catch { return { hash: 'mismatch', mismatched: ['engine-manifest.json'] }; }
   const root = path.dirname(file);
   const mismatched: string[] = [];
-  for (const f of files.filter((x) => x.path.startsWith('engine/bundle/'))) {
+  for (const f of files.filter((x) => checkedByEngineCheck(x.path))) {
     const abs = path.resolve(root, f.path);
     try {
       if (fs.statSync(abs).size !== f.size || (await sha256(abs)) !== f.sha256) mismatched.push(f.path);
@@ -51,7 +59,7 @@ export function startEngineCheck(ctx: ServiceContext): Promise<{ hash: EngineSta
   let p = cache.get(ctx);
   if (!p) {
     p = verifyBundleHash(ctx).then((r) => {
-      if (r.hash === 'mismatch') ctx.log.error({ code: 'EM-3003', files: r.mismatched.slice(0, 20) }, 'engine bundle hash mismatch');
+      if (r.hash === 'mismatch') ctx.log.error({ code: 'EM-3003', files: r.mismatched.slice(0, 20) }, 'engine hash mismatch (bundle / Chrome Headless Shell / compositor)');
       return r;
     }).catch((e: unknown) => { ctx.log.warn({ err: String(e) }, 'engine bundle hash check failed'); return { hash: null, mismatched: [] }; });
     cache.set(ctx, p);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse } from '../src/lib/close-flow.js';
+import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, remainingMs } from '../src/lib/close-flow.js';
+import { SHUTDOWN_KILL_AFTER_MS } from '../src/lib/constants.js';
 
 // FR-002: the Shell no longer ignores R-002's 409 EM-8304; it asks "Keep rendering / Cancel render and close" and retries with force.
 describe('close flow (FR-002)', () => {
@@ -18,5 +19,12 @@ describe('close flow (FR-002)', () => {
     expect(choiceFromButton(1)).toBe('cancel-and-close');
     expect(choiceFromButton(-1)).toBe('keep');
     expect(RENDER_RUNNING_DIALOG.detail).toContain('EM-8304');
+  });
+  it('bounds the whole stop by one 5 s deadline (kill fallback)', () => {
+    expect(SHUTDOWN_KILL_AFTER_MS).toBeLessThanOrEqual(5_000);
+    const deadline = 1_000 + SHUTDOWN_KILL_AFTER_MS;
+    expect(remainingMs(deadline, 1_000)).toBe(SHUTDOWN_KILL_AFTER_MS);
+    expect(remainingMs(deadline, 4_000)).toBe(SHUTDOWN_KILL_AFTER_MS - 3_000);
+    expect(remainingMs(deadline, 99_000)).toBe(0);
   });
 });

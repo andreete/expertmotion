@@ -16,7 +16,7 @@ export const compositionModule: ServiceModule = {
         throw e;
       }
     };
-    ctx.hooks.applyOps = (projectId, ops, source) => store.applyOps(projectId, ops, { cause: source.kind === 'asset' ? 'insert' : 'system' }).version.id;
+    ctx.hooks.applyOps = (projectId, ops, source) => store.applyOps(projectId, ops, { cause: source.kind === 'asset' ? 'insert' : 'system' }, source.jobs).version.id;
   },
   register(router, ctx) {
     const { store } = s1(ctx);
@@ -42,8 +42,9 @@ export const compositionModule: ServiceModule = {
     // R-052
     route(router, 'get', '/projects/:id/composition/versions/:versionId', { params: VersionParams }, ({ params }) => { store.projectRow(params.id); return versionDto(store.versionRow(params.id, params.versionId), true); });
     // R-053 / R-054
-    route(router, 'post', '/projects/:id/composition/undo', { params: ProjectParams }, ({ params }) => { const c = store.undo(params.id); return { head: c.version, ...state(params.id) }; });
-    route(router, 'post', '/projects/:id/composition/redo', { params: ProjectParams }, ({ params }) => { const c = store.redoOnce(params.id); return { head: c.version, ...state(params.id) }; });
+    // FR-095 / FR-097: settings intents stamped with the undone / redone version move with it (Reset restores the profile too).
+    route(router, 'post', '/projects/:id/composition/undo', { params: ProjectParams }, ({ params }) => { const undone = store.head(params.id).hash; const c = store.undo(params.id); s1(ctx).workflow.syncSettingsWithVersion(params.id, 'undo', undone); return { head: c.version, ...state(params.id) }; });
+    route(router, 'post', '/projects/:id/composition/redo', { params: ProjectParams }, ({ params }) => { const c = store.redoOnce(params.id); s1(ctx).workflow.syncSettingsWithVersion(params.id, 'redo', store.head(params.id).hash); return { head: c.version, ...state(params.id) }; });
     // R-055
     route(router, 'get', '/projects/:id/composition/diff', { params: ProjectParams, query: DiffQuery }, ({ params, query }) => {
       store.projectRow(params.id);

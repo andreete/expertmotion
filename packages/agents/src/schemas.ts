@@ -5,7 +5,8 @@ import { ElementRef, Operation } from '@expertmotion/composition-model';
 export const PresetIdRe = /^preset:[a-z]+\.[a-z0-9-]+$/;
 export const INTENT_CATEGORIES = ['transition', 'caption', 'background', 'motion', 'shape', 'easing', 'effect', 'audio', 'text', 'layout', 'output', 'asset', 'generate'] as const;
 export type IntentCategory = (typeof INTENT_CATEGORIES)[number];
-export const INTENT_STATUSES = ['queued', 'superseded', 'compiled', 'planned', 'executed', 'rejected', 'removed'] as const;
+/** `held` (FR-037): a pick whose preset needs a model that is not installed (EM-2104); it becomes `queued` when `model.installed` arrives. */
+export const INTENT_STATUSES = ['queued', 'superseded', 'compiled', 'planned', 'executed', 'rejected', 'removed', 'held'] as const;
 
 export const EditIntent = z.object({
   id: z.string(), projectId: z.string(),

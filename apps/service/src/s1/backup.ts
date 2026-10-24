@@ -1,6 +1,7 @@
 // Project backup and restore (DATABASE_SCHEMA §6, FR-017, FR-018, FR-177, SEC-052). A backup is a store-only zip:
 //   manifest.json (format, versions, project id, sha256 + size of every other entry), project.json, assets.json,
-//   versions/<id>.json (newest 50 incl. head), intents.json, plans.json, media/<assetId>/original.<ext> (+ playable when it
+//   versions/<id>.json (newest 50 incl. head), intents.json, plans.json, conversations.json (Brainstorming/Editor threads, never
+//   provider secrets), media/<assetId>/original.<ext> (+ playable when it
 //   differs), outputs/<outputId>/<file> when asked. Encrypted by default with a passphrase (crypto-box.ts) or plain.
 // Restore validates the archive (zip.ts), the manifest and every hash before anything is imported, then imports as a project
 // that never overwrites an existing one (ids that already exist are re-issued; the name gets " (restored)", EM-6303).
@@ -36,6 +37,8 @@ const AssetJson = z.object({
 });
 const VersionJson = z.object({ id: z.string().max(64), parentId: z.string().max(64).nullable(), hash: z.string().max(128), cause: z.enum(['insert', 'compile', 'execute', 'undo', 'redo', 'restore', 'system']), planId: z.string().max(64).nullable(), createdAt: z.string().max(64), model: z.unknown() });
 const ProjectJson = z.object({ id: z.string().max(64), name: z.string().min(1).max(200), settings: z.record(z.string(), z.unknown()), language: z.enum(['id', 'en']), headVersionId: z.string().max(64), createdAt: z.string().max(64) });
+const ConversationJson = z.object({ agent: z.enum(['brainstorm', 'editor']), summary: z.unknown().optional(), createdAt: z.string().max(64),
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant', 'system', 'tool']), blocks: z.array(z.unknown()).max(200), createdAt: z.string().max(64) })).max(20_000) });
 const PlanJson = z.object({ id: z.string().max(64), baseVersionId: z.string().max(64), origin: z.enum(['compile', 'editor-agent']), status: z.string().max(32), plan: z.unknown(), intentIds: z.array(z.string().max(64)).max(500), message: z.string().max(4000).nullable(), createdAt: z.string().max(64) });
 
 interface AssetRow { id: string; project_id: string; kind: 'video' | 'image' | 'audio' | 'subtitle'; name: string; sha256: string; bytes: number; original_path: string; playable_path: string | null; probe_json: string | null; duration_ms: number | null; width: number | null; height: number | null; fps: number | null; has_audio: number | null; status: string; sequence_badge: number | null; created_at: string }
@@ -53,7 +56,7 @@ export class Backups {
   startBackup(projectId: string, input: { folder: string; passphrase?: string | undefined; includeOutputs: boolean }): { jobId: string; done: Promise<string | null> } {
     const p = this.store.projectRow(projectId);
     const folder = confine(input.folder, allowedRoots(this.ctx.cfg.dataDir), 'dir');
-    const assets = this.ctx.db.prepare('SELECT * FROM assets WHERE project_id = ?').all(projectId) as AssetRow[];
+    const assets = this.ctx.db.prepare('SELECT * FROM assets WHERE project_id = ? AND deleted_at IS NULL').all(projectId) as AssetRow[];   // FR-052: removed assets stay out
     const media: Array<{ name: string; abs: string }> = [];
     for (const a of assets) {
       const orig = relFile(this.ctx.paths.media, a.original_path);
@@ -101,6 +104,11 @@ export class Backups {
       await addJson('intents.json', (db.prepare("SELECT intent_json FROM edit_intents WHERE project_id = ? AND status != 'removed' ORDER BY created_at").all(projectId) as Array<{ intent_json: string }>).map((r) => JSON.parse(r.intent_json)));
       await addJson('plans.json', (db.prepare("SELECT * FROM edit_plans WHERE project_id = ? AND status NOT IN ('draft','executing') ORDER BY created_at").all(projectId) as PlanRow[])
         .map((r) => ({ id: r.id, baseVersionId: r.base_version_id, origin: r.origin, status: r.status, plan: JSON.parse(r.plan_json), intentIds: r.intent_ids_json ? JSON.parse(r.intent_ids_json) : [], message: r.message, createdAt: r.created_at })));
+      // FR-017: conversations go into the backup (messages only; provider connections and keys live elsewhere and are never read here).
+      await addJson('conversations.json', (db.prepare('SELECT * FROM conversations WHERE project_id = ? ORDER BY created_at').all(projectId) as Array<{ id: string; agent: string; summary_json: string | null; created_at: string }>)
+        .map((c) => ({ agent: c.agent, ...(c.summary_json ? { summary: JSON.parse(c.summary_json) as unknown } : {}), createdAt: c.created_at,
+          messages: (db.prepare('SELECT role, blocks_json, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at, id').all(c.id) as Array<{ role: string; blocks_json: string; created_at: string }>)
+            .map((m) => ({ role: m.role, blocks: JSON.parse(m.blocks_json) as unknown[], createdAt: m.created_at })) })));
       for (const f of [...media, ...outputs]) {
         const h = crypto.createHash('sha256'); let n = 0;
         await w.addFile(f.name, f.abs, (b) => { h.update(b); n += b.length; progress(b.length); });
@@ -173,6 +181,7 @@ export class Backups {
       if (!versions.some((v) => v.id === proj.headVersionId)) throw bad('head version missing');
       const intents = parse(z.array(EditIntent).max(20_000), listed.has('intents.json') ? await readJson('intents.json') : [], 'intents');
       const plans = parse(z.array(PlanJson).max(5000), listed.has('plans.json') ? await readJson('plans.json') : [], 'plans');
+      const conversations = parse(z.array(ConversationJson).max(2), listed.has('conversations.json') ? await readJson('conversations.json') : [], 'conversations');   // older backups have none
       this.notice('restore', jobId, { percent: 10, done: false });
 
       // Extract and verify media into staging before anything is imported.
@@ -253,9 +262,21 @@ export class Backups {
           const status = p.status === 'executed' ? 'executed' : p.status === 'valid' ? 'stale' : p.status;
           ip.run(plid(p.id), pid, vid(p.baseVersionId), p.origin, JSON.stringify({ ...pl.data, id: plid(p.id), projectId: pid, status }), status, p.createdAt, now, JSON.stringify(p.intentIds.map(iid)), p.message);
         }
+        const intentIdSet = new Set(intents.map((i) => i.id));
+        const remapIds = (v: unknown): unknown => typeof v === 'string' ? assetIds.get(v) ?? (intentIdSet.has(v) ? iid(v) : v) : Array.isArray(v) ? v.map(remapIds)
+          : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, remapIds(x)])) : v;
+        const ic = db.prepare('INSERT INTO conversations (id, project_id, agent, summary_json, created_at, updated_at) VALUES (?,?,?,?,?,?)');
+        const im = db.prepare('INSERT INTO messages (id, conversation_id, role, blocks_json, agent_run_id, created_at) VALUES (?,?,?,?,NULL,?)');
+        for (const c of conversations) {
+          const cid = this.ctx.newId();
+          ic.run(cid, pid, c.agent, c.summary === undefined ? null : JSON.stringify(c.summary), c.createdAt, now);
+          for (const m of c.messages) im.run(this.ctx.newId(), cid, m.role, JSON.stringify(remapIds(m.blocks)), m.createdAt);
+        }
         db.prepare('INSERT INTO audit_log (at, event, project_id, details_json) VALUES (?,?,?,?)').run(now, 'project.restore', pid, JSON.stringify({ form: manifest.form, renamed }));
       })();
       finalMedia = undefined;                                         // committed: keep the media
+      // FR-018: derived files (proxy, thumbnails, filmstrip, waveform) are not in the backup; ingest regenerates them from the originals.
+      try { this.ctx.hooks.reingest?.(pid, assetRows.map((a) => a.nid)); } catch (e) { this.ctx.log.warn({ projectId: pid, err: String(e) }, 'restore: re-ingest not queued'); }
       this.notice('restore', jobId, { projectId: pid, percent: 100, done: true, ...(renamed ? { code: 'EM-6303', name } : {}) });
       return pid;
     } finally {

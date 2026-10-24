@@ -129,4 +129,5 @@ export function createRendersModule(opts: RenderOptions = {}): ServiceModule {
   };
 }
 
-export const rendersModule: ServiceModule = createRendersModule();
+// FR-145: unvalidated Outputs fail (EM-3205); a dev machine without ffprobe can opt out with EM_DEV=1 EM_ACCEPT_UNVALIDATED=1.
+export const rendersModule: ServiceModule = createRendersModule({ acceptUnvalidated: process.env['EM_DEV'] === '1' && process.env['EM_ACCEPT_UNVALIDATED'] === '1' });

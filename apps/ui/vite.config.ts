@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
+import { cspMetaPlugin } from './csp-meta.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const loops = fileURLToPath(new URL('../../resources/catalogue', import.meta.url));
@@ -28,7 +29,7 @@ export default defineConfig({
   root: here,
   base: './',
   // Two vite copies are installed (root + apps/ui); the plugins are typed against the root copy, hence the cast.
-  plugins: [react(), tailwindcss(), catalogueLoops] as unknown as PluginOption[],
+  plugins: [react(), tailwindcss(), catalogueLoops, cspMetaPlugin] as unknown as PluginOption[],   // cspMetaPlugin: build only (SEC-024)
   // Workspace packages expose their TypeScript sources under the "source" export condition (no prebuilt dist needed).
   resolve: { conditions: ['source', 'module', 'browser', 'development|production'] },
   // Bundled fonts (Inter, JetBrains Mono, …) live in the Engine's public folder; the Player resolves staticFile() against it.

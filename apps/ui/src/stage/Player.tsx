@@ -2,7 +2,7 @@
 // media URLs from the preview media grant (ported Preview: fit-to-box sizing, safe-area overlay, draft/full, indicators).
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { Player as RemotionPlayer, type PlayerRef } from '@remotion/player';
-import { ChevronLeft, ChevronRight, Maximize, Menu, Pause, Play, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize, Menu, Minimize, Pause, Play, RefreshCw } from 'lucide-react';
 import { ExpertmotionTimeline, calculateMetadata, safeAreaFor, type AssetUrls, type EngineInputProps } from '@expertmotion/engine';
 import { applyOperations, deriveTiming, type CompositionModelT, type OperationT } from '@expertmotion/composition-model';
 import { compileDefaults, getPreset } from '@expertmotion/catalogue';
@@ -84,6 +84,8 @@ export function StagePlayer() {
   const { state, actions, runtime, t, lang, prefs, setPrefs, dispatch } = useStore();
   const ref = useRef<PlayerRef>(null);
   const box = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  const [isFull, setIsFull] = useState(false);
   const [size, setSize] = useState({ w: 640, h: 360 });
   const [playing, setPlaying] = useState(false);
   const [ms, setMs] = useState(0);
@@ -114,6 +116,20 @@ export function StagePlayer() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // FR-059: fullscreen the whole Player frame so our own controls stay visible as an overlay; Escape exits (browser).
+  useEffect(() => {
+    const on = () => setIsFull(typeof document !== 'undefined' && document.fullscreenElement === frame.current && frame.current !== null);
+    document.addEventListener('fullscreenchange', on);
+    return () => document.removeEventListener('fullscreenchange', on);
+  }, []);
+  const toggleFullscreen = () => {
+    if (typeof document === 'undefined') return;
+    if (document.fullscreenElement) { void document.exitFullscreen?.().catch(() => undefined); return; }
+    const el = frame.current;
+    if (el?.requestFullscreen) void el.requestFullscreen().catch(() => undefined);
+  };
+  const fullRef = useRef(toggleFullscreen);
+  fullRef.current = toggleFullscreen;
   useEffect(() => { if (head) return; const h = setTimeout(() => setSlow(true), 8000); return () => clearTimeout(h); }, [head]);
 
   // Player events → local time + live bus; settled playhead → store.
@@ -140,7 +156,7 @@ export function StagePlayer() {
       seekMs: (v) => { const f = Math.max(0, Math.min((meta?.durationInFrames ?? 1) - 1, Math.round((v / 1000) * fps))); ref.current?.seekTo(f); setMs((f / fps) * 1000); playerBus.emit((f / fps) * 1000); actions.seek((f / fps) * 1000); },
       stepFrames: (n) => { const cur = ref.current?.getCurrentFrame() ?? 0; const f = Math.max(0, Math.min((meta?.durationInFrames ?? 1) - 1, cur + n)); ref.current?.seekTo(f); actions.seek((f / fps) * 1000); },
       currentMs: () => ((ref.current?.getCurrentFrame() ?? 0) / fps) * 1000, durationMs: () => durationMs,
-      fullscreen: () => ref.current?.requestFullscreen(), isPlaying: () => ref.current?.isPlaying() ?? false,
+      fullscreen: () => fullRef.current(), isPlaying: () => ref.current?.isPlaying() ?? false,
     });
     return () => playerBus.set(null);
   }, [fps, meta?.durationInFrames, durationMs, actions]);
@@ -164,7 +180,7 @@ export function StagePlayer() {
   const ratioLabel = ratio === 'custom' && head?.settings.customRatio ? `${head.settings.customRatio.w}:${head.settings.customRatio.h}` : ratio;
 
   return (
-    <div data-el="stage.player.frame" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[12px] border border-em-line bg-em-panel">
+    <div ref={frame} data-el="stage.player.frame" data-fullscreen={isFull ? 'true' : undefined} className={cx('relative flex min-h-0 flex-1 flex-col overflow-hidden bg-em-panel', isFull ? 'h-full w-full' : 'rounded-[12px] border border-em-line')}>
       <div className="flex h-7 items-center gap-2 border-b border-em-line px-2 text-[12px]">
         <span data-el="stage.player.controls.ratio" className="t-mono" title={t('ui.stage.player.ratio')}>{ratioLabel}</span>
         <span data-el="stage.player.controls.res" className="t-mono text-em-muted" title={t('ui.stage.player.res')}>{exportDims ? `${exportDims.width}×${exportDims.height}` : '—'} · {quality}</span>
@@ -219,7 +235,7 @@ export function StagePlayer() {
           </div>
         )}
       </div>
-      <div className="flex h-10 items-center gap-2 border-t border-em-line px-2">
+      <div data-el="stage.player.controls" className={cx('flex h-10 items-center gap-2 px-2', isFull ? 'absolute inset-x-0 bottom-0 z-10 bg-black/70 text-white' : 'border-t border-em-line')}>
         {playing
           ? <IconButton el="stage.player.controls.pause" label={t('ui.stage.player.pause')} icon={<Pause size={16} />} onClick={() => ref.current?.pause()} />
           : <IconButton el="stage.player.controls.play" label={t('ui.stage.player.play')} icon={<Play size={16} />} onClick={() => ref.current?.play()} disabledReason={meta ? null : t('ui.stage.player.loading')} />}
@@ -231,7 +247,7 @@ export function StagePlayer() {
           aria-valuetext={t('a11y.stage.player.scrubber.value', { time: formatTimecode(ms, fps), total: formatTimecode(durationMs, fps) })}
           onChange={(e) => playerBus.get()?.seekMs((Number(e.target.value) / fps) * 1000)} className={cx('h-1 flex-1 accent-[var(--em-accent)]')} />
         <span data-el="stage.player.controls.duration" className="t-mono text-em-muted">{formatTimecode(durationMs, fps)}</span>
-        <IconButton el="stage.player.controls.fullscreen" label={t('ui.stage.player.fullscreen')} icon={<Maximize size={16} />} onClick={() => ref.current?.requestFullscreen()} />
+        <IconButton el="stage.player.controls.fullscreen" label={t(isFull ? 'ui.stage.player.fullscreen.exit' : 'ui.stage.player.fullscreen')} aria-pressed={isFull} icon={isFull ? <Minimize size={16} /> : <Maximize size={16} />} onClick={toggleFullscreen} />
       </div>
     </div>
   );

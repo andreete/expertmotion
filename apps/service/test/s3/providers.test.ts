@@ -127,6 +127,21 @@ describe('providers module', () => {
     expect(() => s.ctx.hooks.budgetCheck(projectId)).not.toThrow();
   });
 
+  it('budgets: a per-project cap per connection (FR-117) refuses runs with EM-4201 naming that connection', async () => {
+    const put = await s.api('/providers/budget', { method: 'PUT', json: { projects: [{ projectId, connectionId: connId, limitUsd: 0.5 }] } });
+    const view = await body<{ projects: Array<{ projectId: string; connectionId: string | null; limitUsd: number | null; spentUsd: number }> }>(put);
+    const row = view.projects.find((p) => p.connectionId === connId)!;
+    expect(row).toMatchObject({ projectId, limitUsd: 0.5 });
+    expect(row.spentUsd).toBeGreaterThan(1);
+    let err: unknown; try { s.ctx.hooks.budgetCheck(projectId); } catch (e) { err = e; }
+    expect(err).toMatchObject({ code: 'EM-4201', details: { scope: 'project', connectionId: connId, limitUsd: 0.5 } });
+    expect((err as Error).message).toContain(' on ');
+    const bad = await s.api('/providers/budget', { method: 'PUT', json: { projects: [{ projectId, connectionId: connId, limitUsd: 20_000 }] } });
+    expect(bad.status).toBe(400);
+    await s.api('/providers/budget', { method: 'PUT', json: { projects: [{ projectId, connectionId: connId, limitUsd: 0 }] } });   // 0 = unlimited
+    expect(() => s.ctx.hooks.budgetCheck(projectId)).not.toThrow();
+  });
+
   it('Private Mode blocks validation, model refresh and agents without any outbound call', async () => {
     await s.api('/settings', { method: 'PUT', json: { privateMode: true } });
     const before = calls.length;

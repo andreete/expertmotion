@@ -54,11 +54,12 @@ export function HardwarePopover({ onClose }: { onClose: () => void }) {
     try { dispatch({ type: 'globals', hardware: await runtime.api.refreshHardware() }); setRecheck(null); void actions.loadModels(); }
     catch (e) { setRecheck(e instanceof EmError ? e.code : 'EM-9001'); }
   };
-  const procTitle = k ? t('ui.scr.hardware.procmem.detail', { service: k.processMb, engine: k.chromeMb ?? '—' }) : undefined;
+  // FR-127: Expertmotion = Shell (Electron) + Service + Engine children; a part not measured on this platform shows "—"
+  const procTitle = k ? t('ui.scr.hardware.procmem.detail', { shell: k.shellMb ?? '—', service: k.processMb, engine: k.chromeMb ?? '—' }) : undefined;
   const rows: Array<[string, string, string, (string | undefined)?]> = [
     ['scr.hardware.cpu', t('ui.scr.hardware.cpu'), k ? `${Math.round(k.cpuPercent)} %` : '…'],
     ['scr.hardware.ram', t('ui.scr.hardware.ram'), k ? `${gb(k.ramTotalMb - k.ramFreeMb)} / ${gb(k.ramTotalMb)} GB` : '…'],
-    ['scr.hardware.procmem', t('ui.scr.hardware.procmem'), k ? `${k.processMb + (k.chromeMb ?? 0)} MB` : '…', procTitle],
+    ['scr.hardware.procmem', t('ui.scr.hardware.procmem'), k ? `${k.processMb + (k.chromeMb ?? 0) + (k.shellMb ?? 0)} MB` : '…', procTitle],
     ['scr.hardware.disk', t('ui.scr.hardware.disk'), k?.diskFreeMb != null ? `${gb(k.diskFreeMb)} GB` : '…'],
     ['scr.hardware.output', t('ui.scr.hardware.output'), k?.outputDiskFreeMb != null ? `${gb(k.outputDiskFreeMb)} GB` : '…'],
     ['scr.hardware.gpu', t('ui.scr.hardware.gpu'), p ? (p.gpuModel ? `${p.gpuModel}${k?.gpuPercent != null ? ` · ${k.gpuPercent} %` : ''}` : t('ui.scr.hardware.gpu.none')) : '…'],

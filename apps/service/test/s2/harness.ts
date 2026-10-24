@@ -19,7 +19,7 @@ export const hasFfmpeg = (() => { try { execFileSync(FFMPEG, ['-version'], { std
 
 export interface S2Service extends TestService {
   heads: Map<string, { model: CompositionModelT; versionId: string }>;
-  applied: Array<{ projectId: string; ops: OperationT[]; source: { kind: string; summary: string } }>;
+  applied: Array<{ projectId: string; ops: OperationT[]; source: { kind: string; summary: string; jobs?: Record<string, unknown> } }>;
   project(name?: string): string;
   version(projectId: string, model: CompositionModelT): string;
   events: Array<{ name: string; data: Record<string, unknown> }>;
@@ -57,7 +57,7 @@ export async function startS2(modules: readonly ServiceModule[], opts: { dataDir
   s.ctx.hooks.composition = (projectId) => { const h = heads.get(projectId); if (!h) throw new EmError('EM-9003', 'Not found.'); return h; };
   s.ctx.hooks.applyOps = (projectId, ops, source) => {
     const h = heads.get(projectId); if (!h) throw new EmError('EM-9003', 'Not found.');
-    const r = applyOperations(h.model, ops, { assets: s.ctx.hooks.assetFacts(projectId), tier: 'T0', newId });
+    const r = applyOperations(h.model, ops, { assets: s.ctx.hooks.assetFacts(projectId), tier: 'T0', newId, ...(source.jobs ? { jobs: source.jobs } : {}) });
     if (!r.ok) { const i = r.issues[0]!; throw new EmError(i.code as `EM-${number}`, i.message, { status: 422 }); }
     applied.push({ projectId, ops, source });
     return version(projectId, r.value.model);

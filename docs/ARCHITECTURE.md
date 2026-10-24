@@ -110,7 +110,7 @@ flowchart TB
 2. Local Service opens the encrypted DB, runs migrations, marks interrupted render jobs failed and interrupted agent runs cancelled, loads the licence state, detects the Hardware Tier, warms the browser (`ensureBrowser`) in the background, and reports `ready` over the parent port.
 3. Shell loads the Editor (`app://` scheme in production, Vite dev server in development) and injects `{port, token}` via preload (`contextBridge`).
 4. Editor opens `EventSource('/api/v1/events')` (all routes live under `/api/v1`, see API_SPECIFICATION.md) with the token in the query string (EventSource cannot set headers; the token is single-use-per-launch and loopback only) and uses `Authorization: Bearer <token>` on fetch.
-5. On window close: Shell asks the Service to checkpoint; waits ≤ 5 s for running renders to cancel (prompting the Creator if one is running); sends `{type:'shutdown'}` over the parent port (fallback: kills the utility process after 10 s); exit.
+5. On window close: Shell asks the Service to checkpoint; waits ≤ 5 s for running renders to cancel (prompting the Creator if one is running); sends `{type:'shutdown'}` over the parent port (fallback: kills the utility process when the 5 s close deadline passes, FR-002); exit.
 6. Crash of the Service: Shell restarts it (backoff 1 s, 3 s, 9 s), Editor shows `sys.offline` and reconnects; render jobs are marked failed by the Service on restart.
 
 ## 6. Data flow: key sequences

@@ -8,7 +8,7 @@ import { createAssetsModule } from '../../src/modules/assets.js';
 import { createModelsModule } from '../../src/modules/models.js';
 import { createGeneratorsModule } from '../../src/modules/generators.js';
 import { createEgress } from '../../src/services/egress.js';
-import { generatorsServiceOf, type GeneratorEngines } from '../../src/s2/generators-service.js';
+import { generatorsServiceOf, musicBedOp, shiftPages, type GeneratorEngines } from '../../src/s2/generators-service.js';
 import { modelsServiceOf } from '../../src/s2/models-service.js';
 import { FIXTURES, ffmpeg, hasFfmpeg, json, startS2, wavBuffer, type S2Service } from './harness.js';
 
@@ -101,9 +101,9 @@ describe('generators (R-130…R-133) with fake engines', () => {
   let s: S2Service; let pid: string; let calls: string[] = []; let gate: Promise<void> = Promise.resolve();
   const voiceDef = def('piper-test');
   const imageDef = def('sd15-emaonly', { engine: 'stable-diffusion.cpp', task: 'image', files: [{ ...def('x').files[0]!, name: 'model.safetensors' }] });
-  let pngN = 0;
+  let pngN = 0; const prompts: string[] = [];
   const engines: Partial<GeneratorEngines> = {
-    image: async (i, c) => { const p = path.join(c.jobDir, `img-${++pngN}.png`); ffmpeg(['-ss', String(pngN * 0.3), '-i', path.join(FIXTURES, 'clip-a.mp4'), '-frames:v', '1', p]); c.onProgress(1); return { pngPath: p }; },
+    image: async (i, c) => { prompts.push(i.prompt); const p = path.join(c.jobDir, `img-${++pngN}.png`); ffmpeg(['-ss', String(pngN * 0.3), '-i', path.join(FIXTURES, 'clip-a.mp4'), '-frames:v', '1', p]); c.onProgress(1); return { pngPath: p }; },
     voice: async (i, c) => { calls.push(`voice:${i.text}`); await gate; if (c.signal.aborted) throw new Error('aborted'); c.onProgress(0.5); const p = path.join(c.jobDir, 'out.wav'); fs.writeFileSync(p, wavBuffer(800)); return { wavPath: p }; },
   };
   beforeAll(async () => {
@@ -168,8 +168,12 @@ describe('generators (R-130…R-133) with fake engines', () => {
     const usage: unknown[] = [];
     s.ctx.hooks.providerFor = () => ({ id: 'fake', model: 'fake/model', complete: async () => ({ text: '{"caption":"Kopi pagi terbaik","hashtags":["#kopi","#pagi","not a tag","#ngopi"]}', usage: { model: 'fake/model', inputTokens: 10, outputTokens: 5, costUsd: 0.001, approximate: false } }) });
     s.ctx.hooks.recordUsage = (_p, _a, _r, u) => { usage.push(...u); };
-    const j = await final((await json<GenJob>(await gen('hashtags', { language: 'id', platform: 'tiktok', count: 10 }))).id);
-    expect(j.status).toBe('done'); expect(j.result).toMatchObject({ caption: 'Kopi pagi terbaik', hashtags: ['#kopi', '#pagi', '#ngopi'] });
+    const sent: string[] = [];
+    s.ctx.hooks.providerFor = () => ({ id: 'fake', model: 'fake/model', complete: async (req: { messages: Array<{ content: string }> }) => { sent.push(req.messages[0]!.content); return { text: '{"caption":"Kopi pagi terbaik","hashtags":["#kopi","#pagi","not a tag","#ngopi"]}', usage: { model: 'fake/model', inputTokens: 10, outputTokens: 5, costUsd: 0.001, approximate: false } }; } });
+    const j = await final((await json<GenJob>(await gen('hashtags', { language: 'id', platform: 'tiktok', tone: 'energetic', count: 10 }))).id);
+    expect(j.status).toBe('done'); expect(j.result).toMatchObject({ caption: 'Kopi pagi terbaik', hashtags: ['#kopi', '#pagi', '#ngopi'], tone: 'energetic' });
+    expect(JSON.parse(sent[0]!)).toMatchObject({ language: 'id', platform: 'tiktok', tone: 'energetic' });   // FR-105
+    expect((await gen('hashtags', { language: 'id', platform: 'tiktok', tone: 'angry', count: 10 })).status).toBe(400);
     expect(usage).toHaveLength(1);
     s.ctx.settings.update({ privateMode: true });
     const r = await gen('hashtags', { language: 'id', platform: 'tiktok', count: 10 });
@@ -201,6 +205,41 @@ describe('generators (R-130…R-133) with fake engines', () => {
     expect(o.kind).toBe('still'); expect(fs.existsSync(o.path)).toBe(true); expect(o.fileName).toMatch(/thumbnail-\d{8}-\d{4}\.png$/);
     expect((await s.api(`/generator-jobs/${j.id}/save-output`, { method: 'POST', json: { assetId: '01ARZ3NDEKTSV4RRFFQ69G5FAV' } })).status).toBe(400);
     expect((s.ctx.db.prepare("SELECT count(*) n FROM outputs WHERE project_id = ? AND kind = 'still'").get(pid) as { n: number }).n).toBe(1);
+    // FR-103: Insert as overlay puts the chosen candidate on the overlay track at the playhead; a foreign asset id is refused
+    expect((await s.api(`/generator-jobs/${j.id}/insert`, { method: 'POST', json: { assetId: '01ARZ3NDEKTSV4RRFFQ69G5FAV' } })).status).toBe(400);
+    const ins = await s.api(`/generator-jobs/${j.id}/insert`, { method: 'POST', json: { assetId: cands[2]!.assetId, atMs: 1500 } });
+    expect(ins.status).toBe(200);
+    expect(s.applied.at(-1)!.ops).toEqual([{ op: 'op:generated.insert', target: { kind: 'project' }, args: { kind: 'thumbnail', jobId: j.id, atMs: 1500 } }]);
+    expect(s.applied.at(-1)!.source.jobs).toEqual({ [j.id]: { kind: 'thumbnail', assetId: cands[2]!.assetId } });
+    expect(s.heads.get(pid)!.model.tracks.overlay.at(-1)).toMatchObject({ kind: 'image', assetId: cands[2]!.assetId, timing: { atMs: 1500 } });
+  });
+  it.skipIf(!hasFfmpeg)('FR-103: prompt mode uses the style and the title text in the prompt', async () => {
+    prompts.length = 0;
+    const j = await final((await json<GenJob>(await gen('thumbnail', { prompt: 'kopi pagi', titleText: 'Kopi Pagi', style: 'cinematic', language: 'id' }))).id);
+    expect(j.status).toBe('done');
+    expect(prompts[0]).toContain('kopi pagi'); expect(prompts[0]).toContain('cinematic'); expect(prompts[0]).toContain('"Kopi Pagi"');
+    expect((await gen('thumbnail', { prompt: 'x', style: 'neon' })).status).toBe(400);
+  });
+  it('FR-102: a generated music bed uses the preset:audio.bed-soft Compile defaults incl. fades', () => {
+    expect(musicBedOp('A1')).toEqual({ op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId: 'A1', volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000 } });
+  });
+  it('FR-104: Sequence captions: pages move onto each Clip window; no audio on the Sequence is EM-7103', async () => {
+    const pages = [{ text: 'a', startMs: 0, durationMs: 1000, tokens: [{ text: 'a', fromMs: 0, toMs: 1000 }] }, { text: 'b', startMs: 4000, durationMs: 1000, tokens: [] }];
+    expect(shiftPages(pages, { fromMs: 2000, toMs: 4000, trimBeforeMs: 0, playbackRate: 2 })).toEqual([
+      { text: 'a', startMs: 2000, durationMs: 500, tokens: [{ text: 'a', fromMs: 2000, toMs: 2500 }] }]);
+    const p2 = s.project('Tanpa klip');
+    const r = await s.api(`/projects/${p2}/generators/captions`, { method: 'POST', json: { source: 'sequence', language: 'id' } });
+    expect(r.status).toBe(422); expect((await json<{ error: { code: string } }>(r)).error.code).toBe('EM-7103');
+  });
+  it('FR-104: caption Insert also sets the default caption style when the project has none', async () => {
+    const p3 = s.project('Caption gaya');
+    const id = '01ARZ3NDEKTSV4RRFFQ69G5STY';
+    const pages = [{ text: 'halo', startMs: 0, durationMs: 1000, tokens: [] }];
+    s.ctx.db.prepare("INSERT INTO generator_jobs (id, project_id, kind, input_json, status, progress, result_json, created_at) VALUES (?, ?, 'captions', '{}', 'done', 1, ?, ?)")
+      .run(id, p3, JSON.stringify({ pages, proposedOps: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } }] }), new Date().toISOString());
+    expect((await s.api(`/generator-jobs/${id}/insert`, { method: 'POST' })).status).toBe(200);
+    expect(s.applied.at(-1)!.ops.map((o) => o.op)).toEqual(['op:caption.setPages', 'op:caption.setStyle']);
+    expect(s.heads.get(p3)!.model.tracks.caption.styleId).toBe('preset:caption.editorial');
   });
   it('FR-104: caption text edited in the preview replaces the pages on Insert (R-134 body.pages)', async () => {
     const id = '01ARZ3NDEKTSV4RRFFQ69G5FCP';

@@ -65,7 +65,7 @@ export const EditIntent = z.object({
   propertyClass: z.enum(['scalar','list','exclusive-group']),
   needsInterpretation: z.boolean(),     // false => Compile path
   instruction: z.string().optional(),   // free text from chat/brainstorm, if any
-  status: z.enum(['queued','superseded','compiled','planned','executed','rejected','removed']), // removed = Creator removed it from the queue; Restore sets a superseded intent back to 'queued' and stamps restoredAt
+  status: z.enum(['queued','superseded','compiled','planned','executed','rejected','removed','held']), // removed = Creator removed it from the queue; Restore sets a superseded intent back to 'queued' and stamps restoredAt; held = the preset needs a model that is not installed (EM-2104, FR-037): persisted, ignored by supersession and planning, set to 'queued' and compiled when model.installed arrives
   restoredAt: z.string().datetime().optional(),
   appliedVersion: z.number().int().min(1).optional(),   // 1-based ordinal of the Composition Version that applied it ("Applied in v{n}" grouping, Stage 3)
   appliedHash: z.string().optional(),                   // hash of that Composition Version; the "Applied directly" line shows it short (FR-085). Absent for zero-op settings intents
@@ -189,7 +189,7 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:output.setAutoRatio` | project | `{on}` | scalar | FR-088: on = ratio follows the first Clip's probe (nearest supported ratio) now and whenever the first Clip changes; `op:output.setRatio` turns it off; key `project.ratioAuto` |
 | `op:project.setFps` | project | `{fps}` | scalar | re-derives frames |
 | `op:project.setDurationPolicy` | project | `{policy: 'fit-content'|'fixed', fixedMs?}` | scalar | |
-| `op:generated.insert` | project | `{kind: 'voice'|'music'|'thumbnail'|'captions', jobId}` | list | result of a generator job |
+| `op:generated.insert` | project | `{kind: 'voice'|'music'|'thumbnail'|'captions', jobId, atMs?}` | list | result of a generator job (thumbnail: the chosen candidate as an image overlay at `atMs`, FR-103) |
 
 Ops never reference file paths; they reference `assetId`/`jobId`. Ops never contain code.
 
@@ -237,6 +237,9 @@ Rewrite envelope sent to the Editor Agent (JSON, not prose):
   "lockedKeys": ["cut:1.transition", "project.captionStyle"],
   "creatorMessage": "buat judul pembuka yang kuat, nuansa energik",
   "creatorNotes": "...from the previous Plan Card notes, if any...",
+  "selection": [{ "kind": "clip", "id": "..." }],   // FR-080: Timeline selection at send time (omitted when empty)
+  "playheadMs": 3000,                              // FR-080: playhead at send time (chat messages)
+  "attachments": ["logo.png"],                     // FR-072: names only; images go as image parts to image-input models
   "capabilities": { "ops": [...names...], "presets": {...ids by category, with hardware flags...}, "maxOpsPerPlan": 200 },
   "constraints": ["never touch lockedKeys", "times in ms", "respond with EditPlan JSON only"]
 }
@@ -261,7 +264,7 @@ Rewrite envelope sent to the Editor Agent (JSON, not prose):
 | `hardware.profile` | `{}` | tier, RAM, GPU | none | both |
 | `project.settings.get` | `{projectId}` | settings | none | both |
 
-Tools called by the model are read-only or produce proposals; all mutations happen through Execute. Tool inputs are Zod-validated; failures return `{error: {code, message}}` so the model can correct itself (max 2 corrections).
+Editor Agent tool loop (FR-080): the same JSON-mode protocol as the Brainstorming Agent (`{"tool","input"}` → `{"toolResult"}`, at most 4 calls per run, not counted as corrections) over `composition.get`, `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate`, `composition.validateOps` and `assets.probe`. Editor Chat messages become `EditIntent { source: 'chat', category: 'layout', propertyKey: 'chat:<messageId>', needsInterpretation: true, instruction }` in the Intent Queue before the run. Tools called by the model are read-only or produce proposals; all mutations happen through Execute. Tool inputs are Zod-validated; failures return `{error: {code, message}}` so the model can correct itself (max 2 corrections).
 
 ## 9. Brainstorming → Editor hand-off
 
@@ -277,7 +280,7 @@ The Brainstorming Agent's output schema includes an optional `proposedIntents: E
 ## 11. Usage and budget
 
 - Every provider call records `inputTokens`, `outputTokens`, `costUsd` (OpenRouter `usage.cost`; otherwise computed from the Capability Table's price per million tokens if present, flagged `approximate: true`; otherwise `null` and shown as "n/a").
-- Per-project and per-month budget limits (Creator-set) stop new agent runs with `EM-4201` when exceeded; a warning at 80 %.
+- Per-project and per-month budget limits per Provider Connection (Creator-set; FR-117, `project_connection_budgets` + `provider_connections.budget_month_usd`) stop new agent runs with `EM-4201` when exceeded; a warning at 80 %.
 - No hidden calls: the Editor shows a spinner with "Asking <model>…" for every provider request.
 
 ## 12. Failure handling
@@ -288,7 +291,7 @@ The Brainstorming Agent's output schema includes an optional `proposedIntents: E
 | Rate limit (429) | wait per `Retry-After` up to 20 s, once; then `EM-4102` |
 | Invalid JSON / schema | re-prompt with the Zod error (max 2); then `EM-4301` and the raw text is shown collapsed for transparency |
 | Model lacks tool calling | Capability Table routes to JSON-mode prompting (tools described in prompt, output is the EditPlan JSON) |
-| `touchesLockedKeys` non-empty | one re-prompt listing the keys; then drop those ops with notice |
+| `touchesLockedKeys` non-empty | one re-prompt listing the keys; then drop those ops with notice: a `locked-key` info risk plus one `validation` entry per affected step `{ code: 'EM-2302', path: 'droppedSteps[<n>]', message: '<n>. <expectedDiff> (<locked keys>)' }`, which the Plan Card lists struck through (FR-081) |
 | Execute fails mid-transaction | SQLite rollback; `ExecutionResult.rollback.performed = true`; version unchanged |
 | Service restart during agent run | run marked `cancelled`; Plan Card shows "interrupted, re-run" |
 | Private Mode on | agent composer disabled with inline notice (`EM-4401`); any egress attempt is refused by the single egress module (`EM-8202`); deterministic picks keep working |

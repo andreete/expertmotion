@@ -73,5 +73,7 @@ Differences from the Windows release path (§6), all deliberate:
 | Code signing (signtool, OV certificate) | none: SmartScreen shows "Windows protected your PC" (More info → Run anyway) | signed |
 | Obfuscation, encrypted prompts, startup integrity check (EM-8007), Electron fuses, asar | yes | yes |
 | Release key | a test key in `~/em-win-deps/keys` on the server, never in git | the Operator's release key |
+| Release check (`scripts/release-check.mjs`) | runs with `--allow-placeholders`: lists the placeholders (licence and model-manifest public keys, `TO_PIN` hashes, publisher name, feed URL) and continues | `npm run release:win` runs it first without the flag and stops on any placeholder |
+| Integrity signing (`apps/desktop/scripts/harden.mjs`) | needs `EM_RELEASE_PRIVATE_KEY_PEM` (the script passes the test key); `--dry-run` only for a local rehearsal | fails when `EM_RELEASE_PRIVATE_KEY_PEM` is unset |
 
 Use the test installer for the §6 step 9 smoke test; ship only the signed Windows build.

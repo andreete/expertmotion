@@ -1,9 +1,9 @@
 // ServiceContext: everything a module needs, created once at startup. Cross-module calls go through `hooks`, which the owning
 // module installs in its `start()`; defaults keep every module usable (and testable) on its own.
 import { EmError, newId as ulid, type EmCode, type Logger } from '@expertmotion/shared';
-import type { AssetFacts, CompositionModelT, OperationT, Tier } from '@expertmotion/composition-model';
+import type { AssetFacts, CompositionModelT, ElementRefT, GeneratedResult, OperationT, Tier } from '@expertmotion/composition-model';
 import type { EditIntentT, EditPlanT } from '@expertmotion/agents';
-import type { ChatProvider, ChatUsage } from '@expertmotion/agents';
+import type { ChatImage, ChatProvider, ChatUsage } from '@expertmotion/agents';
 import type { ServiceConfig, Paths } from './config.js';
 import type { DB } from './db/open.js';
 import type { EventBus } from './http/events.js';
@@ -41,15 +41,26 @@ export interface Hooks {
   /** composition module (S1): current head of a project (EM-9003 when unknown). */
   composition(projectId: string): { model: CompositionModelT; versionId: string };
   /** composition module (S1): apply ops as one new version (validated, transactional); returns the new version id. */
-  applyOps(projectId: string, ops: OperationT[], source: { kind: 'generator' | 'asset' | 'system'; ref?: string; summary: string }): string;
+  applyOps(projectId: string, ops: OperationT[], source: { kind: 'generator' | 'asset' | 'system'; ref?: string; summary: string; /** results `op:generated.insert` refers to */ jobs?: Record<string, GeneratedResult> }): string;
   /** intents module (S1): create an Edit Plan from the Intent Queue and/or a typed instruction (Compile or Editor Agent). */
   createPlan(projectId: string, input: { instruction?: string; mode?: 'auto' | 'compile' | 'agent'; signal?: AbortSignal;
     /** agent run created by the caller (S3 editor chat): reuse it instead of creating a second run row and second run events. */
-    runId?: string; intentIds?: string[] }): Promise<EditPlanT & { planId: string; runId?: string }>;
+    runId?: string; intentIds?: string[];
+    /** FR-080 / FR-072 / FR-084: selection, playhead, attachment names and image parts for the envelope; plan-goal deltas. */
+    selection?: ElementRefT[]; playheadMs?: number; attachments?: string[]; images?: ChatImage[]; onDelta?: (delta: string) => void;
+    /** FR-080 / FR-067: enqueue the message as a chat Edit Intent (propertyKey chat:<messageId>) with the inspector target. */
+    chat?: { messageId: string; target?: ElementRefT } }): Promise<EditPlanT & { planId: string; runId?: string }>;
   /** intents module (S1): enqueue intents (Brainstorm handoff, AI_WORKFLOW §6), persist, emit intent.updated; returns the queue. */
   enqueueIntents?(projectId: string, intents: EditIntentT[]): { queue: EditIntentT[] };
   /** assets module (FR-048): check the project's media copies (missing / changed → re-ingest); run on open and before render. */
   mediaCheck?(projectId: string): Promise<{ missing: string[]; changed: string[] }>;
+  /** intents module (S1, FR-049): record an asset Insert in the Intent Queue ("Insert N clips", applied directly) and apply its
+   *  ops as one Composition Version through the Compile path; returns the new version id. */
+  insertIntent?(projectId: string, ops: OperationT[], meta: { label: string; assetIds: string[]; playheadMs?: number }): { versionId: string; intentId: string };
+  /** intents module (S1, FR-037): a model was installed; picks held for its `model:<id>` flag resume (queued → Compile). */
+  onModelInstalled?(modelFlag: string): void;
+  /** assets module (FR-018): re-run ingest from the kept originals so derived files (proxy, thumbnails, waveform) are regenerated. */
+  reingest?(projectId: string, assetIds: string[]): void;
 }
 
 export interface ServiceContext {

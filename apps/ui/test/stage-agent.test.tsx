@@ -71,8 +71,10 @@ describe('Output Settings (FR-087…FR-097)', () => {
     expect(table.textContent).toContain('1080×1350');
     expect(table.textContent).toContain('2160×2700');
     expect(table.textContent).toContain('2700×2160');
-    fireEvent.click(el('agent.output.profile.help.learnmore')!);
-    expect(document.body.textContent).toContain('70 % of RAM');
+    await act(async () => { fireEvent.click(el('agent.output.profile.help.learnmore')!); });
+    await waitFor(() => { if (!el('scr.help')) throw new Error('help not open'); });     // FR-091: Learn more → Help ▸ Performance profiles
+    expect(document.querySelector('[data-help-section="performance"]')?.hasAttribute('open')).toBe(true);
+    expect(el('scr.help.performance.table')?.textContent).toContain('70 % of RAM');
     expect(el('agent.output.profile.help')?.getAttribute('title')).toBe('Profiles change how many frames render in parallel and how much memory Expertmotion may use. Faster profiles need more RAM and a GPU; the video itself is identical.');
   }, 20_000);
 
@@ -257,6 +259,48 @@ describe('Agent Panel (FR-071…FR-086)', () => {
 });
 
 describe('FR-090 / FR-097 Performance Profile through the Intent Queue', () => {
+  const bootOn = async (tier: 'T1' | 'T2') => {
+    try { localStorage.clear(); } catch { /* ignore */ }
+    const runtime = createMockRuntime({ seed: 'sample', delays: false });
+    const hw = runtime.api.hardwareProfile.bind(runtime.api);
+    vi.spyOn(runtime.api, 'hardwareProfile').mockImplementation(async () => ({ ...(await hw()), tier }));
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    await waitFor(() => { if (!el('agent.output.ratio.9x16')?.hasAttribute('aria-checked') || el('agent.output.profile.turbo')?.getAttribute('aria-disabled') === 'true') throw new Error('not booted'); });
+    return runtime;
+  };
+  it('FR-090: Turbo on T1 shows EM-3106 once, with Use Standard', async () => {
+    await bootOn('T1');
+    await act(async () => { fireEvent.click(el('agent.output.profile.turbo')!); });
+    await waitFor(() => { if (!els('sys.toast').some((x) => x.textContent?.includes('Profile may be slow here'))) throw new Error('no EM-3106'); });
+    const use = els('sys.toast').find((x) => x.textContent?.includes('Profile may be slow here'))!.querySelector<HTMLElement>('[data-el="sys.toast.action"]')!;
+    await act(async () => { fireEvent.click(use); });
+    await waitFor(() => expect(el('agent.output.profile.standard')?.getAttribute('aria-checked')).toBe('true'));
+    for (const x of els('sys.toast')) { const d = x.querySelector<HTMLElement>('button[aria-label="Dismiss"]'); if (d) fireEvent.click(d); }
+    await act(async () => { fireEvent.click(el('agent.output.profile.turbo')!); });   // second time: no EM-3106 again
+    await waitFor(() => expect(el('agent.output.profile.turbo')?.getAttribute('aria-checked')).toBe('true'));
+    expect(els('sys.toast').some((x) => x.textContent?.includes('Profile may be slow here'))).toBe(false);
+    await act(async () => { fireEvent.click(el('agent.output.profile.standard')!); });
+    await waitFor(() => expect(el('agent.output.profile.standard')?.getAttribute('aria-checked')).toBe('true'));
+  }, 20_000);
+  it('FR-095/FR-097: Reset restores ratio, resolution and profile as one queue-recorded unit; one Undo restores all three', async () => {
+    const runtime = await bootOn('T2');
+    const batch = vi.spyOn(runtime.api, 'createIntentBatch');
+    await act(async () => { fireEvent.click(el('agent.output.ratio.1x1')!); });
+    await act(async () => { fireEvent.click(el('agent.output.resolution.720p')!); });
+    await act(async () => { fireEvent.click(el('agent.output.profile.turbo')!); });
+    await waitFor(() => { if (el('agent.output.profile.turbo')?.getAttribute('aria-checked') !== 'true' || el('agent.output.resolution.720p')?.getAttribute('aria-checked') !== 'true') throw new Error('not set'); });
+    await act(async () => { fireEvent.click(el('agent.output.reset')!); });
+    await act(async () => { fireEvent.click(within(el('scr.confirm')!).getByRole('button', { name: 'Reset to Defaults' })); });
+    await waitFor(() => { if (el('agent.output.ratio.9x16')?.getAttribute('aria-checked') !== 'true' || el('agent.output.profile.standard')?.getAttribute('aria-checked') !== 'true') throw new Error('not reset'); });
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(batch.mock.calls[0]![1].picks.map((p) => p.output?.kind)).toEqual(['ratio', 'resolution', 'performanceProfile']);
+    expect((await runtime.api.getSettings()).defaultPerformanceProfile).toBe('standard');
+    await waitFor(() => { if (!els('agent.editor.intentqueue.item.superseded').some((i) => i.textContent?.includes('Turbo'))) throw new Error('turbo pick not superseded'); });
+    await act(async () => { fireEvent.click(el('hdr.action.undo')!); });
+    await waitFor(() => { if (el('agent.output.ratio.1x1')?.getAttribute('aria-checked') !== 'true' || el('agent.output.resolution.720p')?.getAttribute('aria-checked') !== 'true' || el('agent.output.profile.turbo')?.getAttribute('aria-checked') !== 'true') throw new Error('one undo did not restore all three'); });
+    expect((await runtime.api.getSettings()).defaultPerformanceProfile).toBe('turbo');
+  }, 20_000);
+
   it('a profile pick is a queue item (applied directly, no model), the next pick supersedes it, Undo restores the previous profile', async () => {
     try { localStorage.clear(); } catch { /* ignore */ }
     const runtime = createMockRuntime({ seed: 'sample', delays: false });
@@ -280,4 +324,37 @@ describe('FR-090 / FR-097 Performance Profile through the Intent Queue', () => {
     expect((await runtime.api.getSettings()).defaultPerformanceProfile).toBe('turbo');
     await waitFor(() => { if (!els('agent.editor.intentqueue.item.superseded').some((i) => i.textContent?.includes('Accelerated'))) throw new Error('accelerated not superseded'); });
   }, 20_000);
+});
+
+describe('FR-098 inspector quick params', () => {
+  it('validates against the preset params schema inline (EM-2102, nothing sent) and applies a valid value as a Compile pick', async () => {
+    const { runtime } = await renderEditor('sample');
+    const clip = () => document.querySelector<HTMLElement>('[data-el="stage.timeline.track.video"] [data-el="stage.timeline.element"][data-kind="clip"]')!;
+    await act(async () => { fireEvent.click(clip()); });
+    expect(el('stage.timeline.quickparams')).toBeNull();                     // nothing tweakable yet
+    await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="effect"]')!); });
+    await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-preset-id="preset:effect.blur"]')!); });
+    await waitFor(() => { if (!document.querySelector('[data-el="stage.timeline.quickparams.field"][data-param="radiusPx"]')) throw new Error('no quick params'); });
+    const spy = vi.spyOn(runtime.api, 'createIntent');
+    const field = () => document.querySelector<HTMLInputElement>('[data-el="stage.timeline.quickparams.field"][data-param="radiusPx"]')!;
+    fireEvent.change(field(), { target: { value: '80' } });
+    await act(async () => { fireEvent.click(el('stage.timeline.quickparams.apply')!); });
+    expect(el('stage.timeline.quickparams')!.textContent).toContain('EM-2102');
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.change(field(), { target: { value: '12' } });
+    await act(async () => { fireEvent.click(el('stage.timeline.quickparams.apply')!); });
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0]![1]).toMatchObject({ presetId: 'preset:effect.blur', params: { radiusPx: 12 }, target: { kind: 'clip' } });
+    await waitFor(() => { if (field().value !== '12') throw new Error(`radius ${field().value}`); });
+  }, 20_000);
+
+  it('quickGroups: transition duration, motion duration/delay, effect values', async () => {
+    const { quickGroups } = await import('../src/stage/QuickParams.js');
+    const m = createEmptyModel('p1', { fps: 30, ratio: '9:16', resolution: '1080p', autoRatio: false, language: 'id' } as never);
+    m.tracks.video = [0, 1].map((i) => ({ id: `c${i}`, assetId: 'a', trimBeforeMs: 0, durationMs: 3000, playbackRate: 1, volume: 1, muted: false, fadeInMs: 0, fadeOutMs: 0, objectFit: 'cover', effects: i === 0 ? [{ presetId: 'preset:effect.vignette', params: { intensity: 0.4 }, motion: 'static' }] : [], motion: i === 0 ? { presetId: 'preset:motion.rise', durationMs: 600, delayMs: 0, exit: true, params: { distanceU: 40 } } : null })) as never;
+    m.transitions = [{ cutIndex: 0, presetId: 'preset:transition.fade', durationMs: 500, timing: 'linear', params: {} }] as never;
+    expect(quickGroups(m, { kind: 'cut', index: 0 })).toMatchObject([{ presetId: 'preset:transition.fade', fields: ['durationMs'] }]);
+    const g = quickGroups(m, { kind: 'clip', id: 'c0' });
+    expect(g.map((x) => [x.presetId, x.fields])).toEqual([['preset:motion.rise', ['durationMs', 'delayMs']], ['preset:effect.vignette', ['intensity']]]);
+  });
 });

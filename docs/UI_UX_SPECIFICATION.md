@@ -156,7 +156,7 @@ Implements PRD-002, PRD-003, PRD-014, PRD-017, PRD-019.
 | `hdr.title.dirty` | 6 px accent dot after title | tooltip "Unsaved changes" / "Perubahan belum disimpan" | shown/hidden | |
 | `hdr.action.hardware` | IconButton `activity` | tooltip "Hardware Monitor" / "Monitor Perangkat Keras" | warn dot when free RAM < 2 GB or disk < 1 GB | opens `scr.hardware` popover |
 | `hdr.action.save` | IconButton `save` | "Save (Ctrl+S)" / "Simpan (Ctrl+S)" | disabled when clean | |
-| `hdr.action.undo` / `.redo` | IconButton `undo-2` / `redo-2` | "Undo (Ctrl+Z)" / "Batalkan (Ctrl+Z)" · "Redo (Ctrl+Y)" / "Ulangi (Ctrl+Y)" | disabled when `canUndo` / `canRedo` is false (`composition.updated`) | |
+| `hdr.action.undo` / `.redo` | IconButton `undo-2` / `redo-2` | "Undo (Ctrl+Z)" / "Batalkan (Ctrl+Z)" · "Redo (Ctrl+Shift+Z)" / "Ulangi (Ctrl+Shift+Z)" (Ctrl+Y also works; FR-153) | disabled when `canUndo` / `canRedo` is false (`composition.updated`) | |
 | `hdr.action.backup` / `.restore` | IconButton `archive` / `archive-restore` | "Back up project to zip" / "Cadangkan proyek ke zip" · "Restore project from zip" / "Pulihkan proyek dari zip" | no badge (the newer-checkpoint badge sits on `hdr.menu.file.recover`); both open `scr.backup` | |
 | `hdr.action.models` | IconButton `boxes` | "Model Manager" / "Pengelola Model" | progress ring while downloading | |
 | `hdr.action.purchase` | Button primary 28 | "Purchase" / "Beli Lisensi" | hidden when licensed | |
@@ -279,7 +279,7 @@ Implements PRD-010, PRD-011, PRD-012, PRD-008, PRD-020.
 | `agent.editor.intentqueue` | list pinned at the top of the thread area; header "Your picks (3)" / "Pilihan kamu (3)" + `agent.editor.plan` Button secondary "Plan" / "Susun rencana" (enabled when a queued intent needs interpretation) + `.clear` ghost "Clear" / "Bersihkan" | CMP-15 items, newest first | empty: "Your picks and requests appear here." / "Pilihan dan permintaan kamu muncul di sini." |
 | `agent.editor.thread` | CMP-13 bubbles between queue and composer | system bubbles for handoffs and results | |
 | `agent.editor.plancard` | CMP-14 (§11.2) | — | — |
-| `agent.editor.execute` | Button primary 36 inside the Plan Card footer | "Execute" / "Execute" (kept as a product term; tooltip "Apply this plan (Ctrl+Enter)" / "Terapkan rencana ini (Ctrl+Enter)") | disabled reasons: "No plan yet" / "Belum ada rencana" · "Composition changed; re-plan" / "Komposisi berubah; susun ulang" · "Plan has a blocking issue" / "Rencana punya masalah pemblokir" |
+| `agent.editor.execute` | Button primary 36 inside the Plan Card footer | "Execute" / "Execute" (kept as a product term; tooltip "Apply this plan (Ctrl+Enter outside the chat box)" / "Terapkan rencana ini (Ctrl+Enter di luar kotak chat)"; inside a chat composer Ctrl+Enter sends (FR-153)) | disabled reasons: "No plan yet" / "Belum ada rencana" · "Composition changed; re-plan" / "Komposisi berubah; susun ulang" · "Plan has a blocking issue" / "Rencana punya masalah pemblokir" |
 | `agent.editor.cancel` | Button ghost | "Cancel" / "Batal" | enabled while running |
 | `agent.editor.composer` / `.send` / `.attach` | as brainstorm | placeholder "Tell the Editor Agent what to change…" / "Katakan pada Editor Agent apa yang harus diubah…"; target chip "clip 2" removable | |
 | `agent.editor.footer.model` / `.footer.ctx` | as brainstorm | + badge "JSON mode" when the model lacks tool calling | |

@@ -23,7 +23,8 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
       const player = playerBus.get();
       const k = e.key;
       if (ctrl && k.toLowerCase() === 's' && !e.shiftKey) { e.preventDefault(); void actions.save(); return; }
-      if (ctrl && k === 'Enter') { if (state.plan?.status === 'valid') { e.preventDefault(); void actions.execute(); } return; }
+      // FR-153: Ctrl+Enter in a chat composer sends (Composer handles it); elsewhere it Executes a valid plan (EDITOR_INTERACTION_MODEL §7)
+      if (ctrl && k === 'Enter') { if (!typing && state.plan?.status === 'valid') { e.preventDefault(); void actions.execute(); } return; }
       if (k === 'Escape') {
         if (state.screen) return;                                         // modal handles its own Esc
         if (state.streaming.editor || state.plan?.status === 'draft') { void actions.cancelPlan(); return; }

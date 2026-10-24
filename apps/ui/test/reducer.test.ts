@@ -30,7 +30,7 @@ describe('reducer', () => {
     s = reducer(s, { type: 'event', event: ev({ name: 'composition.updated', data: { projectId: 'P', version: version('v2', 'h2'), previousHash: 'h1', diff: [], cause: 'undo', canUndo: true, canRedo: true, durationMs: 1000, issues: [] } }) });
     expect(s.plan?.status).toBe('stale');
     expect(s.canRedo).toBe(true);
-    expect(s.project?.dirty).toBe(true);
+    expect(s.project?.dirty).toBe(false);                               // FR-173: versions are persisted, never "unsaved"
     expect(s.project?.headHash).toBe('h2');
   });
 
@@ -116,5 +116,23 @@ describe('sample project notice (R-025)', () => {
     s = reducer(s, { type: 'event', event: ev({ name: 'service.notice', data: { kind: 'sample', projectId: 'P1', ready: true } }) });
     expect(s.sampleReady).toEqual(['P1']);
     expect(reducer(initialState, { type: 'event', event: ev({ name: 'service.notice', data: { kind: 'sample', projectId: 'P2' } }) }).sampleReady).toEqual([]);
+  });
+});
+
+describe('FR-171 reload after a Service restart', () => {
+  const open = (s: AppState) => ({ project: s.project!, head: { ...version('v1', 'h1'), model: undefined }, mediaGrant: { token: 'g', baseUrl: 'http://127.0.0.1:1/media/g', expiresAt: '' },
+    checkpointNewerThanSave: null, intentQueue: { projectId: 'P', headHash: 'h1', items: [], lockedKeys: [] }, latestPlan: null, renderJobs: [] }) as never;
+  it('keeps playhead and selection when the same Project is reloaded (keepView), resets them on a normal open', () => {
+    let s: AppState = { ...withProject(), playheadMs: 4200, selection: [{ kind: 'cut', index: 0 }] as AppState['selection'] };
+    const kept = reducer(s, { type: 'projectOpened', open: open(s), assets: [], keepView: true });
+    expect(kept.playheadMs).toBe(4200);
+    expect(kept.selection).toEqual([{ kind: 'cut', index: 0 }]);
+    s = reducer(s, { type: 'projectOpened', open: open(s), assets: [] });
+    expect(s.playheadMs).toBe(0);
+    expect(s.selection).toEqual([]);
+  });
+  it('service action stores the epoch and the fatal code', () => {
+    const s = reducer(initialState, { type: 'service', epoch: 2, fatal: { code: 'EM-8002' } });
+    expect([s.serviceEpoch, s.fatal?.code]).toEqual([2, 'EM-8002']);
   });
 });

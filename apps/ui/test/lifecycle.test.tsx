@@ -16,11 +16,13 @@ const until = (fn: () => unknown, msg = 'condition') => waitFor(() => { if (!fn(
 const untilAsync = (fn: () => Promise<unknown>, msg = 'condition') => waitFor(async () => { if (!(await fn())) throw new Error(`waiting for ${msg}`); });
 const byText = (text: string, root: ParentNode = document) => [...root.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.trim() === text) ?? null;
 
+/** FR-173: only UI-level state is "unsaved" — a rename makes the dot appear (a pick does not, see the FR-173 test). */
 async function makeDirty() {
-  await until(() => document.querySelector('[data-el="lib.catalogue.tab"][data-category="transition"]'), 'catalogue');
-  fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="transition"]')!);
-  await until(() => document.querySelector('[data-preset-id="preset:transition.fade"]'), 'fade card');
-  await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-preset-id="preset:transition.fade"]')!); });
+  await until(() => el('hdr.title'), 'title');
+  fireEvent.click(el('hdr.title')!);
+  const input = el('hdr.title') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: `${input.value} baru` } });
+  await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); });
   await until(() => el('hdr.title.dirty'), 'dirty dot');
 }
 const title = () => el('hdr.title')?.textContent ?? '';
@@ -106,6 +108,7 @@ describe('New and Settings: duration policy and output folder (FR-009, FR-015)',
     await until(() => el('scr.project.new.duration.policy'));
     expect(el('scr.project.new.output.folder')).not.toBeNull();
     expect((el('scr.project.new.name') as HTMLInputElement).value).toBe('Untitled');
+    expect((el('scr.project.new.ratio') as HTMLSelectElement).value).toBe('9:16');      // FR-009 default ratio
     fireEvent.change(el('scr.project.new.duration.policy')!, { target: { value: 'fixed' } });
     expect(el('scr.project.new.duration.fixed')).not.toBeNull();
     fireEvent.change(el('scr.project.new.duration.fixed')!, { target: { value: '0' } });

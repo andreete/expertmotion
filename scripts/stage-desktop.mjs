@@ -50,6 +50,8 @@ for (const [from, to] of plan) {
 const files = [];
 const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else files.push(p); } };
 walk(path.join(desk, 'resources/engine')); walk(path.join(desk, 'resources/bin'));
+// Generator Engine Binaries (whisper.cpp, sherpa-onnx, sd.cpp) when the Operator placed them: hashed before spawn (SEC-061).
+if (fs.existsSync(path.join(desk, 'resources/engines'))) walk(path.join(desk, 'resources/engines'));
 const manifest = { generatedAt: new Date().toISOString(), files: files.sort().map((f) => ({ path: path.relative(path.join(desk, 'resources'), f).split(path.sep).join('/'), size: fs.statSync(f).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') })) };
 fs.writeFileSync(path.join(desk, 'resources/engine-manifest.json'), JSON.stringify(manifest, null, 2));
 

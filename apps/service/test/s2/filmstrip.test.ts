@@ -33,10 +33,11 @@ import { mediaModule } from '../../src/modules/media.js';
 import { FILMSTRIP_FRAMES, ingestOf } from '../../src/s2/ingest.js';
 import { importDir, json, shell, startS2, type S2Service } from './harness.js';
 
-/** Frames an `fps=N/D,…,tile=CxR` graph emits for a clip of `durS` seconds, and how many fit in the single tiled image. */
+/** Frames an `fps=R,…,tile=CxR` graph (R decimal, or N/D) emits for a clip of `durS` seconds, and how many fit in the single tiled image. */
 function framesOf(vf: string, durS: number): { sampled: number; tiled: number } {
-  const fps = /fps=([\d.]+)\/([\d.]+)/.exec(vf); const tile = /tile=(\d+)x(\d+)/.exec(vf);
-  return { sampled: fps ? Math.round((Number(fps[1]) / Number(fps[2])) * durS) : 0, tiled: tile ? Number(tile[1]) * Number(tile[2]) : 0 };
+  const fps = /fps=([\d.]+)(?:\/([\d.]+))?/.exec(vf); const tile = /tile=(\d+)x(\d+)/.exec(vf);
+  const rate = fps ? Number(fps[1]) / (fps[2] ? Number(fps[2]) : 1) : 0;
+  return { sampled: Math.round(rate * durS), tiled: tile ? Number(tile[1]) * Number(tile[2]) : 0 };
 }
 
 describe('FR-042 filmstrip (mocked FFmpeg runner)', () => {

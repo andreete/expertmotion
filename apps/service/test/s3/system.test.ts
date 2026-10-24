@@ -94,6 +94,13 @@ describe('hardware, settings and events over HTTP', () => {
     expect((s.ctx.db.prepare("SELECT count(*) n FROM audit_log WHERE event LIKE 'privatemode.%'").get() as { n: number }).n).toBe(2);
   });
 
+  it('FR-099: Settings keep the Editor layout (settings.json state); unknown buckets are rejected', async () => {
+    const layout = { panelSizes: { standard: { agent: 400, lib: 280 } }, libCollapsed: false, agentCollapsed: true, outputCollapsed: true };
+    expect(await body(await s.api('/settings', { method: 'PUT', json: { layout } }))).toMatchObject({ layout });
+    expect((await body<{ layout: unknown }>(await s.api('/settings'))).layout).toEqual(layout);
+    expect((await s.api('/settings', { method: 'PUT', json: { layout: { panelSizes: { huge: {} } } } })).status).toBe(400);
+  });
+
   it('cache clear removes regenerable variants inside the data folders only', async () => {
     const projectId = addProject(s); const assetId = s.ctx.newId(); const now = new Date().toISOString();
     const dir = path.join(s.ctx.paths.media, projectId, assetId); fs.mkdirSync(dir, { recursive: true });

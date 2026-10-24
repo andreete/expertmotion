@@ -81,8 +81,12 @@ function opFor(pick: DesignPick, target: ElementRefT | undefined, model: Composi
   if (!d || !p) return null;
   const params = { ...(pick.params ?? {}) };
   let args: Record<string, unknown> = { ...d.args };
-  if ('params' in args) args['params'] = { ...(args['params'] as object), ...params };
-  else args = { ...args, ...params };
+  if ('params' in args) {
+    // Keys the Compile rule lifts to the top level (transition durationMs / timing, FR-098) stay there; the rest go to args.params.
+    const top = Object.fromEntries(Object.entries(params).filter(([k]) => k !== 'params' && k in args));
+    const rest = Object.fromEntries(Object.entries(params).filter(([k]) => !(k in args)));
+    args = { ...args, ...top, params: { ...(args['params'] as object), ...rest } };
+  } else args = { ...args, ...params };
   if (p.category === 'text') {
     // FR-025: a variant pick on a selected Text Layer re-applies the variant; otherwise FR-027 Add Text at the playhead,
     // default 3000 ms clamped to the Sequence end.
@@ -245,8 +249,9 @@ export function remove(queue: readonly EditIntentT[], id: string): Result<EditIn
   const q = queue.map((i) => ({ ...i }));
   const t = q.find((i) => i.id === id);
   if (!t) return fail([issue('EM-9003', 'Pick not found.', 'block', 'id')]);
-  if (t.status === 'executed' || t.status === 'compiled') return fail([issue('EM-2203', 'Applied picks stay in history; use Undo to revert them.', 'block', 'id')]);
-  for (const i of q) if (i.id === id || i.parentIntentId === id) if (i.status !== 'executed' && i.status !== 'compiled') i.status = 'removed';
+  // FR-079: any non-executed item (queued, superseded, rejected, planned, compiled) can be removed; executed items stay in history.
+  if (t.status === 'executed' || t.status === 'removed') return fail([issue('EM-2203', 'Applied picks stay in history; use Undo to revert them.', 'block', 'id')]);
+  for (const i of q) if (i.id === id || i.parentIntentId === id) if (i.status !== 'executed') i.status = 'removed';
   return ok(settleParents(q));
 }
 export function clearQueue(queue: readonly EditIntentT[]): EditIntentT[] {
@@ -281,4 +286,17 @@ export function pickFromIntent(i: EditIntentT, extra: Partial<DesignPick> = {}):
   for (const k of Object.keys(p)) if (k.startsWith('__')) delete p[k];
   return { projectId: i.projectId, source: i.source, ...(i.presetId ? { presetId: i.presetId } : {}), ...(field ? { field, value } : {}), ...(output ? { output } : {}), ...(clipEdit ? { clipEdit } : {}),
     ...(Object.keys(p).length ? { params: p } : {}), ...(text !== undefined ? { text } : {}), ...(assetId ? { assetId } : {}), ...(playheadMs !== undefined ? { playheadMs } : {}), ...extra };
+}
+
+/**
+ * FR-080: an Editor Chat message as an Edit Intent (source chat, propertyKey `chat:<messageId>`, needsInterpretation true).
+ * FR-067: `target` is the element the inspector's "Ask Editor Agent" referenced; otherwise the current selection.
+ */
+export function chatIntent(input: { projectId: string; messageId: string; text: string; target?: ElementRefT | undefined; selection?: readonly ElementRefT[] | undefined; category?: IntentCategory; baseVersion: string; newId: () => string; now: () => string }): EditIntentT {
+  const sel = input.target ? [input.target] : [...(input.selection ?? [])].slice(0, 50);
+  return {
+    id: input.newId(), projectId: input.projectId, source: 'chat', createdAt: input.now(), category: input.category ?? 'layout', params: {},
+    target: input.target ?? (sel.length ? { kind: 'selection' } : { kind: 'project' }), resolvedTargets: sel, propertyKey: `chat:${input.messageId}`,
+    propertyClass: 'scalar', needsInterpretation: true, instruction: input.text.slice(0, 2000), status: 'queued', supersedes: [], baseVersion: input.baseVersion,
+  };
 }

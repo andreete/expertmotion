@@ -7,7 +7,7 @@ import type {
   AgentKind, AgentRunDto, AssetDto, AssignmentDto, AssignmentsDto, CapabilityRow, CatalogueItemDto, CheckpointDto, CompositionHeadResponse, ConnectionDto,
   ConversationDto, DesignPickInput, DiskUsageDto, ElementDiff, ExecutionResult, GeneratorCardDto, GeneratorJobDto, GeneratorKind, HardwareProfileDto, HardwareTickDto, HealthDto, Id,
   IntentCreateResponse, IntentQueueDto, LicenseDto, MediaGrantDto, MediaVariant, MessageDto, ModelRegistrySource, ModelStateDto, OpenProjectResponse, OutputDto, Page, PlanDto,
-  ProbeResultDto, ProjectCreateInput, ProjectDto, ProjectSettingsExtras, ProviderKind, ProviderKindInfo, RecentCodeDto, RecoverySummaryDto, RenderCreateInput, RenderEstimate, RenderJobDto, SettingsDto, VersionDto,
+  ProbeResultDto, ProjectCreateInput, ProjectDto, ProjectSettingsExtras, ProjectUiState, ProviderKind, ProviderKindInfo, RecentCodeDto, RecoverySummaryDto, RenderCreateInput, RenderEstimate, RenderJobDto, SettingsDto, VersionDto,
 } from './types.js';
 
 export interface Bootstrap { baseUrl: string; token: string }
@@ -25,7 +25,8 @@ export interface ShellBridge {
   openFolder?: (path: string) => Promise<void> | void;
   openExternal?: (url: string) => Promise<void> | void;
   getPathsForFiles?: (files: readonly File[]) => string[];
-  onServiceState?: (cb: (state: unknown) => void) => void;
+  /** Service up/down + re-bootstrap push after a restart (FR-171); returns an unsubscribe function. */
+  onServiceState?: (cb: (state: unknown) => void) => (() => void) | void;
   /** FR-152 updater (Desktop Shell): state push, current state, and the Creator's consent actions. */
   onUpdateState?: (cb: (state: UpdateState) => void) => (() => void) | void;
   getUpdateState?: () => Promise<UpdateState | null>;
@@ -47,9 +48,19 @@ export const DOCS_URL: string = (import.meta.env as Record<string, string | unde
 
 const Boot = z.object({ port: z.number().int().min(1).max(65535), token: z.string().min(8) });
 
+/** Shell → Editor service state (preload `ServiceState`, FR-171): `ready` may carry a fresh endpoint; `failed` carries EM-8002/EM-6001. */
+export const ServiceStatePush = z.object({
+  status: z.enum(['starting', 'ready', 'offline', 'failed']),
+  bootstrap: Boot.optional(),
+  code: z.string().regex(EM_CODE_RE).optional(),
+  logsDir: z.string().max(1024).optional(),
+});
+export type ServiceStatePushT = z.infer<typeof ServiceStatePush>;
+export const bootstrapFromPush = (b: { port: number; token: string }): Bootstrap => ({ baseUrl: `http://127.0.0.1:${b.port}`, token: b.token });
+
 /** Electron: preload bootstrap. Dev: VITE_EM_API (e.g. http://127.0.0.1:4110) + VITE_EM_TOKEN. Returns null when neither exists. */
-export async function resolveBootstrap(env: Record<string, string | undefined> = import.meta.env as Record<string, string | undefined>): Promise<Bootstrap | null> {
-  const bridge = typeof window !== 'undefined' ? window.expertmotion : undefined;
+export async function resolveBootstrap(env: Record<string, string | undefined> = import.meta.env as Record<string, string | undefined>,
+  bridge: ShellBridge | undefined = typeof window !== 'undefined' ? window.expertmotion : undefined): Promise<Bootstrap | null> {
   if (bridge?.getBootstrap) {
     const parsed = Boot.safeParse(await bridge.getBootstrap());
     if (parsed.success) return { baseUrl: `http://127.0.0.1:${parsed.data.port}`, token: parsed.data.token };
@@ -64,13 +75,13 @@ export const toEmCode = (code: string): EmCode => (EM_CODE_RE.test(code) ? (code
 interface ReqOpts { query?: Record<string, string | number | boolean | undefined>; headers?: Record<string, string>; body?: unknown; form?: FormData }
 
 export class ApiClient {
-  readonly baseUrl: string;
+  private base: string;
   private token: string;
   private readonly fetchImpl: FetchLike;
   private readonly mediaResolver: MediaResolver | undefined;
 
   constructor(opts: { baseUrl: string; token: string; fetch?: FetchLike; mediaResolver?: MediaResolver }) {
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
+    this.base = opts.baseUrl.replace(/\/+$/, '');
     this.token = opts.token;
     this.fetchImpl = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
     this.mediaResolver = opts.mediaResolver;
@@ -78,6 +89,9 @@ export class ApiClient {
 
   /** The Shell pushes a new token after a Service restart (API_SPECIFICATION.md §2.1 Rotation). */
   setToken(token: string): void { this.token = token; }
+  /** FR-171: after a Service restart the Shell pushes a new port + token (onServiceState); every later call and the SSE URL use them. */
+  setEndpoint(baseUrl: string, token: string): void { this.base = baseUrl.replace(/\/+$/, ''); this.token = token; }
+  get baseUrl(): string { return this.base; }
   get serviceToken(): string { return this.token; }
 
   private url(path: string, query?: ReqOpts['query']): string {
@@ -124,7 +138,7 @@ export class ApiClient {
   createProject(body: ProjectCreateInput): Promise<ProjectDto> { return this.post('/projects', body); }                    // R-011
   recentProjects(): Promise<{ items: ProjectDto[] }> { return this.get('/projects/recent'); }                                // R-012
   getProject(id: Id): Promise<ProjectDto> { return this.get(`/projects/${id}`); }                                          // R-013
-  patchProject(id: Id, body: { name?: string; language?: 'id' | 'en' }): Promise<ProjectDto> { return this.patch(`/projects/${id}`, body); } // R-014
+  patchProject(id: Id, body: { name?: string; language?: 'id' | 'en'; uiState?: ProjectUiState }): Promise<ProjectDto> { return this.patch(`/projects/${id}`, body); } // R-014 (uiState: FR-012)
   /** R-015: soft delete by default; `permanent` (Open ▸ Delete, FR-178) removes rows, media and checkpoints now, Outputs unless `keepOutputs`. */
   deleteProject(id: Id, opts: { permanent?: boolean; keepOutputs?: boolean } = {}): Promise<void> {
     return this.del(`/projects/${id}`, opts.permanent ? { permanent: true, keepOutputs: opts.keepOutputs !== false } : undefined);
@@ -160,7 +174,7 @@ export class ApiClient {
   getAsset(id: Id, assetId: Id, probe = false): Promise<AssetDto> { return this.get(`/projects/${id}/assets/${assetId}`, probe ? { probe: true } : undefined); } // R-032
   deleteAsset(id: Id, assetId: Id, confirm = false): Promise<{ version: VersionDto } | undefined> { return this.del(`/projects/${id}/assets/${assetId}`, confirm ? { confirm: true } : undefined); } // R-033
   setSequenceBadge(id: Id, assetId: Id, badge: number | null): Promise<{ items: AssetDto[] }> { return this.put(`/projects/${id}/assets/${assetId}/sequence-badge`, { badge }); } // R-034
-  insertAssets(id: Id, body: { assetIds: Id[]; order?: 'badge' | 'given'; atIndex?: number; asOverlay?: boolean; atMs?: number }): Promise<{ version: VersionDto; ops: OperationT[]; warnings: unknown[] }> {
+  insertAssets(id: Id, body: { assetIds: Id[]; order?: 'badge' | 'given'; atIndex?: number; asOverlay?: boolean; atMs?: number; playheadMs?: number }): Promise<{ version: VersionDto; ops: OperationT[]; warnings: unknown[]; intentId?: Id | null }> {
     return this.post(`/projects/${id}/assets/insert`, body);                                                              // R-035
   }
   relocateAsset(id: Id, assetId: Id, path: string, reingest = false): Promise<AssetDto> { return this.post(`/projects/${id}/assets/${assetId}/relocate`, { path, reingest }, { 'X-Expertmotion-Caller': 'shell' }); } // R-036
@@ -187,6 +201,7 @@ export class ApiClient {
   }
   // ── 6.7 intents ──
   createIntent(id: Id, body: DesignPickInput): Promise<IntentCreateResponse> { return this.post(`/projects/${id}/intents`, body); } // R-060
+  createIntentBatch(id: Id, body: { baseVersion: string; picks: Array<Omit<DesignPickInput, 'baseVersion'>> }): Promise<IntentCreateResponse & { intents: IntentCreateResponse['intent'][] }> { return this.post(`/projects/${id}/intents/batch`, body); } // R-065
   listIntents(id: Id, query: { status?: string; limit?: number } = {}): Promise<IntentQueueDto> { return this.get(`/projects/${id}/intents`, query); } // R-061
   restoreIntent(id: Id, intentId: Id): Promise<IntentCreateResponse> { return this.post(`/projects/${id}/intents/${intentId}/restore`); } // R-062
   removeIntent(id: Id, intentId: Id): Promise<IntentQueueDto> { return this.del(`/projects/${id}/intents/${intentId}`); }   // R-063
@@ -204,7 +219,7 @@ export class ApiClient {
   setPlanNotes(planId: Id, notes: string): Promise<PlanDto> { return this.patch(`/plans/${planId}/notes`, { notes }); }    // R-075
   // ── 6.9 agents ──
   getConversation(id: Id, agent: AgentKind, query: { limit?: number; cursor?: string } = {}): Promise<ConversationDto> { return this.get(`/projects/${id}/conversations/${agent}`, query); } // R-080
-  sendMessage(id: Id, agent: AgentKind, body: { text: string; attachments?: Array<{ assetId: Id }>; intentIds?: Id[]; baseVersion: string }): Promise<{ message: MessageDto; runId: Id; planId?: Id }> {
+  sendMessage(id: Id, agent: AgentKind, body: { text: string; attachments?: Array<{ assetId: Id }>; intentIds?: Id[]; baseVersion: string; target?: ElementRefT; selection?: ElementRefT[]; playheadMs?: number }): Promise<{ message: MessageDto; runId: Id; planId?: Id }> {
     return this.post(`/projects/${id}/conversations/${agent}/messages`, body);                                          // R-081
   }
   handoff(id: Id, body: { messageId: Id; intentIds?: Id[]; baseVersion: string }): Promise<{ queue: IntentQueueDto; accepted: Id[]; rejected: Array<{ id: Id; code: string }>; planId: Id | null }> {
@@ -229,10 +244,10 @@ export class ApiClient {
   refreshConnectionModels(connId: Id): Promise<{ items: CapabilityRow[]; fetchedAt: string }> { return this.post(`/providers/connections/${connId}/models/refresh`); } // R-096
   getAssignments(): Promise<AssignmentsDto> { return this.get('/providers/assignments'); }                                  // R-097
   putAssignments(body: { brainstorm?: AssignmentDto | null; editor?: AssignmentDto | null; defaultConnectionId?: Id | null }): Promise<AssignmentsDto> { return this.put('/providers/assignments', body); } // R-098
-  getBudget(): Promise<{ connections: Array<{ connectionId: Id; budgetMonthUsd: number | null; spentMonthUsd: number; approximate: boolean }>; projects: Array<{ projectId: Id; limitUsd: number | null; spentUsd: number }>; month: string }> {
+  getBudget(): Promise<{ connections: Array<{ connectionId: Id; budgetMonthUsd: number | null; spentMonthUsd: number; approximate: boolean }>; projects: Array<{ projectId: Id; connectionId: Id | null; limitUsd: number | null; spentUsd: number }>; month: string }> {
     return this.get('/providers/budget');                                                                                // R-099
   }
-  putBudget(body: { connections?: Array<{ connectionId: Id; budgetMonthUsd: number | null }>; projects?: Array<{ projectId: Id; limitUsd: number | null }> }) { return this.put<unknown>('/providers/budget', body); } // R-100
+  putBudget(body: { connections?: Array<{ connectionId: Id; budgetMonthUsd: number | null }>; projects?: Array<{ projectId: Id; connectionId?: Id | null; limitUsd: number | null }> }) { return this.put<unknown>('/providers/budget', body); } // R-100
   // ── 6.11 renders ──
   estimateRender(body: RenderCreateInput): Promise<RenderEstimate> { return this.post('/renders/estimate', body); }         // R-110
   createRender(body: RenderCreateInput, key: string = idempotencyKey(`export-${body.projectId}`)): Promise<RenderJobDto> { return this.post('/renders', body, { 'Idempotency-Key': key }); } // R-111
@@ -254,7 +269,7 @@ export class ApiClient {
   listGeneratorJobs(id: Id, query: { kind?: GeneratorKind; limit?: number } = {}): Promise<Page<GeneratorJobDto>> { return this.get(`/projects/${id}/generator-jobs`, query); } // R-131
   getGeneratorJob(jobId: Id): Promise<GeneratorJobDto> { return this.get(`/generator-jobs/${jobId}`); }                    // R-132
   cancelGeneratorJob(jobId: Id): Promise<GeneratorJobDto> { return this.post(`/generator-jobs/${jobId}/cancel`); }         // R-133
-  insertGeneratorResult(jobId: Id, body?: { pages?: unknown[] }): Promise<{ versionId: Id; notice?: string }> { return this.post(`/generator-jobs/${jobId}/insert`, body ?? {}); } // R-134
+  insertGeneratorResult(jobId: Id, body?: { pages?: unknown[]; assetId?: Id; atMs?: number }): Promise<{ versionId: Id; notice?: string }> { return this.post(`/generator-jobs/${jobId}/insert`, body ?? {}); } // R-134
   listGenerators(): Promise<{ items: GeneratorCardDto[] }> { return this.get('/generators'); }                                // R-135
   saveGeneratorOutput(jobId: Id, assetId: Id): Promise<OutputDto> { return this.post(`/generator-jobs/${jobId}/save-output`, { assetId }); } // R-136
   deleteGeneratorJob(jobId: Id): Promise<void> { return this.del(`/generator-jobs/${jobId}`); }                            // R-137

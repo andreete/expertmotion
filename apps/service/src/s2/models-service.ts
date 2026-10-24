@@ -146,7 +146,7 @@ export class ModelsService {
 
   private async download(def: ModelDef, entry: Live): Promise<void> {
     const ctx = this.ctx; const tick = throttle(500); const pollMs = this.opts.pausePollMs ?? 2000;
-    const fetchLike: FetchLike = (url, init) => ctx.egress.fetch(url, init as RequestInit) as unknown as ReturnType<FetchLike>;
+    const fetchLike: FetchLike = (url, init) => ctx.egress.for('model-download')(url, init as RequestInit) as unknown as ReturnType<FetchLike>;   // SEC-080: model hosts only
     const cancelled = () => Object.assign(new Error('cancelled'), { name: 'CancelledError' });
     const progress = () => emit(ctx, 'model.progress', { key: def.key, bytesDone: entry.bytesDone, bytesTotal: entry.bytesTotal, status: entry.status, ...(entry.pausedReason ? { pausedReason: entry.pausedReason } : {}) });
     try {
@@ -179,6 +179,8 @@ export class ModelsService {
       }
       this.live.delete(def.key);
       this.upsert(def, 'installed', { bytesDone: def.bytes, installedAt: manifest.installedAt });
+      // FR-037: picks held for this model resume first, so the queue the Editor sees after `model.installed` is already current.
+      if (def.flag) { try { ctx.hooks.onModelInstalled?.(def.flag); } catch (e) { ctx.log.warn({ model: def.key, err: String(e) }, 'held picks could not resume'); } }
       emit(ctx, 'model.installed', { model: await this.dto(def) });
     } catch (e) {
       this.live.delete(def.key);

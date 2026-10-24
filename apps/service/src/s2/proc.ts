@@ -2,6 +2,12 @@
 // abort kill the process, stdout/stderr tails capped. Never logs arguments (they contain media paths).
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
+import type { Logger } from '@expertmotion/shared';
+
+/** `logs/engine-YYYY-MM-DD.log` (SEC-101, DEPLOYMENT §14): redacted stderr tails of failed Engine Binary runs and renders. */
+let engineLog: Logger | null = null;
+export function setEngineLog(l: Logger | null): void { engineLog = l; }
+export function getEngineLog(): Logger | null { return engineLog; }
 
 export interface ToolRun {
   exe: string; args: readonly string[]; cwd?: string; timeoutMs: number; signal?: AbortSignal;
@@ -56,6 +62,7 @@ export function runTool(spec: ToolRun): Promise<ToolResult> {
     const tail = () => errTail.split(/\r?\n/).filter((l) => l.trim()).slice(-10);
     child.once('error', (e) => done(() => reject(new ToolError(killedFor ?? 'spawn', e.message))));
     child.once('close', (code) => done(() => {
+      if (killedFor || code !== 0) engineLog?.warn({ exe: path.basename(spec.exe), reason: killedFor ?? 'exit', exitCode: code, stderrTail: tail() }, 'engine binary failed');
       if (killedFor) reject(new ToolError(killedFor, killedFor === 'timeout' ? `timed out after ${spec.timeoutMs} ms` : 'cancelled', code, tail()));
       else if (code === 0) resolve({ code: 0, stdout: Buffer.concat(out).toString('utf8'), stderrTail: tail() });
       else reject(new ToolError('exit', `exited with ${code}`, code, tail()));

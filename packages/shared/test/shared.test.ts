@@ -96,6 +96,31 @@ describe('redact', () => {
     expect(out).toContain('token=[REDACTED]');
     expect(out).toContain('/media/[REDACTED]/01J/proxy');
   });
+  it('SEC-100: x-api-key headers, apiKey JSON fields, labelled 64-hex keys, x\'hex\' literals, Windows user names, short sk- keys', () => {
+    const hex = 'ab'.repeat(32);
+    const cases: Array<[string, string, string]> = [
+      ['x-api-key: sk-ant-api03-abcdef', 'sk-ant-api03', 'x-api-key: [REDACTED]'],
+      ['{"x-api-key":"secretvalue99"}', 'secretvalue99', '"x-api-key":"[REDACTED]"'],
+      ['{"apiKey":"my-secret-key"}', 'my-secret-key', '"apiKey":"[REDACTED]"'],
+      ['{"api_key": "abc123"}', 'abc123', '[REDACTED]'],
+      [`{"dbKey":"${hex}"}`, hex, '"dbKey":"[REDACTED]"'],
+      [`dbKeyHex=${hex}`, hex, 'dbKeyHex=[REDACTED]'],
+      [`key: ${hex}`, hex, 'key: [REDACTED]'],
+      [`PRAGMA key = "x'${hex}'"`, hex, "x'[REDACTED]'"],
+      ['open C:\\Users\\andre\\AppData\\Roaming\\Expertmotion', 'andre', 'C:\\Users\\%USER%\\AppData'],
+      [JSON.stringify({ p: 'C:\\Users\\Budi Santoso\\Videos\\a.mp4' }), 'Budi', 'C:\\\\Users\\\\%USER%\\\\Videos'],
+      ['c:/users/siti/x.mp4', 'siti', 'c:/users/%USER%/x.mp4'],
+      ['key sk-12345678', 'sk-12345678', '[REDACTED]'],
+    ];
+    for (const [line, secret, expected] of cases) {
+      const out = redact(line);
+      expect(out, line).not.toContain(secret);
+      expect(out, line).toContain(expected);
+    }
+  });
+  it('SEC-100: leaves ordinary text alone', () => {
+    for (const s of ['task-runner-abcdefgh started', 'risk-assessment-document', 'render 1080p done in 12 s', 'D:\\Media\\clip.mp4', 'key: short']) expect(redact(s)).toBe(s);
+  });
 });
 
 describe('fit (ported)', () => {

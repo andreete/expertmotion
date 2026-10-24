@@ -5,14 +5,24 @@ export interface Logger {
   error(o: object, msg?: string): void;
   child(bindings: object): Logger;
 }
-/** Secret redaction applied to every log line (SECURITY.md SEC-100): provider keys, bearer tokens, query tokens, media grants. */
+/**
+ * Secret redaction applied to every log line (SECURITY.md SEC-100 table): provider keys, bearer tokens, query tokens, media grants,
+ * `x-api-key` headers, `"apiKey"` JSON fields, labelled 64-hex Database Keys, `x'<hex>'` SQL key literals, and the Windows user
+ * name in paths. A pattern with a capture group keeps group 1 (the label) and redacts the rest.
+ */
 export const REDACTION_PATTERNS: readonly RegExp[] = [
-  /sk-or-v1-[A-Za-z0-9]{10,}/g, /sk-ant-[A-Za-z0-9_-]{10,}/g, /sk-[A-Za-z0-9_-]{20,}/g, /AIza[0-9A-Za-z_-]{30,}/g,
-  /Bearer\s+[A-Za-z0-9._~+/=-]{16,}/g, /([?&](?:token|grant)=)[^&\s"]+/g, /(\/media\/)[A-Za-z0-9_-]{43}(?=\/)/g,
+  /\bsk-or-v1-[A-Za-z0-9]{8,}/g, /\bsk-ant-[A-Za-z0-9_-]{8,}/g, /\bsk-[A-Za-z0-9_-]{8,}/g, /AIza[0-9A-Za-z_-]{30,}/g,
+  /Bearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, /([?&](?:token|grant)=)[^&\s"]+/gi, /(\/media\/)[A-Za-z0-9_-]{43}(?=\/)/g,
+  /(x-api-key\\?["']?\s*[:=]\s*\\?["']?)[^\s"'\\,}]+/gi,
+  /(\\?"api_?key\\?"\s*:\s*\\?")[^"\\]+/gi,
+  /(\b(?:db_?key(?:_?hex)?|key)\\?["']?\s*[:=]\s*\\?["']?(?:x')?)[0-9a-f]{64}\b/gi,
+  /(x')[0-9a-f]{64}(?=')/gi,
 ];
+/** Windows user profile segment in paths (`C:\Users\<name>\`, JSON-escaped or with `/`) → `%USER%` (SEC-100). */
+const WINDOWS_USER_PATH = /([A-Za-z]:(?:\\{1,2}|\/)Users(?:\\{1,2}|\/))(?!%USER%)[^\\/"'\r\n\t:*?<>|]+/gi;
 export function redact(text: string): string {
   let out = text;
   for (const re of REDACTION_PATTERNS) out = out.replace(re, (_m, p1?: string) => (typeof p1 === 'string' ? `${p1}[REDACTED]` : '[REDACTED]'));
-  return out;
+  return out.replace(WINDOWS_USER_PATH, (_m, p1: string) => `${p1}%USER%`);
 }
 export const silentLogger: Logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return silentLogger; } };

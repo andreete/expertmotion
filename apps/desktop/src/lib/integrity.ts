@@ -74,3 +74,12 @@ export function verifyManifest(
   }
   return { ok: true };
 }
+
+/**
+ * SEC-061: which files under resources/engine/chrome and resources/engine/compositor are executables the Service spawns or
+ * loads (hashed in the signed integrity manifest). Same rule as apps/service/src/s2/engine-check.ts `isEngineExecutable`.
+ */
+export function isEngineExecutable(file: string): boolean {
+  const name = file.split(/[\\/]/).pop() ?? '';
+  return /\.(exe|dll|node|so|dylib)$/i.test(name) || /^(chrome-headless-shell|remotion|ffmpeg|ffprobe)$/.test(name);
+}

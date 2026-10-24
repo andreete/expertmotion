@@ -1,7 +1,8 @@
 // App shell: Header, three columns (Library / Stage / Agent), banners, toasts, live region, screens as modals.
-// Responsive rules (EDITOR_INTERACTION_MODEL.md §9–§10): ≥ 1280 defaults; 1024–1279 Library collapses to a rail and Agent
-// narrows to 320; < 1024 both collapse with a non-blocking toast. Dividers resize the columns and the Player/Timeline split
-// (§9, FR-099); sizes are kept per window-width bucket in prefs.
+// Responsive rules (EDITOR_INTERACTION_MODEL.md §9–§10, FR-099): side panels shrink to their minimums, then collapse to a rail
+// in the order Library → Agent before the Stage gets narrower than 640 px; < 1024 both collapse with a non-blocking toast.
+// Dividers resize the columns and the Player/Timeline split; sizes are kept per window-width bucket in prefs and mirrored
+// to the Local Service Settings `layout` (FR-155).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Boxes, ChevronLeft, ChevronRight, ShieldCheck, Sparkles, Type, Upload, WifiOff, Wrench, X } from 'lucide-react';
 import { useStore } from './state/store.js';
@@ -26,7 +27,7 @@ import { CloseRenderDialog, LifecycleEffects, UnsavedDialog } from './screens/Li
 import type { LibMode } from './state/reducer.js';
 import { Splitter } from './components/Splitter.js';
 import { LAYOUT, bucketFor, clamp, defaultSizes, resolveColumns, timelineMax } from './layout.js';
-import type { PanelSizes } from './prefs.js';
+import { layoutOf, type PanelSizes } from './prefs.js';
 
 function useWindowWidth(): number {
   const [w, setW] = useState(typeof window === 'undefined' ? 1440 : window.innerWidth);
@@ -39,10 +40,8 @@ export function App() {
   const { state, actions, prefs, setPrefs, lang } = store;
   const i18n = useMemo<I18n>(() => ({ lang, t: (k, v) => translate(lang, k, v), setLang: (l) => void actions.setLanguage(l) }), [lang, actions]);
   const width = useWindowWidth();
-  const narrow = width < 1280, tiny = width < 1024;
+  const tiny = width < 1024;
   const [libOverlay, setLibOverlay] = useState(false);
-  const libCollapsed = prefs.libCollapsed || narrow;
-  const agentCollapsed = prefs.agentCollapsed || tiny;
   const collapse = useMemo(() => ({ toggleLibrary: () => setPrefs({ libCollapsed: !prefs.libCollapsed }), toggleAgent: () => setPrefs({ agentCollapsed: !prefs.agentCollapsed }) }), [prefs, setPrefs]);
   // ── panel sizes (live while dragging, persisted on release / key press) ──
   const bucket = bucketFor(width);
@@ -50,7 +49,10 @@ export function App() {
   const stageRef = useRef<HTMLDivElement>(null);
   const stored = { ...defaultSizes(bucket), ...(prefs.panelSizes[bucket] ?? {}) };
   const want = { ...stored, ...live };
-  const cols = resolveColumns({ width: Math.max(width, 1024), lib: want.lib, agent: want.agent, libOpen: !libCollapsed, agentOpen: !agentCollapsed });
+  // FR-099: Library then Agent collapse (rail) automatically before the Stage would get narrower than 640 px.
+  const cols = resolveColumns({ width: Math.max(width, 1024), lib: want.lib, agent: want.agent, libOpen: !prefs.libCollapsed, agentOpen: !prefs.agentCollapsed && !tiny });
+  const libCollapsed = !cols.libOpen, agentCollapsed = !cols.agentOpen;
+  const narrow = libCollapsed && !prefs.libCollapsed;                          // auto-collapsed: the rail opens the Library as an overlay
   const tlMax = timelineMax(stageRef.current?.clientHeight ?? 0);
   const tlHeight = clamp(want.timeline, LAYOUT.timeline.min, tlMax);
   const resize = (key: keyof PanelSizes, min: number, max: number) => (raw: number, commit: boolean) => {
@@ -69,11 +71,12 @@ export function App() {
   };
   useShortcuts(collapse);
   useUpdateBridge();
+  useLayoutSync();
   const warned = useRef(false);
   useEffect(() => { if (tiny && !warned.current) { warned.current = true; actions.toast('info', 'ui.window.small'); } }, [tiny, actions]);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
 
-  if (state.boot === 'no-service') return <I18nContext.Provider value={i18n}><NoService /></I18nContext.Provider>;
+  if (state.boot === 'no-service') return <I18nContext.Provider value={i18n}>{state.fatal ? <FatalOverlay /> : <NoService />}</I18nContext.Provider>;
   return (
     <I18nContext.Provider value={i18n}>
       <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ minWidth: 1024 }}>
@@ -92,7 +95,7 @@ export function App() {
           {libCollapsed && libOverlay && (
             <div className="absolute bottom-0 left-12 top-0 z-30 w-[300px] border-r border-em-line" style={{ boxShadow: 'var(--sh-2)' }} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setLibOverlay(false); }}><LibraryPanel /></div>
           )}
-          <div ref={stageRef} data-region="stage" aria-label={store.t('a11y.region.stage')} className="flex min-w-[560px] flex-1 flex-col gap-1 p-2">
+          <div ref={stageRef} data-region="stage" aria-label={store.t('a11y.region.stage')} className="flex min-w-[640px] flex-1 flex-col gap-1 p-2">
             <StagePlayer />
             <Splitter el="stage.divider" orientation="horizontal" invert value={tlHeight} min={LAYOUT.timeline.min} max={tlMax} label={store.t('a11y.layout.divider.timeline')}
               onChange={resize('timeline', LAYOUT.timeline.min, tlMax)} onReset={reset('timeline')} />
@@ -111,6 +114,7 @@ export function App() {
         <Screens />
         <LifecycleEffects />
         <Tour />
+        {state.fatal && <FatalOverlay />}
       </div>
     </I18nContext.Provider>
   );
@@ -157,12 +161,13 @@ function Banners() {
 export const toastDismissMs = (toast: { kind: string; textKey: string; sticky: boolean }): number | null =>
   toast.sticky || toast.kind === 'warn' || toast.kind === 'danger' ? null : toast.textKey === 'ui.sys.toast.saved' ? 1500 : 6000;
 
-/** sys.update (FR-152, FR-162): consent to download, EM-8105 Restart now / Later, deferred while a render runs, paused by Private Mode. */
+/** sys.update (FR-152, FR-162): background download (Download stays as a manual start while it waits), EM-8105 Restart now / Later,
+ *  deferred while a render runs, paused by Private Mode, EM-8104 / EM-8102 with Try again. */
 function UpdateBanner() {
   const { state, dispatch, t } = useStore();
   const u = state.update!;
   const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
-  const act = (a: 'download' | 'restart' | 'later') => { void shell?.updateAction?.(a); if (a === 'later') dispatch({ type: 'dismissUpdate' }); };
+  const act = (a: 'download' | 'restart' | 'later' | 'check') => { void shell?.updateAction?.(a); if (a === 'later') dispatch({ type: 'dismissUpdate' }); };
   const status = state.settings?.privateMode ? 'paused' : (u.status ?? (u.downloaded ? 'downloaded' : 'available'));
   const rendering = state.renders.some((j) => j.status === 'rendering' || j.status === 'queued');
   return (
@@ -177,10 +182,37 @@ function UpdateBanner() {
       </span>
       {status === 'available' && <Button el="sys.update.download" size={28} onClick={() => act('download')}>{t('ui.sys.update.download')}</Button>}
       {status === 'downloaded' && <Button el="sys.update.restart" size={28} variant="primary" disabledReason={rendering ? t('ui.sys.update.wait') : null} onClick={() => act('restart')}>{t('ui.sys.update.restartnow')}</Button>}
+      {status === 'error' && (u.code === 'EM-8104' || u.code === 'EM-8102' || u.code === 'EM-8101') && <Button el="sys.update.retry" size={28} onClick={() => act('check')}>{t('ui.sys.update.retry')}</Button>}
       {(status === 'downloaded' || status === 'available') && <Button el="sys.update.later" size={28} variant="ghost" onClick={() => act('later')}>{t('ui.sys.update.later')}</Button>}
       <IconButton label={t('ui.common.dismiss')} icon={<X size={14} />} size={28} onClick={() => dispatch({ type: 'dismissUpdate' })} />
     </div>
   );
+}
+
+/**
+ * FR-099 / FR-155: the panel layout lives in the Local Service Settings (`layout`, the settings.json state), so it survives a
+ * UI cache reset and a reinstall of the Editor. Loaded once when Settings arrive; saved 500 ms after the last change.
+ */
+function useLayoutSync() {
+  const { state, prefs, setPrefs, runtime, dispatch } = useStore();
+  const loaded = useRef(false);
+  const layout = layoutOf(prefs);
+  const key = JSON.stringify(layout);
+  const lastSaved = useRef<string | null>(null);
+  useEffect(() => {
+    if (loaded.current || !state.settings) return;
+    loaded.current = true;
+    const l = state.settings.layout;
+    if (l) { lastSaved.current = JSON.stringify({ ...layout, ...l }); setPrefs(l); } else lastSaved.current = key;
+  }, [state.settings]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!loaded.current || lastSaved.current === key) return;
+    const h = setTimeout(() => {
+      lastSaved.current = key;
+      void runtime.api.putSettings({ layout }).then((s) => dispatch({ type: 'settings', settings: s })).catch(() => undefined);
+    }, 500);
+    return () => clearTimeout(h);
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 /** Subscribes to the Shell's updater state (absent in the browser dev build). */
@@ -210,7 +242,7 @@ function Toasts() {
   return (
     <div className="pointer-events-none fixed bottom-[260px] right-4 z-40 flex w-[340px] flex-col gap-2">
       {[...state.toasts].reverse().map((toast) => (
-        <div key={toast.id} data-el="sys.toast" role={toast.kind === 'danger' ? 'alert' : 'status'} onMouseEnter={() => pause(toast.id)} onMouseLeave={() => { if (toastDismissMs(toast) !== null) schedule(toast.id, 3000); }}
+        <div key={toast.id} data-el="sys.toast" data-kind={toast.kind} onMouseEnter={() => pause(toast.id)} onMouseLeave={() => { if (toastDismissMs(toast) !== null) schedule(toast.id, 3000); }}
           className={cx('pointer-events-auto flex items-start gap-2 rounded-[8px] border-l-2 bg-em-panel px-3 py-2', tone[toast.kind])} style={{ boxShadow: 'var(--sh-2)' }}>
           <div className="flex-1">
             <div>{t(toast.textKey, toast.vars)}{toast.count > 1 && <span className="t-mono ml-1 text-em-muted">×{toast.count}</span>}</div>
@@ -249,7 +281,7 @@ function Screens() {
   switch (s.kind) {
     case 'onboarding': return <Onboarding onClose={close} />;
     case 'license': return <LicenseScreen onClose={close} />;
-    case 'providers': return <ProvidersScreen onClose={close} />;
+    case 'providers': return <ProvidersScreen onClose={close} {...(s.focus ? { focus: s.focus } : {})} />;
     case 'models': return <ModelsScreen onClose={close} {...(s.focus ? { focus: s.focus } : {})} />;
     case 'project.new': return <NewProjectDialog onClose={close} saveAs={s.saveAs === true} />;
     case 'unsaved': return <UnsavedDialog screen={s} onClose={close} />;
@@ -261,7 +293,7 @@ function Screens() {
     case 'generate': return <GenerateSheet kind={s.generator} onClose={close} />;
     case 'diagnostics': return <DiagnosticsScreen onClose={close} />;
     case 'about': return <AboutScreen onClose={close} />;
-    case 'help': return <HelpScreen onClose={close} />;
+    case 'help': return <HelpScreen onClose={close} {...(s.topic ? { topic: s.topic } : {})} />;
     case 'backup': return <BackupDialog mode="backup" onClose={close} />;
     case 'restore': return <BackupDialog mode="restore" onClose={close} />;
     case 'ratio.custom': return <CustomRatioDialog onClose={close} />;
@@ -270,6 +302,34 @@ function Screens() {
     case 'confirm': return <ConfirmModal screen={s} onClose={close} />;
     default: return null;
   }
+}
+
+/**
+ * sys.fatal (FR-171, FR-176): the Shell gave up restarting the Local Service (EM-8002) or cannot unlock project storage (EM-6001).
+ * Shown in the Editor — not only as a native box — with Open Diagnostics (the logs folder; the Service-side Diagnostics screen is
+ * unreachable without a Service) and Quit. The Editor stays mounted behind it, so selection and composer drafts are kept.
+ */
+function FatalOverlay() {
+  const { state, t } = useStore();
+  const f = state.fatal;
+  if (!f) return null;
+  const bridge = typeof window !== 'undefined' ? window.expertmotion : undefined;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-8">
+      <div data-el="sys.fatal" role="alertdialog" aria-modal="true" aria-labelledby="sys-fatal-title" className="max-w-[560px] rounded-[12px] border border-em-danger bg-em-panel p-6">
+        <h1 id="sys-fatal-title" className="mb-2 text-[20px] font-semibold">{t(`err.${f.code}.title`)}</h1>
+        <p className="mb-3 text-em-text-2">{t(`err.${f.code}.body`)}</p>
+        {f.code === 'EM-6001' && <p className="mb-3 text-em-text-2">{t('ui.sys.fatal.storage.hint')}</p>}
+        <p className="t-mono mb-4 text-[12px] text-em-text-2">{f.code}</p>
+        <div className="flex justify-end gap-2">
+          {f.logsDir && bridge?.openFolder && (
+            <Button el="sys.fatal.diagnostics" onClick={() => void bridge.openFolder?.(f.logsDir!)}>{t('ui.sys.fatal.diagnostics')}</Button>
+          )}
+          <Button el="sys.fatal.quit" variant="primary" onClick={() => window.close()}>{t('ui.sys.fatal.quit')}</Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function NoService() {

@@ -17,7 +17,13 @@ export interface ShutdownMessage {
   readonly type: 'shutdown';
 }
 
-export type ShellToService = BootstrapMessage | ShutdownMessage;
+/** FR-127: the Shell's own memory (Electron main, renderer, GPU, …) pushed every 30 s; the Service adds it to the meter. */
+export interface MetricsMessage {
+  readonly type: 'metrics';
+  readonly shellMb: number;
+}
+
+export type ShellToService = BootstrapMessage | ShutdownMessage | MetricsMessage;
 
 export type ServiceToShell = { type: 'ready'; port: number } | { type: 'fatal'; code: string };
 
@@ -33,6 +39,19 @@ export function buildBootstrap(args: { token: string; port: number; dataDir: str
 }
 
 export const shutdownMessage: ShutdownMessage = { type: 'shutdown' };
+
+/** Minimal shape of Electron's `app.getAppMetrics()` entries (workingSetSize is in KB). */
+export interface AppProcessMetric { readonly pid: number; readonly type: string; readonly memory: { readonly workingSetSize: number } }
+
+/**
+ * Sums the working set of the Shell's processes, excluding the Local Service utility process (which reports itself as
+ * `processMb`, its Engine children as `chromeMb`). In-process call, no spawn: cheap enough for a 30 s cadence.
+ */
+export function buildMetrics(metrics: readonly AppProcessMetric[], servicePid?: number): MetricsMessage {
+  let kb = 0;
+  for (const m of metrics) if (m.pid !== servicePid && Number.isFinite(m.memory?.workingSetSize)) kb += m.memory.workingSetSize;
+  return { type: 'metrics', shellMb: Math.round(kb / 1024) };
+}
 
 /** Parses an untrusted message from the Service's parent port; returns null if it is not well-formed. */
 export function parseServiceMessage(value: unknown): ServiceToShell | null {

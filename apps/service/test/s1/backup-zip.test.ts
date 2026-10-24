@@ -74,6 +74,11 @@ describe('backup R-020 → restore R-021', () => {
     s.ctx.db.prepare("INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, playable_path, duration_ms, status, created_at, updated_at) VALUES (?,?,'video','kopi.mp4',?,?,?,?,8000,'ready','t','t')")
       .run(assetId, pid, crypto.createHash('sha256').update(media).digest('hex'), media.length, `${pid}/${assetId}/original.mp4`, `${pid}/${assetId}/original.mp4`);
     s.ctx.hooks.applyOps(pid, [{ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId } }], { kind: 'asset', summary: 'insert' });
+    // FR-017: a Brainstorming thread with an attachment that references the asset
+    const conv = s.ctx.newId();
+    s.ctx.db.prepare("INSERT INTO conversations (id, project_id, agent, summary_json, created_at, updated_at) VALUES (?,?,'brainstorm',NULL,'t','t')").run(conv, pid);
+    s.ctx.db.prepare("INSERT INTO messages (id, conversation_id, role, blocks_json, agent_run_id, created_at) VALUES (?,?,'user',?,NULL,'2026-10-24T00:00:00.000Z')")
+      .run(s.ctx.newId(), conv, JSON.stringify([{ type: 'text', text: 'Ide video kopi' }, { type: 'attachment', assetId }]));
   });
   afterAll(async () => { await s.close(); });
 
@@ -89,6 +94,8 @@ describe('backup R-020 → restore R-021', () => {
     expect(r.entries.map((e) => e.name)).toContain(`media/${assetId}/original.mp4`);
     await r.close();
     expect((await s.json('/projects/restore', { method: 'POST', json: { path: file } })).body.error.code).toBe('EM-8005');
+    const reingested: Array<{ projectId: string; assetIds: string[] }> = [];
+    s.ctx.hooks.reingest = (projectId, assetIds) => { reingested.push({ projectId, assetIds }); };
     const rs = await s.json('/projects/restore', { method: 'POST', json: { path: file }, headers: shell });
     expect(rs.status).toBe(202);
     const rd = await done('restore', rs.body.jobId);
@@ -104,6 +111,11 @@ describe('backup R-020 → restore R-021', () => {
     expect(row.status).toBe('ready');
     expect(fs.readFileSync(path.join(s.ctx.paths.media, row.original_path)).equals(media)).toBe(true);
     expect((await s.json(`/projects/${np}/composition/versions`)).body.total).toBe(2);
+    // FR-017 / FR-018: the conversation comes back (attachment remapped) and derived media is queued for regeneration
+    const msgs = s.ctx.db.prepare("SELECT m.blocks_json FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.project_id = ? AND c.agent = 'brainstorm'").all(np) as Array<{ blocks_json: string }>;
+    expect(msgs).toHaveLength(1);
+    expect(JSON.parse(msgs[0]!.blocks_json)).toEqual([{ type: 'text', text: 'Ide video kopi' }, { type: 'attachment', assetId: newAsset }]);
+    expect(reingested).toEqual([{ projectId: np, assetIds: [newAsset] }]);
   });
   it('encrypted backup: passphrase required (EM-6305), wrong passphrase fails the job, right one restores', async () => {
     const b = await s.json(`/projects/${pid}/backup`, { method: 'POST', json: { folder, passphrase: 'kata-sandi-panjang' } });

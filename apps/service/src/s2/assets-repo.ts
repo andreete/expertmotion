@@ -9,6 +9,10 @@ export interface AssetRow {
   proxy_path: string | null; thumb_path: string | null; filmstrip_path: string | null; waveform_path: string | null; probe_json: string | null;
   duration_ms: number | null; width: number | null; height: number | null; fps: number | null; has_audio: number | null; status: 'ingesting' | 'ready' | 'failed';
   error_code: string | null; sequence_badge: number | null; created_at: string; updated_at: string;
+  /** FR-052 soft delete (migration 21): set by Remove Asset while Composition Versions still reference the asset. */
+  deleted_at?: string | null;
+  /** FR-041 path-import identity digest (migration 21). */
+  source_key?: string | null;
 }
 export const VARIANTS = ['original', 'playable', 'proxy', 'thumb', 'filmstrip', 'waveform'] as const;
 export type Variant = (typeof VARIANTS)[number];
@@ -20,11 +24,12 @@ export function getAsset(ctx: ServiceContext, id: string, projectId?: string): A
 }
 export function requireAsset(ctx: ServiceContext, projectId: string, id: string): AssetRow {
   const r = getAsset(ctx, id, projectId);
-  if (!r) throw em('EM-9003', 'Not found.');
+  if (!r || r.deleted_at) throw em('EM-9003', 'Not found.');
   return r;
 }
-export function listAssets(ctx: ServiceContext, projectId: string): AssetRow[] {
-  return ctx.db.prepare('SELECT * FROM assets WHERE project_id = ? ORDER BY created_at, id').all(projectId) as AssetRow[];
+/** Live assets of a project; `includeDeleted` adds soft-deleted rows (FR-052: their facts stay valid for Undo). */
+export function listAssets(ctx: ServiceContext, projectId: string, opts: { includeDeleted?: boolean } = {}): AssetRow[] {
+  return ctx.db.prepare(`SELECT * FROM assets WHERE project_id = ?${opts.includeDeleted ? '' : ' AND deleted_at IS NULL'} ORDER BY created_at, id`).all(projectId) as AssetRow[];
 }
 
 const CODEC_LABEL: Record<string, string> = { h264: 'H.264', hevc: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1', prores: 'ProRes', mpeg4: 'MPEG-4', mjpeg: 'JPEG', png: 'PNG', webp: 'WebP', gif: 'GIF',
@@ -44,7 +49,7 @@ export function toAssetDto(r: AssetRow, progress: number | undefined, withProbe 
   let probe: unknown;
   if (withProbe && r.probe_json) { try { probe = JSON.parse(r.probe_json); } catch { probe = undefined; } }
   return {
-    id: r.id, projectId: r.project_id, kind: r.kind, name: r.name, bytes: r.bytes, sha256: r.sha256.startsWith('pending-') ? '' : r.sha256, status: r.status,
+    id: r.id, projectId: r.project_id, kind: r.kind, name: r.name, bytes: r.bytes, sha256: r.sha256.startsWith('pending-') || r.sha256.startsWith('failed-') ? '' : r.sha256, status: r.status,
     progress: r.status === 'ready' ? 1 : (progress ?? 0), errorCode: r.error_code, durationMs: r.duration_ms, width: r.width, height: r.height, fps: r.fps,
     hasAudio: r.has_audio === null ? null : r.has_audio === 1, sequenceBadge: r.sequence_badge, codec: codecOf(r.probe_json), missing,
     media: { original: true, playable: !!r.playable_path, proxy: !!r.proxy_path, thumb: !!r.thumb_path, filmstrip: !!r.filmstrip_path, waveform: !!r.waveform_path },
@@ -72,14 +77,14 @@ export function toFacts(r: AssetRow): AssetFacts {
  * everything after it up; clearing renumbers. Returns the ids whose badge changed.
  */
 export function setBadge(ctx: ServiceContext, projectId: string, assetId: string, badge: number | null): string[] {
-  const before = new Map((ctx.db.prepare('SELECT id, sequence_badge FROM assets WHERE project_id = ?').all(projectId) as Array<{ id: string; sequence_badge: number | null }>).map((r) => [r.id, r.sequence_badge]));
+  const before = new Map((ctx.db.prepare('SELECT id, sequence_badge FROM assets WHERE project_id = ? AND deleted_at IS NULL').all(projectId) as Array<{ id: string; sequence_badge: number | null }>).map((r) => [r.id, r.sequence_badge]));
   const ordered = [...before.entries()].filter(([id, b]) => b !== null && id !== assetId).sort((a, b) => (a[1]! - b[1]!)).map(([id]) => id);
   if (badge !== null) ordered.splice(Math.min(badge - 1, ordered.length), 0, assetId);
   return writeBadges(ctx, projectId, before, ordered);
 }
 /** Clears the badges of `ids` and renumbers the rest. */
 export function clearBadges(ctx: ServiceContext, projectId: string, ids: readonly string[]): string[] {
-  const before = new Map((ctx.db.prepare('SELECT id, sequence_badge FROM assets WHERE project_id = ?').all(projectId) as Array<{ id: string; sequence_badge: number | null }>).map((r) => [r.id, r.sequence_badge]));
+  const before = new Map((ctx.db.prepare('SELECT id, sequence_badge FROM assets WHERE project_id = ? AND deleted_at IS NULL').all(projectId) as Array<{ id: string; sequence_badge: number | null }>).map((r) => [r.id, r.sequence_badge]));
   const drop = new Set(ids);
   const ordered = [...before.entries()].filter(([id, b]) => b !== null && !drop.has(id)).sort((a, b) => (a[1]! - b[1]!)).map(([id]) => id);
   return writeBadges(ctx, projectId, before, ordered);

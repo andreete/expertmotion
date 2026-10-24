@@ -9,7 +9,8 @@ import { getPreset, listPresets } from '@expertmotion/catalogue';
 import { layoutFor, textLayerFit, MIN_FIT_U } from '@expertmotion/engine';
 import { resolveDimensions } from '@expertmotion/engine/formats';
 import { useStore } from '../state/store.js';
-import { Button, IconButton, Segmented, inputCls, cx } from '../components/ui.js';
+import { Button, IconButton, Popover, Segmented, inputCls, cx } from '../components/ui.js';
+import { RATIOS, RESOLUTIONS, type Ratio, type Resolution } from '@expertmotion/composition-model';
 import { CatalogueCard } from './Catalogue.js';
 import { HEX_RE, MIN_CONTRAST, contrastRatio } from './contrast.js';
 
@@ -206,12 +207,54 @@ export function TextPanel() {
           {!opSel && <span className="text-[11px] text-em-muted">{t('ui.lib.text.opacity.disabled')}</span>}
         </span>
       ))}
-      <button type="button" data-el="lib.text.ratio" className="text-left text-em-text-2 hover:text-em-text" onClick={() => document.querySelector<HTMLElement>('[data-el^="agent.output.ratio."][aria-checked="true"]')?.focus()}>{t('ui.lib.text.ratio', { ratio })}</button>
-      <button type="button" data-el="lib.text.videosize" className="text-left text-em-text-2 hover:text-em-text" onClick={() => document.querySelector<HTMLElement>('[data-el^="agent.output.resolution."][aria-checked="true"]')?.focus()}>{t('ui.lib.text.videosize', { resolution: model?.settings.resolution ?? '1080p' })}</button>
+      <OutputShortcut kind="ratio" />
+      <OutputShortcut kind="resolution" />
       <div className="flex gap-2">
         <Button el="lib.text.insert.image" onClick={() => requestImportAndInsert(IMAGE_ACCEPT, 'overlay', state.playheadMs)} disabledReason={state.project ? null : t('ui.common.noproject')}>{t('ui.lib.text.insert.image')}</Button>
         <Button el="lib.text.insert.video" onClick={() => requestImportAndInsert(VIDEO_ACCEPT, 'clip', state.playheadMs)} disabledReason={state.project ? null : t('ui.common.noproject')}>{t('ui.lib.text.insert.video')}</Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * FR-031: Home ▸ Ratio / Video Size pick directly from a popover with the same choices as Output Settings (FR-087 / FR-089) and
+ * through the same store actions (`layoutPick`, Custom → `scr.ratio.custom`, the same tier gating), so there is no second source
+ * of truth: the active Output Settings button and the Player frame follow the new Composition Version.
+ */
+export function OutputShortcut({ kind }: { kind: 'ratio' | 'resolution' }) {
+  const { state, actions, t } = useStore();
+  const [open, setOpen] = useState(false);
+  const s = state.head?.model?.settings;
+  const tier = state.hardware?.tier ?? 'T0';
+  const current = kind === 'ratio' ? s?.ratio ?? '9:16' : s?.resolution ?? '1080p';
+  const el = kind === 'ratio' ? 'lib.text.ratio' : 'lib.text.videosize';
+  const reasonOf = (v: string) => (!s ? t('ui.common.noproject') : kind === 'resolution' && tier === 'T0' && (v === '2k' || v === '2160p') ? t('ui.agent.output.resolution.needsgpu') : null);
+  const choose = (v: string) => {
+    setOpen(false);
+    if (kind === 'ratio') { if (v === 'custom') actions.setScreen({ kind: 'ratio.custom' }); else void actions.layoutPick({ ratio: v as Ratio }); }
+    else void actions.layoutPick({ resolution: v as Resolution });
+  };
+  const values: readonly string[] = kind === 'ratio' ? RATIOS : RESOLUTIONS;
+  return (
+    <span className="relative">
+      <button type="button" data-el={el} data-popover-trigger="" aria-haspopup="menu" aria-expanded={open} className="text-left text-em-text-2 hover:text-em-text" onClick={() => setOpen((o) => !o)}>
+        {kind === 'ratio' ? t('ui.lib.text.ratio', { ratio: current }) : t('ui.lib.text.videosize', { resolution: current })}
+      </button>
+      {open && (
+        <Popover el={`${el}.menu`} role="menu" width={180} label={kind === 'ratio' ? t('ui.agent.output.ratio') : t('ui.agent.output.resolution')} onClose={() => setOpen(false)}>
+          {values.map((v) => {
+            const reason = reasonOf(v);
+            return (
+              <button key={v} type="button" role="menuitemradio" aria-checked={v === current} data-el={`${el}.option`} data-value={v} aria-disabled={reason ? true : undefined} title={reason ?? undefined}
+                onClick={() => { if (!reason) choose(v); }}
+                className={cx('w-full rounded-[6px] px-2 py-1.5 text-left hover:bg-em-panel-2', v === current && 'text-em-accent', reason && 'cursor-not-allowed opacity-50')}>
+                {kind === 'ratio' && v === 'custom' ? t('ui.agent.output.ratio.custom') : v}
+              </button>
+            );
+          })}
+        </Popover>
+      )}
+    </span>
   );
 }

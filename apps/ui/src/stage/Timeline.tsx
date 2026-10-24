@@ -8,6 +8,7 @@ import type { AppState } from '../state/reducer.js';
 import type { PlanDto } from '../api/types.js';
 import { Button, IconButton, cx } from '../components/ui.js';
 import { playerBus } from './playerBus.js';
+import { QuickParams } from './QuickParams.js';
 import { formatTimecode } from '../i18n/index.js';
 
 type Track = 'video' | 'overlay' | 'text' | 'caption' | 'audio';
@@ -122,6 +123,7 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
   }, []);
   const fps = model?.settings.fps ?? 30;
   const hasClip = (model?.tracks.video.length ?? 0) > 0;
+  const showLanes = hasClip || bars.length > 0;                         // FR-069: a project with nothing on it shows only the empty state
   const pulseIds = state.pulse && Date.now() - state.pulse.at < 5000 ? new Set(state.pulse.diff.map((d) => d.elementId)) : new Set<string>();
   const isSelected = (b: Bar) => state.selection.some((s) => s.kind === b.ref.kind && (s.id !== undefined ? s.id === b.ref.id : s.index === b.ref.index));
   // FR-068 (P1): drag a video Clip to reorder it, or drag its edges to trim (frame-snapped); both go through the Intent Queue.
@@ -153,9 +155,15 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
     const out = liveMs < b.fromMs || liveMs >= b.toMs;
     if (prefs.seekOnSelect && out) playerBus.get()?.seekMs(b.fromMs);
   };
-  const seekFromRuler = (e: ReactMouseEvent<HTMLDivElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    playerBus.get()?.seekMs(Math.max(0, (e.clientX - r.left + e.currentTarget.scrollLeft) / pxPerMs));
+  // FR-066: click or drag on the ruler scrubs the playhead (the Player scrubber follows through playerBus).
+  const seekFromRuler = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const ruler = e.currentTarget;
+    const at = (x: number) => { const r = ruler.getBoundingClientRect(); return Math.max(0, Math.min(durationMs, (x - r.left) / pxRef.current)); };
+    playerBus.get()?.seekMs(at(e.clientX));
+    const move = (ev: PointerEvent) => { ev.preventDefault(); playerBus.get()?.seekMs(at(ev.clientX)); };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
   };
   const tickEvery = pxPerMs * 1000 > 80 ? 1000 : pxPerMs * 1000 > 30 ? 2000 : pxPerMs * 1000 > 12 ? 5000 : 10000;
   const ticks = Array.from({ length: Math.floor(durationMs / tickEvery) + 1 }, (_, i) => i * tickEvery);
@@ -175,7 +183,7 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
         <span className="t-mono text-em-muted">{formatTimecode(durationMs, fps)}</span>
       </div>
       <div className="flex min-h-0 flex-1">
-        <div className="flex w-24 shrink-0 flex-col border-r border-em-line">
+        {showLanes && <div className="flex w-24 shrink-0 flex-col border-r border-em-line">
           <div className="h-6 border-b border-em-line" />
           {TRACKS.map((tr) => (
             <div key={tr} className="flex h-9 items-center gap-1 border-b border-em-line px-2 text-[12px] text-em-text-2">
@@ -183,11 +191,12 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
               {projectChips[tr] && <span className="truncate rounded-full border border-em-line px-1 text-[10px]" title={projectChips[tr]}>{projectChips[tr]}</span>}
             </div>
           ))}
-        </div>
+        </div>}
         <div ref={lanes} role="grid" aria-label={t('a11y.stage.timeline')} className="relative min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
           onClick={(e) => { if (e.target === e.currentTarget) actions.select([]); }}>
           <div className="relative" style={{ width: Math.max(width, durationMs * pxPerMs + 8) }}>
-            <div data-el="stage.timeline.ruler" className="relative h-6 cursor-pointer border-b border-em-line" onMouseDown={seekFromRuler}>
+            {showLanes && <>
+            <div data-el="stage.timeline.ruler" className="relative h-6 cursor-pointer touch-none select-none border-b border-em-line" onPointerDown={seekFromRuler}>
               {ticks.map((ms) => <span key={ms} className="t-mono absolute top-1 border-l border-em-line pl-1 text-[10px] text-em-muted" style={{ left: ms * pxPerMs }}>{Math.round(ms / 1000)}s</span>)}
             </div>
             {TRACKS.map((tr) => {
@@ -225,8 +234,9 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
             <div data-el="stage.timeline.head" aria-hidden className="pointer-events-none absolute bottom-0 top-0 z-20 w-0.5 bg-em-accent" style={{ left: liveMs * pxPerMs }}>
               <span className="absolute -left-1 top-0 h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-[var(--em-accent)]" />
             </div>
+            </>}
             {!hasClip && (
-              <div data-el="stage.timeline.empty" className="pointer-events-none absolute inset-x-0 bottom-0 top-6 flex items-center justify-center p-4 text-center text-em-muted">
+              <div data-el="stage.timeline.empty" className={cx('pointer-events-none flex', showLanes ? 'absolute inset-x-0 bottom-0 top-6' : 'h-full min-h-[160px]', 'items-center justify-center p-4 text-center text-em-muted')}>
                 {t('ui.stage.timeline.empty')}
               </div>
             )}
@@ -252,8 +262,9 @@ export function provenanceOf(ref: ElementRefT, state: Pick<AppState, 'queue' | '
 }
 
 function Inspector({ bars, model, onAsk }: { bars: Bar[]; model: CompositionModelT; onAsk: (b: Bar) => void }) {
-  const { t, lang, state } = useStore();
+  const { t, lang, state, actions } = useStore();
   const b = bars[0]!;
+  const missingAsset = b.assetId ? state.assets.find((a) => a.id === b.assetId && a.missing) : undefined;   // FR-048
   const fps = model.settings.fps;
   const label = (id: string | undefined | null) => (id ? getPreset(id)?.label[lang] ?? id : '—');
   const ms = (v: number) => `${formatTimecode(v, fps)} (${v} ms)`;
@@ -322,6 +333,17 @@ function Inspector({ bars, model, onAsk }: { bars: Bar[]; model: CompositionMode
         {rows.map(([k, v]) => <div key={k} className="contents"><dt className="text-em-muted">{k}</dt><dd className="truncate" title={v}>{v}</dd></div>)}
       </dl>
       <Button size={28} icon={<Bot size={14} />} onClick={() => onAsk(b)} disabledReason={state.settings?.privateMode ? t('err.EM-4401.title') : null}>{t('ui.stage.timeline.inspector.ask')}</Button>
+      {missingAsset && (
+        // FR-048: the element's Asset file is missing — the same Locate (re-link by hash) and Remove as on the Asset card.
+        <div data-el="stage.timeline.inspector.missing" className="flex flex-col gap-1 rounded-[6px] border border-dashed border-em-danger p-1.5 text-[12px]">
+          <span className="text-em-danger">{t('err.EM-1301.title')} <span className="t-mono text-em-muted">EM-1301</span></span>
+          <div className="flex gap-1">
+            <Button el="stage.timeline.inspector.locate" size={28} onClick={() => void actions.locateAsset(missingAsset.id)} disabledReason={window.expertmotion?.pickFiles ? null : t('ui.lib.assets.locate.unavailable')}>{t('ui.lib.assets.locate')}</Button>
+            <Button el="stage.timeline.inspector.remove" size={28} onClick={() => void actions.removeAsset(missingAsset.id)}>{t('ui.common.remove')}</Button>
+          </div>
+        </div>
+      )}
+      {bars.length === 1 && <QuickParams model={model} target={b.ref} />}
     </aside>
   );
 }

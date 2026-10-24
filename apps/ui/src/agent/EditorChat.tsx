@@ -43,10 +43,11 @@ export function EditorChat() {
     window.addEventListener('em:ask-editor', ask);
     return () => window.removeEventListener('em:ask-editor', ask);
   }, [dispatch]);
-  const send = async () => {
+  // FR-067 / FR-072: the inspector's typed target and the attachments travel with the next message.
+  const send = async (attachments: string[]) => {
     const text = value.trim();
     setValue('');
-    const ok = await actions.send('editor', text);
+    const ok = await actions.send('editor', text, attachments, chip ? draft?.target ?? null : null);
     if (!ok) setValue(text); else { setChip(null); dispatch({ type: 'editorDraft', draft: null }); }
   };
   const plan = state.plan;
@@ -93,7 +94,7 @@ export function EditorChat() {
         {plan && !thread.current && <PlanCard plan={plan} />}
       </Thread>
       <Composer agent="editor" placeholder={t('ui.agent.editor.placeholder')} chip={chip} onClearChip={() => { setChip(null); setValue(''); dispatch({ type: 'editorDraft', draft: null }); }}
-        value={value} setValue={setValue} onSend={() => void send()}
+        value={value} setValue={setValue} onSend={(att) => void send(att)}
         extra={!plan || plan.status === 'executed' || plan.status === 'cancelled' || plan.status === 'stale' ? (
           <Button el="agent.editor.execute" variant="primary" size={28} disabledReason={executeDisabledReason(plan, state.head?.hash, t, { hasClip: (state.head?.model?.tracks.video.length ?? 1) > 0, running: Boolean(state.streaming.editor) })} aria-label={t('a11y.agent.editor.execute')}>{t('ui.agent.editor.execute')}</Button>
         ) : null} />

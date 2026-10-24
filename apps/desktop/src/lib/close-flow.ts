@@ -31,3 +31,6 @@ export const RENDER_RUNNING_DIALOG = {
 
 export type CloseChoice = 'keep' | 'cancel-and-close';
 export const choiceFromButton = (response: number): CloseChoice => (response === 1 ? 'cancel-and-close' : 'keep');
+
+/** FR-002: time left before `deadline` (never negative), so the forced request and the kill fallback share one ≤ 5 s budget. */
+export const remainingMs = (deadline: number, now: number): number => Math.max(0, deadline - now);

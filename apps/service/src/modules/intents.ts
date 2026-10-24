@@ -1,9 +1,22 @@
 // Intents R-060…R-064 and plans R-070…R-075 (API_SPECIFICATION §6.7–6.8). Installs hooks.createPlan.
 import type { EditPlanT } from '@expertmotion/agents';
+import { getPreset } from '@expertmotion/catalogue';
+import type { ServiceContext } from '../context.js';
 import type { ServiceModule } from './types.js';
+import { modelsServiceOf } from '../s2/models-service.js';
 import { route } from '../http/route.js';
-import { DesignPickInput, ExecuteInput, IntentClearQuery, IntentListQuery, IntentParams, NotesInput, PlanCreateInput, PlanListQuery, PlanParams, ProjectParams, decodeCursor, encodeCursor, planDto } from '../s1/dto.js';
+import { DesignPickInput, ExecuteInput, IntentBatchInput, IntentClearQuery, IntentListQuery, IntentParams, NotesInput, PlanCreateInput, PlanListQuery, PlanParams, ProjectParams, decodeCursor, encodeCursor, planDto } from '../s1/dto.js';
 import { s1 } from '../s1/index.js';
+
+/** FR-037: where a preset's `model:<id>` flag comes from (the catalogue; tests substitute it, no P0 preset carries one yet). */
+export const modelGate = { flagOf: (presetId: string): string | undefined => getPreset(presetId)?.flags.find((f) => f.startsWith('model:')) };
+/** FR-037: the `model:<id>` flag of the picked preset when that model is not installed (the pick is then held with EM-2104). */
+async function missingModelFor(ctx: ServiceContext, presetId: string | undefined): Promise<string | null> {
+  const flag = presetId ? modelGate.flagOf(presetId) : undefined;
+  if (!flag) return null;
+  const installed = await modelsServiceOf(ctx).installedFlags().catch(() => new Set<string>());
+  return installed.has(flag) ? null : flag;
+}
 
 export const intentsModule: ServiceModule = {
   name: 'intents',
@@ -12,18 +25,23 @@ export const intentsModule: ServiceModule = {
     ctx.hooks.createPlan = async (projectId, input) => {
       const head = store.head(projectId);
       const mode = input.mode === 'compile' ? 'compile-only' : input.mode ?? 'auto';
-      const started = workflow.createPlan(projectId, { intentIds: input.intentIds ?? [], message: input.instruction, baseVersion: head.hash, mode, signal: input.signal, runId: input.runId });
+      const started = workflow.createPlan(projectId, { intentIds: input.intentIds ?? [], message: input.instruction, baseVersion: head.hash, mode, signal: input.signal, runId: input.runId,
+        extras: { selection: input.selection, playheadMs: input.playheadMs, attachments: input.attachments, images: input.images, onDelta: input.onDelta, chat: input.chat } });
       const plan = await started.done;
       return { ...(plan as unknown as EditPlanT), planId: plan.id, ...(started.runId ? { runId: started.runId } : {}) };
     };
     ctx.hooks.enqueueIntents = (projectId, intents) => workflow.enqueueExternal(projectId, intents);
+    ctx.hooks.insertIntent = (projectId, ops, meta) => workflow.insertIntent(projectId, ops, meta);       // FR-049
+    ctx.hooks.onModelInstalled = (modelFlag) => { workflow.resumeHeld(modelFlag); };                       // FR-037
     workflow.drainHandoffs();
   },
   stop(ctx) { s1(ctx).workflow.stop(); },
   register(router, ctx) {
     const { workflow, store } = s1(ctx);
     // R-060 … R-064
-    route(router, 'post', '/projects/:id/intents', { params: ProjectParams, body: DesignPickInput, status: 201 }, ({ params, body }) => workflow.createIntent(params.id, body));
+    route(router, 'post', '/projects/:id/intents', { params: ProjectParams, body: DesignPickInput, status: 201 }, async ({ params, body }) => workflow.createIntent(params.id, body, { holdFor: await missingModelFor(ctx, body.presetId) }));
+    // R-065: Reset to Defaults and other multi-pick units (one Composition Version, every pick recorded in the queue)
+    route(router, 'post', '/projects/:id/intents/batch', { params: ProjectParams, body: IntentBatchInput, status: 201 }, ({ params, body }) => { store.projectRow(params.id); return workflow.createIntentBatch(params.id, { baseVersion: body.baseVersion, picks: body.picks.map((p) => ({ ...p, baseVersion: body.baseVersion })) }); });
     route(router, 'get', '/projects/:id/intents', { params: ProjectParams, query: IntentListQuery }, ({ params, query }) => { store.projectRow(params.id); return workflow.queueDto(params.id, query); });
     route(router, 'post', '/projects/:id/intents/:intentId/restore', { params: IntentParams }, ({ params }) => { store.projectRow(params.id); return workflow.restoreIntent(params.id, params.intentId); });
     route(router, 'delete', '/projects/:id/intents/:intentId', { params: IntentParams }, ({ params }) => { store.projectRow(params.id); return workflow.removeIntent(params.id, params.intentId); });

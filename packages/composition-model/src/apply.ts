@@ -325,7 +325,13 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const job = ctx.jobs?.[a.jobId];
       if (!job || job.kind !== a.kind) stop('EM-9003', `Generated result ${a.jobId} was not found.`, `${path}.args.jobId`);
       if (a.kind === 'captions') { m.tracks.caption.pages = structuredClone(job!.pages ?? []); return; }
-      if (a.kind === 'thumbnail') stop('EM-9004', 'Thumbnails are saved as outputs, not added to the video.', `${path}.args.kind`);
+      if (a.kind === 'thumbnail') {
+        // FR-103: Insert as overlay — the chosen candidate becomes an image overlay at atMs (same defaults as op:overlay.addImage).
+        const img = asset(ctx, job!.assetId ?? '', ['image'], path);
+        const w = 480, h = img.width && img.height ? Math.round((w * img.height) / img.width) : w;
+        m.tracks.overlay.push({ kind: 'image', id: ctx.newId(), assetId: img.id, timing: { atMs: a.atMs ?? 0, durationMs: IMAGE_DEFAULT_MS }, position: { x: 0, y: 0 }, size: { w, h }, objectFit: 'contain', opacity: 1, motion: null, effects: [] });
+        return;
+      }
       const as = asset(ctx, job!.assetId ?? '', ['audio'], path);
       m.tracks.audio.push(a.kind === 'music'
         ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, trimBeforeMs: 0, volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000, ducking: null }

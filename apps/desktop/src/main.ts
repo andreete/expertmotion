@@ -22,26 +22,28 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, safeStorage, 
 import type { UtilityProcess } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { randomBytes, createHash, createPublicKey, verify as nodeVerify } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { appendFile } from 'node:fs/promises';
+import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { redact } from '@expertmotion/shared';
 import {
-  APP_HOST, APP_ORIGIN, APP_SCHEME, EM, IPC, isAllowedExternal, isPlayableOutput, READY_TIMEOUT_MS, UPDATE_ACTIONS, type UpdateAction, SHELL_CALLER_HEADER, SHELL_CALLER_VALUE,
-  SHUTDOWN_KILL_AFTER_MS, SHUTDOWN_REQUEST_WAIT_MS,
+  APP_HOST, APP_ORIGIN, APP_SCHEME, EM, IPC, isAllowedExternal, isPlayableOutput, READY_TIMEOUT_MS, type UpdateAction, SHELL_CALLER_HEADER, SHELL_CALLER_VALUE,
+  SHELL_METRICS_MS, SHUTDOWN_KILL_AFTER_MS, SHUTDOWN_REQUEST_WAIT_MS,
 } from './lib/constants.js';
 import { pickPort } from './lib/port.js';
-import { MIN_HEIGHT, MIN_WIDTH, parseWindowState, restoreBounds, type WindowState } from './lib/window-state.js';
+import { MIN_HEIGHT, MIN_WIDTH, restoreBounds, settingsWithWindow, windowStateFromSettings, type WindowState } from './lib/window-state.js';
 import { initialRestartState, onFailure, onReady, type RestartState } from './lib/backoff.js';
 import { buildCsp } from './lib/csp.js';
 import { resolveAppUrl } from './lib/protocol.js';
 import { isTrustedSender } from './lib/ipc.js';
-import { crashFileName, dataLayout, directoriesToCreate, logFiles, type DataLayout } from './lib/data-dir.js';
+import { buildServiceEnv } from './lib/child-env.js';
+import { IpcPath, OpenUrlArg, parseIpc, PickFilesArgs, PickFolderArgs, PickSaveArgs, UpdateActionArg } from './lib/ipc-schemas.js';
+import { crashFileName, dataLayout, directoriesToCreate, type DataLayout } from './lib/data-dir.js';
+import { createRotatingLog, pruneOldLogs, type RotatingLog } from './lib/log-file.js';
 import { editorEntryUrl, resolveDevRules, type DevRules } from './lib/dev-mode.js';
-import { buildBootstrap, parseServiceMessage, shutdownMessage } from './lib/bootstrap.js';
-import { evaluateKeyring } from './lib/keyring.js';
-import { installDecision, nextUpdateState, shouldCheckForUpdates, updaterConfig, UPDATE_TICK_MS, type UpdateEvent, type UpdateState } from './lib/updater-policy.js';
-import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, type ShutdownAnswer } from './lib/close-flow.js';
+import { buildBootstrap, buildMetrics, parseServiceMessage, shutdownMessage } from './lib/bootstrap.js';
+import { evaluateKeyring, quarantineTargets, STORAGE_LOCKED_DIALOG, unwrapDbKey } from './lib/keyring.js';
+import { DOWNLOAD_RETRY_MS, downloadDecision, installDecision, nextUpdateState, parsePendingUpdate, pendingUpdateOutcome, shouldCheckForUpdates, updaterConfig, UPDATE_TICK_MS, type UpdateEvent, type UpdateState } from './lib/updater-policy.js';
+import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, remainingMs, type ShutdownAnswer } from './lib/close-flow.js';
 import { verifyManifest, type SignedManifest } from './lib/integrity.js';
 
 /** Build-time constants injected by esbuild `define` (see scripts/build-main.mjs). */
@@ -55,12 +57,12 @@ const FEED_URL = typeof __EM_FEED_URL__ === 'string' ? __EM_FEED_URL__ : 'https:
 // ---------------------------------------------------------------------------------------------
 // Logging with redaction (SEC-100). Every line passes through `redact` before it touches disk.
 // ---------------------------------------------------------------------------------------------
-let shellLogPath: string | null = null;
+let shellLog: RotatingLog | null = null;    // logs/shell-YYYY-MM-DD.log, 20 MB cap, 7 days (SEC-101)
 function logLine(level: 'info' | 'warn' | 'error', msg: string, extra?: Record<string, unknown>): void {
   const line = redact(JSON.stringify({ ts: new Date().toISOString(), level, component: 'shell', msg, ...extra }));
   if (level === 'error') console.error(line);
   else console.log(line);
-  if (shellLogPath !== null) void appendFile(shellLogPath, `${line}\n`).catch(() => undefined);
+  shellLog?.write(line);
 }
 
 function timestamp(d = new Date()): string {
@@ -78,6 +80,7 @@ let devRules: DevRules;
 let endpoint: Endpoint | null = null;
 let dbKeyHex: string | null = null;
 let serviceProc: UtilityProcess | null = null;
+let metricsTimer: NodeJS.Timeout | null = null;
 let restartState: RestartState = initialRestartState;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -92,25 +95,46 @@ const stderrTail: string[] = [];
 // ---------------------------------------------------------------------------------------------
 // Keyring: unwrap or create the Database Key (SEC-040).
 // ---------------------------------------------------------------------------------------------
-function loadOrCreateDbKey(): string {
+function createDbKey(): string {
+  const key = randomBytes(32).toString('hex');
+  writeFileSync(layout.keyring, safeStorage.encryptString(key), { mode: 0o600 });
+  logLine('info', 'created new Database Key keyring');
+  return key;
+}
+
+/**
+ * Unwraps (or creates) the Database Key. A `decryptString` failure — the data folder was copied from another Windows account,
+ * or DPAPI lost its master key (FR-176) — is EM-6001: the Editor shows `sys.fatal` and the native dialog offers Restore backup,
+ * which moves the locked files aside (never deletes them) and starts with empty storage so a backup zip can be restored.
+ * Resolves null when the Creator chose Quit.
+ */
+async function acquireDbKey(): Promise<{ keyHex: string; restoreBackup: boolean } | null> {
   const gate = evaluateKeyring({
     available: safeStorage.isEncryptionAvailable(),
     backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : null,
     platform: process.platform,
   });
   if (!gate.ok) {
+    logLine('error', 'keyring unavailable', { code: gate.code, reason: gate.reason });
+    pushServiceState({ status: 'failed', code: gate.code, logsDir: layout.logs });
     fatalDialog(gate.code, `Project storage cannot be opened: ${gate.reason}`);
     app.exit(1);
-    throw new Error(gate.reason);
+    return null;
   }
-  if (existsSync(layout.keyring)) {
-    const wrapped = readFileSync(layout.keyring);
-    return safeStorage.decryptString(wrapped);
+  if (!existsSync(layout.keyring)) return { keyHex: createDbKey(), restoreBackup: false };
+  const unwrapped = unwrapDbKey(readFileSync(layout.keyring), (b) => safeStorage.decryptString(Buffer.from(b)));
+  if (unwrapped.ok) return { keyHex: unwrapped.keyHex, restoreBackup: false };
+  logLine('error', 'keyring unwrap failed', { code: unwrapped.code, reason: unwrapped.reason });
+  pushServiceState({ status: 'failed', code: unwrapped.code, logsDir: layout.logs });
+  const opts = { type: 'error' as const, ...STORAGE_LOCKED_DIALOG, buttons: [...STORAGE_LOCKED_DIALOG.buttons] };
+  const { response } = mainWindow !== null ? await dialog.showMessageBox(mainWindow, opts) : await dialog.showMessageBox(opts);
+  if (response !== 0) { app.quit(); return null; }
+  const ts = timestamp();
+  for (const { from, to } of quarantineTargets({ keyring: layout.keyring, db: join(layout.data, 'expertmotion.db') }, ts)) {
+    try { if (existsSync(from)) renameSync(from, to); } catch (err) { logLine('error', 'quarantine failed', { code: unwrapped.code, error: (err as Error).message }); }
   }
-  const key = randomBytes(32).toString('hex');
-  writeFileSync(layout.keyring, safeStorage.encryptString(key), { mode: 0o600 });
-  logLine('info', 'created new Database Key keyring');
-  return key;
+  logLine('warn', 'locked storage moved aside; starting empty storage for Restore backup', { code: unwrapped.code, suffix: `unreadable-${ts}` });
+  return { keyHex: createDbKey(), restoreBackup: true };
 }
 
 function fatalDialog(code: string, detail: string): void {
@@ -128,15 +152,9 @@ function serviceModulePath(): string {
     : join(app.getAppPath(), 'dist', 'service', 'service.cjs');
 }
 
-/** Scrubbed environment for the utility process (SEC-065): no EM_* leakage, no proxies. */
+/** Scrubbed environment for the utility process (SEC-065): system-only PATH, no EM_* leakage, no proxies (lib/child-env.ts). */
 function serviceEnv(): NodeJS.ProcessEnv {
-  const base: NodeJS.ProcessEnv = {};
-  for (const key of ['SYSTEMROOT', 'TEMP', 'TMP', 'LANG', 'PATH'] as const) {
-    const v = process.env[key];
-    if (v !== undefined) base[key] = v;
-  }
-  if (!app.isPackaged && process.env.EM_LOG_LEVEL !== undefined) base.EM_LOG_LEVEL = process.env.EM_LOG_LEVEL;
-  return base;
+  return buildServiceEnv(process.env, { platform: process.platform, packaged: app.isPackaged });
 }
 
 async function startService(): Promise<void> {
@@ -175,11 +193,21 @@ async function startService(): Promise<void> {
     restartState = onReady(restartState, Date.now());
     logLine('info', 'service ready', { port });
     pushServiceState({ status: 'ready', bootstrap: { port, token } });
+    startMetrics(proc);
   } catch (err) {
     logLine('error', 'service failed to become ready', { error: (err as Error).message });
     triedPorts.add(port);
     scheduleRestart();
   }
+}
+
+/** FR-127: push the Shell's process memory to the Service every 30 s (app.getAppMetrics is in-process; no spawn). */
+function startMetrics(proc: UtilityProcess): void {
+  if (metricsTimer) clearInterval(metricsTimer);
+  const push = () => { try { if (serviceProc === proc) proc.postMessage(buildMetrics(app.getAppMetrics(), proc.pid)); } catch { /* service gone */ } };
+  push();
+  metricsTimer = setInterval(push, SHELL_METRICS_MS);
+  metricsTimer.unref();
 }
 
 function onServiceExit(code: number): void {
@@ -194,8 +222,9 @@ function scheduleRestart(): void {
   if (decision.action === 'give-up') {
     logLine('error', 'service gave up after retries', { attempts: decision.attempts, exitTail: stderrTail.slice(-5) });
     writeCrashFile('service', `service failed to start ${decision.attempts} times\n${stderrTail.join('\n')}`);
-    pushServiceState({ status: 'failed', code: EM.serviceFailed });
-    fatalDialog(EM.serviceFailed, 'The background service failed to start. Open Diagnostics or restart your computer.');
+    pushServiceState({ status: 'failed', code: EM.serviceFailed, logsDir: layout.logs });
+    // FR-171: the Editor shows EM-8002 with Open Diagnostics (sys.fatal); the native box is only the fallback without a window.
+    if (mainWindow === null) fatalDialog(EM.serviceFailed, 'The background service failed to start. Open Diagnostics or restart your computer.');
     return;
   }
   restartState = decision.state;
@@ -210,6 +239,7 @@ async function shutdownService(reason: 'window-closed' | 'update' | 'uninstall')
   shuttingDown = true;
   const proc = serviceProc;
   if (proc === null || endpoint === null) return 'stopped';
+  let deadline = Date.now() + SHUTDOWN_KILL_AFTER_MS;
   try {
     let answer = await requestServiceShutdown(reason, false);
     // FR-002: a render is running (409 EM-8304): ask, then retry with force, or keep the Service and reopen the Editor.
@@ -221,7 +251,8 @@ async function shutdownService(reason: 'window-closed' | 'update' | 'uninstall')
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
         return 'kept';
       }
-      answer = await requestServiceShutdown(reason, true);
+      deadline = Date.now() + SHUTDOWN_KILL_AFTER_MS;          // FR-002: "Cancel and close" exits within 5 s of the choice
+      answer = await requestServiceShutdown(reason, true, remainingMs(deadline, Date.now()));
     }
     if (answer.kind === 'failed') logLine('warn', 'shutdown request refused', { status: answer.status });
   } catch (err) {
@@ -229,7 +260,7 @@ async function shutdownService(reason: 'window-closed' | 'update' | 'uninstall')
   }
   proc.postMessage(shutdownMessage);
   await new Promise<void>((resolve) => {
-    const killTimer = setTimeout(() => { proc.kill(); resolve(); }, SHUTDOWN_KILL_AFTER_MS);
+    const killTimer = setTimeout(() => { proc.kill(); resolve(); }, remainingMs(deadline, Date.now()));
     proc.once('exit', () => { clearTimeout(killTimer); resolve(); });
   });
   serviceProc = null;
@@ -237,7 +268,7 @@ async function shutdownService(reason: 'window-closed' | 'update' | 'uninstall')
 }
 
 /** Asks the Service to checkpoint and stop (POST /service/shutdown, trusted-caller header); `force` cancels a running render. */
-function requestServiceShutdown(reason: string, force: boolean): Promise<ShutdownAnswer> {
+function requestServiceShutdown(reason: string, force: boolean, waitMs: number = SHUTDOWN_REQUEST_WAIT_MS): Promise<ShutdownAnswer> {
   if (endpoint === null) return Promise.resolve({ kind: 'accepted' });
   const { port, token } = endpoint;
   return new Promise<ShutdownAnswer>((resolve, reject) => {
@@ -246,14 +277,14 @@ function requestServiceShutdown(reason: string, force: boolean): Promise<Shutdow
     request.setHeader(SHELL_CALLER_HEADER, SHELL_CALLER_VALUE);
     request.setHeader('Content-Type', 'application/json');
     request.setHeader('Origin', APP_ORIGIN);
-    const timer = setTimeout(() => { request.abort(); reject(new Error('shutdown timeout')); }, SHUTDOWN_REQUEST_WAIT_MS);
+    const timer = setTimeout(() => { request.abort(); reject(new Error('shutdown timeout')); }, Math.max(1, waitMs));
     request.on('response', (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => { if (chunks.length < 16) chunks.push(c); });
       res.on('end', () => { clearTimeout(timer); resolve(parseShutdownResponse(res.statusCode, Buffer.concat(chunks).toString('utf8'))); });
     });
     request.on('error', (e) => { clearTimeout(timer); reject(e); });
-    request.end(JSON.stringify({ reason, timeoutMs: SHUTDOWN_REQUEST_WAIT_MS, ...(force ? { force: true } : {}) }));
+    request.end(JSON.stringify({ reason, timeoutMs: Math.max(1000, waitMs), ...(force ? { force: true } : {}) }));
   });
 }
 
@@ -296,12 +327,18 @@ function contentType(path: string): string {
 // ---------------------------------------------------------------------------------------------
 // BrowserWindow hardening (SEC-020…027, SEC-029).
 // ---------------------------------------------------------------------------------------------
-function windowStateFile(): string { return join(layout.data, 'window-state.json'); }
+// FR-155: bounds live in settings.json (`window` key, ARCHITECTURE §8); the pre-FR-155 data/window-state.json is a read fallback.
+function readJson(file: string): unknown { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return undefined; } }
 function readWindowState(): WindowState {
-  try { return parseWindowState(JSON.parse(readFileSync(windowStateFile(), 'utf8'))); } catch { return { maximized: false }; }
+  return windowStateFromSettings(readJson(layout.settings), readJson(join(layout.data, 'window-state.json')));
 }
 function writeWindowState(win: BrowserWindow): void {
-  try { writeFileSync(windowStateFile(), JSON.stringify({ bounds: win.getNormalBounds(), maximized: win.isMaximized() })); } catch { /* best effort */ }
+  try {
+    const next = settingsWithWindow(readJson(layout.settings), { bounds: win.getNormalBounds(), maximized: win.isMaximized() });
+    const tmp = `${layout.settings}.tmp`;
+    writeFileSync(tmp, JSON.stringify(next, null, 2));
+    renameSync(tmp, layout.settings);                       // atomic replace: a crash never leaves a half-written settings.json
+  } catch { /* best effort */ }
 }
 
 function createWindow(): void {
@@ -333,9 +370,10 @@ function createWindow(): void {
   win.once('ready-to-show', () => { if (saved.maximized) win.maximize(); win.show(); scheduleUpdateCheck(); });
   let saveTimer: NodeJS.Timeout | undefined;
   const saveSoon = () => { if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(() => writeWindowState(win), 500); };
-  win.on('resize', saveSoon); win.on('move', saveSoon);
+  win.on('resize', saveSoon); win.on('move', saveSoon); win.on('maximize', saveSoon); win.on('unmaximize', saveSoon);
   win.on('close', () => { if (saveTimer) clearTimeout(saveTimer); writeWindowState(win); });
   win.on('closed', () => { mainWindow = null; });
+  win.webContents.on('did-finish-load', () => { win.webContents.send(IPC.serviceState, lastServiceState); });
 
   void win.loadURL(editorEntryUrl(app.isPackaged, process.env));
 }
@@ -362,8 +400,9 @@ function registerIpc(): void {
     return endpoint === null ? null : { port: endpoint.port, token: endpoint.token };
   });
 
-  ipcMain.handle(IPC.pickFiles, async (event, options: { filters?: Electron.FileFilter[]; multiple?: boolean }) => {
-    if (!senderOk(event) || mainWindow === null) return [];
+  ipcMain.handle(IPC.pickFiles, async (event, raw: unknown) => {
+    const options = parseIpc(PickFilesArgs, raw);                       // SEC-030: Zod-validated arguments
+    if (!senderOk(event) || mainWindow === null || options === null) return [];
     const dialogOptions: Electron.OpenDialogOptions = {
       properties: options.multiple === false ? ['openFile'] : ['openFile', 'multiSelections'],
     };
@@ -372,16 +411,18 @@ function registerIpc(): void {
     return result.canceled ? [] : result.filePaths;
   });
 
-  ipcMain.handle(IPC.pickFolder, async (event, options: { defaultPath?: string }) => {
-    if (!senderOk(event) || mainWindow === null) return null;
+  ipcMain.handle(IPC.pickFolder, async (event, raw: unknown) => {
+    const options = parseIpc(PickFolderArgs, raw);
+    if (!senderOk(event) || mainWindow === null || options === null) return null;
     const dialogOptions: Electron.OpenDialogOptions = { properties: ['openDirectory', 'createDirectory'] };
     if (options.defaultPath !== undefined) dialogOptions.defaultPath = options.defaultPath;
     const result = await dialog.showOpenDialog(mainWindow, dialogOptions);
     return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!;
   });
 
-  ipcMain.handle(IPC.pickSavePath, async (event, options: { defaultPath?: string; filters?: Electron.FileFilter[] }) => {
-    if (!senderOk(event) || mainWindow === null) return null;
+  ipcMain.handle(IPC.pickSavePath, async (event, raw: unknown) => {
+    const options = parseIpc(PickSaveArgs, raw);
+    if (!senderOk(event) || mainWindow === null || options === null) return null;
     const dialogOptions: Electron.SaveDialogOptions = {};
     if (options.defaultPath !== undefined) dialogOptions.defaultPath = options.defaultPath;
     if (options.filters !== undefined) dialogOptions.filters = options.filters;
@@ -389,31 +430,43 @@ function registerIpc(): void {
     return result.canceled || result.filePath === undefined ? null : result.filePath;
   });
 
-  ipcMain.handle(IPC.openFolder, (event, targetPath: unknown) => {
-    if (!senderOk(event) || typeof targetPath !== 'string') return;
+  ipcMain.handle(IPC.openFolder, (event, raw: unknown) => {
+    const targetPath = IpcPath.safeParse(raw).data;
+    if (!senderOk(event) || targetPath === undefined) return;
     shell.showItemInFolder(targetPath);
   });
 
-  ipcMain.handle(IPC.openExternal, async (event, url: unknown) => {
-    if (!senderOk(event) || typeof url !== 'string' || !isAllowedExternal(url)) return;
+  ipcMain.handle(IPC.openExternal, async (event, raw: unknown) => {
+    const url = OpenUrlArg.safeParse(raw).data;
+    if (!senderOk(event) || url === undefined || !isAllowedExternal(url)) return;
     await shell.openExternal(url);
   });
 
-  ipcMain.handle(IPC.openPath, async (event, targetPath: unknown) => {          // FR-146 Play: rendered media only
-    if (!senderOk(event) || typeof targetPath !== 'string' || !isPlayableOutput(targetPath) || !existsSync(targetPath)) return;
+  ipcMain.handle(IPC.openPath, async (event, raw: unknown) => {          // FR-146 Play: rendered media only
+    const targetPath = IpcPath.safeParse(raw).data;
+    if (!senderOk(event) || targetPath === undefined || !isPlayableOutput(targetPath) || !existsSync(targetPath)) return;
     const err = await shell.openPath(targetPath);
     if (err) logLine('warn', 'open path failed', { code: EM.openFolderFailed });
   });
 
   ipcMain.handle(IPC.getUpdateState, (event) => (senderOk(event) ? updateState : null));
-  ipcMain.handle(IPC.updateAction, async (event, action: unknown) => {
-    if (!senderOk(event) || typeof action !== 'string' || !(UPDATE_ACTIONS as readonly string[]).includes(action)) return;
-    await onUpdateAction(action as UpdateAction);
+  ipcMain.handle(IPC.updateAction, async (event, raw: unknown) => {
+    const action = UpdateActionArg.safeParse(raw).data;
+    if (!senderOk(event) || action === undefined) return;
+    await onUpdateAction(action);
   });
 }
 
-function pushServiceState(state: { status: 'starting' | 'ready' | 'offline' | 'failed'; bootstrap?: Endpoint; code?: string }): void {
-  mainWindow?.webContents.send(IPC.serviceState, state);
+type ServiceStatePush = { status: 'starting' | 'ready' | 'offline' | 'failed'; bootstrap?: Endpoint; code?: string; logsDir?: string };
+/** Last pushed state, re-sent when the Editor (re)loads so a push before the renderer subscribed is never lost (FR-171). */
+let lastServiceState: ServiceStatePush = { status: 'starting' };
+/** Set when the Creator chose Restore backup for EM-6001: the next `ready` carries the code so the Editor opens Restore. */
+let restoreBackupPending = false;
+function pushServiceState(state: ServiceStatePush): void {
+  const out = state.status === 'ready' && restoreBackupPending ? { ...state, code: EM.storageUnavailable } : state;
+  if (state.status === 'ready') restoreBackupPending = false;
+  lastServiceState = out;
+  mainWindow?.webContents.send(IPC.serviceState, out);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -426,19 +479,50 @@ function setUpdate(e: UpdateEvent): void {
 
 function configureUpdater(): void {
   const cfg = updaterConfig(FEED_URL);
-  autoUpdater.autoDownload = cfg.autoDownload;           // FR-152: download only after the Creator's consent
+  autoUpdater.autoDownload = cfg.autoDownload;           // FR-152: the Shell starts the background download itself (downloadDecision)
   autoUpdater.allowDowngrade = cfg.allowDowngrade;
   autoUpdater.autoInstallOnAppQuit = false;              // never install behind a running render; restart goes through onUpdateAction
   autoUpdater.channel = cfg.channel;
   autoUpdater.on('checking-for-update', () => setUpdate({ type: 'checking' }));
   autoUpdater.on('update-not-available', () => setUpdate({ type: 'none' }));
   autoUpdater.on('error', (err) => { logLine('warn', 'updater error', { code: EM.updateCheckFailed, stage: updateStage, error: err.message }); setUpdate({ type: 'error', message: err.message, stage: updateStage }); });
-  autoUpdater.on('update-available', (info) => { logLine('info', 'update available', { code: EM.updateAvailable, version: info.version }); setUpdate({ type: 'available', version: info.version }); });
+  autoUpdater.on('update-available', (info) => { logLine('info', 'update available', { code: EM.updateAvailable, version: info.version }); setUpdate({ type: 'available', version: info.version }); void backgroundDownload(); });
   autoUpdater.on('download-progress', (p) => setUpdate({ type: 'progress', percent: p.percent }));
   autoUpdater.on('update-downloaded', (info) => { logLine('info', 'update downloaded', { code: EM.updateAvailable, version: info.version }); setUpdate({ type: 'downloaded', version: info.version }); });
   // FR-152: check after the Editor is interactive and then every 24 h (the hourly tick lets the policy decide)
   updateTimer = setInterval(scheduleUpdateCheck, UPDATE_TICK_MS);
   updateTimer.unref();
+  checkPendingUpdate();
+}
+
+// FR-152 / EM-8104: marker written right before quitAndInstall; read once at the next launch.
+function pendingUpdateFile(): string { return join(layout.data, 'update-pending.json'); }
+function checkPendingUpdate(): void {
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(pendingUpdateFile(), 'utf8')); } catch { return; }
+  const p = parsePendingUpdate(raw);
+  const outcome = pendingUpdateOutcome(p, app.getVersion(), Date.now());
+  if (outcome === 'interrupted' && p) {
+    logLine('error', 'update was interrupted; previous version kept', { code: EM.updateInterrupted, fromVersion: p.fromVersion, toVersion: p.toVersion });
+    setUpdate({ type: 'interrupted', fromVersion: p.fromVersion, toVersion: p.toVersion });
+  } else if (outcome === 'applied' && p) logLine('info', 'update applied', { fromVersion: p.fromVersion, version: app.getVersion() });
+  try { rmSync(pendingUpdateFile(), { force: true }); } catch { /* best effort */ }
+}
+
+/** FR-152: download in the background when allowed (not Private Mode, not metered, no Render Job); otherwise retry later. */
+let downloadRetry: NodeJS.Timeout | null = null;
+async function backgroundDownload(): Promise<void> {
+  if (!app.isPackaged) return;
+  if (downloadRetry) { clearTimeout(downloadRetry); downloadRetry = null; }
+  const d = downloadDecision({ privateMode: await privateModeOn(), metered: null /* no Electron API; unknown does not block */, renderActive: await renderActive(), status: updateState.status });
+  if (d.download) {
+    updateStage = 'download';
+    try { await autoUpdater.downloadUpdate(); } catch (err) { setUpdate({ type: 'error', message: (err as Error).message, stage: 'download' }); }
+    return;
+  }
+  logLine('info', 'background update download waits', { reason: d.reason });
+  if (d.reason === 'private-mode') { setUpdate({ type: 'paused' }); return; }
+  if (d.reason === 'rendering' || d.reason === 'metered') { downloadRetry = setTimeout(() => { void backgroundDownload(); }, DOWNLOAD_RETRY_MS); downloadRetry.unref(); }
 }
 
 async function renderActive(): Promise<boolean> {
@@ -472,6 +556,7 @@ async function onUpdateAction(action: UpdateAction): Promise<void> {
     return;
   }
   updateStage = 'install';
+  try { writeFileSync(pendingUpdateFile(), JSON.stringify({ fromVersion: app.getVersion(), toVersion: updateState.version ?? '', at: Date.now() })); } catch { /* best effort */ }
   await shutdownService('update').catch(() => undefined);
   autoUpdater.quitAndInstall(false, true);
 }
@@ -553,12 +638,12 @@ function boot(): void {
 
   layout = dataLayout(app.getPath('appData'), process.platform === 'win32' ? '\\' : '/');
   for (const dir of directoriesToCreate(layout)) mkdirSync(dir, { recursive: true });
-  shellLogPath = logFiles(layout).shell;
+  shellLog = createRotatingLog(layout.logs, 'shell');
+  pruneOldLogs(layout.logs);
   devRules = resolveDevRules(app.isPackaged, process.env);
 
   process.on('uncaughtException', (err) => { logLine('error', 'uncaughtException', { error: err.message }); writeCrashFile('shell', err.stack ?? err.message); });
 
-  dbKeyHex = loadOrCreateDbKey();
 
   void app.whenReady().then(() => {
     hardenSession();
@@ -568,8 +653,15 @@ function boot(): void {
     createWindow();
     createTray();
     pushServiceState({ status: 'starting' });
-    void checkIntegrity().then((ok) => {
-      if (ok) { void startService(); return; }
+    void checkIntegrity().then(async (ok) => {
+      if (ok) {
+        const key = await acquireDbKey();                    // after the window exists: EM-6001 is shown in the Editor too
+        if (key === null) return;
+        dbKeyHex = key.keyHex;
+        restoreBackupPending = key.restoreBackup;
+        void startService();
+        return;
+      }
       fatalDialog('EM-8007', 'Some Expertmotion program files are missing or were changed. Reinstall Expertmotion from the original installer; your projects are kept.');
       app.quit();
     });

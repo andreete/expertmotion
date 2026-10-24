@@ -1,6 +1,7 @@
 /**
- * Window bounds persistence (FR-155): minimum 1280×720, last bounds and maximised state remembered in
- * `<data>/window-state.json`, restored only when they still fit a connected display (a monitor may have been unplugged).
+ * Window bounds persistence (FR-155): minimum 1280×720, last bounds and maximised state remembered under the `window` key
+ * of `<root>/settings.json` (ARCHITECTURE §8; other keys in that file are preserved), restored only when they still fit a
+ * connected display (a monitor may have been unplugged). The older `<data>/window-state.json` is read once as a fallback.
  * Pure functions; main.ts does the I/O.
  */
 export const MIN_WIDTH = 1280;
@@ -35,4 +36,18 @@ function overlap(a: Rect, b: Rect): number {
   const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
   const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
   return w > 0 && h > 0 ? w * h : 0;
+}
+
+/** FR-155: the window state stored in settings.json (`window` key), else the legacy window-state.json content. */
+export function windowStateFromSettings(settings: unknown, legacy?: unknown): WindowState {
+  const w = typeof settings === 'object' && settings !== null ? (settings as Record<string, unknown>)['window'] : undefined;
+  if (typeof w === 'object' && w !== null) return parseWindowState(w);
+  return parseWindowState(legacy);
+}
+
+/** settings.json with the `window` key replaced; every other key (theme, …) is kept; a non-object file starts fresh. */
+export function settingsWithWindow(settings: unknown, state: WindowState): Record<string, unknown> {
+  const base = typeof settings === 'object' && settings !== null && !Array.isArray(settings) ? { ...(settings as Record<string, unknown>) } : {};
+  base['window'] = { ...(state.bounds ? { bounds: state.bounds } : {}), maximized: state.maximized };
+  return base;
 }

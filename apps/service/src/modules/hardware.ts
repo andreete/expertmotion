@@ -9,7 +9,7 @@ import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
 import { emit } from '../s3/dto.js';
 import { s3 } from '../s3/state.js';
-import { childTreeRssMb, CpuMeter, detectWithSysteminformation, diskFreeMb, diskFreeMbNearest, profileWarnings, tierFor, type RawHardware } from '../s3/hardware.js';
+import { CpuMeter, detectWithSysteminformation, diskFreeMb, diskFreeMbNearest, engineMemorySampler, profileWarnings, shellMemory, tierFor, type RawHardware } from '../s3/hardware.js';
 import { s2 } from '../s2/state.js';
 
 /** FR-128: data-drive free space below this raises EM-6402 once per session. */
@@ -19,7 +19,7 @@ export interface WorkloadItem { kind: 'render' | 'download' | 'ingest' | 'genera
 export interface HardwareProfileDto { tier: Tier; cpuModel: string | null; cpuThreads: number; ramTotalMb: number; gpuVendor: string | null; gpuModel: string | null; vramMb: number | null; nvenc: boolean; detectedAt: string; warnings: string[] }
 export interface HardwareOptions { detect?: () => Promise<RawHardware>; detectOnStart?: boolean; startDelayMs?: number; tickMs?: number; refreshMinMs?: number;
   /** FR-128 background disk check interval (statfs only; default 60 s) and an injectable reader for tests. */
-  diskCheckMs?: number; diskFree?: (dir: string) => number | null; childMemMb?: () => number | null }
+  diskCheckMs?: number; diskFree?: (dir: string) => number | null; childMemMb?: () => number | null; shellMemMb?: () => number | null }
 
 interface ProfileRow { id: string; detected_at: string; tier: Tier; cpu_model: string | null; cpu_threads: number | null; ram_total_mb: number | null; gpu_vendor: string | null; gpu_model: string | null; vram_mb: number | null; nvenc: number | null; benchmark_json: string | null }
 const rowDto = (r: ProfileRow): HardwareProfileDto => {
@@ -32,7 +32,7 @@ const fallbackProfile = (now: string): HardwareProfileDto => ({ tier: 'T0', cpuM
 export function createHardwareModule(opts: HardwareOptions = {}): ServiceModule {
   const detect = opts.detect ?? detectWithSysteminformation;
   const tickMs = opts.tickMs ?? 2000; const refreshMinMs = opts.refreshMinMs ?? 30_000;
-  const diskFree = opts.diskFree ?? diskFreeMb; const childMem = opts.childMemMb ?? (() => childTreeRssMb());
+  const diskFree = opts.diskFree ?? diskFreeMb; const childMem = opts.childMemMb ?? engineMemorySampler(); const shellMem = opts.shellMemMb ?? (() => shellMemory.get());
   const perCtx = new WeakMap<ServiceContext, { profile: HardwareProfileDto | null; lastDetect: number; inflight: Promise<HardwareProfileDto> | null; timer: NodeJS.Timeout | null; startTimer: NodeJS.Timeout | null; meter: CpuMeter;
     diskTimer: NodeJS.Timeout | null; startDiskTimer?: NodeJS.Timeout; lowDiskSent: boolean }>();
   const st = (ctx: ServiceContext) => perCtx.get(ctx)!;
@@ -95,7 +95,7 @@ export function createHardwareModule(opts: HardwareOptions = {}): ServiceModule 
     const mem = process.memoryUsage();
     const out = ctx.settings.get().outputFolder;
     return { at: ctx.now(), cpuPercent: st(ctx).meter.sample(), ramFreeMb: Math.round(availableMemBytes() / 1048576), ramTotalMb: Math.round(os.totalmem() / 1048576), processMb: Math.round(mem.rss / 1048576),
-      chromeMb: childMem(), diskFreeMb: checkDisk(ctx), outputDiskFreeMb: out ? diskFreeMbNearest(out) : diskFree(ctx.paths.outputs), gpuPercent: null,
+      chromeMb: childMem(), shellMb: shellMem(), diskFreeMb: checkDisk(ctx), outputDiskFreeMb: out ? diskFreeMbNearest(out) : diskFree(ctx.paths.outputs), gpuPercent: null,
       workload: { rendering: count(ctx, "SELECT count(*) n FROM render_jobs WHERE status = 'rendering'") > 0, ingesting: count(ctx, "SELECT count(*) n FROM assets WHERE status = 'ingesting'"),
         downloading: count(ctx, "SELECT count(*) n FROM models WHERE status IN ('downloading','verifying')"), agentRuns: s3(ctx).runs.size, items: workloadItems(ctx) } };
   }

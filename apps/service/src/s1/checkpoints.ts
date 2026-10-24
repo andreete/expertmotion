@@ -65,7 +65,7 @@ export class Checkpoints {
       const row = this.ctx.db.prepare('SELECT head_version_id, deleted_at FROM projects WHERE id = ?').get(projectId) as { head_version_id: string | null; deleted_at: string | null } | undefined;
       if (!row || row.deleted_at || !row.head_version_id) return;
       const last = this.ctx.db.prepare('SELECT version_id FROM recovery_checkpoints WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(projectId) as { version_id: string } | undefined;
-      if (last?.version_id === row.head_version_id) return;
+      if (last?.version_id === row.head_version_id) { this.store.uiDirty.delete(projectId); return; }   // rename only: already persisted
       this.write(projectId, 'autosave');
     } catch (e) {
       this.ctx.log.warn({ projectId, err: String(e) }, 'autosave failed');
@@ -95,6 +95,7 @@ export class Checkpoints {
     const row: CheckpointRow = { id: this.ctx.newId(), project_id: projectId, version_id: h.versionId, file_path: rel, reason, created_at: now };
     this.ctx.db.prepare('INSERT INTO recovery_checkpoints (id, project_id, version_id, file_path, reason, created_at) VALUES (@id, @project_id, @version_id, @file_path, @reason, @created_at)').run(row);
     this.offers.delete(projectId);
+    this.store.uiDirty.delete(projectId);                                 // FR-173: Save / autosave clears the dirty dot
     this.prune(projectId);
     return checkpointDto(row, v.duration_ms, this.fileMeta(row));
   }
@@ -109,6 +110,17 @@ export class Checkpoints {
     this.ctx.db.transaction(() => { for (const r of old) del.run(r.id); })();
     const still = this.ctx.db.prepare('SELECT 1 FROM recovery_checkpoints WHERE project_id = ? AND file_path = ? LIMIT 1');
     for (const r of old) if (!still.get(projectId, r.file_path)) { try { fs.rmSync(this.abs(r.file_path), { force: true }); } catch { /* ignore */ } }
+  }
+
+  /** FR-175 housekeeping at start: keep the newest 20 rows and remove checkpoint files no row references any more. */
+  private pruneAtStart(projectId: string): void {
+    try {
+      this.prune(projectId);
+      const dir = path.join(this.ctx.paths.checkpoints, projectId);
+      const referenced = new Set((this.ctx.db.prepare('SELECT file_path FROM recovery_checkpoints WHERE project_id = ?').all(projectId) as Array<{ file_path: string }>)
+        .map((r) => path.basename(r.file_path)));
+      for (const f of fs.readdirSync(dir)) if (/^[0-9a-f]{64}\.json$/.test(f) && !referenced.has(f)) { try { fs.rmSync(path.join(dir, f), { force: true }); } catch { /* in use */ } }
+    } catch (e) { this.ctx.log.warn({ projectId, err: String(e) }, 'checkpoint prune at start failed'); }
   }
 
   list(projectId: string) {
@@ -174,6 +186,7 @@ export class Checkpoints {
     for (const pid of dirs) {
       if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(pid)) continue;
       if (!known.has(pid)) { if (this.importOrphan(pid)) imported.push(pid); continue; }
+      this.pruneAtStart(pid);
       if (!unclean) continue;
       try {
         const p = this.ctx.db.prepare('SELECT p.deleted_at, v.hash FROM projects p LEFT JOIN composition_versions v ON v.id = p.head_version_id WHERE p.id = ?').get(pid) as { deleted_at: string | null; hash: string | null };

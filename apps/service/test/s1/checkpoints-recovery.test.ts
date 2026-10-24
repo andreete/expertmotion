@@ -40,12 +40,23 @@ describe('checkpoints R-022…R-024 and autosave over HTTP', () => {
   beforeAll(async () => { s = await startS1(); s.ctx.settings.update({ autosaveDebounceMs: 500, autosaveMaxMs: 1000 }); });
   afterAll(async () => { await s.close(); });
 
+  it('FR-173 / FR-165: autosave clears the dirty state of a rename', async () => {
+    const p = await newProject(s);
+    await s.json(`/projects/${p.id}`, { method: 'PATCH', json: { name: `${p.name} x` } });
+    expect((await s.json(`/projects/${p.id}`)).body.dirty).toBe(true);
+    await new Promise((r) => setTimeout(r, 1300));                    // autosaveMaxMs is 1000 in this suite
+    expect((await s.json(`/projects/${p.id}`)).body.dirty).toBe(false);
+  });
   it('empty list carries EM-6202; manual checkpoint clears dirty; restore appends a restore version', async () => {
     const p = await newProject(s);
     s1(s.ctx).checkpoints.autosave.cancel(p.id);
     expect((await s.json(`/projects/${p.id}/checkpoints`)).body).toEqual({ items: [], notice: 'EM-6202' });
     insertClips(s, p.id, ['a1']);
-    expect((await s.json(`/projects/${p.id}`)).body.dirty).toBe(true);
+    // FR-173: a new Composition Version is persisted on creation, never "unsaved"; a rename (UI-level state) is dirty until Save.
+    expect((await s.json(`/projects/${p.id}`)).body.dirty).toBe(false);
+    expect((await s.json(`/projects/${p.id}`, { method: 'PATCH', json: { name: `${p.name} baru` } })).body.dirty).toBe(true);
+    s1(s.ctx).checkpoints.autosave.cancel(p.id);
+    expect((await s.json('/projects?limit=50')).body.items.find((x: { id: string }) => x.id === p.id).dirty).toBe(true);
     const c = await s.json(`/projects/${p.id}/checkpoints`, { method: 'POST', json: { reason: 'manual' } });
     expect(c.status).toBe(201);
     expect(c.body).toMatchObject({ projectId: p.id, reason: 'manual', durationMs: 10_000 });

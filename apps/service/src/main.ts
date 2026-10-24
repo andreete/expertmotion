@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { devConfig, prodConfig, type Bootstrap, type ServiceConfig } from './config.js';
 import { boot } from './boot.js';
 import { loadPromptAssets } from './services/prompt-assets.js';
+import { shellMemory } from './s3/hardware.js';
 
 interface ParentPort { on(ev: 'message', fn: (e: { data: unknown }) => void): void; postMessage(m: unknown): void }
 const parentPort = (process as unknown as { parentPort?: ParentPort }).parentPort;
@@ -28,7 +29,11 @@ async function start(cfg: ServiceConfig) {
     if (closing) return; closing = true; ctx.log.info({ why }, 'shutting down');
     server.close(); ctx.bus.closeAll(); await stop(); process.exit(0);
   };
-  parentPort?.on('message', (e) => { if ((e.data as { type?: string })?.type === 'shutdown') void shutdown('parent'); });
+  parentPort?.on('message', (e) => {
+    const d = e.data as { type?: string; shellMb?: unknown };
+    if (d?.type === 'shutdown') void shutdown('parent');
+    else if (d?.type === 'metrics' && typeof d.shellMb === 'number') shellMemory.set(d.shellMb);   // FR-127: Shell process memory
+  });
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }

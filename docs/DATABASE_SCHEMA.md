@@ -45,7 +45,7 @@ CREATE TABLE schema_migrations (
   applied_at   TEXT NOT NULL
 );
 
-CREATE TABLE settings (                       -- app-wide preferences (non-secret)
+CREATE TABLE settings (                       -- app-wide preferences (non-secret); one row per SettingsDto key, e.g. 'layout' = Editor panel layout (FR-099, FR-155; no migration: key-value)
   key          TEXT PRIMARY KEY,
   value_json   TEXT NOT NULL CHECK(json_valid(value_json)),
   updated_at   TEXT NOT NULL
@@ -420,8 +420,12 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 | 10 | s1_versions_plans | replaces the unique index on `composition_versions(project_id, hash)` with a plain index (undo/redo append a row that copies an earlier model, so hashes repeat); `edit_plans` gains `intent_ids_json`, `message`, `result_json`, `idempotency_key`. Note: `projects.head_version_id` is not declared as a foreign key in §3 (circular reference); the service keeps it consistent in the commit transaction |
 | 11 | s1_sample_project | `projects.is_sample INTEGER NOT NULL DEFAULT 0 CHECK(is_sample IN (0,1))` and a partial index on it: flags the onboarding Sample Project (API R-025) so it is found again (idempotent create) and hard-deleted when the Creator creates or opens another project. Duplicates (R-019) and restored backups are never samples |
 | 12 | s1_redo_stack | `projects.redo_json TEXT` (JSON array of version ids, newest last; NULL = empty): the Redo stack (FR-168, R-054) survives a Service restart; written in the same transaction as the undo/redo version and cleared by any other new version |
+| 13 | s1_project_ui_state | `projects.ui_state_json TEXT` (JSON, NULL = never saved): the Editor's per-project UI state written by Save (FR-012: Library mode, playhead, selection, Player toggles) via R-014 `uiState`, copied by Save As (R-019); not part of the Composition Model |
 | 20 | s2_render_failed_frame | `render_jobs.failed_frame INTEGER CHECK(failed_frame IS NULL OR failed_frame >= 0)`: the frame a failed, stalled or interrupted Render Job stopped at (FR-143), from the renderer error (`frame` / "frame N"), else the last progress report; startup recovery copies `rendered_frames` of jobs that were rendering. Shown in the Export failure dialog (`scr.export.failed.frame`) and sent as `render.failed.frame` |
+| 21 | s2_asset_soft_delete_source_key | `assets.deleted_at TEXT` (FR-052: Remove Asset soft-deletes while any Composition Version references the asset, so Undo restores Clips with media; listings and counts skip removed rows, composition facts keep them; unreferenced removed rows are purged with their files on R-031) and `assets.source_key TEXT` + partial index `(project_id, source_key)` (FR-041: sha256 of canonical source path, size and mtime of a path import, so the same file is recognised as EM-1006 before copying; a digest, never the path) |
 | 30 | s3_budgets_defaults_handoffs | `project_budgets(project_id, limit_usd, updated_at)` (per-project AI cap per calendar month, NULL or 0 = no limit, FR-117); `provider_defaults(default_connection_id)` (R-097); `brainstorm_handoffs(id, project_id, message_id, intents_json, status pending/enqueued, created_at)` (R-082 payloads until the intents module enqueues them); `agent_runs.plan_id`; indexes on runs and `usage_records` |
+
+| 31 | s3_project_connection_budgets | `project_connection_budgets(project_id, connection_id, limit_usd, updated_at, PK(project_id, connection_id))` (FR-117: the per-Project cap is per Provider Connection; calendar month; NULL or 0 = no limit; both FKs cascade); existing `project_budgets` caps are copied onto every connection and the project-wide value is cleared (the table stays for R-100 rows without `connectionId`); index `agent_runs(project_id, connection_id)` |
 
 Later migrations append rows here (ADR-024).
 

@@ -38,11 +38,17 @@ interface ProjectState {
   usage: Record<AgentKind, { usedTokens: number; contextLength: number } | null>;
   checkpoints: CheckpointDto[];
   outputs: OutputDto[];
+  /** Head not yet covered by a checkpoint (drives checkpointNewerThanSave; FR-173 keeps it out of `dto.dirty`). */
+  headUnsaved?: boolean;
   genJobs: GeneratorJobDto[];
   grant: MediaGrantDto;
+  /** FR-052: removed (soft-deleted) assets kept while a version still uses them; Undo brings them back. */
+  removed?: AssetDto[];
 }
 
-export interface MockOptions { seed?: 'sample' | 'empty'; delays?: boolean; bus?: MockBus; onboardingDone?: boolean }
+export interface MockOptions { seed?: 'sample' | 'empty'; delays?: boolean; bus?: MockBus; onboardingDone?: boolean;
+  /** FR-037 test seam: the `model:<id>` flag of a preset (no P0 preset carries one yet). */
+  modelFlagOf?: (presetId: string) => string | undefined }
 export interface MockServer { fetch: (input: string, init?: RequestInit) => Promise<Response>; mediaResolver: MediaResolver; bus: MockBus; token: string; baseUrl: string; firstProjectId: () => string | null }
 
 // ───────────────────────── sample media (SVG data URLs, so the Player shows something without files) ─────────────────────────
@@ -82,7 +88,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   const hardware: HardwareProfileDto = { tier: 'T0', cpuModel: 'Intel Core i5-1135G7', cpuThreads: 8, ramTotalMb: 16_384, gpuVendor: 'Intel', gpuModel: 'Iris Xe (shared)', vramMb: null, nvenc: false, detectedAt: nowIso(), warnings: [] };
   const connections: ConnectionDto[] = [];
   const assignments: { brainstorm: AssignmentDto | null; editor: AssignmentDto | null; defaultConnectionId: string | null } = { brainstorm: null, editor: null, defaultConnectionId: null };
-  const projectBudgets = new Map<string, number | null>();
+  const projectBudgets = new Map<string, number | null>();   // key `${projectId}|${connectionId ?? ''}` (FR-117 per connection)
   const models: ModelStateDto[] = [
     { key: 'whisper-small', engine: 'whisper.cpp', version: '1.7', task: 'stt', label: 'Whisper small (captions)', licence: { name: 'MIT', url: 'https://github.com/openai/whisper' }, tiers: ['T0', 'T1', 'T2'], bytesTotal: 488_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null, recommended: true, languages: ['id', 'en'], commercialUse: 'yes', usedBy: { generators: ['captions'], presets: [] }, pathLabel: 'models\\whisper.cpp\\whisper-small\\' },
     { key: 'whisper-large-v3-turbo', engine: 'whisper.cpp', version: '1.7', task: 'stt', label: 'Whisper large v3 turbo', licence: { name: 'MIT', url: 'https://github.com/openai/whisper' }, tiers: ['T1', 'T2'], bytesTotal: 1_620_000_000, bytesDone: 0, status: 'not-installed', errorCode: null, installedAt: null },
@@ -112,7 +118,10 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   }));
   const strip = (v: VersionDto & { model: CompositionModelT }): VersionDto => { const { model: _m, ...rest } = v; return rest; };
   const queueDto = (p: ProjectState): IntentQueueDto => {
-    const items = p.intents.filter((i) => i.status !== 'removed').slice().reverse();
+    const live = new Set(p.chain.slice(0, p.pointer + 1).map((id) => p.versions.get(id)?.hash));
+    // FR-167: applied items whose version is past the head (after Undo) are marked undone.
+    const items = p.intents.filter((i) => i.status !== 'removed').slice().reverse()
+      .map((i) => ((i.status === 'executed' || i.status === 'compiled') && i.appliedHash && !live.has(i.appliedHash) ? { ...i, undone: true } : i));
     const lockedKeys = [...new Set(p.intents.filter((i) => (i.status === 'compiled' || i.status === 'executed') && !i.propertyKey.includes('*')).map((i) => i.propertyKey))];
     return { projectId: p.dto.id, headHash: head(p).hash, items, lockedKeys };
   };
@@ -125,7 +134,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     p.versions.set(v.id, v);
     p.chain = [...p.chain.slice(0, p.pointer + 1), v.id];
     p.pointer = p.chain.length - 1;
-    p.dto.headVersionId = v.id; p.dto.headHash = v.hash; p.dto.durationMs = v.durationMs; p.dto.dirty = true; p.dto.settings = model.settings; touch(p);
+    p.dto.headVersionId = v.id; p.dto.headHash = v.hash; p.dto.durationMs = v.durationMs; p.headUnsaved = true; p.dto.settings = model.settings; touch(p);
     staleOtherPlans(p, v.hash, planId);
     emit('composition.updated', { projectId: p.dto.id, version: strip(v), previousHash: prev.hash, diff, cause, canUndo: p.pointer > 0, canRedo: false, durationMs: v.durationMs, issues: timing.warnings });
     return v;
@@ -134,9 +143,16 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const prev = head(p);
     p.pointer = pointer;
     const v = head(p);
-    p.dto.headVersionId = v.id; p.dto.headHash = v.hash; p.dto.durationMs = v.durationMs; p.dto.dirty = true; p.dto.settings = v.model.settings;
+    p.dto.headVersionId = v.id; p.dto.headHash = v.hash; p.dto.durationMs = v.durationMs; p.headUnsaved = true; p.dto.settings = v.model.settings;
     staleOtherPlans(p, v.hash, null);
     emit('composition.updated', { projectId: p.dto.id, version: strip(v), previousHash: prev.hash, diff: [], cause, canUndo: p.pointer > 0, canRedo: p.pointer < p.chain.length - 1, durationMs: v.durationMs, issues: [] });
+    // FR-052: an Undo/Redo head that uses removed assets brings them back into the Asset Panel
+    const used = new Set([...v.model.tracks.video.map((c) => c.assetId), ...v.model.tracks.audio.map((a) => a.assetId), ...v.model.tracks.overlay.flatMap((o) => (o.kind === 'image' ? [o.assetId] : []))]);
+    const back = (p.removed ?? []).filter((a) => used.has(a.id));
+    if (back.length) {
+      p.removed = (p.removed ?? []).filter((a) => !used.has(a.id)); p.assets.push(...back); p.dto.assetCount = p.assets.length;
+      emit('service.notice', { projectId: p.dto.id, kind: 'assets-restored', assetIds: back.map((a) => a.id) });
+    }
   }
   function staleOtherPlans(p: ProjectState, hash: string, except: string | null) {
     for (const pl of p.plans) {
@@ -319,6 +335,21 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   }
 
   const ACTIVE = new Set(['queued', 'compiled', 'planned', 'executed']);
+  const modelInstalled = (flag: string) => models.some((x) => x.status === 'installed' && (`model:${x.key}` === flag || x.key === flag.slice(6) || x.key.startsWith(`${flag.slice(6)}-`)));
+  /** FR-037: model.installed → held picks for that model become queued and apply (same Compile path as a fresh pick). */
+  function resumeHeld() {
+    for (const p of projects.values()) {
+      const held = p.intents.filter((i) => i.status === 'held' && modelInstalled(String(i.params['__heldFor'] ?? '')));
+      if (!held.length) continue;
+      for (const i of held) { i.status = 'queued'; const { __heldFor: _drop, ...rest } = i.params; i.params = rest; }
+      const leaves = held.filter((i) => i.parentIntentId || !held.some((c) => c.parentIntentId === i.id));
+      for (const l of leaves) l.supersedes = supersedeFor(p, l);
+      compileAndApply(p, leaves, opsStore);
+      for (const parent of held.filter((i) => !i.parentIntentId && held.some((c) => c.parentIntentId === i.id))) parent.status = leaves.filter((l) => l.parentIntentId === parent.id).every((l) => l.status === 'executed') ? 'executed' : 'queued';
+      settleParents(p);
+      emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: held.map((i) => i.id), reason: 'compiled' });
+    }
+  }
   function supersedeFor(p: ProjectState, intent: EditIntent): string[] {
     if (intent.propertyClass === 'list' && !intent.presetId) return [];
     const out: string[] = [];
@@ -368,6 +399,16 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     emit('settings.changed', { scope: 'settings', settings });
   }
 
+  /** Undo/Redo of a version moves the settings intents stamped with it (R-053/R-054 note, FR-095). */
+  function syncSettings(p: ProjectState, kind: 'undo' | 'redo', hash: string) {
+    const it = [...p.intents].reverse().find((i) => i.status === 'executed' && i.appliedHash === hash && settingsValueOf(i));
+    if (!it) return;
+    const v = kind === 'undo' ? String(it.params['__previous'] ?? '') : settingsValueOf(it)!;
+    if (!PROFILES.includes(v)) return;
+    settings = { ...settings, defaultPerformanceProfile: v as SettingsDto['defaultPerformanceProfile'] };
+    emit('settings.changed', { scope: 'settings', settings });
+  }
+
   function createIntent(p: ProjectState, body: DesignPickInput, source: EditIntent['source']) {
     if (body.baseVersion !== head(p).hash) throw new HttpError(409, 'EM-2301', 'The composition changed after this pick was made.', { baseVersion: body.baseVersion, headVersion: head(p).hash });
     if (body.output?.kind === 'performanceProfile') {
@@ -398,6 +439,13 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const leaves: EditIntent[] = multi ? res.leaves.map((l) => ({ ...base, id: newId(), parentIntentId: parent.id, resolvedTargets: [l.target], target: l.target, propertyKey: l.key, needsInterpretation: res.needsInterpretation, status: 'queued' as const })) : [parent];
     p.intents.push(parent, ...(multi ? leaves : []));
     res.leaves.forEach((l, i) => { if (l.ops) opsStore.set(leaves[i]!.id, l.ops); });
+    // FR-037: the preset needs a model that is not installed → the pick is held (EM-2104) until model.installed resumes it.
+    const heldFor = body.presetId ? opts.modelFlagOf?.(body.presetId) : undefined;
+    if (heldFor && !modelInstalled(heldFor)) {
+      for (const i of [parent, ...(multi ? leaves : [])]) { i.status = 'held'; i.params = { ...i.params, __heldFor: heldFor }; }
+      emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [parent.id], reason: 'created' });
+      return { intent: parent, queue: queueDto(p), superseded: [], appliedVersion: null, planId: null, notices: [{ code: 'EM-2104' }] };
+    }
     const superseded = leaves.flatMap((l) => { const s = supersedeFor(p, l); l.supersedes = s; return s; });
     if (multi) parent.supersedes = superseded;
     let appliedVersion: VersionDto | null = null;
@@ -615,15 +663,21 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('GET', '/projects/:id', (m) => proj(m[1]!).dto);
   r('PATCH', '/projects/:id', (m, b) => {
     const p = proj(m[1]!), body = obj(b);
-    if (typeof body['name'] === 'string') { if (!body['name'].trim()) throw new HttpError(400, 'EM-9002', 'Name cannot be empty.'); p.dto.name = body['name'].trim(); }
+    if (typeof body['name'] === 'string') {
+      if (!body['name'].trim()) throw new HttpError(400, 'EM-9002', 'Name cannot be empty.');
+      // FR-173: a rename is UI-level state → dirty until Save or autosave (10 s, FR-165)
+      if (p.dto.name !== body['name'].trim()) { p.dto.dirty = true; setTimeout(() => { p.dto.dirty = false; }, 10_000); }
+      p.dto.name = body['name'].trim();
+    }
     if (body['language'] === 'id' || body['language'] === 'en') p.dto.language = body['language'];
+    if (body['uiState'] && typeof body['uiState'] === 'object') p.dto.uiState = structuredClone(body['uiState']) as NonNullable<ProjectDto['uiState']>;   // FR-012
     touch(p); return p.dto;
   });
   r('DELETE', '/projects/:id', (m) => { proj(m[1]!); projects.delete(m[1]!); return undefined; });
   r('POST', '/projects/:id/open', (m) => {
     const p = proj(m[1]!);
     p.dto.openedAt = nowIso();
-    return { project: p.dto, head: head(p), mediaGrant: p.grant, checkpointNewerThanSave: p.dto.dirty && p.checkpoints[0] ? p.checkpoints[0] : null, intentQueue: queueDto(p), latestPlan: p.plans.filter((x) => x.origin === 'editor-agent').slice(-1)[0] ?? null, renderJobs: renders.filter((j) => j.projectId === p.dto.id) };
+    return { project: p.dto, head: head(p), mediaGrant: p.grant, checkpointNewerThanSave: p.headUnsaved && p.checkpoints[0] ? p.checkpoints[0] : null, intentQueue: queueDto(p), latestPlan: p.plans.filter((x) => x.origin === 'editor-agent').slice(-1)[0] ?? null, renderJobs: renders.filter((j) => j.projectId === p.dto.id) };
   });
   r('GET', '/projects/:id/settings', (m) => { const md = head(proj(m[1]!)).model; return { ...md.settings, durationPolicy: md.durationPolicy, ...(md.fixedDurationMs ? { fixedDurationMs: md.fixedDurationMs } : {}), outputFolder: null }; });
   r('PUT', '/projects/:id/settings', (m, b) => {
@@ -691,7 +745,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('POST', '/projects/:id/checkpoints', (m) => {
     const p = proj(m[1]!);
     const c: CheckpointDto = { id: newId(), projectId: p.dto.id, versionId: head(p).id, reason: 'manual', createdAt: nowIso(), durationMs: p.dto.durationMs, hash: head(p).hash, bytes: 4000 };
-    p.checkpoints.unshift(c); p.checkpoints = p.checkpoints.slice(0, 20); p.dto.dirty = false;
+    p.checkpoints.unshift(c); p.checkpoints = p.checkpoints.slice(0, 20); p.dto.dirty = false; p.headUnsaved = false;
     emit('service.notice', { projectId: p.dto.id, kind: 'checkpoint', code: 'EM-6203' });
     return created(c);
   });
@@ -763,6 +817,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const audio = model.tracks.audio.filter((x) => x.assetId === a.id);
     if ((clips.length || audio.length) && q.get('confirm') !== 'true') throw new HttpError(409, 'EM-1101', 'This asset is used in the timeline.', { clips: clips.length });
     p.assets = p.assets.filter((x) => x.id !== a.id); p.dto.assetCount = p.assets.length;
+    // FR-052: an asset a version still uses is kept (soft delete) so Undo restores its Clips with media
+    if ([...p.versions.values()].some((v) => JSON.stringify(v.model).includes(`"${a.id}"`))) p.removed = [...(p.removed ?? []), { ...a, sequenceBadge: null }];
     if (clips.length || audio.length) {
       const ops: OperationT[] = [...clips.map((c) => ({ op: 'op:clip.remove', target: { kind: 'clip' as const, id: c.id }, args: {} })), ...audio.map((x) => ({ op: 'op:audio.remove', target: { kind: 'audio' as const, id: x.id }, args: {} }))];
       const res = applyOperations(model, ops, { assets: facts(p).concat([{ id: a.id, kind: a.kind, status: 'ready' }]), tier: hardware.tier, newId });
@@ -792,15 +848,20 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const ordered = body['order'] === 'given' ? chosen : [...chosen.filter((a) => a.sequenceBadge !== null).sort((x, y) => x.sequenceBadge! - y.sequenceBadge!), ...chosen.filter((a) => a.sequenceBadge === null)];
     let atIndex = typeof body['atIndex'] === 'number' ? body['atIndex'] : undefined;          // FR-030 / FR-049 after the selected Clip
     const atMs = typeof body['atMs'] === 'number' ? body['atMs'] : 0;
-    const ops: OperationT[] = ordered.flatMap((a): OperationT[] => a.kind === 'audio' ? [{ op: 'op:audio.addLayer', args: { assetId: a.id, atMs: 0, volume: 1, role: 'voice' } }]
+    const playheadMs = typeof body['playheadMs'] === 'number' ? body['playheadMs'] : atMs;        // FR-049: audio at the playhead
+    const ops: OperationT[] = ordered.flatMap((a): OperationT[] => a.kind === 'audio' ? [{ op: 'op:audio.addLayer', args: { assetId: a.id, atMs: playheadMs, volume: 1, role: 'voice' } }]
       : a.kind === 'subtitle' ? [] : a.kind === 'image' && body['asOverlay'] === true ? [{ op: 'op:overlay.addImage', args: { assetId: a.id, atMs } }]   // FR-029
       : [{ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: a.id, ...(atIndex === undefined ? {} : { atIndex: atIndex++ }) } }]);
     const res = applyOperations(head(p).model, ops, { assets: facts(p), tier: hardware.tier, newId });
     if (!res.ok) throw new HttpError(422, res.issues[0]?.code ?? 'EM-2002', res.issues[0]?.message ?? 'Insert failed.');
     const v = commit(p, res.value.model, 'insert', res.value.diff);
-    for (const a of ordered) { a.sequenceBadge = null; p.intents.push(systemIntent(p, a.id, v.hash)); }
-    emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [], reason: 'compiled' });
-    return { version: strip(v), ops, warnings: res.warnings };
+    for (const a of ordered) a.sequenceBadge = null;
+    // FR-049: one Edit Intent "Insert N clips", applied directly (Compile path), visible in the Intent Queue
+    const it: EditIntent = { id: newId(), projectId: p.dto.id, source: 'ui', createdAt: nowIso(), category: 'asset', params: { targetLabel: `Insert ${ordered.length} clips`, __insert: { count: ordered.length, assetIds: ordered.map((a) => a.id) } },
+      target: { kind: 'sequence' }, resolvedTargets: [{ kind: 'sequence' }], propertyKey: `list:asset.insert:${v.id}`, propertyClass: 'list', needsInterpretation: false, status: 'executed', supersedes: [], baseVersion: v.hash, appliedVersion: p.pointer + 1, appliedHash: v.hash };
+    p.intents.push(it);
+    emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [it.id], reason: 'compiled' });
+    return { version: strip(v), ops, warnings: res.warnings, intentId: it.id };
   });
   r('POST', '/projects/:id/assets/:aid/relocate', () => { throw new HttpError(422, 'EM-1302', 'This file is different from the original.'); });
   r('POST', '/projects/:id/media-grants', (m) => { const p = proj(m[1]!); p.grant = { ...p.grant, grant: randomGrant() }; p.grant.baseUrl = `${MOCK_BASE}/media/${p.grant.grant}`; return created(p.grant); });
@@ -812,8 +873,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   });
   r('GET', '/projects/:id/composition/versions', (m) => { const p = proj(m[1]!); const items = p.chain.map((id) => strip(p.versions.get(id)!)).reverse(); return { items, nextCursor: null, total: items.length }; });
   r('GET', '/projects/:id/composition/versions/:vid', (m) => { const v = proj(m[1]!).versions.get(m[2]!); if (!v) throw new HttpError(404, 'EM-2401', 'Version not found.'); return v; });
-  r('POST', '/projects/:id/composition/undo', (m) => { const p = proj(m[1]!); if (p.pointer === 0) throw new HttpError(422, 'EM-2401', 'Nothing to undo.', { reason: 'at-root' }); moveHead(p, p.pointer - 1, 'undo'); return { head: strip(head(p)), canUndo: p.pointer > 0, canRedo: true }; });
-  r('POST', '/projects/:id/composition/redo', (m) => { const p = proj(m[1]!); if (p.pointer >= p.chain.length - 1) throw new HttpError(422, 'EM-2401', 'Nothing to redo.', { reason: 'no-redo' }); moveHead(p, p.pointer + 1, 'redo'); return { head: strip(head(p)), canUndo: true, canRedo: p.pointer < p.chain.length - 1 }; });
+  r('POST', '/projects/:id/composition/undo', (m) => { const p = proj(m[1]!); if (p.pointer === 0) throw new HttpError(422, 'EM-2401', 'Nothing to undo.', { reason: 'at-root' }); const undone = head(p).hash; moveHead(p, p.pointer - 1, 'undo'); syncSettings(p, 'undo', undone); return { head: strip(head(p)), canUndo: p.pointer > 0, canRedo: true }; });
+  r('POST', '/projects/:id/composition/redo', (m) => { const p = proj(m[1]!); if (p.pointer >= p.chain.length - 1) throw new HttpError(422, 'EM-2401', 'Nothing to redo.', { reason: 'no-redo' }); moveHead(p, p.pointer + 1, 'redo'); syncSettings(p, 'redo', head(p).hash); return { head: strip(head(p)), canUndo: true, canRedo: p.pointer < p.chain.length - 1 }; });
   r('GET', '/projects/:id/composition/diff', (m, _b, q) => ({ from: q.get('from'), to: q.get('to'), diff: [], ops: [] }));
   r('POST', '/projects/:id/composition/validate', (m, b) => {
     const p = proj(m[1]!), body = obj(b);
@@ -824,6 +885,28 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   // intents
   r('POST', '/projects/:id/intents', (m, b) => created(createIntent(proj(m[1]!), obj(b) as unknown as DesignPickInput, obj(b)['source'] === 'chat' ? 'chat' : 'ui')));
   r('GET', '/projects/:id/intents', (m) => queueDto(proj(m[1]!)));
+  // R-065 (FR-095 / FR-097): several fully specified picks as one unit — one Composition Version; settings intents stamped with it.
+  r('POST', '/projects/:id/intents/batch', (m, b) => {
+    const p = proj(m[1]!); const body = obj(b);
+    const base = String(body['baseVersion'] ?? '');
+    if (base !== head(p).hash) throw new HttpError(409, 'EM-2301', 'The composition changed after this pick was made.', { baseVersion: base, headVersion: head(p).hash });
+    const picks = (Array.isArray(body['picks']) ? body['picks'] : []) as DesignPickInput[];
+    const model: EditIntent[] = [], settingsOnes: EditIntent[] = []; const superseded: string[] = [];
+    for (const pick of picks) {
+      const r0 = createIntent(p, { ...pick, baseVersion: base, plan: 'none' }, 'ui');
+      superseded.push(...r0.superseded);
+      if (r0.intent.status === 'rejected') throw new HttpError(422, r0.notices[0]?.code ?? 'EM-2303', 'This pick cannot be used.');
+      (pick.output?.kind === 'performanceProfile' ? settingsOnes : model).push(r0.intent);
+    }
+    if (model.some((i) => i.needsInterpretation)) throw new HttpError(422, 'EM-2303', 'These picks need the Editor Agent.');
+    const leaves = model.flatMap((i) => { const kids = p.intents.filter((k) => k.parentIntentId === i.id); return kids.length ? kids : [i]; });
+    const appliedVersion = compileAndApply(p, leaves, opsStore);
+    settleParents(p);
+    if (appliedVersion) for (const i of settingsOnes) i.appliedHash = appliedVersion.hash;
+    emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [...model, ...settingsOnes].map((i) => i.id), reason: 'executed' });
+    const intents = [...model, ...settingsOnes];
+    return created({ intent: intents[0], intents, queue: queueDto(p), superseded, appliedVersion, planId: appliedVersion ? p.plans[p.plans.length - 1]!.id : null, notices: [] });
+  });
   r('POST', '/projects/:id/intents/:iid/restore', (m) => {
     const p = proj(m[1]!), it = p.intents.find((i) => i.id === m[2]);
     if (!it) throw new HttpError(404, 'EM-9003', 'Not found.');
@@ -850,7 +933,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('DELETE', '/projects/:id/intents/:iid', (m) => {
     const p = proj(m[1]!), it = p.intents.find((i) => i.id === m[2]);
     if (!it) throw new HttpError(404, 'EM-9003', 'Not found.');
-    if (it.status === 'executed' || it.status === 'compiled') throw new HttpError(422, 'EM-9002', 'Applied changes are history and cannot be removed.', { reason: 'executed' });
+    if (it.status === 'executed') throw new HttpError(422, 'EM-9002', 'Applied changes are history and cannot be removed.', { reason: 'executed' });
     it.status = 'removed';
     for (const c of p.intents) if (c.parentIntentId === it.id && c.status !== 'executed') c.status = 'removed';
     for (const pl of p.plans) if (pl.status === 'valid') { pl.status = 'stale'; emit('plan.invalid', { projectId: p.dto.id, planId: pl.id, status: 'stale', code: 'EM-2301', validation: [], touchesLockedKeys: [] }); }
@@ -916,11 +999,16 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     if (!text) throw new HttpError(400, 'EM-9002', 'Message is empty.');
     agentChecks();
     if (!assignments[agent]) throw new HttpError(422, 'EM-4007', `The ${agent === 'editor' ? 'Editor Agent' : 'Brainstorming Agent'} has no model yet.`);
-    const user: MessageDto = { id: newId(), role: 'user', blocks: [{ type: 'text', text }], agentRunId: null, createdAt: nowIso() };
+    // FR-072: attachments become attachment blocks (images reach the model only with image input; checked in the Service).
+    const atts = (Array.isArray(body['attachments']) ? body['attachments'] as Array<{ assetId: string }> : []).flatMap((x) => { const a = p.assets.find((y) => y.id === x.assetId); return a ? [{ type: 'attachment' as const, assetId: a.id, mime: a.kind === 'image' ? 'image/*' : `${a.kind}/*`, name: a.name }] : []; });
+    const user: MessageDto = { id: newId(), role: 'user', blocks: [{ type: 'text', text }, ...atts], agentRunId: null, createdAt: nowIso() };
     p.messages[agent].push(user);
     if (agent === 'editor') {
       if (body['baseVersion'] !== head(p).hash) throw new HttpError(409, 'EM-2301', 'Base version is not the head.');
+      const target = body['target'] as ElementRefT | undefined;
       const res = createIntent(p, { source: 'chat', category: 'text', target: { kind: 'selection' }, instruction: text, baseVersion: head(p).hash, plan: 'none' }, 'chat');
+      // FR-080 / FR-067: the chat message is a chat Edit Intent (propertyKey chat:<id>) carrying the inspector's target.
+      Object.assign(res.intent, { category: 'layout', propertyKey: `chat:${user.id}`, needsInterpretation: true, ...(target ? { target, resolvedTargets: [target] } : {}) });
       const plan = startAgentPlan(p, [res.intent.id], text);
       return accepted({ message: user, runId: lastEditorRunId, planId: plan.id });
     }
@@ -965,7 +1053,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     for (const p of projects.values()) for (const pl of p.plans) if (pl.status === 'draft') { pl.status = 'cancelled'; for (const i of p.intents) if (i.status === 'planned') i.status = 'queued'; emit('plan.invalid', { projectId: p.dto.id, planId: pl.id, status: 'cancelled', code: 'EM-4303', validation: [], touchesLockedKeys: [] }); }
     return { id: m[1], status: 'cancelled' };
   });
-  r('GET', '/projects/:id/usage', (m) => { proj(m[1]!); return { project: { inputTokens: 0, outputTokens: 0, costUsd: 0, approximate: true, runs: 0 }, byAgent: {}, byModel: [], budget: { projectLimitUsd: projectBudgets.get(m[1]!) ?? null, monthLimitUsd: connections[0]?.budgetMonthUsd ?? null, spentMonthUsd: 0, warn80: false, exceeded: false } }; });
+  r('GET', '/projects/:id/usage', (m) => { proj(m[1]!); return { project: { inputTokens: 0, outputTokens: 0, costUsd: 0, approximate: true, runs: 0 }, byAgent: {}, byModel: [], budget: { projectLimitUsd: [...projectBudgets.entries()].find(([k, v]) => k.startsWith(`${m[1]!}|`) && v)?.[1] ?? null, monthLimitUsd: connections[0]?.budgetMonthUsd ?? null, spentMonthUsd: 0, warn80: false, exceeded: false } }; });
   // providers
   r('GET', '/providers/connections', () => ({ items: connections.map((c) => ({ ...c, modelCount: c.modelsFetchedAt ? CAPABILITIES.length : null })) }));
   r('POST', '/providers/connections', (_m, b) => {
@@ -1017,12 +1105,12 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const warnings = (['brainstorm', 'editor'] as const).flatMap((agent) => { const cap = CAPABILITIES.find((x) => x.modelId === assignments[agent]?.modelId); return cap && (cap.toolCalling !== true || cap.structuredOutput !== true) ? [{ code: 'EM-4005', path: `body.${agent}.modelId`, message: 'simple mode', severity: 'info' as const }] : []; });
     return { ...assignments, warnings };
   });
-  const budget = () => ({ connections: connections.map((c) => ({ connectionId: c.id, budgetMonthUsd: c.budgetMonthUsd, spentMonthUsd: 0.12, approximate: true })), projects: [...projectBudgets.entries()].map(([projectId, limitUsd]) => ({ projectId, limitUsd, spentUsd: 0.01 })), month: new Date().toISOString().slice(0, 7) });
+  const budget = () => ({ connections: connections.map((c) => ({ connectionId: c.id, budgetMonthUsd: c.budgetMonthUsd, spentMonthUsd: 0.12, approximate: true })), projects: [...projectBudgets.entries()].map(([k, limitUsd]) => { const [projectId, connectionId] = k.split('|') as [string, string]; return { projectId, connectionId: connectionId || null, limitUsd, spentUsd: 0.01 }; }), month: new Date().toISOString().slice(0, 7) });
   r('GET', '/providers/budget', budget);
   r('PUT', '/providers/budget', (_m, b) => {
     const body = obj(b);
     for (const c of (Array.isArray(body['connections']) ? body['connections'] : []) as Array<{ connectionId: string; budgetMonthUsd: number | null }>) { const x = connections.find((y) => y.id === c.connectionId); if (x) x.budgetMonthUsd = c.budgetMonthUsd; }
-    for (const pb of (Array.isArray(body['projects']) ? body['projects'] : []) as Array<{ projectId: string; limitUsd: number | null }>) projectBudgets.set(pb.projectId, pb.limitUsd);
+    for (const pb of (Array.isArray(body['projects']) ? body['projects'] : []) as Array<{ projectId: string; connectionId?: string | null; limitUsd: number | null }>) projectBudgets.set(`${pb.projectId}|${pb.connectionId ?? ''}`, pb.limitUsd);
     emit('settings.changed', { scope: 'budget' });
     return budget();
   });
@@ -1077,6 +1165,10 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('GET', '/catalogue', (_m, _b, q) => ({ items: listPresets({ ...(q.get('category') ? { category: q.get('category') as Category } : {}), priority: (q.get('priority') ?? 'p0').split(',') as Array<'p0' | 'p1' | 'p2'> }).map(catItem), catalogueVersion: 'mock' }));
   r('GET', '/catalogue/search', (_m, _b, q) => ({ items: listPresets().filter((p) => p.label.en.toLowerCase().includes((q.get('q') ?? '').toLowerCase())).map((p) => ({ ...catItem(p), score: 1 })), suggestions: ['fade', 'karaoke', 'transisi halus', 'judul besar', 'latar gradasi', 'zoom pelan'] }));
   // generators
+  /** FR-104: caption Insert also sets the default caption style when the project has none (generators-service withCaptionStyle). */
+  const withCaptionStyle = (p: Parameters<typeof head>[0], ops: OperationT[]): OperationT[] =>
+    ops.some((o) => o.op === 'op:caption.setPages') && !ops.some((o) => o.op === 'op:caption.setStyle') && head(p).model.tracks.caption.styleId === null
+      ? [...ops, { op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: 'preset:caption.editorial' } }] : ops;
   r('POST', '/projects/:id/generators/:kind', (m, b) => {
     const p = proj(m[1]!), kind = m[2] as GeneratorJobDto['kind'], body = obj(b);
     if (kind === 'music' || kind === 'thumbnail') throw new HttpError(422, 'EM-9004', 'Coming in a later version.', { feature: kind });
@@ -1097,8 +1189,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
         job.resultAssetId = a.id;
         emit('ingest.done', { projectId: p.dto.id, asset: a });
         ops = [{ op: 'op:audio.addLayer', args: { assetId: a.id, atMs: typeof body['atMs'] === 'number' ? body['atMs'] : 0, volume: 1, role: 'voice' } }];
-      } else if (kind === 'captions') ops = [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } }];
-      job.result = kind === 'hashtags' ? { caption: 'Senja, kopi, dan cerita kecil di Kafe Senja.', hashtags: ['#kafesenja', '#kopisusu', '#ngopi', '#senja', '#kopilokal'] }
+      } else if (kind === 'captions') ops = withCaptionStyle(p, [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } }]);
+      job.result = kind === 'hashtags' ? { caption: 'Senja, kopi, dan cerita kecil di Kafe Senja.', hashtags: ['#kafesenja', '#kopisusu', '#ngopi', '#senja', '#kopilokal'], tone: typeof body['tone'] === 'string' ? body['tone'] : 'casual' }
         : kind === 'captions' ? { pages } : { text: String(body['text'] ?? '') };
       if (body['insert'] === true && ops.length) {               // R-130 `insert: true`: deterministic apply, no Editor Agent plan
         const res = applyOperations(head(p).model, ops, { assets: facts(p), tier: hardware.tier, newId });
@@ -1115,7 +1207,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       if (j.status !== 'done') throw new HttpError(422, 'EM-9002', 'This result is not ready yet.');
       if (typeof j.result?.['versionId'] === 'string') return { versionId: j.result['versionId'], notice: 'EM-2308' };
       const pagesOverride = Array.isArray(obj(b)['pages']) ? obj(b)['pages'] : null;
-      const ops = ((j.result?.['proposedOps'] ?? []) as OperationT[]).map((o) => (pagesOverride && o.op === 'op:caption.setPages' ? { ...o, args: { ...o.args, pages: pagesOverride } } as OperationT : o));
+      const ops = withCaptionStyle(p, ((j.result?.['proposedOps'] ?? []) as OperationT[])).map((o) => (pagesOverride && o.op === 'op:caption.setPages' ? { ...o, args: { ...o.args, pages: pagesOverride } } as OperationT : o));
       if (!ops.length) throw new HttpError(422, 'EM-9002', 'This result has nothing to insert.');
       const res = applyOperations(head(p).model, ops, { assets: facts(p), tier: hardware.tier, newId });
       if (!res.ok) throw new HttpError(422, res.issues[0]?.code ?? 'EM-2102', res.issues[0]?.message ?? 'Invalid.');
@@ -1151,6 +1243,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       x.bytesDone = Math.min(x.bytesTotal, x.bytesDone + Math.ceil(x.bytesTotal / 8));
       if (x.bytesDone < x.bytesTotal) { emit('model.progress', { key: x.key, bytesDone: x.bytesDone, bytesTotal: x.bytesTotal, status: 'downloading' }); later(350, step); return; }
       x.status = 'installed'; x.installedAt = nowIso();
+      resumeHeld();                                                     // FR-037: before the announcement, like the Service
       emit('model.installed', { model: x });
     };
     later(200, step);
@@ -1162,7 +1255,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   // hardware, licence, settings, diagnostics
   r('GET', '/hardware/profile', () => hardware);
   r('POST', '/hardware/profile/refresh', () => ({ ...hardware, detectedAt: nowIso() }));
-  r('GET', '/hardware/live', () => ({ at: nowIso(), cpuPercent: 18 + Math.round(Math.random() * 20), ramFreeMb: 7400 + Math.round(Math.random() * 300), ramTotalMb: hardware.ramTotalMb, processMb: 580 + Math.round(Math.random() * 60), chromeMb: renders.some((j) => j.status === 'rendering') ? 420 : null, diskFreeMb: 48_000, outputDiskFreeMb: 48_000, gpuPercent: null, workload: { rendering: renders.some((j) => j.status === 'rendering'), ingesting: 0, downloading: models.filter((x) => x.status === 'downloading').length, agentRuns: 0,
+  r('GET', '/hardware/live', () => ({ at: nowIso(), cpuPercent: 18 + Math.round(Math.random() * 20), ramFreeMb: 7400 + Math.round(Math.random() * 300), ramTotalMb: hardware.ramTotalMb, processMb: 580 + Math.round(Math.random() * 60), chromeMb: renders.some((j) => j.status === 'rendering') ? 420 : null, shellMb: 210, diskFreeMb: 48_000, outputDiskFreeMb: 48_000, gpuPercent: null, workload: { rendering: renders.some((j) => j.status === 'rendering'), ingesting: 0, downloading: models.filter((x) => x.status === 'downloading').length, agentRuns: 0,
     items: [
       ...renders.filter((j) => j.status === 'rendering' || j.status === 'queued').map((j) => ({ kind: 'render' as const, id: j.id, label: projects.get(j.projectId)?.dto.name ?? '', status: j.status, progress: j.status === 'rendering' ? j.progress : null, cancellable: true, pausedReason: null })),
       ...models.filter((x) => x.status === 'downloading' || x.status === 'paused').map((x) => ({ kind: 'download' as const, id: x.key, label: x.label, status: x.status, progress: x.bytesTotal ? x.bytesDone / x.bytesTotal : null, cancellable: true, pausedReason: x.pausedReason ?? null })),

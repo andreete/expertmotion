@@ -91,6 +91,28 @@ describe('Providers screen (FR-109…FR-119)', () => {
   });
 });
 
+describe('Budget used up (FR-117, AI-016)', () => {
+  it('EM-4201 "Change budget" opens Providers focused on the per-project budget field of the connection', { timeout: 20_000 }, async () => {
+    try { localStorage.clear(); } catch { /* ignore */ }
+    const bus = new MockBus();
+    const runtime = createMockRuntime({ seed: 'sample', delays: false, bus });
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: ['lic:EM-5001'] }}><App /></StoreProvider>);
+    await until(() => el('stage.timeline') && el('agent.output.ratio.9x16'), 'boot');
+    const c = await runtime.api.addConnection({ provider: 'openrouter', label: 'Utama', secret: KEY, validateNow: true });
+    await runtime.api.putAssignments({ editor: { agent: 'editor', connectionId: c.id, modelId: 'anthropic/claude-sonnet-4.5', settings: {} }, defaultConnectionId: c.id });
+    await act(async () => { bus.emit('agent.run.failed', { runId: 'r1', agent: 'editor', code: 'EM-4201', retryable: false }); });
+    await until(() => el('agent.editor.budget'), 'Change budget');
+    expect(el('agent.editor.budget')!.textContent).toBe('Change budget');
+    await act(async () => { fireEvent.click(el('agent.editor.budget')!); });
+    await until(() => el('scr.providers') && document.activeElement?.getAttribute('data-el') === 'scr.providers.budget.project', 'focused budget field');
+    const put = vi.spyOn(runtime.api, 'putBudget');
+    fireEvent.change(el('scr.providers.budget.project')!, { target: { value: '5' } });
+    await act(async () => { fireEvent.click(els('scr.providers.save').at(-1)!); });
+    await until(() => put.mock.calls.length > 0, 'saved');
+    expect(put.mock.calls[0]![0].projects?.[0]).toMatchObject({ connectionId: c.id, limitUsd: 5 });
+  });
+});
+
 describe('Model Manager (FR-120…FR-126)', () => {
   async function openModels() {
     const r = await renderEditor('sample');

@@ -2,8 +2,8 @@
 // (edit_intents) → Compile (no LLM) or Editor Agent → validatePlan → Execute as one transaction with rollback.
 // The LLM never mutates: every model change goes through CompositionStore.commit after deterministic validation (AI-001, AI-004).
 import {
-  EditIntent, buildCompilePlan, buildRewriteEnvelope, compileIntents, createIntents, enqueue, lockedKeysFromQueue, pickFromIntent, planOps, remove, restore,
-  runEditorAgent, settingsPatchOf, validatePlan, type ChatUsage, type DesignPick, type EditIntentT, type EditPlanT,
+  EditIntent, buildCompilePlan, buildRewriteEnvelope, chatIntent, compileIntents, createIntents, enqueue, lockedKeysFromQueue, pickFromIntent, planOps, remove, restore,
+  runEditorAgent, settingsPatchOf, validatePlan, type ChatImage, type ChatUsage, type DesignPick, type EditIntentT, type EditPlanT,
 } from '@expertmotion/agents';
 import { validateParams } from '@expertmotion/catalogue';
 import { OPERATIONS, type CompositionModelT, type ElementRefT, type OperationT } from '@expertmotion/composition-model';
@@ -12,6 +12,13 @@ import type { ServiceContext } from '../context.js';
 import { parseIntent, planDto, versionDto, type DesignPickInputT, type PlanRow, type VersionDto } from './dto.js';
 import type { Checkpoints } from './checkpoints.js';
 import { issueError, type CompositionStore } from './store.js';
+import { brainstormTools, deltaEmitter } from '../modules/agents.js';
+import { getAssignment } from '../modules/providers.js';
+import { cachedModels } from '../s3/usage-store.js';
+
+/** FR-080 / FR-072: what an Editor Chat message adds to the Rewrite envelope and the provider request. */
+export interface AgentPlanExtras { selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images?: ChatImage[] | undefined; attachments?: string[] | undefined; onDelta?: ((d: string) => void) | undefined;
+  chat?: { messageId: string; target?: ElementRefT | undefined } | undefined }
 
 type Reason = 'created' | 'superseded' | 'restored' | 'removed' | 'cleared' | 'compiled' | 'executed' | 'rejected';
 export interface ExecutionResultT {
@@ -32,6 +39,9 @@ const notFound = (route: string, id: string) => new EmError('EM-9003', 'The item
 export class Workflow {
   private readonly runs = new Map<string, Run>();
   private readonly executing = new Set<string>();
+  /** FR-084: Executes accepted but not yet inside their transaction (a Cancel may still abort them), and the ones cancelled. */
+  private readonly pendingExec = new Set<string>();
+  private readonly cancelledExec = new Set<string>();
   constructor(private readonly ctx: ServiceContext, private readonly store: CompositionStore, private readonly checkpoints: Checkpoints) {
     store.onCommit((pid, head) => this.markStale(pid, (r) => r.baseVersion !== head.hash));
   }
@@ -54,9 +64,21 @@ export class Workflow {
   }
   queueDto(projectId: string, opts: { status?: string[] | undefined; limit?: number } = {}) {
     const all = this.loadQueue(projectId);
-    const headHash = this.store.head(projectId).hash;
-    const items = all.filter((i) => !opts.status || opts.status.includes(i.status)).reverse().slice(0, opts.limit ?? 100);
+    const head = this.store.head(projectId);
+    const headHash = head.hash;
+    const live = this.lineageHashes(projectId, head.versionId);
+    // FR-167: an applied intent whose version left the head's lineage (Undo, or a branch after Undo) shows "undone" in the queue.
+    const items = all.filter((i) => !opts.status || opts.status.includes(i.status)).reverse().slice(0, opts.limit ?? 100)
+      .map((i) => ((i.status === 'executed' || i.status === 'compiled') && i.appliedHash && !live.has(i.appliedHash) ? { ...i, undone: true } : i));
     return { projectId, headHash, items, lockedKeys: lockedKeysFromQueue(all) };
+  }
+  /** Hashes of the head and its parent chain (Undo/Redo commit with the target's parent, so undone versions drop out). */
+  private lineageHashes(projectId: string, headVersionId: string): Set<string> {
+    const rows = this.ctx.db.prepare(`WITH RECURSIVE chain(id, parent_id, hash, depth) AS (
+        SELECT id, parent_id, hash, 0 FROM composition_versions WHERE id = ? AND project_id = ?
+        UNION ALL SELECT v.id, v.parent_id, v.hash, c.depth + 1 FROM composition_versions v JOIN chain c ON v.id = c.parent_id WHERE c.depth < 5000)
+      SELECT hash FROM chain`).all(headVersionId, projectId) as Array<{ hash: string }>;
+    return new Set(rows.map((r) => r.hash));
   }
   private emitQueue(projectId: string, changed: string[], reason: Reason): void {
     if (!changed.length) return;
@@ -71,9 +93,16 @@ export class Workflow {
   }
 
   // ───────────────────────────── R-060 Design Pick ─────────────────────────────
-  createIntent(projectId: string, b: DesignPickInputT): PickResult {
+  createIntent(projectId: string, b: DesignPickInputT, opts: { holdFor?: string | null } = {}): PickResult {
     const head = this.store.head(projectId);
     if (!isHeadRef(head, b.baseVersion)) throw stale(head.hash, b.baseVersion);
+    const r = this.intentsFromPick(projectId, b, head);
+    if (opts.holdFor) return this.holdIntents(projectId, r, opts.holdFor);      // FR-037: the preset's model is not installed
+    return this.enqueueAndMaybeApply(projectId, r, { auto: b.plan === 'auto', reason: 'created' });
+  }
+
+  /** Design Pick → validated Edit Intents (catalogue params, Target Resolution); settings intents remember the replaced value. */
+  private intentsFromPick(projectId: string, b: DesignPickInputT, head: { model: CompositionModelT; hash: string }): EditIntentT[] {
     if (b.presetId && b.presetId.length && Object.keys(b.params).length) {
       const v = validateParams(b.presetId, b.params);
       if (!v.ok) throw issueError({ ...v.issues[0]!, path: `body.${v.issues[0]!.path}` });
@@ -91,7 +120,59 @@ export class Workflow {
     if (!r.ok) throw issueError(r.issues[0] ?? issue('EM-2303', 'This pick cannot be used.'));
     // FR-090: a settings intent remembers the value it replaces, so Undo can put it back even without a queued predecessor.
     if (settingsPatchOf(r.value[0]!)) r.value[0]!.params = { ...r.value[0]!.params, __previous: this.ctx.settings.get().defaultPerformanceProfile };
-    return this.enqueueAndMaybeApply(projectId, r.value, { auto: b.plan === 'auto', reason: 'created' });
+    return r.value;
+  }
+
+  /**
+   * R-065 (FR-095 / FR-097): several fully specified picks as ONE unit — every intent is recorded in the Intent Queue (superseding its
+   * predecessor), the Composition Model ones compile into one plan and one Composition Version, and zero-op settings intents
+   * (Performance Profile) are applied to Settings and stamped with that version's hash so Undo/Redo of it restores them too.
+   */
+  createIntentBatch(projectId: string, b: { baseVersion: string; picks: DesignPickInputT[] }): PickResult & { intents: EditIntentT[] } {
+    const head = this.store.head(projectId);
+    if (!isHeadRef(head, b.baseVersion)) throw stale(head.hash, b.baseVersion);
+    const incoming = b.picks.flatMap((p) => this.intentsFromPick(projectId, { ...p, baseVersion: b.baseVersion }, head));
+    const interpret = incoming.find((i) => i.needsInterpretation);
+    if (interpret) throw new EmError('EM-2303', 'These picks need the Editor Agent; they cannot be applied as one change.', { status: 422, details: { intentIds: [interpret.id] } });
+    const before = this.loadQueue(projectId);
+    const after = enqueue(before, incoming);
+    const wasSup = new Set(before.filter((i) => i.status === 'superseded').map((i) => i.id));
+    const superseded = after.filter((i) => i.status === 'superseded' && !wasSup.has(i.id)).map((i) => i.id);
+    const changed = this.saveQueue(projectId, before, after);
+    const settingsIntents = incoming.filter((i) => settingsPatchOf(i));
+    const modelIds = incoming.filter((i) => !settingsPatchOf(i)).map((i) => i.id);
+    let appliedVersion: VersionDto | null = null, planId: string | null = null; const notices: Array<{ code: string }> = [];
+    if (modelIds.length) {
+      const res = this.applyNow(projectId, modelIds, { reason: 'created', changedBefore: changed, goal: 'Reset Output Settings' });
+      appliedVersion = res.version; planId = res.planId; notices.push(...res.notices);
+    }
+    if (settingsIntents.length) {
+      const hash = appliedVersion?.hash;            // no new version (already at the defaults) → nothing to stamp, Restore still undoes it
+      const ids = new Set(settingsIntents.map((i) => i.id));
+      const mid = this.loadQueue(projectId);
+      const done = this.saveQueue(projectId, mid, mid.map((i) => (ids.has(i.id) ? { ...i, status: 'executed' as const, ...(hash ? { appliedHash: hash } : {}) } : i)));
+      let next = this.ctx.settings.get();
+      for (const i of settingsIntents) next = this.ctx.settings.update({ defaultPerformanceProfile: settingsPatchOf(i)!.performanceProfile });
+      this.emitQueue(projectId, [...new Set([...(modelIds.length ? [] : changed), ...done])], 'executed');
+      this.ctx.bus.emit('settings.changed', { at: this.ctx.now(), scope: 'settings', settings: next });
+    }
+    const queue = this.loadQueue(projectId);
+    const intents = incoming.map((i) => queue.find((q) => q.id === i.id) ?? i);
+    return { intent: intents[0]!, intents, queue: this.queueDto(projectId), superseded, appliedVersion, planId, notices };
+  }
+
+  /**
+   * FR-095 / FR-097: Undo or Redo of a Composition Version also moves the zero-op settings intents stamped with it — Undo puts
+   * back `params.__previous`, Redo re-applies the value — so one Undo of a Reset restores ratio, resolution and profile together.
+   */
+  syncSettingsWithVersion(projectId: string, kind: 'undo' | 'redo', hash: string): void {
+    const hits = this.loadQueue(projectId).filter((i) => i.status === 'executed' && i.appliedHash === hash && settingsPatchOf(i));
+    if (!hits.length) return;
+    const i = hits[hits.length - 1]!;
+    const value = kind === 'undo' ? i.params['__previous'] : settingsPatchOf(i)!.performanceProfile;
+    if (value !== 'standard' && value !== 'accelerated' && value !== 'turbo') return;
+    const next = this.ctx.settings.update({ defaultPerformanceProfile: value });
+    this.ctx.bus.emit('settings.changed', { at: this.ctx.now(), scope: 'settings', settings: next });
   }
 
   /** Enqueue (supersede), then apply directly when fully specified (AI-004) or start a plan run when autoPlan is on. */
@@ -131,7 +212,7 @@ export class Workflow {
   }
 
   /** Compile + Execute in one go for fully specified intents (R-060 auto path, R-062, R-018). Rejects the intents on failure. */
-  applyNow(projectId: string, intentIds: string[], o: { reason: Reason; changedBefore?: string[]; goal?: string }): { version: VersionDto | null; planId: string; notices: Array<{ code: string }> } {
+  applyNow(projectId: string, intentIds: string[], o: { reason: Reason; changedBefore?: string[]; goal?: string; ops?: readonly OperationT[] }): { version: VersionDto | null; planId: string; notices: Array<{ code: string }> } {
     const queue = this.loadQueue(projectId);
     const ids = new Set(intentIds);
     const intents = queue.filter((i) => ids.has(i.id));
@@ -141,7 +222,8 @@ export class Workflow {
       this.emitQueue(projectId, [...new Set([...(o.changedBefore ?? []), ...ch])], 'rejected');
       return issueError(iss);
     };
-    const comp = compileIntents(intents, (i) => pickFromIntent(i), head.model);
+    // `ops`: intents whose operations were built by their owning module (FR-049 asset Insert), validated and executed the same way.
+    const comp = o.ops ? { ok: true as const, value: o.ops.map((op) => ({ ...op, intentId: intents[0]?.id ?? op.intentId })) } : compileIntents(intents, (i) => pickFromIntent(i), head.model);
     if (!comp.ok) throw reject(comp.issues[0]!);
     const planId = this.ctx.newId();
     const label = String(intents[0]?.params['targetLabel'] ?? intents[0]?.propertyKey ?? 'pick');
@@ -177,7 +259,7 @@ export class Workflow {
     const before = this.loadQueue(projectId);
     const t = before.find((i) => i.id === intentId);
     if (!t) throw notFound('intent', intentId);
-    if (t.status === 'executed' || t.status === 'compiled') throw new EmError('EM-9002', 'Applied picks stay in history; use Undo to revert them.', { status: 422, details: { reason: 'executed' } });
+    if (t.status === 'executed') throw new EmError('EM-9002', 'Applied picks stay in history; use Undo to revert them.', { status: 422, details: { reason: 'executed' } });
     const r = remove(before, intentId);
     if (!r.ok) throw issueError(r.issues[0]!);
     this.emitQueue(projectId, this.saveQueue(projectId, before, r.value), 'removed');
@@ -250,7 +332,7 @@ export class Workflow {
   }
 
   // ───────────────────────────── R-070 create plan ─────────────────────────────
-  createPlan(projectId: string, input: { intentIds: string[]; message?: string | undefined; baseVersion: string; mode: 'auto' | 'compile-only' | 'agent'; signal?: AbortSignal | undefined; runId?: string | undefined })
+  createPlan(projectId: string, input: { intentIds: string[]; message?: string | undefined; baseVersion: string; mode: 'auto' | 'compile-only' | 'agent'; signal?: AbortSignal | undefined; runId?: string | undefined; extras?: AgentPlanExtras | undefined })
     : { plan: ReturnType<Workflow['planDtoFor']>; runId?: string; done: Promise<ReturnType<Workflow['planDtoFor']>> } {
     const head = this.store.head(projectId);
     if (!isHeadRef(head, input.baseVersion)) throw stale(head.hash, input.baseVersion);
@@ -269,7 +351,7 @@ export class Workflow {
     const needAgent = !!message || selected.some((i) => i.needsInterpretation);
     if (!message && !selected.length) throw new EmError('EM-9002', 'There is nothing to plan: the Intent Queue is empty and no message was given.', { status: 422, details: { reason: 'empty' } });
     if (input.mode === 'compile-only' && needAgent) throw new EmError('EM-2303', 'These picks need the Editor Agent; they cannot be compiled directly.', { details: { intentIds: selected.filter((i) => i.needsInterpretation).map((i) => i.id) } });
-    if (input.mode === 'agent' || needAgent) return this.startAgentPlan(projectId, selected, message, input.signal, input.runId);
+    if (input.mode === 'agent' || needAgent) return this.startAgentPlan(projectId, selected, message, input.signal, input.runId, input.extras);
 
     const comp = compileIntents(selected, (i) => pickFromIntent(i), head.model);
     if (!comp.ok) throw issueError(comp.issues[0]!);
@@ -286,7 +368,7 @@ export class Workflow {
   activeRun(projectId: string): Run | undefined { for (const r of this.runs.values()) if (r.projectId === projectId) return r; return undefined; }
 
   /** `externalRunId`: the caller (S3 editor chat) owns that agent_runs row, its events and usage; only plan_id is linked here. */
-  private startAgentPlan(projectId: string, intents: EditIntentT[], message: string | undefined, signal?: AbortSignal, externalRunId?: string) {
+  private startAgentPlan(projectId: string, selectedIntents: EditIntentT[], message: string | undefined, signal?: AbortSignal, externalRunId?: string, extras: AgentPlanExtras = {}) {
     if (this.ctx.settings.get().privateMode) throw new EmError('EM-4401', 'Agents are off while Private Mode is on. Designs and exports keep working.');
     const active = this.activeRun(projectId);
     if (active) throw new EmError('EM-4305', 'Wait for the current answer to finish, or cancel it, before sending another message.', { details: { agent: 'editor', activeRunId: active.runId } });
@@ -294,6 +376,14 @@ export class Workflow {
     if (!head.model.tracks.video.length) throw new EmError('EM-2202', 'Insert at least one asset before applying designs or asking the Editor Agent.', { details: { projectId } });
     const provider = this.ctx.hooks.providerFor('editor', projectId);
     this.ctx.hooks.budgetCheck(projectId);
+    let intents = selectedIntents;
+    if (extras.chat && message) {
+      // FR-080: the chat message becomes an Edit Intent (source chat, propertyKey chat:<messageId>) once the run can start.
+      const ci = chatIntent({ projectId, messageId: extras.chat.messageId, text: message, target: extras.chat.target, selection: extras.selection, baseVersion: head.hash, newId: this.ctx.newId, now: this.ctx.now });
+      const before = this.loadQueue(projectId);
+      this.emitQueue(projectId, this.saveQueue(projectId, before, enqueue(before, [ci])), 'created');
+      intents = [...intents, ci];
+    }
     const external = !!externalRunId;
     const planId = this.ctx.newId(), runId = externalRunId ?? this.ctx.newId(), now = this.ctx.now();
     const draft: EditPlanT = { id: planId, projectId, baseVersion: head.hash, origin: 'editor-agent', goal: (message ?? 'Plan the queued picks').slice(0, 300), steps: [], touchesLockedKeys: [], risks: [], status: 'draft', validation: [] };
@@ -310,13 +400,19 @@ export class Workflow {
       const queue = this.loadQueue(projectId);
       const assets = this.store.facts(projectId), tier = this.ctx.hooks.tier(), lockedKeys = lockedKeysFromQueue(queue);
       const notes = (this.ctx.db.prepare("SELECT json_extract(plan_json, '$.notes') AS n FROM edit_plans WHERE project_id = ? AND id != ? AND json_extract(plan_json, '$.notes') IS NOT NULL ORDER BY updated_at DESC LIMIT 1").get(projectId, planId) as { n: string } | undefined)?.n;
-      const env = buildRewriteEnvelope({ model: head.model, baseVersion: head.hash, assets, intents, lockedKeys, tier, ...(message ? { creatorMessage: message } : {}), ...(notes ? { creatorNotes: notes } : {}) });
+      const env = buildRewriteEnvelope({ model: head.model, baseVersion: head.hash, assets, intents, lockedKeys, tier, ...(message ? { creatorMessage: message } : {}), ...(notes ? { creatorNotes: notes } : {}),
+        ...(extras.selection?.length ? { selection: extras.selection } : {}), ...(extras.playheadMs !== undefined ? { playheadMs: extras.playheadMs } : {}), ...(extras.attachments?.length ? { attachments: extras.attachments } : {}) });
       let usage: ChatUsage[] = [];
+      // FR-084: plan deltas stream as agent.run.delta (the S3 chat passes its own emitter for its run; queue-started runs use one here).
+      const own = extras.onDelta || external ? null : deltaEmitter(this.ctx, projectId, runId, 'editor');   // an external run owns its events
+      const onDelta = extras.onDelta ?? (own ? (d: string) => own.push(d) : null);
       try {
         const r = await runEditorAgent(env, provider, { model: head.model, baseVersion: head.hash, assets, tier, lockedKeys, newId: this.ctx.newId, planId, projectId },
-          { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId) });
+          { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId), tools: brainstormTools(this.ctx, projectId, head.model.settings.language),
+            ...(onDelta ? { onDelta: (d: string) => { if (!ac.signal.aborted) onDelta(d); } } : {}), ...(extras.images?.length ? { images: extras.images } : {}) }).finally(() => own?.flush());
         usage = r.usage;
-        if (usage.length && !external) { try { this.ctx.hooks.recordUsage(projectId, 'editor', runId, usage); } catch (e) { this.ctx.log.warn({ err: String(e) }, 'recordUsage failed'); } }
+        // Usage is recorded under the run that made the request (the S3 chat's run when external, FR-074).
+        if (usage.length) { try { this.ctx.hooks.recordUsage(projectId, 'editor', runId, usage); } catch (e) { this.ctx.log.warn({ err: String(e) }, 'recordUsage failed'); } }
         const current = this.planRow(planId);
         if (current.status === 'cancelled' || ac.signal.aborted) { this.finishCancelled(run); return this.planDtoFor(planId); }
         const agg = aggregate(usage);
@@ -326,7 +422,7 @@ export class Workflow {
           const plan: EditPlanT = { ...r.plan, ...(agg ? { usage: agg } : {}), ...(JSON.parse(current.plan_json).notes ? { notes: JSON.parse(current.plan_json).notes as string } : {}) };
           this.updatePlan(planId, plan, status);
           if (!external) this.finishRun(runId, 'done', null);
-          if (!external) this.ctx.bus.emit('agent.run.done', { at: this.ctx.now(), projectId, run: this.runDto(runId), usage: agg, contextUsage: { usedTokens: agg?.inputTokens ?? 0, contextLength: null }, planId });
+          if (!external) this.ctx.bus.emit('agent.run.done', { at: this.ctx.now(), projectId, run: this.runDto(runId), usage: agg, contextUsage: this.editorContextUsage(usage), planId });
           if (status === 'valid') this.emitPlanReady(planId, runId); else this.emitPlanInvalid(projectId, plan, status, 'EM-2301');
         } else {
           const code = r.error.code;
@@ -356,10 +452,25 @@ export class Workflow {
     return { plan: this.planDtoFor(planId), runId, done };
   }
 
+  /** FR-074: the counter is the last request's input + output tokens over the assigned model's context length (Capability Table). */
+  private editorContextUsage(usage: readonly ChatUsage[]): { usedTokens: number; contextLength: number | null } {
+    const last = usage[usage.length - 1];
+    let contextLength: number | null = null;
+    try { const a = getAssignment(this.ctx, 'editor'); contextLength = a ? cachedModels(this.ctx, a.connectionId)?.find((m) => m.modelId === a.modelId)?.contextLength ?? null : null; } catch { /* providers module absent */ }
+    return { usedTokens: last ? last.inputTokens + last.outputTokens : 0, contextLength };
+  }
   private finishRun(runId: string, status: 'done' | 'failed' | 'cancelled', code: string | null): void {
     this.ctx.db.prepare("UPDATE agent_runs SET status = ?, error_code = ?, finished_at = ? WHERE id = ? AND status = 'running'").run(status, code, this.ctx.now(), runId);
   }
+  /** FR-084: cancelling a chat request withdraws it: its chat Edit Intent (FR-080) is removed so the next message does not repeat it. */
+  private withdrawChatIntents(projectId: string, planId: string): void {
+    const row = this.planRow(planId);
+    const ids = new Set(row.intent_ids_json ? (JSON.parse(row.intent_ids_json) as string[]) : []);
+    const chat = this.loadQueue(projectId).filter((i) => ids.has(i.id) && i.source === 'chat' && i.status === 'queued').map((i) => i.id);
+    this.emitQueue(projectId, this.setIntentStatus(projectId, chat, 'removed'), 'removed');
+  }
   private finishCancelled(run: Run): void {
+    this.withdrawChatIntents(run.projectId, run.planId);
     const r = this.planRow(run.planId);
     const p = JSON.parse(r.plan_json) as EditPlanT;
     if (r.status !== 'cancelled') this.updatePlan(run.planId, p, 'cancelled');
@@ -378,7 +489,7 @@ export class Workflow {
   }
 
   // ───────────────────────────── R-073 Execute ─────────────────────────────
-  execute(planId: string, o: { confirmDestructive: boolean; idempotencyKey?: string | undefined }): ExecutionResultT & { notice?: string } {
+  async execute(planId: string, o: { confirmDestructive: boolean; idempotencyKey?: string | undefined }): Promise<ExecutionResultT & { notice?: string }> {
     const row = this.planRow(planId);
     if (o.idempotencyKey) {
       const prior = this.ctx.db.prepare("SELECT result_json FROM edit_plans WHERE project_id = ? AND idempotency_key = ? AND result_json IS NOT NULL AND updated_at > ? ORDER BY updated_at DESC LIMIT 1")
@@ -392,7 +503,14 @@ export class Workflow {
     if (row.status === 'cancelled' || row.status === 'invalid') throw new EmError('EM-2303', 'This plan cannot be executed.', { details: { planId, status: row.status } });
     const destructive = [...new Set(planOps(plan).filter((op) => DESTRUCTIVE.has(op.op)).map((op) => op.op))];
     if (destructive.length && !o.confirmDestructive) throw new EmError('EM-9002', 'This plan removes content; confirm to continue.', { status: 422, path: 'body.confirmDestructive', details: { destructive } });
-    return this.executeRow(row, { checkpoint: true, ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}) }).result;
+    // FR-084: the plan is `executing` from here; a Cancel that arrives before the transaction starts aborts it (nothing is committed).
+    // Inside the transaction the commit is atomic (SQLite), so a later Cancel can never leave a partial Composition Version.
+    this.updatePlan(planId, plan, 'executing');
+    this.pendingExec.add(planId);
+    await new Promise<void>((r) => setImmediate(r));
+    this.pendingExec.delete(planId);
+    if (this.cancelledExec.delete(planId)) throw new EmError('EM-4303', 'The change was cancelled before it was applied. Nothing changed.', { status: 409, details: { planId } });
+    return this.executeRow(this.planRow(planId), { checkpoint: true, ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}) }).result;
   }
 
   /** The Execute core shared by R-073 and the compile-now path. One transaction; rollback reported as ExecutionResult ok:false. */
@@ -457,12 +575,21 @@ export class Workflow {
   // ───────────────────────────── R-074 / R-075 ─────────────────────────────
   cancel(planId: string) {
     const row = this.planRow(planId);
+    if (row.status === 'executing' && this.pendingExec.has(planId)) {
+      this.pendingExec.delete(planId); this.cancelledExec.add(planId);
+      const p = JSON.parse(row.plan_json) as EditPlanT;
+      this.withdrawChatIntents(row.project_id, planId);
+      this.updatePlan(planId, p, 'cancelled');
+      this.emitPlanInvalid(row.project_id, p, 'cancelled', 'EM-4303');
+      return this.planDtoFor(planId);
+    }
     if (row.status === 'executing') throw new EmError('EM-2309', 'Another change is being applied. Wait for it to finish, then try again.', { details: { projectId: row.project_id, activePlanId: planId } });
     if (row.status === 'executed') throw new EmError('EM-9002', 'An executed plan cannot be cancelled; use Undo.', { status: 422, details: { reason: 'executed' } });
     if (row.status === 'cancelled') return this.planDtoFor(planId);
     const run = this.runs.get(planId);
     if (run) { run.ac.abort(); this.finishCancelled(run); return this.planDtoFor(planId); }
     const p = JSON.parse(row.plan_json) as EditPlanT;
+    this.withdrawChatIntents(row.project_id, planId);
     this.updatePlan(planId, p, 'cancelled');
     if (row.agent_run_id) this.finishRun(row.agent_run_id, 'cancelled', 'EM-4303');
     this.emitPlanInvalid(row.project_id, p, 'cancelled', 'EM-4303');
@@ -480,6 +607,53 @@ export class Workflow {
    * Enqueues already-built intents (Brainstorm hand-off, AI_WORKFLOW §6/§9). They are normalised to this project, the current
    * head and status 'queued'; an intent whose key is a Locked Key is kept but 'rejected' so it never supersedes the Creator's pick.
    */
+  // ───────────────────────────── FR-037 held picks / FR-049 asset Insert ─────────────────────────────
+  /** FR-037: the pick is persisted as `held` (EM-2104): visible in the Intent Queue, ignored by supersession and planning. */
+  private holdIntents(projectId: string, incoming: EditIntentT[], modelFlag: string): PickResult {
+    const before = this.loadQueue(projectId);
+    const held = incoming.map((i) => ({ ...i, status: 'held' as const, params: { ...i.params, __heldFor: modelFlag } }));
+    this.emitQueue(projectId, this.saveQueue(projectId, before, [...before, ...held]), 'created');
+    return { intent: held[0]!, queue: this.queueDto(projectId), superseded: [], appliedVersion: null, planId: null, notices: [{ code: 'EM-2104' }] };
+  }
+
+  /** FR-037: `model.installed` → every pick held for that model becomes `queued` and goes through the normal path (Compile + apply). */
+  resumeHeld(modelFlag: string): string[] {
+    const projects = this.ctx.db.prepare("SELECT DISTINCT project_id FROM edit_intents WHERE status = 'held'").all() as Array<{ project_id: string }>;
+    const resumedIds: string[] = [];
+    for (const { project_id: pid } of projects) {
+      const before = this.loadQueue(pid);
+      const held = before.filter((i) => i.status === 'held' && i.params['__heldFor'] === modelFlag);
+      if (!held.length) continue;
+      const ids = new Set(held.map((i) => i.id));
+      const resumed = held.map((i) => { const params = { ...i.params }; delete params['__heldFor']; return { ...i, status: 'queued' as const, params }; });
+      resumedIds.push(...ids);
+      const top = resumed.filter((i) => !i.parentIntentId);
+      try {
+        for (const t of top) {
+          const family = resumed.filter((i) => i.id === t.id || i.parentIntentId === t.id);
+          const cur = this.loadQueue(pid).filter((i) => !family.some((f) => f.id === i.id));
+          this.enqueueAndMaybeApply(pid, family, { auto: true, reason: 'restored', before: this.loadQueue(pid), after: enqueue(cur, family) });
+        }
+      } catch (e) { this.ctx.log.warn({ projectId: pid, modelFlag, err: String(e) }, 'held pick could not be applied'); }
+    }
+    return resumedIds;
+  }
+
+  /** FR-049: an asset Insert is one Edit Intent ("Insert N clips", a list key that is never superseded), applied directly. */
+  insertIntent(projectId: string, ops: readonly OperationT[], meta: { label: string; assetIds: string[]; playheadMs?: number }): { versionId: string; intentId: string } {
+    const head = this.store.head(projectId);
+    const id = this.ctx.newId();
+    const intent: EditIntentT = {
+      id, projectId, source: 'ui', createdAt: this.ctx.now(), category: 'asset', params: { targetLabel: meta.label, __insert: { count: meta.assetIds.length, assetIds: meta.assetIds, ...(meta.playheadMs !== undefined ? { playheadMs: meta.playheadMs } : {}) } },
+      target: { kind: 'sequence' }, resolvedTargets: [{ kind: 'sequence' }], propertyKey: `list:asset.insert:${id}`, propertyClass: 'list', needsInterpretation: false, status: 'queued', supersedes: [], baseVersion: head.hash,
+    };
+    const before = this.loadQueue(projectId);
+    const changed = this.saveQueue(projectId, before, [...before, intent]);
+    const res = this.applyNow(projectId, [id], { reason: 'created', changedBefore: changed, ops, goal: meta.label });
+    if (!res.version) throw new EmError('EM-2307', 'The change could not be applied.');
+    return { versionId: res.version.id, intentId: id };
+  }
+
   enqueueExternal(projectId: string, raw: readonly unknown[]): { queue: EditIntentT[] } {
     const head = this.store.head(projectId);
     const before = this.loadQueue(projectId);

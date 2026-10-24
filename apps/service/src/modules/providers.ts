@@ -8,10 +8,11 @@ import { extractJson, mapProviderError, type ChatProvider } from '@expertmotion/
 import type { ServiceContext } from '../context.js';
 import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
+import { customBaseUrlProblem } from '../services/egress.js';
 import { createSecretBox, secretHint, type SecretBox } from '../s3/crypto.js';
 import { chatProviderFor, DEFAULT_CALL_TIMEOUT_MS, listModels, VALIDATE_TIMEOUT_MS, validateKey } from '../s3/adapters.js';
 import { Agent, AssignmentDto, AssignmentSettings, audit, emit, Id, monthOf, ProviderKind, requireProject, type AgentT, type AssignmentDtoT, type CapabilityRowT, type ProviderKindT } from '../s3/dto.js';
-import { budgetCheck, budgetState, cachedModels, connectionMonthSpend, projectMonthSpend, recordUsage } from '../s3/usage-store.js';
+import { budgetCheck, budgetState, cachedModels, connectionMonthSpend, projectConnectionMonthSpend, projectMonthSpend, recordUsage } from '../s3/usage-store.js';
 import { s3, track } from '../s3/state.js';
 
 interface ConnRow { id: string; provider: ProviderKindT; label: string; base_url: string | null; secret_enc: Buffer; secret_hint: string; status: 'unvalidated' | 'valid' | 'invalid';
@@ -22,7 +23,7 @@ const aadFor = (id: string) => `provider_connections:${id}`;
 const boxes = new WeakMap<ServiceContext, SecretBox>();
 const box = (ctx: ServiceContext): SecretBox => { let b = boxes.get(ctx); if (!b) { b = createSecretBox(ctx.cfg.dbKeyHex); boxes.set(ctx, b); } return b; };
 /** Late-bound egress so a replaced ctx.egress (tests, proxy settings) is always used. */
-const egressFetch = (ctx: ServiceContext): typeof fetch => (input, init) => ctx.egress.fetch(input, init);
+const egressFetch = (ctx: ServiceContext, purpose: 'provider' | 'provider-models' = 'provider'): typeof fetch => (input, init) => ctx.egress.for(purpose)(input, init);
 
 const modelCount = (r: ConnRow): number | null => { if (!r.models_json) return null; try { const a = JSON.parse(r.models_json) as unknown; return Array.isArray(a) ? a.length : null; } catch { return null; } };
 const toDto = (r: ConnRow) => ({ id: r.id, provider: r.provider, label: r.label, baseUrl: r.base_url, secretHint: r.secret_hint, status: r.status, validatedAt: r.validated_at,
@@ -93,7 +94,7 @@ async function refreshModels(ctx: ServiceContext, id: string): Promise<{ items: 
   const r = getConn(ctx, id);
   if (r.provider === 'custom') throw new EmError('EM-9004', '"Custom provider connections" is not available in this version of Expertmotion yet.', { status: 422 });
   if (ctx.egress.isPrivate()) throw new EmError('EM-8202', 'Private Mode is on, so "List models" was not sent to the internet.');
-  const items = await listModels(r.provider, keyOf(ctx, r), egressFetch(ctx));
+  const items = await listModels(r.provider, keyOf(ctx, r), egressFetch(ctx, 'provider-models'));   // SEC-084: model lists ≤ 8 MB
   const at = ctx.now();
   ctx.db.prepare('UPDATE provider_connections SET models_json=?, models_fetched_at=?, updated_at=? WHERE id=?').run(JSON.stringify(items), at, at, id);
   return { items, fetchedAt: at };
@@ -201,22 +202,27 @@ function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
 function budgetView(ctx: ServiceContext, month = monthOf(ctx.now())) {
   const conns = ctx.db.prepare('SELECT id, budget_month_usd b FROM provider_connections ORDER BY created_at').all() as Array<{ id: string; b: number | null }>;
   const projects = ctx.db.prepare('SELECT project_id p, limit_usd l FROM project_budgets ORDER BY project_id').all() as Array<{ p: string; l: number | null }>;
+  const perConn = ctx.db.prepare('SELECT project_id p, connection_id c, limit_usd l FROM project_connection_budgets ORDER BY project_id, connection_id').all() as Array<{ p: string; c: string; l: number | null }>;
   return {
     connections: conns.map((c) => { const s = connectionMonthSpend(ctx, c.id, month); return { connectionId: c.id, budgetMonthUsd: c.b, spentMonthUsd: s.costUsd, approximate: s.approximate }; }),
-    projects: projects.map((p) => ({ projectId: p.p, limitUsd: p.l, spentUsd: projectMonthSpend(ctx, p.p, month).costUsd })), month,
+    // FR-117: connectionId null = project-wide cap (all connections); otherwise the per-project cap on that connection
+    projects: [...projects.map((p) => ({ projectId: p.p, connectionId: null as string | null, limitUsd: p.l, spentUsd: projectMonthSpend(ctx, p.p, month).costUsd })),
+      ...perConn.map((p) => ({ projectId: p.p, connectionId: p.c as string | null, limitUsd: p.l, spentUsd: projectConnectionMonthSpend(ctx, p.p, p.c, month).costUsd }))], month,
   };
 }
 
-const AddBody = z.object({ provider: ProviderKind, label: z.string().trim().min(1).max(60), secret: z.string().trim().min(8).max(512), baseUrl: z.string().url().startsWith('https://').optional(),
+/** SEC-082: https only, a DNS hostname (no IP literal, no localhost); the host joins the provider allow-list once saved. */
+const CustomBaseUrl = z.string().max(512).superRefine((v, c) => { const p = customBaseUrlProblem(v); if (p) c.addIssue({ code: 'custom', message: `baseUrl: ${p}` }); });
+const AddBody = z.object({ provider: ProviderKind, label: z.string().trim().min(1).max(60), secret: z.string().trim().min(8).max(512), baseUrl: CustomBaseUrl.optional(),
   budgetMonthUsd: z.number().positive().nullable().default(null), validateNow: z.boolean().default(true) }).strict();
-const PatchBody = z.object({ label: z.string().trim().min(1).max(60).optional(), secret: z.string().trim().min(8).max(512).optional(), baseUrl: z.string().url().startsWith('https://').nullable().optional(),
+const PatchBody = z.object({ label: z.string().trim().min(1).max(60).optional(), secret: z.string().trim().min(8).max(512).optional(), baseUrl: CustomBaseUrl.nullable().optional(),
   budgetMonthUsd: z.number().positive().nullable().optional() }).strict();
 const ConnParams = z.object({ connId: Id });
 const AssignBody = z.object({ brainstorm: AssignmentDto.nullable().optional(), editor: AssignmentDto.nullable().optional(), defaultConnectionId: Id.nullable().optional() }).strict();
 const DryRunBody = z.object({ provider: ProviderKind, secret: z.string().trim().min(8).max(512) }).strict();
 const TestBody = z.object({ connectionId: Id.optional(), draft: DryRunBody.optional(), brainstorm: z.string().min(1).max(200).nullable().optional(), editor: z.string().min(1).max(200).nullable().optional() }).strict();
-const BudgetBody = z.object({ connections: z.array(z.object({ connectionId: Id, budgetMonthUsd: z.number().min(0).nullable() })).max(50).optional(),
-  projects: z.array(z.object({ projectId: Id, limitUsd: z.number().min(0).nullable() })).max(500).optional() }).strict();
+const BudgetBody = z.object({ connections: z.array(z.object({ connectionId: Id, budgetMonthUsd: z.number().min(0).max(10_000).nullable() })).max(50).optional(),
+  projects: z.array(z.object({ projectId: Id, connectionId: Id.nullable().optional(), limitUsd: z.number().min(0).max(10_000).nullable() })).max(500).optional() }).strict();
 
 export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModule {
   const enabled = opts.enabledProviders ?? P0_PROVIDERS;
@@ -365,11 +371,15 @@ export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModul
 
       route(router, 'put', '/providers/budget', { body: BudgetBody }, ({ body }) => {
         for (const c of body.connections ?? []) getConn(ctx, c.connectionId);
-        for (const p of body.projects ?? []) requireProject(ctx, p.projectId);
+        for (const p of body.projects ?? []) { requireProject(ctx, p.projectId); if (p.connectionId) getConn(ctx, p.connectionId); }
         const now = ctx.now();
         ctx.db.transaction(() => {
           for (const c of body.connections ?? []) ctx.db.prepare('UPDATE provider_connections SET budget_month_usd=?, updated_at=? WHERE id=?').run(c.budgetMonthUsd && c.budgetMonthUsd > 0 ? c.budgetMonthUsd : null, now, c.connectionId);
-          for (const p of body.projects ?? []) ctx.db.prepare('INSERT INTO project_budgets(project_id, limit_usd, updated_at) VALUES (?,?,?) ON CONFLICT(project_id) DO UPDATE SET limit_usd=excluded.limit_usd, updated_at=excluded.updated_at').run(p.projectId, p.limitUsd && p.limitUsd > 0 ? p.limitUsd : null, now);
+          for (const p of body.projects ?? []) {
+            const lim = p.limitUsd && p.limitUsd > 0 ? p.limitUsd : null;
+            if (p.connectionId) ctx.db.prepare('INSERT INTO project_connection_budgets(project_id, connection_id, limit_usd, updated_at) VALUES (?,?,?,?) ON CONFLICT(project_id, connection_id) DO UPDATE SET limit_usd=excluded.limit_usd, updated_at=excluded.updated_at').run(p.projectId, p.connectionId, lim, now);
+            else ctx.db.prepare('INSERT INTO project_budgets(project_id, limit_usd, updated_at) VALUES (?,?,?) ON CONFLICT(project_id) DO UPDATE SET limit_usd=excluded.limit_usd, updated_at=excluded.updated_at').run(p.projectId, lim, now);
+          }
         })();
         changed(ctx, 'budget');
         return budgetView(ctx);

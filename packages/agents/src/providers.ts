@@ -4,7 +4,9 @@ import { generateText, streamText } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { EmError } from '@expertmotion/shared';
 
-export interface ChatMessage { role: 'user' | 'assistant'; content: string }
+/** FR-072: an image attached by the Creator, sent as an image part only to models with image input (Capability Table). */
+export interface ChatImage { mediaType: string; /** base64, no data: prefix */ data: string; name?: string }
+export interface ChatMessage { role: 'user' | 'assistant'; content: string; images?: ChatImage[] }
 export interface ChatRequest { system: string; messages: ChatMessage[]; maxTokens: number; temperature: number; signal?: AbortSignal; timeoutMs?: number }
 export interface ChatUsage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean }
 export interface ChatResult { text: string; usage: ChatUsage }
@@ -38,13 +40,20 @@ export function mapProviderError(e: unknown): EmError {
   return new EmError('EM-4003', 'Could not reach the AI provider.', { cause: e });
 }
 
+/** AI SDK message list: a user message with images becomes text + image parts; everything else stays a plain string. */
+export function toSdkMessages(messages: readonly ChatMessage[]) {
+  return messages.map((m) => (m.role === 'user' && m.images?.length
+    ? { role: 'user' as const, content: [{ type: 'text' as const, text: m.content }, ...m.images.map((i) => ({ type: 'image' as const, image: i.data, mediaType: i.mediaType }))] }
+    : m.role === 'assistant' ? { role: 'assistant' as const, content: m.content } : { role: 'user' as const, content: m.content }));
+}
+
 export function openRouterProvider(opts: { apiKey: string; model: string; fetch: typeof fetch; baseURL?: string; appName?: string }): ChatProvider {
   const or = createOpenRouter({ apiKey: opts.apiKey, fetch: opts.fetch, ...(opts.baseURL ? { baseURL: opts.baseURL } : {}), appName: opts.appName ?? 'Expertmotion' });
   return {
     id: 'openrouter', model: opts.model,
     async complete(req) {
       try {
-        const r = await generateText({ model: or.chat(opts.model), system: req.system, messages: req.messages, maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0,
+        const r = await generateText({ model: or.chat(opts.model), system: req.system, messages: toSdkMessages(req.messages), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0,
           ...(req.signal ? { abortSignal: req.signal } : {}), ...(req.timeoutMs ? { timeout: req.timeoutMs } : {}) });
         const meta = (r.providerMetadata?.['openrouter'] ?? {}) as { usage?: { cost?: number } };
         const cost = typeof meta.usage?.cost === 'number' ? meta.usage.cost : null;
@@ -53,7 +62,7 @@ export function openRouterProvider(opts: { apiKey: string; model: string; fetch:
     },
     async stream(req, onDelta) {
       try {
-        const r = streamText({ model: or.chat(opts.model), system: req.system, messages: req.messages, maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0,
+        const r = streamText({ model: or.chat(opts.model), system: req.system, messages: toSdkMessages(req.messages), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0,
           ...(req.signal ? { abortSignal: req.signal } : {}), ...(req.timeoutMs ? { timeout: req.timeoutMs } : {}) });
         let text = '';
         for await (const part of r.fullStream) {

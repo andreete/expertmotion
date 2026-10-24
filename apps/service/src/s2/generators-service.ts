@@ -6,7 +6,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyOperations, deriveTiming, type CompositionModelT, type OperationT } from '@expertmotion/composition-model';
+import { applyOperations, deriveTiming, type CompositionModelT, type GeneratedResult, type OperationT } from '@expertmotion/composition-model';
+import { compileDefaults } from '@expertmotion/catalogue';
 import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
 import { JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, removeJobDir, synthesize, transcribeToPages,
   type JobContext, type JobEvent, type ModelDef } from '@expertmotion/models';
@@ -19,8 +20,36 @@ import { runTool } from './proc.js';
 import { defaultRemotionPort, type RendererLike } from './render-service.js';
 import { getOutput, outputRelPath, toOutputDto } from './render-repo.js';
 import { s2, useModel } from './state.js';
+import { assertEngineSpawnAllowed } from './spawn-gate.js';
 
 export const GENERATOR_KINDS = ['voice', 'music', 'thumbnail', 'captions', 'hashtags'] as const;
+/** FR-103: thumbnail styles: the title Text Layer variant in still mode, prompt wording in prompt mode. */
+export const THUMBNAIL_STYLES = ['bold', 'clean', 'cinematic', 'playful'] as const;
+export type ThumbnailStyle = (typeof THUMBNAIL_STYLES)[number];
+const THUMB_VARIANT: Record<ThumbnailStyle, string> = { bold: 'preset:text.title', clean: 'preset:text.subtitle', cinematic: 'preset:text.quote', playful: 'preset:text.callout' };
+const THUMB_PROMPT: Record<ThumbnailStyle, string> = { bold: 'bold high-contrast colours, strong subject', clean: 'clean minimal composition, soft light', cinematic: 'cinematic lighting, film look, shallow depth of field', playful: 'bright playful colours, fun mood' };
+/** FR-105: hashtag / social caption tones. */
+export const HASHTAG_TONES = ['casual', 'professional', 'energetic', 'informative', 'funny'] as const;
+/** FR-104: caption style applied on Insert when the project has none (same default as op:caption.importSrt). */
+export const DEFAULT_CAPTION_STYLE = 'preset:caption.editorial';
+/** FR-102: an inserted music bed uses the preset:audio.bed-soft Compile defaults (volume, loop, fades). */
+export function musicBedOp(assetId: string): OperationT {
+  const cd = compileDefaults('preset:audio.bed-soft');
+  return { op: 'op:audio.addBed', target: { kind: 'project' }, args: { volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000, ...(cd?.args ?? {}), assetId } } as OperationT;
+}
+/** FR-104: Sequence-mode transcription: pages of one clip's source audio moved onto the Sequence timeline (trim, rate, window). */
+export function shiftPages(pages: unknown[], w: { fromMs: number; toMs: number; trimBeforeMs: number; playbackRate: number }): unknown[] {
+  const at = (src: number) => Math.round(w.fromMs + (src - w.trimBeforeMs) / w.playbackRate);
+  const out: unknown[] = [];
+  for (const raw of pages) {
+    const p = raw as { text: string; startMs: number; durationMs: number; tokens?: Array<{ text: string; fromMs: number; toMs: number }> };
+    const start = at(p.startMs), end = at(p.startMs + p.durationMs);
+    if (end <= w.fromMs || start >= w.toMs) continue;
+    const s0 = Math.max(w.fromMs, start), e0 = Math.min(w.toMs, end);
+    out.push({ ...p, startMs: s0, durationMs: Math.max(1, e0 - s0), tokens: (p.tokens ?? []).map((t) => ({ ...t, fromMs: Math.max(s0, at(t.fromMs)), toMs: Math.min(e0, Math.max(at(t.fromMs), at(t.toMs))) })) });
+  }
+  return out;
+}
 export type GeneratorKind = (typeof GENERATOR_KINDS)[number];
 /** ADR-016 priority tag per Generator Card (FR-100). */
 export const GENERATOR_PRIORITY: Record<GeneratorKind, 'P1' | 'P2'> = { voice: 'P1', captions: 'P1', hashtags: 'P1', music: 'P2', thumbnail: 'P2' };
@@ -178,6 +207,7 @@ export class GeneratorsService {
     this.inserts.set(id, body['insert'] === true);
     this.runner.submit({ id, kind, projectId, ...(prep.modelKey ? { modelKey: prep.modelKey } : {}), run: async (j) => {
       const out = await prep.run(j);
+      if (out.ops) out.ops = this.withCaptionStyle(projectId, out.ops);
       if (this.inserts.get(id) && out.ops?.length) {
         const versionId = ctx.hooks.applyOps(projectId, out.ops, { kind: 'generator', ref: id, summary: `Inserted generated ${kind}` });
         out.result['versionId'] = versionId;
@@ -188,16 +218,35 @@ export class GeneratorsService {
     return toGenDto(this.get(id)!);
   }
   /** R-134: insert a finished job's result later (no re-run). Idempotent: a second call returns the same version with notice EM-2308. */
-  insertResult(id: string, override: { pages?: unknown[] } = {}): { versionId: string; notice?: string } | undefined {
+  /** FR-104: caption Insert also sets the default caption style when the project has none yet. */
+  private withCaptionStyle(projectId: string, ops: OperationT[]): OperationT[] {
+    if (!ops.some((o) => o.op === 'op:caption.setPages') || ops.some((o) => o.op === 'op:caption.setStyle')) return ops;
+    let styled = true;
+    try { styled = this.ctx.hooks.composition(projectId).model.tracks.caption.styleId !== null; } catch { /* no head: leave as is */ }
+    return styled ? ops : [...ops, { op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: DEFAULT_CAPTION_STYLE } } as OperationT];
+  }
+  insertResult(id: string, override: { pages?: unknown[]; assetId?: string; atMs?: number } = {}): { versionId: string; notice?: string } | undefined {
     const ctx = this.ctx; const r = this.get(id); if (!r) return undefined;
     if (r.status !== 'done') throw em('EM-9002', 'This result is not ready yet.', { status: 422, details: { reason: 'not-done', status: r.status } });
     const result = (r.result_json ? JSON.parse(r.result_json) : {}) as Record<string, unknown>;
     if (typeof result['versionId'] === 'string') return { versionId: result['versionId'], notice: 'EM-2308' };
     let ops = result['proposedOps'] as OperationT[] | undefined;
+    let jobs: Record<string, GeneratedResult> | undefined;
     if (!ops?.length) throw em('EM-9002', 'This result has nothing to insert.', { status: 422, details: { reason: 'no-ops' } });
     // FR-104: the Creator may edit caption text in the preview before Insert; timings stay the engine's
     if (override.pages && r.kind === 'captions') ops = ops.map((o) => (o.op === 'op:caption.setPages' ? { ...o, args: { ...o.args, pages: override.pages } } as OperationT : o));
-    const versionId = ctx.hooks.applyOps(r.project_id, ops, { kind: 'generator', ref: id, summary: `Inserted generated ${r.kind}` });
+    // FR-103: Insert as overlay = op:generated.insert {kind: thumbnail, jobId, atMs} with the chosen candidate as the job result (an image overlay at the playhead)
+    if (r.kind === 'thumbnail') {
+      const cands = new Set([r.result_asset_id, ...((result['candidates'] as Array<{ assetId: string }> | undefined) ?? []).map((c) => c.assetId)].filter(Boolean));
+      if (override.assetId && !cands.has(override.assetId)) throw em('EM-9002', 'Invalid request: assetId is not a result of this job.', { status: 400, path: 'body.assetId' });
+      const first = ops.find((o) => o.op === 'op:overlay.addImage');
+      const chosen = override.assetId ?? String((first?.args as { assetId?: unknown } | undefined)?.assetId ?? r.result_asset_id ?? '');
+      const atMs = override.atMs ?? Number((first?.args as { atMs?: unknown } | undefined)?.atMs ?? 0);
+      jobs = { [id]: { kind: 'thumbnail', assetId: chosen } };
+      ops = [{ op: 'op:generated.insert', target: { kind: 'project' }, args: { kind: 'thumbnail', jobId: id, atMs } } as OperationT];
+    }
+    ops = this.withCaptionStyle(r.project_id, ops);
+    const versionId = ctx.hooks.applyOps(r.project_id, ops, { kind: 'generator', ref: id, summary: `Inserted generated ${r.kind}`, ...(jobs ? { jobs } : {}) });
     ctx.db.prepare('UPDATE generator_jobs SET result_json = ? WHERE id = ?').run(JSON.stringify({ ...result, versionId }), id);
     return { versionId };
   }
@@ -245,6 +294,7 @@ export class GeneratorsService {
   private async engineStep<T>(j: JobContext, engine: string, stage: string, fn: (c: EngineStepCtx) => Promise<T>): Promise<T> {
     return s2(this.ctx).heavy.run(async () => {
       if (j.signal.aborted) throw new EmError('EM-7101', 'cancelled');
+      await assertEngineSpawnAllowed(this.ctx, engine, this.engineDir(engine));   // SEC-066 Private Mode / network need, SEC-061 hashes
       j.progress(0.05, stage);
       return fn({ engineDir: this.engineDir(engine), jobDir: path.join(this.ctx.paths.tmp, 'jobs', j.jobId), signal: j.signal, onProgress: (f) => j.progress(0.05 + f * 0.8, stage) });
     });
@@ -264,12 +314,44 @@ export class GeneratorsService {
     return (async () => { await createJobDir(this.ctx.paths.tmp, j.jobId); try { return await fn(); } finally { await removeJobDir(this.ctx.paths.tmp, j.jobId).catch(() => undefined); } })();
   }
 
+  /** FR-104: captions for the Sequence audio: each video Clip's audio segment is transcribed and its pages placed on the timeline. */
+  private async prepareSequenceCaptions(projectId: string, b: Record<string, unknown>, tier: 'T0' | 'T1' | 'T2'): Promise<Prepared> {
+    const ctx = this.ctx; const models = modelsServiceOf(ctx);
+    const head = ctx.hooks.composition(projectId).model;
+    const timing = deriveTiming(head);
+    const segs = head.tracks.video.flatMap((c) => {
+      const a = getAsset(ctx, c.assetId, projectId); const w = timing.elementWindows[c.id];
+      if (!a || !w || a.kind !== 'video' || a.status !== 'ready' || a.has_audio !== 1 || c.muted) return [];
+      return [{ src: path.resolve(ctx.paths.media, a.playable_path ?? a.original_path), trimBeforeMs: c.trimBeforeMs, playbackRate: c.playbackRate, fromMs: w.fromMs, toMs: w.toMs }];
+    });
+    if (!segs.length) throw em('EM-7103', 'The Sequence has no audio to transcribe.', { details: { tool: 'captions.generate', reason: 'no-audio' } });
+    if (timing.durationMs > 1_800_000) throw em('EM-1011', 'This Sequence is longer than 30 minutes.', { details: { reason: 'duration' } });
+    const key = typeof b['modelKey'] === 'string' ? b['modelKey'] : defaultModelFor('stt', tier);
+    const def = await this.requireInstalled(key, 'Generate Captions');
+    const language = String(b['language'] ?? 'id');
+    return { modelKey: def.key, run: (j) => this.withJobDir(j, async () => {
+      const modelPath = firstWith(models.dirOf(def), /\.bin$/);
+      const pages: unknown[] = []; let detected: string | null = null;
+      for (const [i, sg] of segs.entries()) {
+        const srcMs = Math.max(100, Math.round((sg.toMs - sg.fromMs) * sg.playbackRate));
+        const wav = path.join(ctx.paths.tmp, 'jobs', j.jobId, `seg-${i + 1}.wav`);
+        await s2(ctx).heavy.run(() => runTool({ exe: ctx.resources.ffmpeg, args: ['-v', 'error', '-nostdin', '-y', '-ss', (sg.trimBeforeMs / 1000).toFixed(3), '-t', (srcMs / 1000).toFixed(3), '-i', sg.src,
+          '-vn', '-map', '0:a:0', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], cwd: path.dirname(wav), timeoutMs: Math.max(60_000, srcMs), signal: j.signal }));
+        const r = await this.engineStep(j, 'whisper.cpp', 'transcribe', (c) => this.engines.captions({ modelPath, wavPath: wav, language, audioDurationMs: srcMs }, { ...c, onProgress: (f) => c.onProgress((i + f) / segs.length) }));
+        detected ??= r.language;
+        // the extracted segment starts at the clip's trim point: page times are relative to it
+        pages.push(...shiftPages(r.pages, { fromMs: sg.fromMs, toMs: sg.toMs, trimBeforeMs: 0, playbackRate: sg.playbackRate }));
+      }
+      return { result: { pages, language: detected, modelId: def.key, durationMs: timing.durationMs, source: 'sequence' }, ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT] };
+    }) };
+  }
   private async prepare(projectId: string, kind: GeneratorKind, b: Record<string, unknown>): Promise<Prepared> {
     const ctx = this.ctx; const tier = ctx.hooks.tier(); const models = modelsServiceOf(ctx);
     const lang = b['language'];
     if (lang !== undefined && lang !== 'id' && lang !== 'en') throw em('EM-7105', 'Only Indonesian and English are supported.', { details: { tool: kind, language: lang } });
     const short = (id: string) => id.slice(-8).toLowerCase();
 
+    if (kind === 'captions' && (b['source'] === 'sequence' || b['assetId'] === undefined)) return this.prepareSequenceCaptions(projectId, b, tier);
     if (kind === 'captions') {
       const asset = getAsset(ctx, String(b['assetId']), projectId);
       if (!asset) throw em('EM-9003', 'Not found.');
@@ -305,7 +387,8 @@ export class GeneratorsService {
       const key = typeof b['modelKey'] === 'string' ? b['modelKey'] : defaultModelFor('music', tier);
       const def = await this.requireInstalled(key, 'Generate Music');
       const durationMs = Number(b['durationMs']);
-      const prompt = `${String(b['prompt'] ?? '')}${typeof b['style'] === 'string' && b['style'] ? `, ${b['style']}` : ''}${b['instrumental'] === false ? '' : ', instrumental'}`;
+      const vocals = lang === 'en' ? ', English vocals' : ', Indonesian vocals';   // FR-106: the language of sung lyrics
+      const prompt = `${String(b['prompt'] ?? '')}${typeof b['style'] === 'string' && b['style'] ? `, ${b['style']}` : ''}${b['instrumental'] === false ? vocals : ', instrumental'}`;
       return { modelKey: def.key, run: (j) => this.withJobDir(j, async () => {
         const seed = crypto.createHash('sha256').update(prompt).digest().readUInt32BE(0);
         let wav: string; let source: 'ace-step' | 'loop-library';
@@ -323,14 +406,20 @@ export class GeneratorsService {
         }
         j.progress(0.9, 'ingest');
         const assetId = await this.register(projectId, wav, `music-${short(j.jobId)}.wav`);
-        return { assetId, result: { assetId, durationMs, source, instrumental: b['instrumental'] !== false, cc0: source === 'loop-library' }, ops: [{ op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId, volume: 0.2, loop: true } }] };
+        return { assetId, result: { assetId, durationMs, source, instrumental: b['instrumental'] !== false, cc0: source === 'loop-library' }, ops: [musicBedOp(assetId)] };
       }) };
     }
     if (kind === 'thumbnail') {
       const prompt = typeof b['prompt'] === 'string' ? b['prompt'] : undefined;
       const size = (b['size'] as { w?: number; h?: number } | undefined) ?? {};
       const count = Math.max(1, Math.min(4, typeof b['count'] === 'number' ? Math.round(b['count']) : 1));   // FR-103: 1–4 candidates
+      const style = (THUMBNAIL_STYLES as readonly string[]).includes(String(b['style'])) ? b['style'] as ThumbnailStyle : 'bold';
+      const title = typeof b['titleText'] === 'string' && b['titleText'].trim() ? b['titleText'].trim().slice(0, 500) : '';
+      const atMs = typeof b['frameMs'] === 'number' ? b['frameMs'] : 0;
+      const overlay = (assetId: string): OperationT[] => [{ op: 'op:overlay.addImage', args: { assetId, atMs } } as OperationT];
       if (prompt) {
+        // FR-103: style wording and the title text go into the diffusion prompt (prompt mode has no separate overlay pass)
+        const fullPrompt = [prompt, THUMB_PROMPT[style], ...(title ? [`thumbnail with the title text "${title}"`] : [])].join(', ');
         let key = defaultModelFor('image', tier);
         if (key === 'frame-composite') key = 'sd15-emaonly';
         const def = await this.requireInstalled(key, 'Generate Thumbnail');
@@ -338,21 +427,21 @@ export class GeneratorsService {
           const candidates: Array<{ assetId: string; seed: number }> = [];
           for (let i = 0; i < count; i++) {
             const seed = crypto.randomInt(0, 2 ** 31);
-            const r = await this.engineStep(j, 'stable-diffusion.cpp', 'diffuse', (c) => this.engines.image({ model: def, modelDir: models.dirOf(def), prompt, width: size.w ?? 1280, height: size.h ?? 720, seed, tier },
+            const r = await this.engineStep(j, 'stable-diffusion.cpp', 'diffuse', (c) => this.engines.image({ model: def, modelDir: models.dirOf(def), prompt: fullPrompt, width: size.w ?? 1280, height: size.h ?? 720, seed, tier },
               { ...c, onProgress: (f) => c.onProgress((i + f) / count) }));
             candidates.push({ assetId: await this.register(projectId, r.pngPath, `thumbnail-${short(j.jobId)}-${i + 1}.png`), seed });
           }
           j.progress(0.9, 'ingest');
           const assetId = candidates[0]!.assetId;
-          return { assetId, result: { assetId, candidates, source: def.key.startsWith('flux') ? 'flux' : 'sd15' } };
+          return { assetId, result: { assetId, candidates, source: def.key.startsWith('flux') ? 'flux' : 'sd15', style, prompt: fullPrompt }, ops: overlay(assetId) };
         }) };
       }
       const head = ctx.hooks.composition(projectId);
       if (head.model.tracks.video.length === 0) throw em('EM-2202', 'Insert at least one asset first.');
       let model = structuredClone(head.model);
       const frameMs = typeof b['frameMs'] === 'number' ? b['frameMs'] : 0;
-      if (typeof b['titleText'] === 'string' && b['titleText'].trim()) {
-        const r = applyOperations(model, [{ op: 'op:text.add', args: { text: b['titleText'].slice(0, 500), variant: 'preset:text.title', atMs: frameMs, durationMs: 1000 } }],
+      if (title) {
+        const r = applyOperations(model, [{ op: 'op:text.add', args: { text: title, variant: THUMB_VARIANT[style], atMs: frameMs, durationMs: 1000 } }],
           { assets: listAssets(ctx, projectId).map(toFacts), tier, newId: ctx.newId });
         if (r.ok) model = r.value.model;
       }
@@ -369,7 +458,7 @@ export class GeneratorsService {
         }
         j.progress(0.9, 'ingest');
         const assetId = candidates[0]!.assetId;
-        return { assetId, result: { assetId, candidates, source: 'frame-composite', frameMs } };
+        return { assetId, result: { assetId, candidates, source: 'frame-composite', frameMs, style }, ops: overlay(assetId) };
       }) };
     }
     // hashtags / social caption text (FR-105, ADR-009): connected LLM; never touches the Composition Model
@@ -380,16 +469,17 @@ export class GeneratorsService {
     let texts: string[] = [];
     try { const m = ctx.hooks.composition(projectId).model; texts = [...m.tracks.text.map((t) => t.text), ...m.tracks.caption.pages.map((p) => p.text)].slice(0, 60); } catch { /* no composition yet */ }
     const count = Number(b['count'] ?? 15); const platform = String(b['platform'] ?? 'instagram');
+    const tone = (HASHTAG_TONES as readonly string[]).includes(String(b['tone'])) ? String(b['tone']) : 'casual';   // FR-105
     return { modelKey: provider.model, run: async (j) => {
       j.progress(0.1, 'ask');
-      const r = await provider.complete({ system: 'You write social media captions. Reply with JSON only: {"caption": string, "hashtags": string[]}. Hashtags start with #, no spaces.',
-        messages: [{ role: 'user', content: JSON.stringify({ language: lang ?? 'id', platform, count, title: project?.name ?? '', texts }).slice(0, 8000) }], maxTokens: 800, temperature: 0.7, signal: j.signal, timeoutMs: 60_000 });
+      const r = await provider.complete({ system: 'You write social media captions. Write in the requested language and tone. Reply with JSON only: {"caption": string, "hashtags": string[]}. Hashtags start with #, no spaces.',
+        messages: [{ role: 'user', content: JSON.stringify({ language: lang ?? 'id', platform, tone, count, title: project?.name ?? '', texts }).slice(0, 8000) }], maxTokens: 800, temperature: 0.7, signal: j.signal, timeoutMs: 60_000 });
       ctx.hooks.recordUsage(projectId, 'brainstorm', j.jobId, [r.usage]);
       let parsed: { caption?: unknown; hashtags?: unknown };
       try { parsed = JSON.parse(r.text.replace(/^```(?:json)?\s*|\s*```$/g, '')) as typeof parsed; } catch (e) { throw em('EM-7103', 'The model did not return hashtags.', { cause: e }); }
       const hashtags = (Array.isArray(parsed.hashtags) ? parsed.hashtags : []).map((h) => String(h).trim().replace(/\s+/g, '')).filter((h) => /^#[\p{L}\p{N}_]+$/u.test(h)).slice(0, count);
       if (!hashtags.length || typeof parsed.caption !== 'string') throw em('EM-7103', 'The model did not return hashtags.');
-      return { result: { caption: parsed.caption.slice(0, 2200), hashtags, modelId: provider.model } };
+      return { result: { caption: parsed.caption.slice(0, 2200), hashtags, modelId: provider.model, tone } };
     } };
   }
 }

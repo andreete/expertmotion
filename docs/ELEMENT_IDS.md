@@ -84,7 +84,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.action.save` | save icon | Same as `hdr.menu.file.save`. |
 | `hdr.action.backup` | cloud-upload icon (repurposed) | Backup Project to a local zip. |
 | `hdr.action.restore` | cloud-sync icon (repurposed) | Restore Project from a zip (`scr.backup.restore`). |
-| `hdr.action.undo` / `hdr.action.redo` | (added) | Move the project head between Composition Versions (Ctrl+Z / Ctrl+Y). |
+| `hdr.action.undo` / `hdr.action.redo` | (added) | Move the project head between Composition Versions (Ctrl+Z / Ctrl+Shift+Z; Ctrl+Y also redoes). |
 | `hdr.action.models` | grid icon | Opens Model Manager (`scr.models`). |
 | `hdr.action.purchase` | Purchase | Opens Licence screen (`scr.license`). Hidden when licensed. |
 | `hdr.action.license` | avatar | Licence status popover (trial / licensed / expired updates). |
@@ -139,6 +139,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 |---|---|---|
 | `stage.player.frame` | "Player" panel | Player container sized to the current Aspect Ratio. |
 | `stage.player.canvas` | video area | Remotion Player surface. |
+| `stage.player.controls` | (controls) | Controls bar; overlays the Player as a bar at the bottom while the frame is fullscreen (FR-059, `data-fullscreen` on `stage.player.frame`). |
 | `stage.player.controls.play` / `.pause` | (controls) | Toggle playback (Space). |
 | `stage.player.controls.scrubber` | (controls) | Playhead scrubber; frame-step with arrows. |
 | `stage.player.controls.time` / `.duration` | (controls) | Current time / total duration (mm:ss.ff). |
@@ -152,6 +153,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `stage.timeline.element` | (bars) | One Timeline Element; variants `.clip`, `.text`, `.caption`, `.audio`, `.transition`, `.effect`, `.background`, `.shape`, `.generated`. Click → selection + inspector. |
 | `stage.timeline.element.selected` | (state) | Selected element; Design Picks target it. |
 | `stage.timeline.inspector` | (added) | Read-only property sheet for the selected element, with "Ask Editor Agent to change" shortcut. |
+| `stage.timeline.quickparams` / `stage.timeline.quickparams.field` / `stage.timeline.quickparams.apply` | (added, P1) | FR-098 quick params under the inspector: transition duration, motion duration/delay, effect values; validated against the preset params schema (EM-2102 inline) before a Compile pick. |
 | `stage.timeline.empty` | "Drag material here…" (replace) | Copy: "Insert assets, then your picks and the Editor Agent fill this timeline." |
 
 ## Agent Panel (`agent.*`)
@@ -166,6 +168,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `agent.brainstorm.footer.model` | "Claude 3.5 Sonnet ▾" | Per-agent Model Assignment override. |
 | `agent.brainstorm.footer.ctx` | "0 / 200000" | Context usage: tokens used / model context length. |
 | `agent.brainstorm.handoff` | (added) | Card shown when the Brainstorming Agent proposes Edit Intents: "Send to Editor Agent" / "Dismiss". |
+| `agent.brainstorm.handoff.item` / `agent.brainstorm.handoff.item.reason` | (added) | One proposed change in plain words (category, value → target); an invalid one is greyed (`data-invalid`) with its reason and EM code and cannot be sent (FR-076). |
 | `agent.editor.panel` | "Editor Agent" | Editor Chat container. |
 | `agent.editor.thread` / `.message` | messages | As above. |
 | `agent.editor.intentqueue` | (added) | Intent Queue list; `.item`, `.item.superseded`, `.item.restore`, `.item.remove`, `.clear`. |
@@ -213,6 +216,9 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `sys.render.progress` | Persistent render progress chip in the header area. |
 | `sys.update` | Update available / downloaded / restart prompt. |
 | `sys.privatemode.banner` | Banner while Private Mode is on. |
+| `sys.fatal` | Fatal Service state shown in the Editor (EM-8002 after three failed restarts, EM-6001 storage locked; FR-171, FR-176). The Editor stays mounted behind it. |
+| `sys.fatal.diagnostics` | Open Diagnostics: opens the logs folder through the Shell (the Diagnostics screen needs the Service). |
+| `sys.fatal.quit` | Quit Expertmotion. |
 | `sys.live` | Visually hidden ARIA live region for status announcements. |
 
 ## Additions found while building the Editor (Stage 3, 2026-10-24)
@@ -246,6 +252,8 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `scr.export.codec.mp4` | Export format option | MP4 (H.264). |
 | `scr.export.codec.gif` | Export format option | Animated GIF. |
 | `scr.export.codec.png` | Export format option | PNG still. |
+| `scr.export.codec.webm` | Export format option | WebM with alpha (VP9 + PNG frames, FR-138); disabled with a reason unless the background is `preset:background.none` (or absent). |
+| `scr.export.codec.webm.reason` | Reason line under the format options | "Transparent WebM needs the background set to None…" shown while the option is disabled (FR-138). |
 | `scr.project.new.name` | New Project name field | Project name input. |
 | `scr.project.settings.language` | Project Settings language toggle | Project language id/en (stored in project settings). |
 | `hdr.title.sample` | "Sample ·" / "Contoh ·" marker in the Project Title | Shown only on the R-025 sample project (`isSample: true`); the marker uses the project's language. |
@@ -268,9 +276,10 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `agent.brainstorm.attach.error` / `agent.editor.attach.error` | inline attachment notice | FR-072: EM-4307 (model cannot read images) or EM-1002 with Remove attachment / Switch model. |
 | `agent.brainstorm.footer.model.option` / `agent.editor.footer.model.option` | one model row in the footer picker | FR-073: lists models of every validated connection with context, tools, image and price columns; applies to the next request of that agent only. |
 | `agent.editor.plancard.step.ops` / `agent.editor.plancard.model` / `agent.editor.plancard.result` | Plan Card details | FR-081 ops count per step and model name; FR-086 diff summary ("3 added, 1 modified") once executed. |
+| `agent.editor.plancard.step.dropped` / `agent.editor.plancard.locked` | Plan Card details | FR-081: a step EM-2302 removed (it touched a Locked Key), shown struck through, and the inline EM-2302 notice; steps of a plan that still touch Locked Keys are struck through (`data-locked` on `agent.editor.plancard.step`). |
 | `agent.output.ratio.help.table` | pixel table in the ratio help popover | FR-087/FR-096: PERFORMANCE §3 pixels for every ratio × resolution, computed. |
 | `agent.output.ratio.auto.hint` | "applies after the first insert" | FR-088: Auto is on but there is no Clip yet. |
-| `agent.output.profile.help.learnmore` | "Learn more" next to the profile help | FR-091: what each profile changes (PERFORMANCE §2), shown locally. |
+| `agent.output.profile.help.learnmore` | "Learn more" next to the profile help | FR-091: opens the offline Help (`scr.help`) at the Performance profiles topic. |
 | `scr.ratio.custom.preset` | extra ratio chip (21:9, 2:1, 1.91:1, 3:2, 2:3, 1:2, 9:21) | FR-092: fills width and height. |
 | `sys.tour` | Tour card | Card of the in-app tour (ONBOARDING_TOUR.md §3); `data-step` = 1…10, `data-phase` = choose/preparing/step/done. |
 | `sys.tour.next` | Tour "Next" | Next step (each step also advances on its real trigger). |
@@ -314,6 +323,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 |---|---|---|
 | `scr.help` | Offline help (Help ▸ Documentation) | Bundled in the Editor build, works without internet (FR-148); `.sections` holds the topics. |
 | `scr.help.sections` | Offline help topics | Collapsible sections (getting started, import, design, agents, export, Private Mode, licence, troubleshooting). |
+| `scr.help.performance.table` | Performance profiles topic table | What Standard / Accelerated / Turbo change (PERFORMANCE §2), in plain words (FR-091). |
 | `scr.help.online` | Online documentation link | Opens the system browser; in Private Mode shows `.blocked` (EM-8202) with the URL to copy instead. |
 | `scr.help.online.blocked` | EM-8202 note with copyable URL | Shown instead of opening the browser while Private Mode is on. |
 | `scr.license.buy.blocked` | EM-8202 note on the buy link | Private Mode: the storefront URL with Copy instead of opening the browser (FR-132). |
@@ -336,10 +346,14 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.about.builddate` | Build date | From R-001 `buildDate` (FR-151). |
 | `scr.about.remotion` | Remotion licence statement | How the Engine is licensed (FR-151). |
 | `scr.about.notices.list` | Third-party notices list | Every bundled Engine Binary and the font licence (FR-151). |
+| `scr.about.security` | Honest boundary statement | What the data protection does and does not cover (FR-176, ADR-006, SECURITY.md §1). |
 | `scr.about.gpl` | GPL source offer | Written offer for the GPL components (espeak-ng, compositor FFmpeg; RISK-030, BRD-019). |
 | `sys.update.download` | Update "Download" | Consent to download an available update (FR-152). |
 | `sys.update.restart` | Update "Restart now" | EM-8105; disabled while an export runs, the Shell also defers the install until the queue is empty. |
 | `sys.update.later` | Update "Later" | Hides the banner; the update stays downloaded. |
+| `sys.update.retry` | Update "Try again" | EM-8104 (interrupted update, previous version kept), EM-8102, EM-8101: runs a new check (FR-152). |
+| `scr.license.trial.notice` | EM-5001 notice in the onboarding Licence step | First launch in Trial Mode (FR-133); outside onboarding the same notice is a one-time `sys.toast`. |
+| `agent.brainstorm.budget` / `agent.editor.budget` | "Change budget" in the EM-4201 message | FR-117 / AI-016: opens `scr.providers` with focus on `.budget.project` (or `.budget.month`) of the connection whose cap is used up. |
 | `scr.generate.voice.voice` | Voice picker | Installed Piper/Kokoro voices (FR-101). |
 | `scr.generate.voice.speed` | Speed slider | 0.8–1.2 (FR-101). |
 | `scr.generate.voice.preview` | Audio preview | Plays the generated audio before Insert (FR-101, FR-102). |
@@ -349,6 +363,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.generate.voice.generated.delete` | Delete a listed result | R-137 (FR-108). |
 | `scr.generate.music.duration` | Music length | 10–120 s (FR-102). |
 | `scr.generate.music.instrumental` | Instrumental toggle | Default on (FR-102). |
+| `scr.generate.music.language` | Language toggle | Indonesia / English for sung lyrics, default from the Project language (FR-106). |
 | `scr.generate.music.cc0` | CC0 loop library note | T0 or the loop library chosen (FR-102). |
 | `scr.generate.music.preview` | Audio preview | Plays the generated audio before Insert (FR-101, FR-102). |
 | `scr.generate.music.install` | Install model | Inline Model Download with size and progress (FR-107). |
@@ -359,19 +374,38 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.generate.thumbnail.count` | Count | Thumbnail candidates 1–4, hashtags 10–20 (FR-103, FR-105). |
 | `scr.generate.thumbnail.candidate` | Thumbnail candidate | Selectable image (FR-103). |
 | `scr.generate.thumbnail.saveoutput` | Save to Outputs | R-136 for the chosen candidate (FR-103). |
+| `scr.generate.thumbnail.style` | Thumbnail style | Bold / Clean / Cinematic / Playful: title variant in still mode, prompt wording in prompt mode (FR-103). |
+| `scr.generate.thumbnail.insert` | Insert as overlay | Inserts the chosen candidate as an image overlay at the playhead (R-134, `op:generated.insert {kind: thumbnail}`, FR-103). |
+| `scr.generate.thumbnail.language` | Language toggle | Indonesia / English, default from the Project language (FR-106). |
 | `scr.generate.thumbnail.install` | Install model | Inline Model Download with size and progress (FR-107). |
 | `scr.generate.thumbnail.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
 | `scr.generate.thumbnail.generated.delete` | Delete a listed result | R-137 (FR-108). |
 | `scr.generate.captions.pages` | Editable caption preview | One text field per caption page; edits are sent with Insert (FR-104). |
+| `scr.generate.captions.source` | Audio source | The Sequence audio (default, every Clip placed on the timeline) or one Asset with audio (FR-104). |
 | `scr.generate.captions.install` | Install model | Inline Model Download with size and progress (FR-107). |
 | `scr.generate.captions.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
 | `scr.generate.captions.generated.insert` | Insert a listed result | R-134 (FR-108). |
 | `scr.generate.captions.generated.delete` | Delete a listed result | R-137 (FR-108). |
 | `scr.generate.hashtags.platform` | Platform | TikTok / Instagram / YouTube (FR-105). |
+| `scr.generate.hashtags.tone` | Tone | Casual / Professional / Energetic / Informative / Funny (FR-105). |
 | `scr.generate.hashtags.count` | Count | Thumbnail candidates 1–4, hashtags 10–20 (FR-103, FR-105). |
 | `scr.generate.hashtags.copycaption` | Copy caption + hashtags | Copies the social caption text with the hashtags (FR-105). |
 | `scr.generate.hashtags.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
 | `scr.generate.hashtags.generated.delete` | Delete a listed result | R-137 (FR-108). |
+
+## Additions for the asset, library and lifecycle gap closure (FR-012, FR-018, FR-031, FR-042, FR-045, FR-048, FR-053, 2026-10-24)
+
+| ID | Element | Behaviour |
+|---|---|---|
+| `lib.assets.selectall` | "Select all" in the Asset Panel header | FR-045: selects every ready Asset in panel order and assigns the next Sequence Badges (ingesting, failed, missing and caption Assets are skipped); pressed again it clears the selection. Ctrl+A does the same while focus is inside `lib.assets.panel`. |
+| `lib.assets.card.action.importagain` | "Import again" on an interrupted card | FR-042: an EM-1201 card (Service restarted mid-ingest) is removed and the picker opens for that file type. |
+| `lib.assets.error.diagnostics` | "Open Diagnostics" in `lib.assets.error` | FR-053: second recovery action of EM-6401 (ERROR_CATALOGUE); opens `scr.diagnostics`. |
+| `lib.text.ratio.menu` / `lib.text.ratio.option` | Home ▸ Ratio popover and one ratio in it | FR-031: the same choices as `agent.output.ratio.*` (Custom opens `scr.ratio.custom`), applied through the same Output intent; `data-value` = ratio, `aria-checked` on the current one. |
+| `lib.text.videosize.menu` / `lib.text.videosize.option` | Home ▸ Video Size popover and one resolution in it | FR-031: the same choices and tier gating as `agent.output.resolution.*`; `data-value` = resolution. |
+| `stage.timeline.inspector.missing` | Missing-file box in the Timeline inspector | FR-048: shown when the selected element's Asset file is missing (EM-1301). |
+| `stage.timeline.inspector.locate` / `stage.timeline.inspector.remove` | Locate / Remove in that box | FR-048: same actions as `lib.assets.card.action.locate` and `lib.assets.card.action.remove`. |
+| `scr.backup.restore.renamed` | EM-6303 notice in the restore dialog | FR-018: the backup was restored as a renamed copy; nothing was overwritten. |
+| `scr.backup.restore.open` | "Open restored project" | FR-018: opens the restored copy and closes the dialog. |
 
 ## Assumptions where the mockup does not define behaviour
 

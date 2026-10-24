@@ -92,6 +92,7 @@ Development-server note: on the shared 1.9 GB Linux server only headless parts m
 
 - Cheap meter every 2 s from Node `os` (total/free RAM, `process.memoryUsage()`, CPU via delta of `os.cpus()` times).
 - `systeminformation` for disk, GPU (`graphics()`), and static CPU info: at startup, on opening the Hardware Monitor, and before render; never more often than every 30 s because Windows calls spawn PowerShell.
+- Expertmotion process memory (FR-127) = Shell + Service + Engine children. Service: `process.memoryUsage().rss`. Shell: the Electron main process sums `app.getAppMetrics()` working sets (in-process, no spawn) and pushes them to the Service every 30 s. Engine children: Linux reads `/proc` per tick (no spawn); Windows runs one `tasklist /fo csv /nh` at most every 30 s while the meter is read and sums the Engine image names (Chrome Headless Shell, ffmpeg/ffprobe, compositor; approximate because tasklist has no parent pid). Never PowerShell/WMI per tick.
 - GPU utilisation shown only when nvidia-smi is available; otherwise "GPU: present / not detected" without a percentage.
 - Overhead budget: < 1 % CPU, < 20 MB RAM.
 - Privacy: readings stay local; shown in Diagnostics; never transmitted.

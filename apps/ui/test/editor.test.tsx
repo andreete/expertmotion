@@ -13,6 +13,7 @@ afterEach(() => cleanup());
 const NOT_IN_MOCK: Record<string, string> = {
   'hdr.win.minimize': 'Electron window controls (rendered only when the Desktop Shell bridge exists)',
   'hdr.win.maximize': 'Electron window controls', 'hdr.win.close': 'Electron window controls',
+  'sys.fatal': 'Desktop Shell push only (EM-8002 / EM-6001; covered in service-restart.test.tsx)', 'sys.fatal.diagnostics': 'Desktop Shell push only', 'sys.fatal.quit': 'Desktop Shell push only',
   'lib.catalogue.card.badge.model': 'no P0/P1 preset carries a model: flag in packages/catalogue',
   'lib.catalogue.card.selected': 'state variant: expressed as data-selected/aria-pressed on lib.catalogue.card',
   'lib.assets.card.state.ingesting': 'transient: mock ingest completes synchronously when delays are off',
@@ -32,9 +33,13 @@ const NOT_IN_MOCK: Record<string, string> = {
   'agent.editor.plancard.step.ops': 'needs a plan with steps (stage-agent.test.tsx)', 'agent.editor.plancard.model': 'needs plan usage', 'agent.editor.plancard.result': 'needs an executed plan',
   'agent.output.ratio.help.table': 'help popover (stage-agent.test.tsx)', 'agent.output.ratio.auto.hint': 'Auto on with no clip (stage-agent.test.tsx)',
   'stage.timeline.element.selected': 'state variant: aria-selected on stage.timeline.element',
+  'stage.timeline.quickparams': 'needs a selected element with motion, effect or transition (stage-agent.test.tsx FR-098)', 'stage.timeline.quickparams.field': 'quick params (stage-agent.test.tsx)', 'stage.timeline.quickparams.apply': 'quick params (stage-agent.test.tsx)',
   'agent.editor.plancard.replan': 'only for stale/invalid/failed plans (covered in plancard.test.tsx)',
+  'agent.editor.plancard.step.dropped': 'only when EM-2302 removed steps (plancard.test.tsx)', 'agent.editor.plancard.locked': 'only for a plan touching Locked Keys (plancard.test.tsx)',
+  'agent.brainstorm.handoff.item.reason': 'only for an invalid proposed change (covered in stage-agent.test.tsx, FR-076)',
   'sys.offline': 'only while the Local Service is unreachable', 'sys.update': 'only after an update notice', 'sys.update.download': 'update banner (export-licence-help.test.tsx)', 'sys.update.restart': 'update banner (export-licence-help.test.tsx)', 'sys.update.later': 'update banner (export-licence-help.test.tsx)', 'sys.render.progress': 'only while exporting (covered in plancard.test.tsx)',
   'sys.toast': 'transient (asserted in plancard.test.tsx)',
+  'sys.update.retry': 'only for EM-8104/EM-8102/EM-8101 (export-licence-help.test.tsx)', 'agent.brainstorm.budget': 'only for EM-4201 (providers-models.test.tsx)', 'agent.editor.budget': 'only for EM-4201 (providers-models.test.tsx)',
   'hdr.title.sample': 'only on the R-025 sample project (covered in tour.test.tsx)',
   'sys.tour': 'only while the tour runs (covered in tour.test.tsx)', 'sys.tour.next': 'tour (tour.test.tsx)', 'sys.tour.back': 'tour (tour.test.tsx)', 'sys.tour.end': 'tour (tour.test.tsx)',
   'sys.tour.choice.current': 'tour re-run choice (tour.test.tsx)', 'sys.tour.choice.sample': 'tour re-run choice (tour.test.tsx)', 'sys.tour.sampleplan': 'TOUR-7 without a provider (tour.test.tsx)',
@@ -45,6 +50,10 @@ const NOT_IN_MOCK: Record<string, string> = {
   'lib.text.colour.contrast': 'only for a low-contrast text colour (covered in library.test.tsx)',
   'lib.assets.card.state.missing': 'only when an original is missing on disk (covered in library.test.tsx)', 'lib.assets.card.action.locate': 'missing asset (library.test.tsx)',
   'stage.timeline.element.missing': 'missing asset (library.test.tsx)',
+  'stage.timeline.inspector.missing': 'missing asset with the element selected (library.test.tsx FR-048)', 'stage.timeline.inspector.locate': 'missing asset (library.test.tsx FR-048)', 'stage.timeline.inspector.remove': 'missing asset (library.test.tsx FR-048)',
+  'lib.assets.card.action.importagain': 'only on an EM-1201 card (library.test.tsx FR-042)', 'lib.assets.error.diagnostics': 'only for EM-6401 (library.test.tsx FR-053)',
+  'lib.text.ratio.menu': 'Home ▸ Ratio popover (library.test.tsx FR-031)', 'lib.text.ratio.option': 'Ratio popover (library.test.tsx FR-031)',
+  'lib.text.videosize.menu': 'Home ▸ Video Size popover (library.test.tsx FR-031)', 'lib.text.videosize.option': 'Video Size popover (library.test.tsx FR-031)',
   'lib.assets.empty': 'empty project only (asserted in the next test)', 'stage.timeline.empty': 'empty project only (asserted in the next test)',
 };
 const MAIN = /^(hdr|lib|stage|agent|sys)\./;
@@ -84,11 +93,17 @@ describe('main editor element ids', () => {
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.assets.card"] button[aria-label="Asset actions"]')!); sweep();
     // Timeline selection → inspector
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="stage.timeline.element"]')!); sweep();
-    // A pick makes the project dirty (hdr.title.dirty)
+    // FR-173: a pick creates a persisted Composition Version — no dirty dot
     await waitFor(() => { if (!document.querySelector('[data-el="lib.catalogue.tab"]')) throw new Error('no tabs'); });
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="transition"]')!);
     const fade = document.querySelector<HTMLElement>('[data-preset-id="preset:transition.fade"]')!;
     await act(async () => { fireEvent.click(fade); });
+    await waitFor(() => { if (!document.querySelector('[data-el="agent.editor.intentqueue.item"]')) throw new Error('no queue item'); });
+    expect(el('hdr.title.dirty')).toBeNull(); sweep();
+    // ...a rename is UI-level state: the dot shows until Save/autosave
+    fireEvent.click(el('hdr.title')!);
+    fireEvent.change(el('hdr.title')!, { target: { value: 'Promo baru' } });
+    await act(async () => { fireEvent.keyDown(el('hdr.title')!, { key: 'Enter' }); });
     await waitFor(() => { if (!el('hdr.title.dirty')) throw new Error('not dirty'); }); sweep();
     // Provider + chat: messages, handoff, plan card
     await act(async () => {

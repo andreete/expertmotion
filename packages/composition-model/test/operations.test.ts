@@ -266,12 +266,13 @@ describe('project, theme and output', () => {
     expect(blocked(applyOperations(base(), [op('op:project.setDurationPolicy', { policy: 'fixed' })], ctx()))).toMatchObject({ code: 'EM-2102' });
     expect(must(okModel(r), [op('op:project.setDurationPolicy', { policy: 'fit-content' })]).fixedDurationMs).toBeUndefined();
   });
-  it('generated.insert: voice, music, captions; thumbnail and unknown job refused', () => {
+  it('generated.insert: voice, music, captions, thumbnail (FR-103 overlay); unknown job refused', () => {
     const jobs = { j1: { kind: 'voice' as const, assetId: 'vo' }, j2: { kind: 'music' as const, assetId: 'mus' }, j3: { kind: 'captions' as const, pages: [{ text: 'x', startMs: 0, durationMs: 500, tokens: [] }] }, j4: { kind: 'thumbnail' as const, assetId: 'img' } };
     const m = must(base(), [op('op:generated.insert', { kind: 'voice', jobId: 'j1', atMs: 500 }), op('op:generated.insert', { kind: 'music', jobId: 'j2' }), op('op:generated.insert', { kind: 'captions', jobId: 'j3' })], ctx({ jobs }));
     expect(m.tracks.audio.map((a) => [a.role, a.atMs])).toEqual([['voice', 500], ['bed', 0]]);
     expect(m.tracks.caption.pages).toHaveLength(1);
-    expect(blocked(applyOperations(base(), [op('op:generated.insert', { kind: 'thumbnail', jobId: 'j4' })], ctx({ jobs })))).toMatchObject({ code: 'EM-9004' });
+    expect(must(base(), [op('op:generated.insert', { kind: 'thumbnail', jobId: 'j4', atMs: 1500 })], ctx({ jobs })).tracks.overlay.at(-1)).toMatchObject({ kind: 'image', assetId: 'img', timing: { atMs: 1500 } });
+    expect(blocked(applyOperations(base(), [op('op:generated.insert', { kind: 'thumbnail', jobId: 'j2' })], ctx({ jobs })))).toMatchObject({ code: 'EM-9003' });
     expect(blocked(applyOperations(base(), [op('op:generated.insert', { kind: 'voice', jobId: 'nope' })], ctx({ jobs })))).toMatchObject({ code: 'EM-9003' });
   });
 });

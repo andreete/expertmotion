@@ -14,9 +14,9 @@ import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
 import { ULID, decodeCursor, em, encodeCursor, isInside, parseOrThrow, requireProject } from '../s2/common.js';
 import { clearBadges, getAsset, listAssets, requireAsset, setBadge, toAssetDto, toFacts, type AssetRow } from '../s2/assets-repo.js';
-import { assetDir, hashFile, ingestOf, inspectSource, MAX_ASSETS_PER_PROJECT } from '../s2/ingest.js';
+import { assetDir, hashFile, ingestOf, inspectSource, sourceKeyOf, MAX_ASSETS_PER_PROJECT } from '../s2/ingest.js';
 import { SIZE_LIMIT, kindFromExt, sniffMatches, readHead } from '../s2/probe.js';
-import { checkProjectMedia, isMissing, purgeExpiredFailed } from '../s2/media-check.js';
+import { checkProjectMedia, isMissing, purgeExpiredFailed, purgeRemoved, restoreReferenced, versionsReference } from '../s2/media-check.js';
 
 const Id = z.string().regex(ULID, 'expected an id');
 const P = z.object({ id: Id });
@@ -50,16 +50,29 @@ function references(ctx: ServiceContext, projectId: string, assetId: string): Op
   const ops: OperationT[] = [];
   for (const c of model.tracks.video) if (c.assetId === assetId) ops.push({ op: 'op:clip.remove', target: { kind: 'clip', id: c.id }, args: {} });
   for (const a of model.tracks.audio) if (a.assetId === assetId) ops.push({ op: 'op:audio.remove', target: { kind: 'audio', id: a.id }, args: {} });
+  for (const o of model.tracks.overlay) if (o.kind === 'image' && o.assetId === assetId) ops.push({ op: 'op:overlay.remove', target: { kind: 'image', id: o.id }, args: {} });
   return ops;
 }
+/** FR-050: per-file errors that stay listed as a failed card (the other codes are import-level: banner or toast). */
+const CARD_ERRORS = new Set(['EM-1001', 'EM-1002', 'EM-1008']);
 
 export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
   const roots = opts.importRoots ?? defaultRoots;
   return {
     name: 'assets',
     start(ctx) {
-      ctx.hooks.assetFacts = (projectId) => listAssets(ctx, projectId).map(toFacts);
+      ctx.hooks.assetFacts = (projectId) => listAssets(ctx, projectId, { includeDeleted: true }).map(toFacts);   // FR-052: removed assets stay valid for Undo
       ctx.hooks.mediaCheck = (projectId) => checkProjectMedia(ctx, projectId);
+      ctx.hooks.reingest = (projectId, assetIds) => { for (const id of assetIds) if (getAsset(ctx, id, projectId)) ingestOf(ctx).requeue(id, { keepStatus: true }); };
+      // FR-052: when a new head uses removed assets again (Undo of a Remove), they come back into the Asset Panel.
+      const prevHead = ctx.hooks.headChanged;
+      ctx.hooks.headChanged = (projectId, versionId) => {
+        try {
+          const back = restoreReferenced(ctx, projectId, ctx.hooks.composition(projectId).model);
+          if (back.length) ctx.bus.emit('service.notice', { at: ctx.now(), kind: 'assets-restored', projectId, assetIds: back });
+        } catch (e) { ctx.log.warn({ projectId, err: String(e) }, 'restoring removed assets failed'); }
+        prevHead(projectId, versionId);
+      };
       const r = ingestOf(ctx).recover();
       if (r.requeued.length || r.failed.length) ctx.log.info({ requeued: r.requeued.length, failed: r.failed.length }, 'ingest recovery');
     },
@@ -76,16 +89,27 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
           if (Array.isArray(raw.paths) && raw.paths.length > MAX_PATHS) throw em('EM-1010', 'You can import up to 50 files at a time.', { details: { count: raw.paths.length, limit: MAX_PATHS } });
           const body = parseOrThrow(PathsBody, req.body, 'body');
           const files = body.paths.map((p) => canonicalImportPath(p, [...roots(), ctx.resources.sampleDir]));   // sampleDir: bundled CC0 sample media (R-025)   // one path outside the roots refuses the whole request
-          const items: AssetRow[] = []; const notices: Array<{ code: string; name: string; index: number; details?: unknown }> = []; const errors: EmError[] = [];
+          const items: AssetRow[] = []; const notices: Array<{ code: string; name: string; index: number; assetId?: string; details?: unknown }> = []; const errors: EmError[] = [];
+          const seen = new Map<string, string>();                      // sourceKey → asset id within this request
           for (const [index, file] of files.entries()) {
             const name = path.basename(body.paths[index]!.replace(/\\/g, '/'));
             try {
               const s = await inspectSource(file, name);
+              // FR-041: the same file (path, size, mtime) again → EM-1006 notice, no new card; content duplicates are caught after hashing.
+              const st = await fs.promises.stat(file);
+              const key = sourceKeyOf(file, st);
+              const existing = seen.get(key) ?? ingest.findBySource(params.id, key)?.id;
+              if (existing) { notices.push({ code: 'EM-1006', name, index, assetId: existing }); continue; }
               await ingest.checkCapacity(params.id, s.bytes);
-              items.push(ingest.importFile({ projectId: params.id, source: file, name, kind: s.kind, bytes: s.bytes, ext: s.ext }));
+              const row = ingest.importFile({ projectId: params.id, source: file, name, kind: s.kind, bytes: s.bytes, ext: s.ext, sourceKey: key });
+              seen.set(key, row.id); items.push(row);
             } catch (e) {
               if (!(e instanceof EmError)) throw e;
-              errors.push(e); notices.push({ code: e.code, name, index, ...(e.details === undefined ? {} : { details: e.details }) });
+              notices.push({ code: e.code, name, index, ...(e.details === undefined ? {} : { details: e.details }) });
+              // FR-050: unsupported / too large files stay listed as a failed card with the reason (24 h or until removed).
+              const room = CARD_ERRORS.has(e.code) && await ingest.checkCapacity(params.id, 0).then(() => true, () => false);
+              if (room) { const f = ingest.recordFailed({ projectId: params.id, name, code: e.code }); items.push(f); notices[notices.length - 1]!.assetId = f.id; }
+              else errors.push(e);
             }
           }
           if (items.length === 0 && errors.length === 1) throw errors[0];
@@ -94,7 +118,15 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
         if (type === 'multipart/form-data') throw em('EM-9002', 'Invalid request: send the file as a raw body (application/octet-stream) with X-Expertmotion-Filename.', { status: 400, path: 'body' });
         if (type !== 'application/octet-stream') throw em('EM-9002', 'Invalid request: unsupported content type.', { status: 400, path: 'headers.content-type' });
         if (!ctx.cfg.dev) throw em('EM-8005', 'Request refused.');
-        return rawUpload(ctx, params.id, req);
+        try { return await rawUpload(ctx, params.id, req); } catch (e) {
+          // FR-050: an unsupported / too large upload also stays listed as a failed card with its reason.
+          const name = e instanceof EmError ? (e.details as { name?: unknown } | undefined)?.name : undefined;
+          if (!(e instanceof EmError) || !CARD_ERRORS.has(e.code) || typeof name !== 'string' || !name) throw e;
+          if (!(await ingest.checkCapacity(params.id, 0).then(() => true, () => false))) throw e;
+          req.resume();                                              // drain a body that was refused before it was read
+          const f = ingest.recordFailed({ projectId: params.id, name, code: e.code });
+          return { items: [dto(ctx, f)], notices: [{ code: e.code, name, assetId: f.id }] };
+        }
       });
 
       // R-031
@@ -104,7 +136,8 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
       }, ({ params, query }) => {
         requireProject(ctx, params.id);
         purgeExpiredFailed(ctx, params.id);                       // FR-050: failed cards stay listed for 24 h
-        const where = ['project_id = ?']; const args: unknown[] = [params.id];
+        purgeRemoved(ctx, params.id);                             // FR-052: removed assets no version references any more
+        const where = ['project_id = ?', 'deleted_at IS NULL']; const args: unknown[] = [params.id];
         if (query.kind) { where.push('kind = ?'); args.push(query.kind); }
         if (query.status) { where.push('status = ?'); args.push(query.status); }
         const total = (ctx.db.prepare(`SELECT count(*) AS n FROM assets WHERE ${where.join(' AND ')}`).get(...args) as { n: number }).n;
@@ -129,6 +162,13 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
           versionId = ctx.hooks.applyOps(params.id, ops, { kind: 'asset', ref: row.id, summary: `Removed ${row.name}` });
         }
         ingest.cancel(row.id);
+        // FR-052: while a Composition Version still references the asset, the row is soft-deleted and its media kept, so Undo
+        // restores the removed Clips with playable media (the asset reappears); otherwise it is deleted with its files now.
+        if (row.status === 'ready' && versionsReference(ctx, params.id, row.id)) {
+          ctx.db.prepare('UPDATE assets SET deleted_at = ?, sequence_badge = NULL, updated_at = ? WHERE id = ?').run(ctx.now(), ctx.now(), row.id);
+          clearBadges(ctx, params.id, []);
+          return versionId ? { version: { id: versionId } } : undefined;
+        }
         ctx.db.transaction(() => {
           ctx.db.prepare('UPDATE generator_jobs SET result_asset_id = NULL WHERE result_asset_id = ?').run(row.id);
           ctx.db.prepare('DELETE FROM assets WHERE id = ?').run(row.id);
@@ -147,7 +187,8 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
 
       // R-035 Insert → one version through hooks.applyOps
       route(router, 'post', '/projects/:id/assets/insert', {
-        params: P, body: z.object({ assetIds: z.array(Id).min(1).max(50), order: z.enum(['badge', 'given']).default('badge'), atIndex: z.number().int().min(0).optional(), asOverlay: z.boolean().default(false), atMs: z.number().int().min(0).optional() }),
+        params: P, body: z.object({ assetIds: z.array(Id).min(1).max(50), order: z.enum(['badge', 'given']).default('badge'), atIndex: z.number().int().min(0).optional(), asOverlay: z.boolean().default(false), atMs: z.number().int().min(0).optional(),
+          playheadMs: z.number().int().min(0).optional() }),
       }, ({ params, body }) => {
         requireProject(ctx, params.id);
         const rows = [...new Set(body.assetIds)].map((id) => requireAsset(ctx, params.id, id));
@@ -160,12 +201,16 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
         for (const r of ordered) {
           if (r.kind === 'image' && body.asOverlay) ops.push({ op: 'op:overlay.addImage', args: { assetId: r.id, atMs: body.atMs ?? 0 } });   // FR-029 (ADR-020 addition)
           else if (r.kind === 'video' || r.kind === 'image') { ops.push({ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: r.id, ...(clipIndex === undefined ? {} : { atIndex: clipIndex }) } }); if (clipIndex !== undefined) clipIndex++; }
-          else if (r.kind === 'audio') ops.push({ op: 'op:audio.addLayer', args: { assetId: r.id, atMs: 0, volume: 1, role: 'voice' } });
+          else if (r.kind === 'audio') ops.push({ op: 'op:audio.addLayer', args: { assetId: r.id, atMs: body.playheadMs ?? body.atMs ?? 0, volume: 1, role: 'voice' } });   // FR-049: at the playhead
           else ops.push({ op: 'op:caption.importSrt', target: { kind: 'project' }, args: { assetId: r.id } });
         }
-        const versionId = ctx.hooks.applyOps(params.id, ops, { kind: 'asset', summary: `Inserted ${ordered.length} asset${ordered.length === 1 ? '' : 's'}` });
+        // FR-049: the Insert is an Edit Intent ("Insert N clips", applied directly) compiled and executed as one Composition Version.
+        const label = `Insert ${ordered.length} clip${ordered.length === 1 ? '' : 's'}`;
+        const applied = ctx.hooks.insertIntent
+          ? ctx.hooks.insertIntent(params.id, ops, { label, assetIds: ordered.map((r) => r.id), ...(body.playheadMs !== undefined ? { playheadMs: body.playheadMs } : {}) })
+          : { versionId: ctx.hooks.applyOps(params.id, ops, { kind: 'asset', summary: `Inserted ${ordered.length} asset${ordered.length === 1 ? '' : 's'}` }), intentId: null };
         clearBadges(ctx, params.id, ordered.map((r) => r.id));
-        return { version: { id: versionId }, ops, warnings };
+        return { version: { id: applied.versionId }, ops, warnings, intentId: applied.intentId };
       });
 
       // R-036 relocate (T+S): the new file must hash to the stored sha256

@@ -55,3 +55,27 @@ describe('update banner state (FR-152, FR-162)', () => {
     expect(installDecision({ renderActive: false, downloaded: false })).toBe('nothing');
   });
 });
+
+describe('background download and EM-8104 rollback detection (FR-152)', () => {
+  it('downloads in the background only when not Private Mode, not metered and no render runs', async () => {
+    const { downloadDecision } = await import('../src/lib/updater-policy.js');
+    const base = { privateMode: false, metered: null, renderActive: false, status: 'available' as const };
+    expect(downloadDecision(base)).toEqual({ download: true });
+    expect(downloadDecision({ ...base, metered: false })).toEqual({ download: true });
+    expect(downloadDecision({ ...base, privateMode: true })).toEqual({ download: false, reason: 'private-mode' });
+    expect(downloadDecision({ ...base, metered: true })).toEqual({ download: false, reason: 'metered' });
+    expect(downloadDecision({ ...base, renderActive: true })).toEqual({ download: false, reason: 'rendering' });
+    expect(downloadDecision({ ...base, status: 'downloaded' })).toEqual({ download: false, reason: 'not-available' });
+  });
+  it('an install that left the previous version running is reported as EM-8104; a finished one is not', async () => {
+    const { parsePendingUpdate, pendingUpdateOutcome, nextUpdateState } = await import('../src/lib/updater-policy.js');
+    const now = Date.now();
+    const p = parsePendingUpdate({ fromVersion: '1.0.0', toVersion: '1.1.0', at: now - 60_000 });
+    expect(pendingUpdateOutcome(p, '1.0.0', now)).toBe('interrupted');
+    expect(pendingUpdateOutcome(p, '1.1.0', now)).toBe('applied');
+    expect(pendingUpdateOutcome(null, '1.0.0', now)).toBe('none');
+    expect(pendingUpdateOutcome(p, '1.0.0', now + 8 * 24 * 3600_000)).toBe('none');            // stale marker
+    expect(parsePendingUpdate({ fromVersion: 1 })).toBeNull();
+    expect(nextUpdateState({ status: 'idle' }, { type: 'interrupted', fromVersion: '1.0.0', toVersion: '1.1.0' })).toEqual({ status: 'error', version: '1.1.0', code: 'EM-8104' });
+  });
+});

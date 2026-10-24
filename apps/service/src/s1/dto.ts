@@ -30,7 +30,9 @@ export const ProjectSettingsInput = ProjectSettings.extend({
 export const ProjectDeleteQuery = z.object({ permanent: z.enum(['true', 'false']).optional().transform((v) => v === 'true'), keepOutputs: z.enum(['true', 'false']).optional().transform((v) => v !== 'false') });
 export const DiskUsageQuery = z.object({ projectId: Id.optional() });
 export const SampleCreateInput = z.object({ language: z.enum(['id', 'en']).default('id') }).strict();
-export const ProjectPatchInput = z.object({ name: z.string().trim().min(1).max(120).optional(), language: z.enum(['id', 'en']).optional() }).strict();
+/** FR-012: `uiState` is the Editor's per-project UI state written by Save (Library mode, playhead, selection, Player toggles; ≤ 16 KB JSON). */
+export const UiStateInput = z.record(z.string().max(64), z.unknown()).refine((v) => JSON.stringify(v).length <= 16_384, 'uiState is larger than 16 KB');
+export const ProjectPatchInput = z.object({ name: z.string().trim().min(1).max(120).optional(), language: z.enum(['id', 'en']).optional(), uiState: UiStateInput.optional() }).strict();
 export const ProjectListQuery = PageQuery.extend({ includeDeleted: boolQ });
 export const DuplicateInput = z.object({ name: z.string().trim().min(1).max(120), copyMedia: z.boolean().default(true) }).strict();
 export const BackupInput = z.object({ folder: z.string().min(1).max(1024), passphrase: z.string().min(8).max(1024).optional(), includeOutputs: z.boolean().default(false) }).strict();
@@ -64,6 +66,8 @@ export const DesignPickInput = z.object({
   clipEdit: z.object({ clipId: z.string().min(1).max(64), toIndex: z.number().int().min(0).optional(), trimBeforeMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(100).optional() }).strict().optional(),
 }).strict();
 export type DesignPickInputT = z.infer<typeof DesignPickInput>;
+/** R-065 (FR-095 / FR-097): fully specified picks applied as one unit (one Composition Version); each pick's own baseVersion is ignored. */
+export const IntentBatchInput = z.object({ baseVersion: z.string().min(1).max(128), picks: z.array(DesignPickInput.omit({ baseVersion: true }).extend({ baseVersion: z.string().max(128).optional() })).min(1).max(8) }).strict();
 export const IntentParams = z.object({ id: Id, intentId: Id });
 const statusList = z.string().max(200).optional().transform((s) => (s ? s.split(',').map((x) => x.trim()).filter(Boolean) : undefined));
 export const IntentListQuery = z.object({ status: statusList, limit: z.coerce.number().int().min(1).max(500).default(100) });
@@ -78,7 +82,7 @@ export const ExecuteInput = z.object({ confirmDestructive: z.boolean().default(f
 export const NotesInput = z.object({ notes: z.string().max(1000) }).strict();
 
 // ───────────────────────────── rows and DTOs ─────────────────────────────
-export interface ProjectRow { id: string; name: string; settings_json: string; head_version_id: string | null; language: 'id' | 'en'; created_at: string; updated_at: string; opened_at: string | null; deleted_at: string | null; is_sample?: number }
+export interface ProjectRow { id: string; name: string; settings_json: string; head_version_id: string | null; language: 'id' | 'en'; created_at: string; updated_at: string; opened_at: string | null; deleted_at: string | null; is_sample?: number; ui_state_json?: string | null }
 export interface ProjectListRow extends ProjectRow { head_hash: string | null; head_duration: number | null; head_parent: string | null; asset_count: number; ckpt_version: string | null }
 export interface VersionRow { id: string; project_id: string; parent_id: string | null; hash: string; model_json: string; cause: VersionCause; plan_id: string | null; duration_ms: number; created_at: string }
 export type VersionCause = 'insert' | 'compile' | 'execute' | 'undo' | 'redo' | 'restore' | 'system';
@@ -86,15 +90,21 @@ export interface CheckpointRow { id: string; project_id: string; version_id: str
 export interface PlanRow { id: string; project_id: string; base_version_id: string; origin: 'compile' | 'editor-agent'; plan_json: string; status: EditPlanT['status']; agent_run_id: string | null; created_at: string; updated_at: string; intent_ids_json: string | null; message: string | null; result_json: string | null; idempotency_key: string | null }
 
 export const PROJECT_SELECT = `SELECT p.*, v.hash AS head_hash, v.duration_ms AS head_duration, v.parent_id AS head_parent,
-  (SELECT count(*) FROM assets a WHERE a.project_id = p.id) AS asset_count,
+  (SELECT count(*) FROM assets a WHERE a.project_id = p.id AND a.deleted_at IS NULL) AS asset_count,
   (SELECT c.version_id FROM recovery_checkpoints c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS ckpt_version
   FROM projects p LEFT JOIN composition_versions v ON v.id = p.head_version_id`;
 
-export function projectDto(r: ProjectListRow) {
-  const dirty = r.ckpt_version !== null ? r.ckpt_version !== r.head_version_id : r.head_parent !== null;
+/**
+ * FR-173: `dirty` is unsaved UI-level state only (title/name changes not yet covered by Save or autosave). Composition Versions
+ * are persisted when they are created and never make a Project "unsaved" (Execute shows no dirty dot).
+ */
+export function projectDto(r: ProjectListRow, dirty = false) {
   return { id: r.id, name: r.name, settings: JSON.parse(r.settings_json) as unknown, language: r.language, headVersionId: r.head_version_id, headHash: r.head_hash,
     durationMs: r.head_duration ?? 0, assetCount: r.asset_count, createdAt: r.created_at, updatedAt: r.updated_at, openedAt: r.opened_at, dirty,
-    ...(r.deleted_at ? { deletedAt: r.deleted_at } : {}), ...(r.is_sample === 1 ? { isSample: true as const } : {}) };
+    ...(r.deleted_at ? { deletedAt: r.deleted_at } : {}), ...(r.is_sample === 1 ? { isSample: true as const } : {}), ...(r.ui_state_json ? { uiState: parseUiState(r.ui_state_json) } : {}) };
+}
+function parseUiState(j: string): Record<string, unknown> {
+  try { const v = JSON.parse(j) as unknown; return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}; } catch { return {}; }
 }
 export type ProjectDto = ReturnType<typeof projectDto>;
 

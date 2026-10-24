@@ -1,7 +1,7 @@
 // Composition store: project rows, Composition Versions, the head pointer and the one commit path every model change takes
 // (DATABASE_SCHEMA §2: version row + operations_history + head update in one transaction). Keeps only the current head of the
 // most recently used projects in memory (small LRU), never whole histories.
-import { applyOperations, deriveTiming, diffModels, hashModel, migrateModel, validate, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT } from '@expertmotion/composition-model';
+import { applyOperations, deriveTiming, diffModels, hashModel, migrateModel, validate, type AssetFacts, type CompositionModelT, type ElementDiff, type GeneratedResult, type OperationT } from '@expertmotion/composition-model';
 import { EmError, EM_CODE_RE, issue, statusForCode, type EmCode, type Issue } from '@expertmotion/shared';
 import type { ServiceContext } from '../context.js';
 import { PROJECT_SELECT, projectDto, versionDto, type ProjectListRow, type ProjectRow, type VersionCause, type VersionRow } from './dto.js';
@@ -40,10 +40,12 @@ export class CompositionStore {
     if (!r || (r.deleted_at && !opts.includeDeleted)) throw new EmError('EM-6101', 'This project no longer exists.', { details: { projectId: id } });
     return r;
   }
+  /** FR-173: Projects with UI-level changes (rename) not yet covered by Save / autosave. In memory: everything is persisted at exit. */
+  readonly uiDirty = new Set<string>();
   projectDto(id: string, opts: { includeDeleted?: boolean } = {}) {
     const r = this.ctx.db.prepare(`${PROJECT_SELECT} WHERE p.id = ?`).get(id) as ProjectListRow | undefined;
     if (!r || (r.deleted_at && !opts.includeDeleted)) throw new EmError('EM-6101', 'This project no longer exists.', { details: { projectId: id } });
-    return projectDto(r);
+    return projectDto(r, this.uiDirty.has(id));
   }
   assertNameFree(name: string, exceptId?: string): void {
     const hit = this.ctx.db.prepare('SELECT id FROM projects WHERE deleted_at IS NULL AND lower(trim(name)) = lower(trim(?)) AND id != ?').get(name, exceptId ?? '') as { id: string } | undefined;
@@ -104,9 +106,9 @@ export class CompositionStore {
   }
 
   /** Dry run: apply ops to a model and report only the blocking problems the ops introduce (like validatePlan). */
-  tryApply(projectId: string, model: CompositionModelT, ops: readonly OperationT[]): { ok: true; model: CompositionModelT; diff: ElementDiff[]; warnings: Issue[] } | { ok: false; issues: Issue[] } {
+  tryApply(projectId: string, model: CompositionModelT, ops: readonly OperationT[], jobs?: Readonly<Record<string, GeneratedResult>>): { ok: true; model: CompositionModelT; diff: ElementDiff[]; warnings: Issue[] } | { ok: false; issues: Issue[] } {
     const assets = this.facts(projectId), tier = this.ctx.hooks.tier();
-    const r = applyOperations(model, ops, { assets, tier, newId: this.ctx.newId });
+    const r = applyOperations(model, ops, { assets, tier, newId: this.ctx.newId, ...(jobs ? { jobs } : {}) });
     if (!r.ok) return { ok: false, issues: r.issues };
     const before = new Set(validate(model, { assets, tier }).map((i) => `${i.code}|${i.path}|${i.message}`));
     const fresh = validate(r.value.model, { assets, tier }).filter((i) => !before.has(`${i.code}|${i.path}|${i.message}`));
@@ -161,9 +163,10 @@ export class CompositionStore {
   }
 
   /** hooks.applyOps / internal: validate + commit; throws the first blocking problem as an EmError. */
-  applyOps(projectId: string, ops: readonly OperationT[], o: Omit<CommitOptions, 'ops' | 'diff'>): Committed {
+  /** `jobs`: generator results that `op:generated.insert` refers to (FR-103 thumbnail overlay, AI_WORKFLOW §5). */
+  applyOps(projectId: string, ops: readonly OperationT[], o: Omit<CommitOptions, 'ops' | 'diff'>, jobs?: Readonly<Record<string, GeneratedResult>>): Committed {
     const h = this.head(projectId);
-    const r = this.tryApply(projectId, h.model, ops);
+    const r = this.tryApply(projectId, h.model, ops, jobs);
     if (!r.ok) throw issueError(r.issues[0] ?? issue('EM-2307', 'The change could not be applied.'));
     return this.commit(projectId, r.model, { ...o, ops, diff: r.diff });
   }

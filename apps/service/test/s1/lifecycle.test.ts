@@ -178,6 +178,39 @@ describe('FR-175 retention', () => {
   });
 });
 
+describe('FR-175 checkpoint retention at start', () => {
+  it('prunes to the newest 20 checkpoints and removes unreferenced files on restart', async () => {
+    const dataDir = tempDir('em-s1-cp-prune-'), key = crypto.randomBytes(32).toString('hex');
+    svc = await startS1({ dataDir, cfg: { dbKeyHex: key } });
+    const p = await newProject(svc);
+    expect((await svc.json(`/projects/${p.id}/checkpoints`, { method: 'POST', json: { reason: 'manual' } })).status).toBe(201);
+    const db = svc.ctx.db;
+    const base = db.prepare('SELECT * FROM recovery_checkpoints WHERE project_id = ? LIMIT 1').get(p.id) as { version_id: string; file_path: string } | undefined;
+    expect(base).toBeTruthy();
+    const dir = path.join(svc.ctx.paths.checkpoints, p.id);
+    const body = fs.readFileSync(path.join(svc.ctx.paths.data, base!.file_path));
+    // 25 rows (as an older build without pruning-on-write could leave), each with its own file, plus one stray file.
+    for (let i = 0; i < 25; i++) {
+      const h = crypto.createHash('sha256').update(`cp${i}`).digest('hex');
+      fs.writeFileSync(path.join(dir, `${h}.json`), body);
+      db.prepare('INSERT INTO recovery_checkpoints (id, project_id, version_id, file_path, reason, created_at) VALUES (?,?,?,?,?,?)')
+        .run(`01JPRUNE${String(i).padStart(18, '0')}`, p.id, base!.version_id, `checkpoints/${p.id}/${h}.json`, 'autosave', new Date(Date.now() + i * 1000).toISOString());
+    }
+    const stray = crypto.createHash('sha256').update('stray').digest('hex');
+    fs.writeFileSync(path.join(dir, `${stray}.json`), body);
+    await svc.close();
+    svc = await startS1({ dataDir, cfg: { dbKeyHex: key } });
+    s1(svc.ctx);
+    const n = (svc.ctx.db.prepare('SELECT count(*) AS n FROM recovery_checkpoints WHERE project_id = ?').get(p.id) as { n: number }).n;
+    expect(n).toBe(20);
+    const kept = svc.ctx.db.prepare('SELECT id FROM recovery_checkpoints WHERE project_id = ? ORDER BY created_at DESC').all(p.id) as Array<{ id: string }>;
+    expect(kept[0]!.id).toBe(`01JPRUNE${String(24).padStart(18, '0')}`);
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    expect(files).toHaveLength(20);
+    expect(files).not.toContain(`${stray}.json`);
+  });
+});
+
 describe('R-003 recovery summary (FR-171 / FR-172)', () => {
   it('reports an unclean previous run once per start, with the rows recovery marked', async () => {
     const dataDir = tempDir('em-s1-recov-'), key = crypto.randomBytes(32).toString('hex');

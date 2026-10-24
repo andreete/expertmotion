@@ -14,10 +14,12 @@ export type ToastKind = 'info' | 'success' | 'warn' | 'danger';
 export interface ToastAction { labelKey: string; run: () => void }
 export interface Toast { id: string; kind: ToastKind; textKey: string; vars?: Record<string, string | number>; code?: string; count: number; action?: ToastAction; sticky: boolean }
 
+/** FR-117 / AI-016: EM-4201 "Change budget" opens Providers on this budget field (connection from the error details, else the breached one). */
+export interface BudgetFocus { field: 'project' | 'month'; connectionId?: string }
 export type Screen =
-  | { kind: 'onboarding' } | { kind: 'license' } | { kind: 'providers' } | { kind: 'models'; focus?: string } | { kind: 'project.new'; saveAs?: boolean } | { kind: 'project.open' }
+  | { kind: 'onboarding' } | { kind: 'license' } | { kind: 'providers'; focus?: BudgetFocus } | { kind: 'models'; focus?: string } | { kind: 'project.new'; saveAs?: boolean } | { kind: 'project.open' }
   | { kind: 'project.settings' } | { kind: 'project.recover' } | { kind: 'export' } | { kind: 'generate'; generator: 'voice' | 'music' | 'thumbnail' | 'captions' | 'hashtags' }
-  | { kind: 'diagnostics' } | { kind: 'about' } | { kind: 'help' } | { kind: 'backup' } | { kind: 'restore' } | { kind: 'ratio.custom' } | { kind: 'history' } | { kind: 'shortcuts' }
+  | { kind: 'diagnostics' } | { kind: 'about' } | { kind: 'help'; topic?: 'performance' } | { kind: 'backup' } | { kind: 'restore' } | { kind: 'ratio.custom' } | { kind: 'history' } | { kind: 'shortcuts' }
   | { kind: 'confirm'; titleKey: string; bodyKey?: string; vars?: Record<string, string | number>; confirmKey: string; danger?: boolean; onConfirm: () => void }
   /** FR-174: Save / Don't save / Cancel before switching or closing with unsaved UI state; `then` runs after Save or Don't save. */
   | { kind: 'unsaved'; then: () => void; closing?: boolean }
@@ -30,6 +32,10 @@ export interface AppState {
   boot: 'loading' | 'ready' | 'no-service';
   stream: StreamStatus;
   streamAttempt: number;
+  /** FR-171: bumps when the Shell pushed a new Service endpoint (restart); the SSE stream reconnects on change. */
+  serviceEpoch: number;
+  /** FR-171 / FR-176: the Shell reported a fatal Service state (EM-8002 after 3 restarts, EM-6001 storage locked) → `sys.fatal`. */
+  fatal: { code: string; logsDir?: string } | null;
   health: HealthDto | null;
   settings: SettingsDto | null;
   licence: LicenseDto | null;
@@ -77,13 +83,14 @@ export interface AppState {
   checkpointBadge: boolean;
   /** FR-152 / FR-162 updater state from the Desktop Shell bridge (or a legacy service.notice {kind:'update'}). */
   update: { version: string; downloaded: boolean; status?: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'deferred' | 'paused' | 'error'; percent?: number; code?: string } | null;
-  backupJob: { jobId: string; percent: number; done: boolean; path?: string; mode: 'backup' | 'restore'; projectId?: string } | null;
+  /** `code` / `name`: EM-6303 restored as a renamed copy (FR-018), or the failure code of the job. */
+  backupJob: { jobId: string; percent: number; done: boolean; path?: string; mode: 'backup' | 'restore'; projectId?: string; code?: string; name?: string } | null;
   /** Sample projects whose background preparation settled (`service.notice {kind:'sample', ready}`, R-025; ready:false = partial). */
   sampleReady: string[];
 }
 
 export const initialState: AppState = {
-  boot: 'loading', stream: 'connecting', streamAttempt: 0, health: null, settings: null, licence: null, hardware: null, tick: null, project: null, head: null,
+  boot: 'loading', stream: 'connecting', streamAttempt: 0, serviceEpoch: 0, fatal: null, health: null, settings: null, licence: null, hardware: null, tick: null, project: null, head: null,
   canUndo: false, canRedo: false, grant: null, assets: [], ingestStage: {}, queue: null, pending: [], plan: null, previousPlans: [], renders: [], outputs: [],
   messages: { brainstorm: [], editor: [] }, streaming: { brainstorm: null, editor: null }, contextUsage: { brainstorm: null, editor: null }, lastUsage: { brainstorm: null, editor: null }, headLoading: false, doneRuns: [],
   agentError: { brainstorm: null, editor: null }, connections: [], assignments: null, capabilities: {}, models: [], toasts: [], live: null,
@@ -94,11 +101,12 @@ export const initialState: AppState = {
 export type Action =
   | { type: 'boot'; boot: AppState['boot'] }
   | { type: 'stream'; status: StreamStatus; attempt: number }
+  | { type: 'service'; epoch: number; fatal: AppState['fatal'] }
   | { type: 'globals'; health?: HealthDto | null; settings?: SettingsDto | null; licence?: LicenseDto | null; hardware?: HardwareProfileDto | null }
   | { type: 'settings'; settings: SettingsDto }
   | { type: 'licence'; licence: LicenseDto }
   | { type: 'tick'; tick: HardwareTickDto }
-  | { type: 'projectOpened'; open: OpenProjectResponse; assets: AssetDto[]; messages?: Partial<Record<AgentKind, MessageDto[]>>; contextUsage?: Partial<AppState['contextUsage']> }
+  | { type: 'projectOpened'; open: OpenProjectResponse; assets: AssetDto[]; messages?: Partial<Record<AgentKind, MessageDto[]>>; contextUsage?: Partial<AppState['contextUsage']>; keepView?: boolean }
   | { type: 'projectClosed' }
   | { type: 'project'; project: ProjectDto }
   | { type: 'head'; head: VersionDto; canUndo: boolean; canRedo: boolean }
@@ -178,7 +186,8 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     case 'composition.updated': {
       const v = ev.data.version;
       const head = state.head && state.head.id === v.id ? state.head : { ...v, ...(state.head?.model ? { model: state.head.model } : {}) };
-      const project = state.project ? { ...state.project, headVersionId: v.id, headHash: v.hash, durationMs: ev.data.durationMs, dirty: true } : null;
+      // FR-173: a new Composition Version is already persisted — it never sets the dirty dot.
+      const project = state.project ? { ...state.project, headVersionId: v.id, headHash: v.hash, durationMs: ev.data.durationMs } : null;
       const plan = state.plan && (state.plan.status === 'valid' || state.plan.status === 'invalid') && state.plan.baseVersion !== v.hash && ev.data.cause !== 'execute'
         ? { ...state.plan, status: 'stale' as const } : state.plan;
       return { ...state, head, project, canUndo: ev.data.canUndo, canRedo: ev.data.canRedo, plan, headLoading: state.headLoading || (state.head !== null && state.head.id !== v.id), pulse: ev.data.diff.length ? { diff: ev.data.diff, at: Date.now() } : state.pulse };
@@ -190,7 +199,9 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     case 'render.cancelled': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'cancelled' } : j)) };
     case 'ingest.progress': return { ...state, assets: state.assets.map((a) => (a.id === ev.data.assetId ? { ...a, progress: ev.data.progress } : a)), ingestStage: { ...state.ingestStage, [ev.data.assetId]: ev.data.stage } };
     case 'ingest.done': return { ...state, assets: upsert(state.assets, [ev.data.asset]) };
-    case 'ingest.failed': return { ...state, assets: state.assets.map((a) => (a.id === ev.data.assetId ? { ...a, status: 'failed', errorCode: ev.data.code } : a)) };
+    // FR-041: EM-1006 = the same content is already in the project; the Service dropped the row, so the card goes (a toast says why).
+    case 'ingest.failed': if (ev.data.code === 'EM-1006') return { ...state, assets: state.assets.filter((a) => a.id !== ev.data.assetId), assetSelection: state.assetSelection.filter((id) => id !== ev.data.assetId) };
+      return { ...state, assets: state.assets.map((a) => (a.id === ev.data.assetId ? { ...a, status: 'failed', errorCode: ev.data.code } : a)) };
     case 'agent.run.started': return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.run.id, text: '', modelId: ev.data.modelId } }, agentError: { ...state.agentError, [ev.data.agent]: null } };
     case 'agent.run.delta': {
       const s = state.streaming[ev.data.agent];
@@ -218,7 +229,8 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
       if (d.kind === 'sample' && typeof d['ready'] === 'boolean' && typeof d.projectId === 'string') return state.sampleReady.includes(d.projectId) ? state : { ...state, sampleReady: [...state.sampleReady, d.projectId] };
       if (d.kind === 'update') return { ...state, update: { version: typeof d['version'] === 'string' ? d['version'] : '', downloaded: Boolean(d['downloaded']) } };
       if ((d.kind === 'backup' || d.kind === 'restore') && typeof d.jobId === 'string' && state.backupJob?.jobId === d.jobId) {
-        return { ...state, backupJob: { ...state.backupJob, percent: d.percent ?? state.backupJob.percent, done: Boolean(d.done), ...(typeof d.path === 'string' ? { path: d.path } : {}), ...(typeof d.projectId === 'string' ? { projectId: d.projectId } : {}) } };
+        return { ...state, backupJob: { ...state.backupJob, percent: d.percent ?? state.backupJob.percent, done: Boolean(d.done), ...(typeof d.path === 'string' ? { path: d.path } : {}), ...(typeof d.projectId === 'string' ? { projectId: d.projectId } : {}),
+          ...(typeof d.code === 'string' ? { code: d.code } : {}), ...(typeof d['name'] === 'string' ? { name: d['name'] } : {}) } };
       }
       return state;
     }
@@ -230,6 +242,7 @@ export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'boot': return { ...state, boot: action.boot };
     case 'stream': return { ...state, stream: action.status, streamAttempt: action.attempt };
+    case 'service': return { ...state, serviceEpoch: action.epoch, fatal: action.fatal };
     case 'globals': return {
       ...state,
       ...(action.health !== undefined ? { health: action.health } : {}), ...(action.settings !== undefined ? { settings: action.settings } : {}),
@@ -243,7 +256,13 @@ export function reducer(state: AppState, action: Action): AppState {
       const o = action.open;
       return {
         ...state, project: o.project, head: o.head, grant: o.mediaGrant, queue: o.intentQueue, plan: o.latestPlan && o.latestPlan.status !== 'executed' ? o.latestPlan : null, previousPlans: [],
-        renders: o.renderJobs, assets: action.assets, ingestStage: {}, pending: [], selection: [], playheadMs: 0, previewPresetId: null, assetSelection: [],
+        renders: o.renderJobs, assets: action.assets, ingestStage: {}, pending: [], previewPresetId: null,
+        // FR-171: a reload of the same Project (Service restart, resync) keeps selection and playhead
+        ...(action.keepView && state.project?.id === o.project.id
+          ? { selection: pruneSelection(state.selection, o.head), playheadMs: state.playheadMs, assetSelection: state.assetSelection.filter((id) => action.assets.some((a) => a.id === id)) }
+          // FR-012: otherwise the UI state the last Save stored for this project (Library mode, playhead, selection) comes back
+          : { selection: o.project.uiState?.selection ?? [], playheadMs: Math.max(0, Math.round(o.project.uiState?.playheadMs ?? 0)),
+            assetSelection: (o.project.uiState?.assetSelection ?? []).filter((id) => action.assets.some((a) => a.id === id)), ...(o.project.uiState?.libMode ? { libMode: o.project.uiState.libMode } : {}) }),
         canUndo: o.head.parentId !== null, canRedo: false, checkpointBadge: o.checkpointNewerThanSave !== null,
         messages: { brainstorm: action.messages?.brainstorm ?? [], editor: action.messages?.editor ?? [] },
         contextUsage: { brainstorm: action.contextUsage?.brainstorm ?? null, editor: action.contextUsage?.editor ?? null },

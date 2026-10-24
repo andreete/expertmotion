@@ -12,10 +12,19 @@ const now = (id: string) => Number(el(id)!.getAttribute('aria-valuenow'));
 const stored = () => JSON.parse(localStorage.getItem('expertmotion.prefs.v1') ?? '{}') as { panelSizes?: Record<string, Record<string, number>> };
 
 describe('layout rules', () => {
-  it('keeps the Stage at least 560 px and every column in range at 1280×720', () => {
+  it('FR-099: at 1280×720 all three columns stay visible with the Stage ≥ 640 px; panels shrink, then collapse Library → Agent', () => {
     const c = resolveColumns({ width: 1280, lib: 420, agent: 520, libOpen: true, agentOpen: true });
+    expect(c).toMatchObject({ libOpen: true, agentOpen: true });
     expect(c.agent).toBeGreaterThanOrEqual(320);
-    expect(1280 - c.lib - c.agent - 18).toBeGreaterThanOrEqual(540);
+    expect(1280 - c.lib - c.agent - 12).toBeGreaterThanOrEqual(640);
+    const d = resolveColumns({ width: 1280, lib: 300, agent: 360, libOpen: true, agentOpen: true });
+    expect(d).toMatchObject({ libOpen: true, agentOpen: true });
+    expect(1280 - d.lib - d.agent - 12).toBeGreaterThanOrEqual(640);
+    const e = resolveColumns({ width: 1150, lib: 300, agent: 360, libOpen: true, agentOpen: true });   // Library goes first
+    expect(e).toMatchObject({ libOpen: false, agentOpen: true });
+    expect(1150 - 48 - e.agent - 6).toBeGreaterThanOrEqual(640);
+    const f = resolveColumns({ width: 1000, lib: 300, agent: 360, libOpen: true, agentOpen: true });   // then the Agent Panel
+    expect(f).toMatchObject({ libOpen: false, agentOpen: false });
     expect(resolveColumns({ width: 1440, lib: 100, agent: 100, libOpen: true, agentOpen: true })).toMatchObject({ lib: 240, agent: 320 });
     expect(bucketFor(1279)).toBe('narrow'); expect(bucketFor(1440)).toBe('standard'); expect(bucketFor(1600)).toBe('wide');
   });
@@ -75,5 +84,17 @@ describe('panel dividers', () => {
     fireEvent.mouseMove(window, { clientX: 100 });
     fireEvent.mouseUp(window);
     await waitFor(() => { if (el('lib.divider')) throw new Error('not collapsed'); });
+  });
+});
+
+describe('FR-099 layout persisted in the Local Service Settings', () => {
+  it('saves panel sizes and the collapsed Output Settings to Settings.layout (settings.json state)', async () => {
+    const { runtime } = await renderEditor('sample');
+    fireEvent.keyDown(el('agent.divider')!, { key: 'ArrowLeft' });
+    fireEvent.click(document.querySelector<HTMLElement>('[data-el="agent.output"] > button')!);
+    await waitFor(async () => {
+      const l = (await runtime.api.getSettings()).layout;
+      if (l?.panelSizes['standard']?.agent !== 376 || !l.outputCollapsed) throw new Error(JSON.stringify(l));
+    }, { timeout: 3000 });
   });
 });

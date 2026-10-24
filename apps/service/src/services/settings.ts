@@ -25,6 +25,11 @@ export const SettingsSchema = z.object({
   defaultFps: z.union(FPS_VALUES.map((v) => z.literal(v)) as unknown as [z.ZodLiteral<24>, z.ZodLiteral<25>, z.ZodLiteral<30>, z.ZodLiteral<50>, z.ZodLiteral<60>]).default(30),
   checkUpdates: z.boolean().default(true),
   diagnosticsIncludeStructure: z.boolean().default(false),
+  // FR-099 / FR-155: Editor layout (panel widths per window-width bucket, collapsed panels). Non-secret UI state only.
+  layout: z.object({
+    panelSizes: z.partialRecord(z.enum(['narrow', 'standard', 'wide']), z.object({ lib: z.number().int().min(0).max(4000).optional(), agent: z.number().int().min(0).max(4000).optional(), timeline: z.number().int().min(0).max(4000).optional() }).strict()).default({}),
+    libCollapsed: z.boolean().default(false), agentCollapsed: z.boolean().default(false), outputCollapsed: z.boolean().default(false),
+  }).strict().optional(),
 }).strict();
 export type Settings = z.infer<typeof SettingsSchema>;
 

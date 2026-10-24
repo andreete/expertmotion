@@ -1,7 +1,9 @@
 /**
- * electron-updater policy (SECURITY.md SEC-090…096). The feed host is a build constant (SEC-096);
- * no check runs in Private Mode (SEC-094); downloads need Creator consent (`autoDownload:false`);
- * downgrades are off (SEC-095). Private Mode is a setting the Local Service exposes in
+ * electron-updater policy (SECURITY.md SEC-090…096, FRD FR-152). The feed host is a build constant (SEC-096);
+ * no check or download runs in Private Mode (SEC-094); after a check finds an update the Shell downloads it in the
+ * background when `downloadDecision` allows (not Private Mode, not metered, no Render Job) — electron-updater's own
+ * `autoDownload` stays false so this policy is the only path; downgrades are off (SEC-095). EM-8104 after an
+ * interrupted install is detected from the pending-update marker (`pendingUpdateOutcome`). Private Mode is a setting the Local Service exposes in
  * `/api/v1/settings` (SettingsDto.privateMode); the Shell reads it before every check.
  * Pure decision helpers; the AppUpdater wiring lives in main.ts.
  */
@@ -53,7 +55,7 @@ export interface UpdateState {
 export type UpdateEvent =
   | { type: 'checking' } | { type: 'none' } | { type: 'available'; version: string } | { type: 'progress'; percent: number }
   | { type: 'downloaded'; version: string } | { type: 'error'; message: string; stage: 'check' | 'download' | 'install' }
-  | { type: 'paused' } | { type: 'deferred' } | { type: 'resumed' };
+  | { type: 'paused' } | { type: 'deferred' } | { type: 'resumed' } | { type: 'interrupted'; fromVersion: string; toVersion: string };
 
 /** EM code of an updater failure (ERROR_CATALOGUE §6.8): signature/trust → EM-8103, download → EM-8102, install → EM-8104, else EM-8101. */
 export function updateErrorCode(message: string, stage: 'check' | 'download' | 'install'): 'EM-8101' | 'EM-8102' | 'EM-8103' | 'EM-8104' {
@@ -74,7 +76,43 @@ export function nextUpdateState(s: UpdateState, e: UpdateEvent): UpdateState {
     case 'paused': return s.status === 'downloaded' || s.status === 'deferred' ? s : { status: 'paused' };
     case 'deferred': return { ...s, status: 'deferred' };
     case 'resumed': return s.status === 'deferred' ? { ...s, status: 'downloaded' } : s;
+    case 'interrupted': return { status: 'error', version: e.toVersion, code: 'EM-8104' };
   }
+}
+
+/**
+ * FR-152 background download: only when Private Mode is off, the connection is not reported metered (null = the OS gave no
+ * answer; Electron has no metered API, so unknown does not block) and no Render Job runs. Otherwise wait and re-evaluate.
+ */
+export type DownloadDecision = { download: true } | { download: false; reason: 'private-mode' | 'metered' | 'rendering' | 'not-available' };
+export function downloadDecision(ctx: { privateMode: boolean; metered: boolean | null; renderActive: boolean; status: UpdateState['status'] }): DownloadDecision {
+  if (ctx.status !== 'available') return { download: false, reason: 'not-available' };
+  if (ctx.privateMode) return { download: false, reason: 'private-mode' };
+  if (ctx.metered === true) return { download: false, reason: 'metered' };
+  if (ctx.renderActive) return { download: false, reason: 'rendering' };
+  return { download: true };
+}
+/** How often a waiting background download is re-evaluated (render finished, Private Mode off, …). */
+export const DOWNLOAD_RETRY_MS = 5 * 60 * 1000;
+
+/**
+ * EM-8104 rollback detection. Before `quitAndInstall` the Shell writes `<data>/update-pending.json` {fromVersion, toVersion,
+ * at}. On the next launch: running `toVersion` → applied (marker removed); still running `fromVersion` → the install was
+ * interrupted and NSIS left the previous version in place (that file-level rollback is the installer's job, SEC-093) → EM-8104
+ * with "Try again"; anything else (a newer/manual install) → applied. A marker older than 7 days is stale and ignored.
+ */
+export interface PendingUpdate { fromVersion: string; toVersion: string; at: number }
+export function parsePendingUpdate(raw: unknown): PendingUpdate | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const v = raw as Record<string, unknown>;
+  return typeof v.fromVersion === 'string' && typeof v.toVersion === 'string' && typeof v.at === 'number' && Number.isFinite(v.at)
+    ? { fromVersion: v.fromVersion, toVersion: v.toVersion, at: v.at } : null;
+}
+export function pendingUpdateOutcome(p: PendingUpdate | null, currentVersion: string, now: number): 'none' | 'applied' | 'interrupted' {
+  if (!p) return 'none';
+  if (now - p.at > 7 * 24 * 60 * 60 * 1000) return 'none';
+  if (currentVersion === p.fromVersion && p.fromVersion !== p.toVersion) return 'interrupted';
+  return 'applied';
 }
 
 /** FR-152: never apply an update while a Render Job runs; the install waits for the queue to empty. */

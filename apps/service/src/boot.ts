@@ -7,11 +7,12 @@ import { openDatabase } from './db/open.js';
 import { EventBus } from './http/events.js';
 import { createApp } from './http/app.js';
 import { GrantStore } from './services/grants.js';
-import { createEgress } from './services/egress.js';
+import { createEgress, customBaseUrlHost } from './services/egress.js';
 import { SettingsStore } from './services/settings.js';
 import { createLogger, pruneLogs } from './services/logger.js';
 import type { ServiceModule } from './modules/types.js';
 import { MODULES } from './modules/index.js';
+import { setEngineLog } from './s2/proc.js';
 
 /**
  * Resource locations. Packaged (Electron utilityProcess): `process.resourcesPath` holds engine/bundle, engine/chrome,
@@ -42,16 +43,25 @@ export function defaultResources(env: NodeJS.ProcessEnv = process.env): Resource
   };
 }
 
+/** SEC-082: hosts of saved custom (OpenRouter-compatible) base URLs join the provider allow-list; IP literals/localhost never do. */
+function customProviderHosts(db: { prepare(sql: string): { all(): unknown[] } }): string[] {
+  try {
+    return (db.prepare("SELECT base_url FROM provider_connections WHERE provider = 'custom' AND base_url IS NOT NULL").all() as Array<{ base_url: string }>)
+      .map((r) => customBaseUrlHost(r.base_url)).filter((h): h is string => h !== null);
+  } catch { return []; }
+}
+
 export async function boot(cfg: ServiceConfig, opts: { resources?: Resources; modules?: readonly ServiceModule[]; echoLogs?: boolean } = {}) {
   const p = makePaths(cfg.dataDir);
   const log = createLogger(p.logs, { echo: opts.echoLogs ?? cfg.dev });
+  setEngineLog(createLogger(p.logs, { prefix: 'engine' }));
   try { pruneLogs(p.logs); } catch { /* ignore */ }
   const { db, openedVia, migrated } = openDatabase(p.db, cfg.dbKeyHex);
   log.info({ openedVia, migrated }, 'database opened');
   const settings = new SettingsStore(db);
   const ctx: ServiceContext = {
     cfg, paths: p, db, bus: new EventBus(), grants: new GrantStore(cfg.mediaGrantTtlMs), settings, log,
-    egress: createEgress({ isPrivate: () => settings.get().privateMode }),
+    egress: createEgress({ isPrivate: () => settings.get().privateMode, customProviderHosts: () => customProviderHosts(db) }),
     resources: opts.resources ?? defaultResources(), hooks: defaultHooks(), newId, now: nowIso, mediaOrigins: new Set<string>(),
   };
   const modules = opts.modules ?? MODULES;

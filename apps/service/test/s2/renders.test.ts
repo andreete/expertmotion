@@ -9,7 +9,7 @@ import { health } from '../../src/modules/health.js';
 import { createAssetsModule } from '../../src/modules/assets.js';
 import { mediaModule } from '../../src/modules/media.js';
 import { createRendersModule } from '../../src/modules/renders.js';
-import { defaultFileStem, failedFrameOf, gifPaletteArgs, renderServiceOf, type RendererLike } from '../../src/s2/render-service.js';
+import { defaultFileStem, failedFrameOf, gifPaletteArgs, modelHasAudio, probeMismatch, renderServiceOf, type RendererLike } from '../../src/s2/render-service.js';
 import { engineStatus, verifyBundleHash } from '../../src/s2/engine-check.js';
 import type { ServiceContext } from '../../src/context.js';
 import { tempDir } from '../helpers.js';
@@ -60,7 +60,7 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
   const bundle = tempDir('em-bundle-');
   beforeAll(async () => {
     fs.writeFileSync(path.join(bundle, 'index.html'), '<html></html>');
-    s = await startS2([health, createAssetsModule(), mediaModule, createRendersModule({ renderer: async () => fake.r, freeMemBytes: () => mem, remotionPort: async () => 4131, stallMs: 300, maxStartsPerMinute: 100 })]);
+    s = await startS2([health, createAssetsModule(), mediaModule, createRendersModule({ renderer: async () => fake.r, freeMemBytes: () => mem, remotionPort: async () => 4131, stallMs: 300, maxStartsPerMinute: 100, acceptUnvalidated: true })]);
     s.ctx.resources.engineBundle = bundle;
     s.ctx.resources.ffprobe = '/nonexistent/ffprobe'; s.ctx.resources.ffmpeg = '/nonexistent/ffmpeg';
     pid = s.project();
@@ -186,6 +186,17 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     expect(g.effectiveProfile.resolution).toBe('720p'); expect(g.warnings.map((w) => w.code)).toContain('EM-3103');
   });
 
+  it('FR-138: transparent WebM needs background None (EM-9002 with a reason), allowed once the background is None', async () => {
+    const webm = { ...profile, format: 'webm', codec: 'vp9', alpha: true };
+    s.ctx.hooks.applyOps(pid, [{ op: 'op:background.set', target: { kind: 'project' }, args: { presetId: 'preset:background.gradient' } }], { kind: 'system', summary: 'bg' });
+    const bad = await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: webm, performanceProfile: 'standard' } });
+    expect(bad.status).toBe(422);
+    expect((await json<{ error: { code: string; details: { reason: string } } }>(bad)).error).toMatchObject({ code: 'EM-9002', details: { reason: 'alpha-needs-background-none' } });
+    s.ctx.hooks.applyOps(pid, [{ op: 'op:background.set', target: { kind: 'project' }, args: { presetId: 'preset:background.none' } }], { kind: 'system', summary: 'bg none' });
+    expect((await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: webm, performanceProfile: 'standard' } })).status).toBe(200);
+    s.ctx.hooks.applyOps(pid, [{ op: 'op:background.clear', target: { kind: 'project' }, args: {} }], { kind: 'system', summary: 'bg clear' });
+  });
+
   it('blocking preflight: engine missing → 503 EM-3001; folder outside the profile → 403 EM-8302; no clips → EM-2202', async () => {
     s.ctx.resources.engineBundle = path.join(bundle, 'missing');
     const r = await create();
@@ -249,5 +260,52 @@ describe('render recovery on start', () => {
     expect(fs.existsSync(path.join(b.ctx.paths.tmp, `render-${id}`))).toBe(false);
     await b.close();
     void renderServiceOf;
+  });
+});
+
+describe('output validation with ffprobe (FR-145, SEC-068)', () => {
+  const exp = { format: 'mp4' as const, width: 1080, height: 1350, fps: 30, durationMs: 4000, audio: true };
+  const probe = (o: { w?: number; h?: number; fps?: string; dur?: string; audio?: boolean } = {}) => ({
+    streams: [{ codec_type: 'video', width: o.w ?? 1080, height: o.h ?? 1350, avg_frame_rate: o.fps ?? '30/1', r_frame_rate: o.fps ?? '30/1' }, ...(o.audio === false ? [] : [{ codec_type: 'audio' }])],
+    format: { duration: o.dur ?? '4.010' } });
+  it('checks dimensions, duration ± 1 frame, fps and audio presence', () => {
+    expect(probeMismatch(probe(), exp)).toBeNull();
+    expect(probeMismatch(probe({ dur: '4.060' }), exp)).toBeNull();                         // within 1 frame + 50 ms slack
+    expect(probeMismatch(probe({ h: 1080 }), exp)).toMatch(/^dimensions:/);
+    expect(probeMismatch(probe({ dur: '4.2' }), exp)).toMatch(/^duration:/);
+    expect(probeMismatch(probe({ fps: '25/1' }), exp)).toBe('fps: expected 30, got 25');
+    expect(probeMismatch(probe({ fps: '30000/1001' }), exp)).toMatch(/^fps:/);
+    expect(probeMismatch(probe({ audio: false }), exp)).toMatch(/^audio:/);
+    expect(probeMismatch(probe({ audio: false }), { ...exp, audio: false })).toBeNull();     // silent model: no audio stream needed
+    expect(probeMismatch(probe({ fps: '10/1', audio: false }), { ...exp, format: 'gif' })).toBeNull();   // GIF: fps capped, no audio
+  });
+  it('the model has audio when an audio layer or an unmuted clip of an asset with audio plays', () => {
+    const base = { tracks: { audio: [] as Array<{ volume: number }>, video: [{ assetId: 'a', muted: false, volume: 1 }] } } as unknown as Parameters<typeof modelHasAudio>[0];
+    expect(modelHasAudio(base, () => true)).toBe(true);
+    expect(modelHasAudio(base, () => false)).toBe(false);
+    const muted = { tracks: { audio: [], video: [{ assetId: 'a', muted: true, volume: 1 }] } } as unknown as Parameters<typeof modelHasAudio>[0];
+    expect(modelHasAudio(muted, () => true)).toBe(false);
+    const bed = { tracks: { audio: [{ volume: 0.5 }], video: [] } } as unknown as Parameters<typeof modelHasAudio>[0];
+    expect(modelHasAudio(bed, () => false)).toBe(true);
+  });
+  it('a missing ffprobe fails the job with EM-3205 and keeps the file (no acceptUnvalidated)', async () => {
+    const fake = fakeRenderer({ mode: 'ok', steps: 2, stepMs: 10 });
+    const s = await startS2([health, createAssetsModule(), mediaModule, createRendersModule({ renderer: async () => fake.r, freeMemBytes: () => 8e9, remotionPort: async () => 4132, maxStartsPerMinute: 100 })]);
+    try {
+      const bundle = tempDir('em-bundle-'); fs.writeFileSync(path.join(bundle, 'index.html'), '<html></html>');
+      s.ctx.resources.engineBundle = bundle; s.ctx.resources.ffprobe = '/nonexistent/ffprobe'; s.ctx.resources.ffmpeg = '/nonexistent/ffmpeg';
+      const pid = s.project(); const assetId = newId(); const now = new Date().toISOString();
+      fs.mkdirSync(path.join(s.ctx.paths.media, pid, assetId), { recursive: true });
+      fs.writeFileSync(path.join(s.ctx.paths.media, pid, assetId, 'original.mp4'), 'video');
+      s.ctx.db.prepare(`INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, playable_path, duration_ms, width, height, has_audio, status, created_at, updated_at)
+        VALUES (?,?,'video','kopi.mp4','h',5,?,?,4000,1080,1920,0,'ready',?,?)`).run(assetId, pid, `${pid}/${assetId}/original.mp4`, `${pid}/${assetId}/original.mp4`, now, now);
+      s.ctx.hooks.applyOps(pid, [{ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId } }], { kind: 'system', summary: 'seed' });
+      s.ctx.hooks.isTrial = () => false;
+      const job = await json<Job>(await s.api('/renders', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard' } }));
+      const ev = await s.waitEvent((e) => ['render.done', 'render.failed'].includes(e.name) && e.data['jobId'] === job.id);
+      expect(ev.name).toBe('render.failed');
+      expect((await json<Job>(await s.api(`/renders/${job.id}`))).errorCode).toBe('EM-3205');
+      expect(fs.existsSync(path.join(s.ctx.paths.outputs, '_failed', `${job.id}.mp4`))).toBe(true);
+    } finally { await s.close(); }
   });
 });

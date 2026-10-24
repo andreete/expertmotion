@@ -184,5 +184,5 @@ Rules for keys: lower-case, dots only, no indexes in keys (use ICU arguments), s
 | 8 | Lint: I18N-01…04, UX-040 words | CI | 0 violations |
 | 9 | `id-ID` formatting snapshots: sizes, money, durations, dates | unit | match §6 |
 | 10 | Agent replies language: 10 golden scenarios in `id`, 5 in `en` | agent eval | ≥ 95 % in the right language |
-| 11 | Tour in Indonesian end to end | manual | all 10 steps |
+| 11 | Tour in Indonesian end to end | manual | all 8 steps |
 | 12 | Diagnostics bundle contains error copy in both languages and no secrets | unit | pass |

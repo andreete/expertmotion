@@ -2,9 +2,11 @@
 // FR-029/FR-030 import-then-insert from the Text Panel, FR-043 metadata tooltip with codec, FR-045 checkbox assigns the next
 // badge and Shift-click selects a range, FR-046 live reorder preview + sys.live, FR-048 missing state with Locate / Remove,
 // FR-053 import-level error banner with a recovery action, FR-054 filter by the Catalogue Search.
-import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react';
-import { AudioLines, FileText, Film, Image as ImageIcon, ListPlus, MoreHorizontal, Upload, X } from 'lucide-react';
-import { IMPORT_LEVEL, errCode, useStore } from '../state/store.js';
+// FR-014 / FR-041: the packaged path import (picker, drag-and-drop) shows the cards at once (store.importPaths), each with its
+// ingest stage; FR-042 EM-1201 cards offer "Import again"; FR-045 select all (button, Ctrl+A while the panel has focus).
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { AudioLines, CheckSquare, File as FileIcon, FileText, Film, Image as ImageIcon, ListPlus, MoreHorizontal, Upload, X } from 'lucide-react';
+import { useStore } from '../state/store.js';
 import type { AssetDto } from '../api/types.js';
 import { Badge, Button, IconButton, Popover, Progress, cx } from '../components/ui.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
@@ -23,6 +25,8 @@ export function reorderPreview(assets: readonly AssetDto[], dragId: string, targ
   return without;
 }
 const selectable = (a: AssetDto) => a.status === 'ready' && !a.missing && a.kind !== 'subtitle';
+/** FR-045: the ready assets "select all" marks, in panel order (ingesting, failed, missing and caption files are skipped). */
+export const selectAllTargets = (shown: readonly AssetDto[]): AssetDto[] => shown.filter(selectable);
 
 export function AssetPanel({ filter = '' }: { filter?: string }) {
   const { state, actions, t, runtime } = useStore();
@@ -54,20 +58,12 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
     }
   };
   const remember = (items: readonly AssetDto[], ins: PendingInsert | null) => { if (!ins) return; for (const a of items) pending.current.set(a.id, ins); setTimeout(flushPending, 0); };
-  const failImport = (e: unknown) => { const code = errCode(e); if (IMPORT_LEVEL.has(code)) setImportErr(code); else actions.error(e); };
   const pick = async (acc?: string, ins: PendingInsert | null = null) => {
     const shell = window.expertmotion;
     if (runtime.mode === 'live' && shell?.pickFiles && state.project) {
       const exts = (acc ?? ACCEPT).split(',').map((x) => x.trim().replace(/^\./, '')).filter(Boolean);
       const paths = await shell.pickFiles({ filters: [{ name: t('ui.lib.assets.title'), extensions: exts }], multiple: !ins });
-      if (paths.length) {
-        try {
-          const r = await runtime.api.importAssetPaths(state.project.id, paths);
-          remember(r.items, ins);
-          for (const n of r.notices) if (IMPORT_LEVEL.has(n.code)) setImportErr(n.code);
-          actions.toast('info', 'ui.lib.assets.importing', { count: r.items.length });
-        } catch (e) { failImport(e); }
-      }
+      if (paths.length) remember(await actions.importPaths(paths), ins);      // cards appear now, then follow ingest (FR-014)
       return;
     }
     nextInsert.current = ins;
@@ -94,10 +90,31 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
     // Packaged app: dropped files are imported by path (trusted-caller route); the raw upload exists only in development.
     const shell = window.expertmotion;
     const paths = runtime.mode === 'live' && shell?.getPathsForFiles ? shell.getPathsForFiles(files) : [];
-    if (paths.length && state.project) { void runtime.api.importAssetPaths(state.project.id, paths).then((r) => { for (const n of r.notices) if (IMPORT_LEVEL.has(n.code)) setImportErr(n.code); actions.toast('info', 'ui.lib.assets.importing', { count: r.items.length }); }).catch(failImport); return; }
+    if (paths.length && state.project) { void actions.importPaths(paths); return; }                     // FR-041: same immediate cards as the picker
     void actions.upload(files);
   };
   const badgedCount = () => assets.filter((x) => x.sequenceBadge !== null).length;
+  // FR-045: select every ready asset (next badges in panel order); when all are selected already, clear the selection.
+  const pool = selectAllTargets(shown);
+  const allSelected = pool.length > 0 && pool.every((a) => state.assetSelection.includes(a.id));
+  const selectAll = async () => {
+    if (!pool.length) return;
+    if (allSelected) {
+      actions.setAssetSelection(state.assetSelection.filter((id) => !pool.some((a) => a.id === id)));
+      for (const a of pool) if (a.sequenceBadge !== null) await actions.setBadge(a.id, null);
+      return;
+    }
+    actions.setAssetSelection([...new Set([...state.assetSelection, ...pool.map((a) => a.id)])]);
+    let n = badgedCount();
+    for (const a of pool) if (a.sequenceBadge === null) await actions.setBadge(a.id, ++n);
+    actions.announce(t('ui.lib.assets.selectall.done', { count: pool.length }));
+  };
+  // FR-042: "Import again" on an interrupted (EM-1201) card: the failed card goes, the picker opens for that kind of file.
+  const importAgain = async (a: AssetDto) => {
+    await actions.removeAsset(a.id);
+    const ext = a.name.includes('.') ? `.${a.name.split('.').pop()!.toLowerCase()}` : undefined;
+    void pick(ext && ACCEPT.split(',').includes(ext) ? ext : undefined);
+  };
   // FR-045: checking assigns the next free badge, unchecking clears it (the rest renumber); Shift-click selects the range.
   const toggle = async (a: AssetDto, e: MouseEvent) => {
     const on = state.assetSelection.includes(a.id);
@@ -142,16 +159,25 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
     if (order) actions.announce(t('ui.lib.assets.order.done', { names: order.map(nameOf).join(', ') }));
   };
   const previewBadge = (a: AssetDto) => (preview ? (preview.indexOf(a.id) >= 0 ? preview.indexOf(a.id) + 1 : null) : a.sequenceBadge);
+  // FR-053: the banner's recovery actions follow ERROR_CATALOGUE (EM-6401 Try again · Open Diagnostics; EM-6005 retry the import;
+  // EM-1401 / EM-1010 "OK": the body says what to do — remove assets or start a new project / import at most 50).
   const errAction = importErr === 'EM-6401' || importErr === 'EM-6005'
-    ? <Button el="lib.assets.error.action" size={28} onClick={() => { setImportErr(null); void pick(); }}>{t('ui.lib.assets.error.retry')}</Button>
-    : <Button el="lib.assets.error.action" size={28} onClick={() => setImportErr(null)}>{t('ui.lib.assets.error.ok')}</Button>;
+    ? <><Button el="lib.assets.error.action" size={28} onClick={() => { setImportErr(null); void pick(); }}>{t('ui.lib.assets.error.retry')}</Button>
+      {importErr === 'EM-6401' && <Button el="lib.assets.error.diagnostics" size={28} variant="ghost" onClick={() => { setImportErr(null); actions.setScreen({ kind: 'diagnostics' }); }}>{t('ui.lib.assets.error.diagnostics')}</Button>}</>
+    : <Button el="lib.assets.error.action" size={28} onClick={() => setImportErr(null)}>{importErr ? t(`err.${importErr}.action`) : t('ui.lib.assets.error.ok')}</Button>;
+  const onPanelKey = (e: KeyboardEvent) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a' && tag !== 'INPUT' && tag !== 'TEXTAREA') { e.preventDefault(); e.stopPropagation(); void selectAll(); }
+  };
 
   return (
-    <section data-el="lib.assets.panel" aria-label={t('ui.lib.assets.title')} className="flex min-h-[160px] flex-col border-t border-em-line">
+    <section data-el="lib.assets.panel" aria-label={t('ui.lib.assets.title')} onKeyDown={onPanelKey} className="flex min-h-[160px] flex-col border-t border-em-line">
       <div data-el="lib.assets.drop" onDragOver={(e) => { e.preventDefault(); if (!dragId) setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop}
         className={cx('relative flex min-h-0 flex-1 flex-col gap-2 p-3', over && 'shadow-[inset_0_0_0_2px_var(--em-accent)]')}>
         <div className="flex items-center gap-2">
           <span className="t-label flex-1">{t('ui.lib.assets.title')} <span className="t-mono">{assets.length}</span></span>
+          <IconButton el="lib.assets.selectall" label={allSelected ? t('ui.lib.assets.selectall.clear') : t('ui.lib.assets.selectall')} icon={<CheckSquare size={16} />} size={28} aria-pressed={allSelected}
+            onClick={() => void selectAll()} disabledReason={pool.length ? null : t('ui.lib.assets.selectall.none')} />
           <IconButton label={t('ui.lib.assets.import')} icon={<Upload size={16} />} size={28} onClick={() => void pick()} disabledReason={state.project ? null : t('ui.common.noproject')} />
         </div>
         <input ref={input} type="file" multiple accept={accept} hidden aria-hidden tabIndex={-1} data-testid="asset-input"
@@ -179,7 +205,7 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
         ) : (
           <ul className="grid min-h-0 flex-1 auto-rows-min grid-cols-2 gap-2 overflow-y-auto" aria-label={t('ui.lib.assets.title')}>
             {shown.map((a) => (
-              <AssetCard key={a.id} asset={a} badge={previewBadge(a)} previewing={preview !== null} selected={state.assetSelection.includes(a.id)} inTimeline={usedIds.has(a.id)} onToggle={(e) => void toggle(a, e)} onBadge={() => cycleBadge(a)}
+              <AssetCard key={a.id} asset={a} badge={previewBadge(a)} previewing={preview !== null} selected={state.assetSelection.includes(a.id)} inTimeline={usedIds.has(a.id)} onToggle={(e) => void toggle(a, e)} onBadge={() => cycleBadge(a)} onImportAgain={() => void importAgain(a)}
                 onDragStart={() => { setDragId(a.id); setPreview(null); }} onDragEnd={() => { setDragId(null); setPreview(null); }} onDragOverCard={() => dragOver(a)} onDropOn={() => void drop(a)} />
             ))}
           </ul>
@@ -194,8 +220,8 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
   );
 }
 
-function AssetCard({ asset: a, badge, previewing, selected, inTimeline, onToggle, onBadge, onDragStart, onDragEnd, onDragOverCard, onDropOn }: {
-  asset: AssetDto; badge: number | null; previewing: boolean; selected: boolean; inTimeline: boolean; onToggle: (e: MouseEvent) => void; onBadge: () => void;
+function AssetCard({ asset: a, badge, previewing, selected, inTimeline, onToggle, onBadge, onImportAgain, onDragStart, onDragEnd, onDragOverCard, onDropOn }: {
+  asset: AssetDto; badge: number | null; previewing: boolean; selected: boolean; inTimeline: boolean; onToggle: (e: MouseEvent) => void; onBadge: () => void; onImportAgain: () => void;
   onDragStart: () => void; onDragEnd: () => void; onDragOverCard: () => void; onDropOn: () => void;
 }) {
   const { state, actions, t, runtime, lang } = useStore();
@@ -210,12 +236,12 @@ function AssetCard({ asset: a, badge, previewing, selected, inTimeline, onToggle
   const name = [a.name, a.kind, a.durationMs ? formatDuration(a.durationMs) : '', badge ? t('a11y.lib.assets.order', { n: badge }) : '', a.status === 'ingesting' ? t('a11y.lib.assets.preparing', { percent: Math.round(a.progress * 100) }) : '',
     a.status === 'failed' ? t(`err.${a.errorCode ?? 'EM-1001'}.title`) : '', missing ? t('ui.lib.assets.missing') : ''].filter(Boolean).join(', ');
   return (
-    <li data-el="lib.assets.card" data-asset-id={a.id} data-missing={missing || undefined} role="group" aria-label={name} title={meta || a.name} draggable={a.sequenceBadge !== null || selectable(a)}
+    <li data-el="lib.assets.card" data-asset-id={a.id} data-missing={missing || undefined} data-status={a.status} tabIndex={-1} role="group" aria-label={name} title={meta || a.name} draggable={a.sequenceBadge !== null || selectable(a)}
       onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={(e) => { e.preventDefault(); onDragOverCard(); }} onDrop={(e) => { e.stopPropagation(); e.preventDefault(); onDropOn(); }}
       className={cx('relative flex flex-col overflow-hidden rounded-[8px] border bg-em-panel', selected ? 'border-em-accent' : a.status === 'failed' || missing ? 'border-em-danger' : 'border-em-line')}>
       <div className="relative aspect-video w-full bg-em-panel-2">
         {thumb ? <img src={thumb} alt={a.name} className="h-full w-full object-cover" /> : playable ? <video src={playable} muted preload="metadata" aria-hidden className="h-full w-full object-cover" />
-          : <span className="flex h-full items-center justify-center text-em-muted">{KIND_ICON[a.kind]}</span>}
+          : <span className="flex h-full items-center justify-center text-em-muted">{a.status === 'failed' ? <FileIcon size={14} /> : KIND_ICON[a.kind]}</span>}
         <button type="button" data-el="lib.assets.card.badge.sequence" onClick={onBadge} aria-label={badge ? t('a11y.lib.assets.badge', { n: badge }) : t('a11y.lib.assets.badge.none')} title={t('ui.lib.assets.badge.hint')}
           className={cx('absolute left-1 top-1 flex h-5 min-w-5 items-center justify-center rounded-full border px-1 text-[11px] font-bold', badge ? 'border-em-accent bg-em-accent text-em-accent-ink' : 'border-em-line bg-black/60 text-em-text', previewing && badge !== a.sequenceBadge && 'ring-2 ring-em-accent-2')}>
           {badge ?? '+'}
@@ -244,12 +270,15 @@ function AssetCard({ asset: a, badge, previewing, selected, inTimeline, onToggle
       {a.status === 'ingesting' && (
         <div data-el="lib.assets.card.state.ingesting" className="flex flex-col gap-1 px-1.5 pb-1.5">
           <Progress value={a.progress} label={t('a11y.lib.assets.preparing', { percent: Math.round(a.progress * 100) })} />
-          <span className="text-[11px] text-em-muted">{t(`ui.lib.assets.stage.${stage ?? 'probe'}`)}</span>
+          <span data-stage={stage ?? 'queued'} className="text-[11px] text-em-muted">{t(`ui.lib.assets.stage.${stage ?? 'queued'}`)}</span>
         </div>
       )}
       {a.status === 'failed' && (
-        <div data-el="lib.assets.card.state.unsupported" className="px-1.5 pb-1.5 text-[11px] text-em-danger">
-          {t(`err.${a.errorCode ?? 'EM-1001'}.title`)} <span className="t-mono text-em-muted">{a.errorCode}</span>
+        <div data-el="lib.assets.card.state.unsupported" data-code={a.errorCode ?? 'EM-1001'} className="flex flex-col gap-1 px-1.5 pb-1.5 text-[11px] text-em-danger">
+          <span>{t(`err.${a.errorCode ?? 'EM-1001'}.title`)} <span className="t-mono text-em-muted">{a.errorCode}</span></span>
+          {a.errorCode === 'EM-1201'
+            ? <Button el="lib.assets.card.action.importagain" size={28} onClick={onImportAgain}>{t('err.EM-1201.action')}</Button>
+            : <Button size={28} onClick={() => void actions.removeAsset(a.id)}>{t('ui.common.remove')}</Button>}
         </div>
       )}
       {missing && (

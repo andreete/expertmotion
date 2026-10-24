@@ -3,19 +3,19 @@ import { z } from 'zod';
 import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
 import { ULID, decodeCursor, em, encodeCursor, parseOrThrow, requireProject } from '../s2/common.js';
-import { GENERATOR_KINDS, generatorsServiceOf, toGenDto, type GeneratorKind, type GeneratorsOptions } from '../s2/generators-service.js';
+import { GENERATOR_KINDS, HASHTAG_TONES, THUMBNAIL_STYLES, generatorsServiceOf, toGenDto, type GeneratorKind, type GeneratorsOptions } from '../s2/generators-service.js';
 
 const Id = z.string().regex(ULID, 'expected an id');
 const Lang = z.string();   // id|en checked by the service so unsupported languages answer EM-7105
 const insert = { insert: z.boolean().default(false) };
 const BODIES: Record<GeneratorKind, z.ZodType<Record<string, unknown>>> = {
-  captions: z.object({ assetId: Id, language: Lang, modelKey: z.string().max(64).optional(), ...insert }),
+  captions: z.object({ assetId: Id.optional(), source: z.enum(['asset', 'sequence']).optional(), language: Lang, modelKey: z.string().max(64).optional(), ...insert }),
   voice: z.object({ text: z.string().min(1).max(20_000), voiceId: z.string().min(1).max(64), language: Lang, speed: z.number().min(0.8).max(1.2).optional(), atMs: z.number().int().min(0).optional(), ...insert }),
-  music: z.object({ prompt: z.string().min(1).max(300), durationMs: z.number().int().min(5000).max(300_000), style: z.string().max(100).optional(), instrumental: z.boolean().optional(),
+  music: z.object({ prompt: z.string().min(1).max(300), durationMs: z.number().int().min(5000).max(300_000), style: z.string().max(100).optional(), instrumental: z.boolean().optional(), language: Lang.optional(),
     modelKey: z.string().max(64).optional(), ...insert }),
   thumbnail: z.object({ frameMs: z.number().int().min(0).optional(), titleText: z.string().max(500).optional(), prompt: z.string().min(1).max(1000).optional(), count: z.number().int().min(1).max(4).optional(),
-    size: z.object({ w: z.number().int().min(256).max(2048), h: z.number().int().min(256).max(2048) }).optional() }),
-  hashtags: z.object({ language: Lang, platform: z.enum(['tiktok', 'instagram', 'youtube']), count: z.number().int().min(5).max(30) }),
+    style: z.enum(THUMBNAIL_STYLES).optional(), language: Lang.optional(), size: z.object({ w: z.number().int().min(256).max(2048), h: z.number().int().min(256).max(2048) }).optional() }),
+  hashtags: z.object({ language: Lang, platform: z.enum(['tiktok', 'instagram', 'youtube']), tone: z.enum(HASHTAG_TONES).optional(), count: z.number().int().min(5).max(30) }),
 };
 
 export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceModule {
@@ -48,8 +48,8 @@ export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceMod
       route(router, 'get', '/generator-jobs/:jobId', { params: z.object({ jobId: Id }) }, ({ params }) => {   // R-132
         const r = svc.get(params.jobId); if (!r) throw em('EM-9003', 'Not found.'); return toGenDto(r);
       });
-      route(router, 'post', '/generator-jobs/:jobId/insert', { params: z.object({ jobId: Id }), body: z.object({ pages: z.array(z.record(z.string(), z.unknown())).max(5000).optional() }).strict().default({}) }, ({ params, body }) => {   // R-134
-        const r = svc.insertResult(params.jobId, body.pages ? { pages: body.pages } : {}); if (!r) throw em('EM-9003', 'Not found.'); return r;
+      route(router, 'post', '/generator-jobs/:jobId/insert', { params: z.object({ jobId: Id }), body: z.object({ pages: z.array(z.record(z.string(), z.unknown())).max(5000).optional(), assetId: Id.optional(), atMs: z.number().int().min(0).optional() }).strict().default({}) }, ({ params, body }) => {   // R-134
+        const r = svc.insertResult(params.jobId, { ...(body.pages ? { pages: body.pages } : {}), ...(body.assetId ? { assetId: body.assetId } : {}), ...(body.atMs !== undefined ? { atMs: body.atMs } : {}) }); if (!r) throw em('EM-9003', 'Not found.'); return r;
       });
       route(router, 'post', '/generator-jobs/:jobId/save-output', { params: z.object({ jobId: Id }), body: z.object({ assetId: Id }).strict() }, ({ params, body }) => {   // R-136 (FR-103)
         const r = svc.saveOutput(params.jobId, body.assetId); if (!r) throw em('EM-9003', 'Not found.'); return r;

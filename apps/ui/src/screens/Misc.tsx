@@ -6,6 +6,7 @@ import type { RecentCodeDto } from '../api/types.js';
 import { useStore } from '../state/store.js';
 import { ExternalLink } from '../components/ExternalLink.js';
 import { licenceView } from './License.js';
+import { ProfileTable } from '../agent/OutputSettings.js';
 import type { Screen } from '../state/reducer.js';
 import type { DiskUsageDto } from '../api/types.js';
 import { Button, ErrorBox, Field, Modal, Progress, inputCls } from '../components/ui.js';
@@ -97,6 +98,8 @@ export function AboutScreen({ onClose }: { onClose: () => void }) {
           <p data-el="scr.about.gpl" className="mt-2 rounded-[6px] border border-em-line p-2 text-[12px] text-em-text-2">{t('ui.scr.about.gpl')}</p>
           <p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.about.notices.file')}</p>
         </details>
+        {/* FR-176 / ADR-006: the honest boundary statement (SECURITY.md §1) — never "unreadable" or "cannot be reverse-engineered" */}
+        <p data-el="scr.about.security" className="rounded-[6px] border border-em-line p-2 text-[12px] text-em-text-2">{t('ui.scr.about.security')}</p>
         <details><summary className="cursor-pointer">{t('ui.scr.about.limitations')}</summary><p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.about.limitations.body')}</p></details>
         {state.settings?.privateMode && <p className="text-em-private">{t('ui.scr.about.updatespaused')}</p>}
       </div>
@@ -105,9 +108,12 @@ export function AboutScreen({ onClose }: { onClose: () => void }) {
 }
 
 /** FR-148: the offline help ships inside the Editor build; the online documentation is a link (EM-8202 copyable URL in Private Mode). */
-export const HELP_SECTIONS = ['start', 'import', 'design', 'agents', 'export', 'private', 'licence', 'trouble'] as const;
-export function HelpScreen({ onClose }: { onClose: () => void }) {
+export const HELP_SECTIONS = ['start', 'import', 'design', 'agents', 'export', 'performance', 'private', 'licence', 'trouble'] as const;
+/** FR-091: `topic` opens and scrolls to one section (Output Settings ▸ profile ▸ Learn more → `performance`). */
+export function HelpScreen({ onClose, topic }: { onClose: () => void; topic?: (typeof HELP_SECTIONS)[number] }) {
   const { actions, setPrefs, t } = useStore();
+  const open = topic ?? 'start';
+  useEffect(() => { if (topic) document.querySelector(`[data-help-section="${topic}"]`)?.scrollIntoView?.({ block: 'start' }); }, [topic]);
   return (
     <Modal el="scr.help" sheet width={600} title={t('ui.scr.help.title')} onClose={onClose}
       footer={<>
@@ -118,9 +124,10 @@ export function HelpScreen({ onClose }: { onClose: () => void }) {
       <p className="mb-3 text-em-text-2">{t('ui.scr.help.offline')}</p>
       <div data-el="scr.help.sections" className="flex flex-col gap-2">
         {HELP_SECTIONS.map((k) => (
-          <details key={k} data-help-section={k} open={k === 'start'} className="rounded-[6px] border border-em-line px-2 py-1">
+          <details key={k} data-help-section={k} open={k === open} className="rounded-[6px] border border-em-line px-2 py-1">
             <summary className="cursor-pointer font-semibold">{t(`ui.scr.help.${k}.title`)}</summary>
             <p className="mt-1 whitespace-pre-line text-[13px] text-em-text-2">{t(`ui.scr.help.${k}.body`)}</p>
+            {k === 'performance' && <ProfileTable />}
           </details>
         ))}
       </div>
@@ -194,14 +201,23 @@ export function BackupDialog({ mode, onClose }: { mode: 'backup' | 'restore'; on
         </div>
       )}
       {job && <div data-el="scr.backup.progress" className="mt-2 flex flex-col gap-1"><Progress value={job.percent / 100} label={t('ui.scr.backup.progress')} /><span className="text-[12px] text-em-muted">{job.done ? (job.path ? t('ui.scr.backup.done', { path: job.path }) : t('ui.scr.restore.done')) : `${job.percent} %`}</span></div>}
+      {job?.done && job.mode === 'restore' && job.code === 'EM-6303' && (
+        // FR-018: a project with the same identity exists, so the backup became a renamed copy; nothing was overwritten.
+        <div data-el="scr.backup.restore.renamed" data-code="EM-6303" role="status" className="mt-2 flex flex-col gap-1 rounded-[6px] border-l-2 border-em-info bg-em-panel-2 px-2 py-1.5 text-[12px]">
+          <span className="font-semibold">{t('err.EM-6303.title')} <span className="t-mono text-[11px] text-em-muted">EM-6303</span></span>
+          <span className="text-em-text-2">{t('err.EM-6303.body', { name: (job.name ?? '').replace(/ \(restored( \d+)?\)$/, '') })}</span>
+          {job.projectId && <div><Button el="scr.backup.restore.open" size={28} onClick={() => { void actions.openProject(job.projectId!); onClose(); }}>{t('err.EM-6303.action')}</Button></div>}
+        </div>
+      )}
       {error && <ErrorBox code={error} />}
     </Modal>
   );
 }
 
+/** FR-153 shortcut sheet (`?`): redo shown as Ctrl+Shift+Z (Ctrl+Y also works); Ctrl+Enter sends the chat message. */
 export const SHORTCUTS: Array<[string, string]> = [
-  ['Space', 'ui.key.play'], ['← / →', 'ui.key.frame'], ['Shift+← / →', 'ui.key.second'], ['Home / End', 'ui.key.startend'], ['Ctrl+S', 'ui.key.save'], ['Ctrl+Z / Ctrl+Y', 'ui.key.undoredo'],
-  ['Ctrl+Enter', 'ui.key.execute'], ['Esc', 'ui.key.escape'], ['/', 'ui.key.search'], ['1 / 2 / 3', 'ui.key.modes'], ['Ctrl+E', 'ui.key.export'], ['Ctrl+I', 'ui.key.import'],
+  ['Space', 'ui.key.play'], ['← / →', 'ui.key.frame'], ['Shift+← / →', 'ui.key.second'], ['Home / End', 'ui.key.startend'], ['Ctrl+S', 'ui.key.save'], ['Ctrl+Z / Ctrl+Shift+Z', 'ui.key.undoredo'],
+  ['Ctrl+Enter', 'ui.key.send'], ['Esc', 'ui.key.escape'], ['/', 'ui.key.search'], ['1 / 2 / 3', 'ui.key.modes'], ['Ctrl+E', 'ui.key.export'], ['Ctrl+I', 'ui.key.import'],
   ['Ctrl+N / Ctrl+O', 'ui.key.newopen'], ['A', 'ui.key.ask'], ['F', 'ui.key.fullscreen'], ['Ctrl+B / Ctrl+Shift+B', 'ui.key.panels'], ['Shift+?', 'ui.key.sheet'],
 ];
 export function ShortcutSheet({ onClose }: { onClose: () => void }) {

@@ -86,6 +86,34 @@ export class SerialQueue<K extends string = string> {
   }
 }
 
+/**
+ * Job queue with bounded concurrency (FR-042: two ingest jobs at a time) and cancellation of queued entries. Heavy child
+ * processes inside the jobs still go through the Service-wide `heavy` Mutex, so two jobs overlap their copy/hash and bookkeeping
+ * while at most one FFmpeg runs (shared-server memory policy).
+ */
+export class WorkQueue<K extends string = string> {
+  private readonly pending: Array<{ key: K; run: () => Promise<void> }> = [];
+  private readonly active = new Set<K>();
+  private idleWaiters: Array<() => void> = [];
+  constructor(readonly concurrency = 1) {}
+  enqueue(key: K, run: () => Promise<void>): void { this.pending.push({ key, run }); this.pump(); }
+  /** Removes a queued (not running) entry. */
+  remove(key: K): boolean { const i = this.pending.findIndex((p) => p.key === key); if (i < 0) return false; this.pending.splice(i, 1); this.pump(); return true; }
+  has(key: K): boolean { return this.active.has(key) || this.pending.some((p) => p.key === key); }
+  get running(): K[] { return [...this.active]; }
+  get size(): number { return this.pending.length + this.active.size; }
+  idle(): Promise<void> { return this.size === 0 ? Promise.resolve() : new Promise((r) => this.idleWaiters.push(r)); }
+  private pump(): void {
+    while (this.active.size < this.concurrency) {
+      const next = this.pending.shift();
+      if (!next) break;
+      this.active.add(next.key);
+      void (async () => { try { await next.run(); } catch { /* jobs record their own failures */ } finally { this.active.delete(next.key); this.pump(); } })();
+    }
+    if (this.size === 0) { const w = this.idleWaiters; this.idleWaiters = []; w.forEach((f) => f()); }
+  }
+}
+
 const CT: Record<string, string> = {
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav', '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.flac': 'audio/flac', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',

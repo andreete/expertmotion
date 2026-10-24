@@ -106,6 +106,13 @@ describe('plans R-070…R-075', () => {
     const list = await s.json(`/projects/${pid}/plans`);
     expect(list.body.items[0].steps[0].ops).toEqual([]);
     expect((await s.json(`/plans/${p.body.id}`)).body.steps[0].ops).toHaveLength(2);
+    // FR-167: after Undo the executed items show "undone"; Redo brings them back.
+    const mine = (b: any) => b.items.filter((i: any) => [i1.intent.id, i2.intent.id].includes(i.id));
+    expect(mine(q.body).every((i: any) => i.undone === undefined)).toBe(true);
+    await s.json(`/projects/${pid}/composition/undo`, { method: 'POST' });
+    expect(mine((await s.json(`/projects/${pid}/intents`)).body).map((i: any) => [i.status, i.undone])).toEqual([['executed', true], ['executed', true]]);
+    await s.json(`/projects/${pid}/composition/redo`, { method: 'POST' });
+    expect(mine((await s.json(`/projects/${pid}/intents`)).body).every((i: any) => i.undone === undefined)).toBe(true);
   });
   it('a plan goes stale when the head moves; Execute then answers 409 EM-2301 and applies nothing', async () => {
     await queuePick({ selection: [{ kind: 'cut', index: 0 }] });

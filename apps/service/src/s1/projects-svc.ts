@@ -75,18 +75,21 @@ export class Projects {
     const rows = this.ctx.db.prepare(`${PROJECT_SELECT} WHERE ${where.join(' AND ')} ORDER BY p.updated_at DESC, p.id DESC LIMIT @limit`).all(args) as ProjectListRow[];
     const total = (this.ctx.db.prepare(`SELECT count(*) AS n FROM projects p WHERE ${q.includeDeleted ? '1=1' : 'p.deleted_at IS NULL'}`).get() as { n: number }).n;
     const page = rows.slice(0, q.limit), last = page[page.length - 1];
-    return { items: page.map(projectDto), nextCursor: rows.length > q.limit && last ? encodeCursor({ u: last.updated_at, id: last.id }) : null, total };
+    return { items: page.map((r) => projectDto(r, this.store.uiDirty.has(r.id))), nextCursor: rows.length > q.limit && last ? encodeCursor({ u: last.updated_at, id: last.id }) : null, total };
   }
   recent() {
     const rows = this.ctx.db.prepare(`${PROJECT_SELECT} WHERE p.deleted_at IS NULL AND p.opened_at IS NOT NULL ORDER BY p.opened_at DESC, p.id DESC LIMIT 10`).all() as ProjectListRow[];
-    return { items: rows.map((r) => ({ ...projectDto(r), ...(fs.existsSync(path.join(this.ctx.paths.media, r.id)) ? {} : { warnings: ['EM-6102'] }) })) };
+    return { items: rows.map((r) => ({ ...projectDto(r, this.store.uiDirty.has(r.id)), ...(fs.existsSync(path.join(this.ctx.paths.media, r.id)) ? {} : { warnings: ['EM-6102'] }) })) };
   }
-  patch(id: string, b: { name?: string | undefined; language?: 'id' | 'en' | undefined }) {
+  patch(id: string, b: { name?: string | undefined; language?: 'id' | 'en' | undefined; uiState?: Record<string, unknown> | undefined }) {
     const p = this.store.projectRow(id);
     if (b.name !== undefined && b.name.trim() !== p.name) this.store.assertNameFree(b.name, id);
     const settings = JSON.parse(p.settings_json) as Record<string, unknown>;
     if (b.language) settings['language'] = b.language;
     this.ctx.db.prepare('UPDATE projects SET name = ?, language = ?, settings_json = ?, updated_at = ? WHERE id = ?').run(b.name?.trim() ?? p.name, b.language ?? p.language, JSON.stringify(settings), this.ctx.now(), id);
+    if (b.uiState !== undefined) this.ctx.db.prepare('UPDATE projects SET ui_state_json = ? WHERE id = ?').run(JSON.stringify(b.uiState), id);   // FR-012
+    // FR-173: a rename is UI-level state → dirty until Save (manual checkpoint) or the next autosave (FR-165)
+    if ((b.name !== undefined && b.name.trim() !== p.name) || (b.language !== undefined && b.language !== p.language)) { this.store.uiDirty.add(id); this.ckpt.autosave.touch(id); }
     return this.store.projectDto(id);
   }
   softDelete(id: string): void {
@@ -261,7 +264,7 @@ export class Projects {
     return { settings: this.getSettings(id), version, warnings };
   }
 
-  /** R-019 Save As: settings, assets (media hard-linked or copied, or shared when copyMedia=false), all versions, intents, plans. */
+  /** R-019 Save As: settings, UI state, assets (media hard-linked or copied, or shared when copyMedia=false), all versions, intents, plans, conversations. */
   duplicate(id: string, b: { name: string; copyMedia: boolean }) {
     const src = this.store.projectRow(id);
     this.store.assertNameFree(b.name);
@@ -304,9 +307,13 @@ export class Projects {
     const imap = new Map(intents.map((i) => [i.id, this.ctx.newId()]));
     const plans = db.prepare("SELECT * FROM edit_plans WHERE project_id = ? AND status NOT IN ('draft','executing')").all(id) as PlanRow[];
     const pmap = new Map(plans.map((p) => [p.id, this.ctx.newId()]));
+    // FR-013: conversations (Brainstorming and Editor threads) are copied too; ids inside message blocks follow the copied assets/intents.
+    const convs = db.prepare('SELECT * FROM conversations WHERE project_id = ?').all(id) as Array<{ id: string; agent: string; summary_json: string | null; created_at: string; updated_at: string }>;
+    const remapIds = (v: unknown): unknown => typeof v === 'string' ? amap.get(v) ?? imap.get(v) ?? v : Array.isArray(v) ? v.map(remapIds)
+      : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, remapIds(x)])) : v;
     try {
       db.transaction(() => {
-        db.prepare('INSERT INTO projects (id, name, settings_json, head_version_id, language, created_at, updated_at) VALUES (?,?,?,NULL,?,?,?)').run(nid, b.name.trim(), src.settings_json, src.language, now, now);
+        db.prepare('INSERT INTO projects (id, name, settings_json, head_version_id, language, created_at, updated_at, ui_state_json) VALUES (?,?,?,NULL,?,?,?,?)').run(nid, b.name.trim(), src.settings_json, src.language, now, now, src.ui_state_json ?? null);
         for (const a of assets) {
           const row: Record<string, unknown> = { ...a, id: amap.get(a.id), project_id: nid, created_at: now, updated_at: now };
           if (b.copyMedia) for (const col of ASSET_PATH_COLS) row[col] = remapPath(a[col], a.id, amap.get(a.id)!) ?? a[col] ?? null;
@@ -330,6 +337,15 @@ export class Projects {
           const status = p.status === 'valid' ? 'stale' : p.status;
           ip.run(pmap.get(p.id), nid, vmap.get(p.base_version_id), p.origin, JSON.stringify(pj), status, p.created_at, now,
             JSON.stringify((p.intent_ids_json ? (JSON.parse(p.intent_ids_json) as string[]) : []).map((x) => imap.get(x) ?? x)), p.message, null);
+        }
+        const ic = db.prepare('INSERT INTO conversations (id, project_id, agent, summary_json, created_at, updated_at) VALUES (?,?,?,?,?,?)');
+        const im = db.prepare('INSERT INTO messages (id, conversation_id, role, blocks_json, agent_run_id, created_at) VALUES (?,?,?,?,NULL,?)');
+        for (const c of convs) {
+          const cid = this.ctx.newId();
+          ic.run(cid, nid, c.agent, c.summary_json, c.created_at, now);
+          for (const m of db.prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at, id').all(c.id) as Array<{ role: string; blocks_json: string; created_at: string }>) {
+            im.run(this.ctx.newId(), cid, m.role, JSON.stringify(remapIds(JSON.parse(m.blocks_json))), m.created_at);
+          }
         }
       })();
     } catch (e) {

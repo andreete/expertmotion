@@ -2,7 +2,7 @@
 // Formal "Anda" register is allowed here (licence text, GLOSSARY "Words to avoid").
 // FR-132 buy link (EM-8202 copyable URL in Private Mode), FR-134 status states + clock-changed badge, FR-135 re-bind steps.
 import { STORE_URL } from '../api/client.js';
-import { useState } from 'react';
+import { useState, type DragEvent } from 'react';
 import { Copy } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
 import { useStore } from '../state/store.js';
@@ -46,6 +46,16 @@ export function LicenceStatus({ onAction }: { onAction: (screen: 'license') => v
   );
 }
 
+/** FR-131: a dropped `.emlicense` file is a UTF-8 text file holding the key (LICENSE_OPERATIONS §3); bounded before reading. */
+export const LICENCE_FILE_MAX_BYTES = 8 * 1024;
+export async function readLicenceFile(f: File): Promise<string | null> {
+  if (!/\.emlicense$/i.test(f.name) && f.type !== 'text/plain') return null;
+  if (f.size === 0 || f.size > LICENCE_FILE_MAX_BYTES) return null;
+  const text = typeof f.text === 'function' ? await f.text()
+    : await new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result ?? '')); r.onerror = () => rej(r.error); r.readAsText(f); });
+  return text.replace(/^\uFEFF/, '').trim() || null;
+}
+
 export function LicenseForm({ onDone, compact }: { onDone?: () => void; compact?: boolean }) {
   const { state, runtime, dispatch, actions, t } = useStore();
   const [key, setKey] = useState('');
@@ -54,12 +64,13 @@ export function LicenseForm({ onDone, compact }: { onDone?: () => void; compact?
   const [copied, setCopied] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removed, setRemoved] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const lic = state.licence;
   const v = licenceView(lic);
-  const activate = async () => {
+  const activate = async (value = key) => {
     setBusy(true); setError(null);
     try {
-      const l = await runtime.api.activateLicense(key.trim());
+      const l = await runtime.api.activateLicense(value.trim());
       dispatch({ type: 'licence', licence: l });
       if (l.warnings?.includes('EM-5005')) actions.toast('info', 'err.EM-5005.title', undefined, { code: 'EM-5005' });
       actions.toast('success', 'ui.scr.license.activated');
@@ -69,6 +80,20 @@ export function LicenseForm({ onDone, compact }: { onDone?: () => void; compact?
   };
   const remove = async () => {
     try { dispatch({ type: 'licence', licence: await runtime.api.deactivateLicense() }); setConfirmRemove(false); setRemoved(true); setKey(''); } catch (e) { actions.error(e); }
+  };
+  const onDrop = async (e: DragEvent<HTMLElement>) => {                    // FR-131: drop the .emlicense file → fill and activate
+    e.preventDefault(); setDragging(false);
+    const f = e.dataTransfer?.files?.[0];
+    if (!f) return;
+    const text = await readLicenceFile(f).catch(() => null);
+    if (!text) { setError('EM-5006'); return; }
+    setKey(text);
+    await activate(text);
+  };
+  const dragProps = {
+    onDragOver: (e: DragEvent<HTMLElement>) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) { e.preventDefault(); setDragging(true); } },
+    onDragLeave: () => setDragging(false),
+    onDrop: (e: DragEvent<HTMLElement>) => { void onDrop(e); },
   };
   const showRebind = removed || lic?.status === 'invalid' || error === 'EM-5003';
   const copyCode = () => { void navigator.clipboard?.writeText(lic?.machineCode ?? '').catch(() => undefined); setCopied(true); };
@@ -82,14 +107,20 @@ export function LicenseForm({ onDone, compact }: { onDone?: () => void; compact?
           {v.clock && <ClockBadge />}
         </div>
       )}
+      {compact && v.status === 'trial' && (                                      /* FR-133: EM-5001 at first launch (onboarding) */
+        <div data-el="scr.license.trial.notice" data-code="EM-5001" role="status" className="rounded-[6px] border-l-2 border-em-info bg-em-panel-2 px-3 py-2">
+          <div className="flex items-center gap-2"><span className="flex-1 font-semibold">{t('err.EM-5001.title')}</span><span className="t-mono text-em-muted">EM-5001</span></div>
+          <div className="text-em-text-2">{t('err.EM-5001.body')}</div>
+        </div>
+      )}
       <Field label={t('ui.scr.license.machinecode')} hint={t('ui.scr.license.machinecode.hint')}>
         <div className="flex gap-2">
           <code data-el="scr.license.machinecode" className="t-mono flex-1 rounded-[6px] border border-em-line bg-em-panel-2 px-2 py-1.5 select-all">{lic?.machineCode ?? '…'}</code>
           <Button el="scr.license.machinecode.copy" icon={<Copy size={14} />} onClick={copyCode}>{copied ? t('ui.common.copied') : t('ui.common.copy')}</Button>
         </div>
       </Field>
-      <Field label={t('ui.scr.license.input')} htmlFor="em-license-key">
-        <div className="flex gap-2">
+      <Field label={t('ui.scr.license.input')} htmlFor="em-license-key" hint={t('ui.scr.license.input.drop')}>
+        <div className={`flex gap-2 rounded-[6px] ${dragging ? 'outline outline-2 outline-em-accent' : ''}`} data-dropping={dragging || undefined} {...dragProps}>
           <input id="em-license-key" data-el="scr.license.input" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} className={inputCls} placeholder="EM1.…" />
           <Button size={32} onClick={() => void navigator.clipboard?.readText().then(setKey).catch(() => undefined)}>{t('ui.common.paste')}</Button>
         </div>

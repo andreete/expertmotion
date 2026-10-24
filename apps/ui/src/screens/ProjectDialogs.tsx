@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { Film, Trash2 } from 'lucide-react';
 import { FPS_VALUES, RATIOS, RESOLUTIONS, type Ratio, type Resolution } from '@expertmotion/composition-model';
 import { resolveDimensions } from '@expertmotion/engine/formats';
-import { useStore } from '../state/store.js';
+import { outputDefaults, useStore } from '../state/store.js';
 import type { CheckpointDto, DiskUsageDto, Fps, ProjectDto, ProjectSettingsExtras, VersionDto } from '../api/types.js';
 import { Button, Empty, Field, IconButton, Modal, inputCls, cx } from '../components/ui.js';
 import { formatBytes, formatDate, formatDuration, type Lang } from '../i18n/index.js';
@@ -48,7 +48,8 @@ export function NewProjectDialog({ onClose, saveAs }: { onClose: () => void; sav
   const { state, actions, runtime, t } = useStore();
   const [name, setName] = useState(saveAs && state.project ? `${state.project.name} copy` : t('ui.hdr.title.untitled'));
   const [fps, setFps] = useState<Fps>(state.settings?.defaultFps ?? 30);
-  const [ratio, setRatio] = useState<Ratio | 'auto'>('auto');
+  // FR-009: the New dialog defaults to 9:16 (or the Settings default ratio); Auto stays an explicit choice.
+  const [ratio, setRatio] = useState<Ratio | 'auto'>(outputDefaults(state).ratio);
   const [resolution, setResolution] = useState<Resolution>(state.settings?.defaultResolution ?? '1080p');
   const [policy, setPolicy] = useState<DurationPolicy>('fit-content');
   const [seconds, setSeconds] = useState('15');
