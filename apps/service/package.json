@@ -20,5 +20,15 @@
   "devDependencies": {
     "@types/express": "4.17.25",
     "esbuild": "0.25.12"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "EM_DEV=1 tsx src/main.ts"
+  },
+  "exports": {
+    ".": {
+      "source": "./src/boot.ts",
+      "default": "./dist/service.cjs"
+    }
   }
 }

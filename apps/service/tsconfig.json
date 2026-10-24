@@ -1,0 +1,2 @@
+{ "extends": "../../tsconfig.base.json", "compilerOptions": { "rootDir": "src", "outDir": "dist", "lib": ["ES2022", "DOM"], "types": ["node"], "paths": { "better-sqlite3-multiple-ciphers": ["../../node_modules/better-sqlite3-multiple-ciphers/index.d.ts"] } }, "include": ["src"],
+  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/catalogue" }, { "path": "../../packages/composition-model" }, { "path": "../../packages/agents" }] }

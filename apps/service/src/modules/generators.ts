@@ -1,0 +1,3 @@
+// Module stub: replaced by its owning implementation (see process.md Entry 4 ownership table).
+import type { ServiceModule } from './types.js';
+export const generatorsModule: ServiceModule = { name: 'generators', register() {} };
