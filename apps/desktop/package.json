@@ -2,9 +2,19 @@
   "name": "@expertmotion/desktop",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "main": "dist/main.cjs",
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "test": "vitest run ../../apps/desktop",
+    "build:main": "node scripts/build-main.mjs",
+    "harden": "node scripts/harden.mjs",
+    "harden:plan": "node scripts/harden.mjs --plan",
+    "pack:win": "electron-builder --win nsis --x64 --config electron-builder.config.cjs --publish never"
+  },
   "dependencies": {
-    "electron-updater": "6.8.11"
+    "electron-updater": "6.8.11",
+    "@expertmotion/shared": "0.0.0"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",

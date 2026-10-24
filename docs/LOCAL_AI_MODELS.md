@@ -106,7 +106,7 @@ If the Operator later wants hashtag/caption text without a Provider Connection: 
 |---|---|
 | Prebuilt, pinned, signed | each engine is pinned to an upstream release tag or commit in `packages/models/engines.json` (name, version, sha256 of the zip, licence id); binaries are re-signed with the Operator's code-signing certificate (DEPLOYMENT_AND_PACKAGING.md) so SmartScreen sees one publisher |
 | Location | `%LOCALAPPDATA%\Expertmotion\app\resources\engines\<engine>\<version>\` (read-only, installed); the Vulkan variant is chosen when the Hardware Monitor reports a Vulkan-capable GPU, else CPU |
-| Verification at startup | sha256 of each engine executable compared with `engines.json`; mismatch → `EM-6003` "engine damaged, reinstall" and the Generator Card is disabled |
+| Verification at startup | sha256 of each engine executable compared with `engines.json`; mismatch → `EM-7108` "engine damaged, reinstall" and the Generator Card is disabled |
 | Third-Party Notices | every engine and model licence text in `scr.about` ▸ Third-Party Notices and in `resources/licenses/` |
 | Updates | engines update only with Expertmotion releases; models can be updated independently through the registry (§4) |
 
@@ -129,11 +129,11 @@ Threads: `threads = max(1, min(8, os.cpus().length - 2))` on T0 so the Editor st
 |---|---|---|
 | No network | Private Mode is checked before every spawn (downloads) but engines themselves never need the network: no proxy env, `HF_HUB_OFFLINE=1`, no URLs in args; Python runs with `-I` (isolated) and a wrapper that monkey-patches `socket` to raise | a Windows Firewall outbound rule per engine is an optional hardening step (THREAT_MODEL.md) |
 | Filesystem | `cwd` and `TEMP` are the job directory; inputs are copied/transcoded into it; outputs are read only from it; paths are validated to stay under app data | engines still have the user's file permissions; this is containment of accidents, not of a hostile binary (ADR-007 honesty rule) |
-| Timeouts | `captions`: `10 × audioSeconds + 60 s`; `tts`: `60 s` per chunk; `thumbnail`: `15 min` (T0) / `3 min` (GPU); `music`: `20 min`; on expiry → `taskkill /PID <pid> /T /F` (kills the process tree) and `EM-6004` | ETA shown from progress parsing (whisper prints segment times; sd.cpp prints step progress; wrapper prints JSON lines) |
-| Memory limit | preferred: Windows Job Object with `JOB_OBJECT_LIMIT_PROCESS_MEMORY` set to the Performance Profile ceiling — Node has no built-in API; needs a tiny native helper or a PowerShell launcher **[UNVERIFIED feasibility]**; fallback: a watchdog polls the child's working set every 2 s (`process.memoryUsage` is not available for children → `Get-Process` via the Hardware Monitor's cached PowerShell channel, or `wmic`-free `tasklist /FI "PID eq <pid>" /FO CSV`) and kills above the ceiling with `EM-6005` | the Hardware Monitor's "background workload" row shows the engine's memory |
+| Timeouts | `captions`: `10 × audioSeconds + 60 s`; `tts`: `60 s` per chunk; `thumbnail`: `15 min` (T0) / `3 min` (GPU); `music`: `20 min`; on expiry → `taskkill /PID <pid> /T /F` (kills the process tree) and `EM-7102` | ETA shown from progress parsing (whisper prints segment times; sd.cpp prints step progress; wrapper prints JSON lines) |
+| Memory limit | preferred: Windows Job Object with `JOB_OBJECT_LIMIT_PROCESS_MEMORY` set to the Performance Profile ceiling — Node has no built-in API; needs a tiny native helper or a PowerShell launcher **[UNVERIFIED feasibility]**; fallback: a watchdog polls the child's working set every 2 s (`process.memoryUsage` is not available for children → `Get-Process` via the Hardware Monitor's cached PowerShell channel, or `wmic`-free `tasklist /FI "PID eq <pid>" /FO CSV`) and kills above the ceiling with `EM-7109` | the Hardware Monitor's "background workload" row shows the engine's memory |
 | Output limits | stdout/stderr capped at 1 MB each (older lines dropped), stored in `logs\jobs\<jobId>.log`; result files size-checked (`captions.json` ≤ 10 MB, wav ≤ 500 MB, png ≤ 50 MB) | — |
 | Concurrency | one generator job at a time per Project; generator jobs are paused while a Render Job runs under Standard/Accelerated (PERFORMANCE.md §2 "Background tasks") | queue shared with ingest |
-| Crash | non-zero exit → `EM-6003` with the last 20 stderr lines in Diagnostics; the Local Service never crashes with the child | PRD-015 analogue |
+| Crash | non-zero exit → `EM-7101` with the last 20 stderr lines in Diagnostics; the Local Service never crashes with the child | PRD-015 analogue |
 
 ### 3.4 GPL-3 handling (espeak-ng data/library; piper1-gpl if ever used)
 
@@ -192,10 +192,10 @@ The shipped `registry.json` (in `packages/models/registry.json`, signed as part 
 | 0 Private Mode | if on → dialog "Private Mode blocks downloads. Turn it off to install this model (≈ 1.6 GB)." Installed models keep working. | `EM-7006` |
 | 1 Confirm | sheet shows: model, task, size, licence name + link + use restrictions (OpenRAIL-M), tier recommendation, estimated speed on this PC, disk needed | — |
 | 2 Disk check | free space on the models volume ≥ `Σ bytes × 1.1 + 500 MB`; else refuse | `EM-7004` |
-| 3 Download | one file at a time, HTTP GET with `Range: bytes=<partSize>-` when a `.part` exists (resume); 2 retries with backoff per network error; progress (bytes, %, speed, ETA) via SSE `model.progress {modelId, file, bytes, total, bps}`; pause/cancel buttons; app restart resumes automatically; download runs through the single egress module (AI_WORKFLOW.md §1) so Private Mode toggling mid-download pauses it | `EM-6002` after retries exhausted |
-| 4 Verify | streaming sha256 of the completed file compared with the registry; mismatch → file deleted, one automatic retry, then `EM-6002` "download corrupted" | `EM-6002` |
+| 3 Download | one file at a time, HTTP GET with `Range: bytes=<partSize>-` when a `.part` exists (resume); 2 retries with backoff per network error; progress (bytes, %, speed, ETA) via SSE `model.progress {modelId, file, bytes, total, bps}`; pause/cancel buttons; app restart resumes automatically; download runs through the single egress module (AI_WORKFLOW.md §1) so Private Mode toggling mid-download pauses it | `EM-7003` after retries exhausted |
+| 4 Verify | streaming sha256 of the completed file compared with the registry; mismatch → file deleted, one automatic retry, then `EM-7003` "download corrupted" | `EM-7003` |
 | 5 Install | move from `.partial` into the model folder; write `manifest.json` with `state: 'installed'`; SSE `model.installed`; Catalogue Card badges (`lib.catalogue.card.badge.model`) and Generator Cards update | — |
-| 6 Self-test (P1) | a 2-second smoke run of the engine on a bundled sample (`captions`: 2 s Indonesian wav; `tts`: "Halo"; `image`: 64² 1-step) with the usual timeout; failure marks `corrupt` with a "re-download" action | `EM-6003` |
+| 6 Self-test (P1) | a 2-second smoke run of the engine on a bundled sample (`captions`: 2 s Indonesian wav; `tts`: "Halo"; `image`: 64² 1-step) with the usual timeout; failure marks `corrupt` with a "re-download" action | `EM-7101` |
 
 ### 4.4 Other operations
 
@@ -213,7 +213,7 @@ The shipped `registry.json` (in `packages/models/registry.json`, signed as part 
 
 ## 5. Hardware Tier → defaults
 
-Tiers come from PERFORMANCE.md §1 (T0 CPU-only, T1 ≥ 4 GB VRAM, T2 ≥ 8 GB VRAM); RAM gates (warn < 8 GB total; generator jobs refuse when free RAM < model `ramBytes` + 1 GB → `EM-6005`).
+Tiers come from PERFORMANCE.md §1 (T0 CPU-only, T1 ≥ 4 GB VRAM, T2 ≥ 8 GB VRAM); RAM gates (warn < 8 GB total; generator jobs refuse when free RAM < model `ramBytes` + 1 GB → `EM-7109`).
 
 | Task | T0 | T1 | T2 | Universal fallback |
 |---|---|---|---|---|
@@ -232,12 +232,12 @@ Resolution defaults for images: SD 1.5 512×512 (or 512×896 for 9:16 thumbnails
 
 | Situation | Behaviour | Code |
 |---|---|---|
-| Model not installed | Generator Card shows "Install (size)"; Catalogue Cards flagged `model:<id>` show `lib.catalogue.card.badge.model`; the Editor Agent's capability list excludes the tool so plans never reference it | `EM-6001` if a plan step still calls it |
-| Tier below `minTier` | model hidden from defaults, shown greyed with "needs a GPU tier" and still installable at the Creator's risk (except WebGPU/VRAM-bound FLUX, which is hidden on T0) | `EM-6005` when run and memory check fails |
-| Free RAM insufficient at run time | refuse with the number needed; suggest closing apps or the smaller model | `EM-6005` |
-| Engine crash / timeout | job `failed`; the Creator can retry with the smaller model (one-click) | `EM-6003` / `EM-6004` |
+| Model not installed | Generator Card shows "Install (size)"; Catalogue Cards flagged `model:<id>` show `lib.catalogue.card.badge.model`; the Editor Agent's capability list excludes the tool so plans never reference it | `EM-7107` if a plan step still calls it |
+| Tier below `minTier` | model hidden from defaults, shown greyed with "needs a GPU tier" and still installable at the Creator's risk (except WebGPU/VRAM-bound FLUX, which is hidden on T0) | `EM-7109` when run and memory check fails |
+| Free RAM insufficient at run time | refuse with the number needed; suggest closing apps or the smaller model | `EM-7109` |
+| Engine crash / timeout | job `failed`; the Creator can retry with the smaller model (one-click) | `EM-7101` / `EM-7102` |
 | Private Mode | downloads blocked; installed models work | `EM-7006` |
-| Python runtime missing (music) | offer the download (§9) or the loop library | `EM-6001` |
+| Python runtime missing (music) | offer the download (§9) or the loop library | `EM-7107` |
 | Quality below acceptance (§7) for Indonesian TTS | the Generator Card states "news-reader quality"; the Brainstorming Agent may suggest recording or a cloud voice (not MVP) | — |
 
 ---
@@ -265,12 +265,12 @@ All four tools are plan steps executed by the runtime after Execute (never calle
 
 | Tool | Input (Zod summary) | Output on completion | Job events (SSE `job.*`) | Preconditions / errors |
 |---|---|---|---|---|
-| `captions.generate` | `{projectId, assetId, language: 'id'|'en'|'auto', modelId?: string, combineTokensWithinMs?: number (1200), maxLines?: 1..3}` | `{jobId}` → `{captions: Caption[], pages: TikTokPage[], language, modelId, durationMs}`; applied as `op:caption.setPages` | `job.queued`, `job.progress {percent, stage: 'extract-audio'|'transcribe'|'paginate', eta}`, `job.done {result}`, `job.failed {code}` | asset must have audio (`EM-1004` family) and be probed; model installed (`EM-6001`); RAM (`EM-6005`); duration ≤ 30 min |
+| `captions.generate` | `{projectId, assetId, language: 'id'|'en'|'auto', modelId?: string, combineTokensWithinMs?: number (1200), maxLines?: 1..3}` | `{jobId}` → `{captions: Caption[], pages: TikTokPage[], language, modelId, durationMs}`; applied as `op:caption.setPages` | `job.queued`, `job.progress {percent, stage: 'extract-audio'|'transcribe'|'paginate', eta}`, `job.done {result}`, `job.failed {code}` | asset must have audio (`EM-1004` family) and be probed; model installed (`EM-7107`); RAM (`EM-7109`); duration ≤ 30 min |
 | `tts.generate` | `{projectId, text: string (≤ 2000), voiceId: 'piper-id-news-medium'|'piper-en-lessac-medium'|'kokoro-82m-v1.0', language: 'id'|'en', speed?: 0.8..1.2, atMs?: number}` | `{jobId}` → `{assetId, durationMs, waveform: true}`; applied as `op:generated.insert {kind: 'voice', jobId}` → Audio Layer at `atMs` (playhead default) | `job.progress {percent, stage: 'synthesize'|'encode'|'ingest'}` … | voice installed; text non-empty; Private Mode irrelevant (local) |
 | `music.generate` | `{projectId, prompt: string (≤ 300), durationMs: 5000..300000, style: string[] (tags from a closed list), seed?: number, instrumental: true}` | `{jobId}` → `{assetId, durationMs, source: 'ace-step'|'loop-library', loudnessLufs}`; applied as `op:audio.addBed {assetId, volume: 0.2, loop: true}` | `job.progress {percent, stage: 'prepare'|'generate'|'normalize'|'ingest'}` … | T1/T2 + Python runtime for ACE-Step, else loop library automatically with a notice |
 | `thumbnail.generate` | `{projectId, frameMs?: number, prompt?: string, titleText?: string, ratio?: AspectRatio, modelId?: string, seed?: number}` | `{jobId}` → `{outputId, assetId, width, height, source: 'frame-composite'|'sd15'|'flux'}`; offered for `op:generated.insert {kind: 'thumbnail'}` as an Overlay, and listed as an Output | `job.progress {percent, stage: 'still'|'diffuse'|'composite'}` … | `frameMs` requires a Composition Version with ≥ 1 Clip; `prompt` requires an installed image model |
 
-Common job envelope: `{jobId, projectId, tool, status: 'queued'|'running'|'done'|'failed'|'cancelled', createdAt, startedAt?, finishedAt?, progress, eta?, error?: {code, message}}`; `DELETE /jobs/:id` cancels (kills the process tree, deletes the job dir). Jobs are persisted; on service restart running jobs are marked `failed` with `EM-6003` and the Plan Card shows "interrupted, re-run" (AI_WORKFLOW.md §12).
+Common job envelope: `{jobId, projectId, tool, status: 'queued'|'running'|'done'|'failed'|'cancelled', createdAt, startedAt?, finishedAt?, progress, eta?, error?: {code, message}}`; `DELETE /jobs/:id` cancels (kills the process tree, deletes the job dir). Jobs are persisted; on service restart running jobs are marked `failed` with `EM-7101` and the Plan Card shows "interrupted, re-run" (AI_WORKFLOW.md §12).
 
 Model Manager API (Creator only, not a Tool): `GET /models` (registry + state), `POST /models/:id/install`, `POST /models/:id/pause`, `DELETE /models/:id`, `POST /models/:id/verify`; SSE `model.progress`, `model.installed`, `model.removed`, `model.failed`.
 
@@ -289,7 +289,7 @@ Model Manager API (Creator only, not a Tool): `GET /models` (registry + state), 
 | Wrapper | `expertmotion_music` package (ours, MIT) with a `__main__` that loads the pipeline once per job, prints JSON progress lines, writes `out.wav`; no network (`HF_HUB_OFFLINE=1`, socket disabled) | ≈ 50 kB |
 | Isolation | venv under app data; `python -I` (ignore user site and env); `PYTHONNOUSERSITE=1`; job dir as cwd/TEMP; timeout 20 min; memory watchdog (§3.3) | — |
 | Updates | wheel lock and wrapper versioned with the app; re-created venv on lock change | — |
-| GPU detection | `torch.cuda.is_available()` at self-test; if false on T1/T2 (driver too old) → fall back to the loop library with `EM-6005` reason | — |
+| GPU detection | `torch.cuda.is_available()` at self-test; if false on T1/T2 (driver too old) → fall back to the loop library with `EM-7109` reason | — |
 
 ### 9.2 Why not Python in the installer
 
@@ -314,10 +314,10 @@ Installer budget ≤ 450 MB (PERFORMANCE.md §5); the torch runtime alone exceed
 |---|---|
 | QA-LM-001 | Every registry row has licence id/name, redistribution flag, sha256 for every file, `minTier`, flag id used by DESIGN_CATALOGUE.md |
 | QA-LM-002 | Download: interrupt at 50 %, restart app → resumes from `.part`, hash verifies |
-| QA-LM-003 | Corrupted file (flip one byte) → `EM-6002`, file removed, retry offered |
+| QA-LM-003 | Corrupted file (flip one byte) → `EM-7003`, file removed, retry offered |
 | QA-LM-004 | Private Mode on → install refused with `EM-7006`; installed model still runs |
 | QA-LM-005 | Engine with no network: packet capture shows zero connections during `captions.generate`, `tts.generate`, `thumbnail.generate` |
-| QA-LM-006 | Timeout kill: a hung engine (debug flag) is killed with its child processes; job `EM-6004`; service alive |
+| QA-LM-006 | Timeout kill: a hung engine (debug flag) is killed with its child processes; job `EM-7102`; service alive |
 | QA-LM-007 | T0 machine: FLUX hidden, SD 1.5 warns, whisper-small default |
 | QA-LM-008 | WER and MOS gates of §7 met on the QA machine; results recorded in POC-010/011 |
 | QA-LM-009 | Third-Party Notices lists espeak-ng (GPL-3.0-or-later) with source URL and written offer; OpenRAIL-M use restrictions shown before installing SD 1.5 |

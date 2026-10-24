@@ -13,7 +13,7 @@
     "tools/*"
   ],
   "scripts": {
-    "typecheck": "tsc -b packages/shared packages/catalogue packages/composition-model packages/agents && tsc -p apps/service --noEmit",
+    "typecheck": "tsc -b packages/shared packages/catalogue packages/composition-model packages/agents packages/models && tsc -p apps/service --noEmit && tsc -p apps/desktop --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "verify": "bash scripts/verify.sh",
