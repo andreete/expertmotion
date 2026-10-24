@@ -13,6 +13,8 @@ An **Asset** (GLOSSARY.md) is the result of this pipeline: an imported media fil
 
 ---
 
+
+> **Stage 3 reconciliation (2026-10-24).** Where this document differs from API_SPECIFICATION.md or ERROR_CATALOGUE.md, those owners win and the service follows them: SSE events are `ingest.progress`, `ingest.done`, `ingest.failed` (not `asset.*`); variant names are `original`, `playable`, `proxy`, `thumb`, `filmstrip`, `waveform` (files `strip.jpg`/`wave.json` keep their names on disk); error meanings are those of ERROR_CATALOGUE (clips longer than the limit use EM-1011). Remotion's slim FFmpeg lacks the `fps`/`tile` filters and the `s16le`/`ipod` muxers: on that build the filmstrip is skipped with EM-1005, the waveform is read from a WAV pipe and `.m4a` is written with `-f mp4`; the full LGPL ingestion build (ADR-019) restores the filmstrip.
 ## 1. Accepted containers and codecs
 
 | Kind | Containers | Codecs accepted by the probe | Result after ingest |

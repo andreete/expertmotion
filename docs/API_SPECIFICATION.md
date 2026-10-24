@@ -598,7 +598,7 @@ Idempotency-Key: export-01JAZK-e012-1
 
 ### 6.12 Catalogue
 
-**R-120 `GET /catalogue`** — query `category?`, `priority?` (default `p0` in v1.0 builds; `p0,p1` later). Response:
+**R-120 `GET /catalogue`** — each item's `preview` is a path relative to the Editor origin (`catalogue/<category>/<name>.webm`; empty when the card draws a generated swatch); the Editor loads it from its own origin (`app://expertmotion/…`, dev: Vite public dir), never from the Local Service. Query `category?`, `priority?` (default `p0` in v1.0 builds; `p0,p1` later). Response:
 
 ```ts
 z.object({ items: z.array(z.object({ id: PresetId, category, label: { en, id }, tags: z.array(z.string()), propertyClass, priority, flags: z.array(z.string()), preview: z.string() /* app:// or dev URL of the loop */,
