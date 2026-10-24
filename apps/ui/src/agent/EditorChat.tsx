@@ -32,7 +32,7 @@ export function EditorChat() {
   };
   const plan = state.plan;
   return (
-    <section data-el="agent.editor.panel" aria-label={t('ui.agent.editor.title')} className="flex min-h-0 flex-[1.5] flex-col"
+    <section data-el="agent.editor.panel" aria-label={t('ui.agent.editor.title')} className="flex min-h-[17rem] flex-[1.5] flex-col"
       onKeyDown={(e) => { if (e.key === 'Escape' && (state.streaming.editor || plan?.status === 'draft')) { e.stopPropagation(); void actions.cancelPlan(); } }}>
       <div className="flex items-center gap-1 px-3 pt-2">
         <span className="t-label flex-1">{t('ui.agent.editor.title')}</span>

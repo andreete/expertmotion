@@ -1,6 +1,7 @@
 // Diagnostics module: R-180 bundle (TR-103, SEC-102: redacted logs + versions + hardware + settings + licence status; never the
 // database, keys, tokens or media), R-181 log tail, and R-002 POST /service/shutdown (trusted caller). Shutdown answers 202 and then
 // raises SIGTERM in-process, so main.ts runs its normal shutdown (every module's stop(): checkpoints, render cancel, run cancel).
+import { availableMemBytes } from '../services/memory.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,7 +65,7 @@ export function buildBundle(ctx: ServiceContext, includeStructure: boolean): { p
   }
   json('versions.json', versions(ctx));
   const hw = one<Record<string, unknown>>(ctx, 'SELECT detected_at, tier, cpu_model, cpu_threads, ram_total_mb, gpu_vendor, gpu_model, vram_mb, nvenc FROM hardware_profiles WHERE is_current = 1 ORDER BY detected_at DESC LIMIT 1');
-  json('hardware.json', { profile: hw ?? null, tier: ctx.hooks.tier(), ramTotalMb: Math.round(os.totalmem() / 1048576), ramFreeMb: Math.round(os.freemem() / 1048576), cpus: os.cpus().length });
+  json('hardware.json', { profile: hw ?? null, tier: ctx.hooks.tier(), ramTotalMb: Math.round(os.totalmem() / 1048576), ramFreeMb: Math.round(availableMemBytes() / 1048576), cpus: os.cpus().length });
   const settings = ctx.settings.get();
   json('settings.json', { ...settings, outputFolder: settings.outputFolder ? '[set]' : null });
   const lic = one<{ status: string; tier: string | null; updates_until: string | null; fingerprint_hash: string }>(ctx, 'SELECT status, tier, updates_until, fingerprint_hash FROM license WHERE id = 1');

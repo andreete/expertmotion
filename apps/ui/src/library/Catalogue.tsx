@@ -86,7 +86,9 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
   const modelMissing = Boolean(modelKey && !state.models.some((m) => m.key === modelKey && m.status === 'installed'));
   const unavailable = item ? !item.availability.ok : preset.flags.includes('webgpu') && tier !== 'T2';
   const label = preset.label[lang];
-  const loopUrl = item?.preview ? (item.preview.startsWith('http') || item.preview.startsWith('app:') ? item.preview : `${runtime.api.baseUrl}/${item.preview.replace(/^\/+/, '')}`) : '';
+  // Loops ship with the Editor (API_SPECIFICATION R-120): resolved against the Editor's own origin, never the Local Service.
+  const [loopFailed, setLoopFailed] = useState(false);
+  const loopUrl = item?.preview && !loopFailed ? new URL(item.preview.replace(/^\/+/, ''), typeof document === 'undefined' ? 'http://localhost/' : document.baseURI).href : '';
   const enter = () => {
     setHover(true);
     if (upcoming || unavailable) return;
@@ -108,7 +110,7 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
         className={cx('group relative flex w-full flex-col overflow-hidden rounded-[8px] border bg-em-panel text-left em-trans', selected ? 'border-em-accent shadow-[inset_0_0_0_2px_var(--em-accent)]' : 'border-em-line hover:border-em-line-strong',
           hover && !reason && '-translate-y-0.5', reason && 'opacity-50 cursor-not-allowed')} style={hover ? { boxShadow: 'var(--sh-2)' } : undefined}>
         <div data-el="lib.catalogue.card.thumb" className={cx('relative w-full', compact ? 'aspect-[16/7]' : 'aspect-video')}>
-          {loopUrl ? <video src={loopUrl} muted loop playsInline aria-hidden className="h-full w-full object-cover" ref={(v) => { if (!v) return; if (hover) void v.play().catch(() => undefined); else v.pause(); }} />
+          {loopUrl ? <video src={loopUrl} muted loop playsInline preload="metadata" aria-hidden onError={() => setLoopFailed(true)} className="h-full w-full object-cover" ref={(v) => { if (!v) return; if (hover) void v.play().catch(() => undefined); else v.pause(); }} />
             : <PresetSwatch id={preset.id} category={preset.category} playing={hover} />}
           {selected && <span className="absolute left-1 top-1 text-em-accent" title={t('ui.lib.catalogue.inpicks')}><Bookmark size={14} fill="currentColor" /></span>}
           <span className="absolute right-1 top-1 flex gap-1">

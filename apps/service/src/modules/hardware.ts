@@ -1,5 +1,6 @@
 // Hardware module: R-150…R-152 and the tier hook. Profile from systeminformation (lazy, at startup and on demand, ≥ 30 s apart),
 // cached in hardware_profiles; live meter from node:os; `hardware.tick` every 2 s only while an SSE client asked for it.
+import { availableMemBytes } from '../services/memory.js';
 import os from 'node:os';
 import type { Tier } from '@expertmotion/composition-model';
 import { EmError } from '@expertmotion/shared';
@@ -55,7 +56,7 @@ export function createHardwareModule(opts: HardwareOptions = {}): ServiceModule 
   const count = (ctx: ServiceContext, sql: string): number => { try { return (ctx.db.prepare(sql).get() as { n: number }).n; } catch { return 0; } };
   function tick(ctx: ServiceContext) {
     const mem = process.memoryUsage();
-    return { at: ctx.now(), cpuPercent: st(ctx).meter.sample(), ramFreeMb: Math.round(os.freemem() / 1048576), ramTotalMb: Math.round(os.totalmem() / 1048576), processMb: Math.round(mem.rss / 1048576),
+    return { at: ctx.now(), cpuPercent: st(ctx).meter.sample(), ramFreeMb: Math.round(availableMemBytes() / 1048576), ramTotalMb: Math.round(os.totalmem() / 1048576), processMb: Math.round(mem.rss / 1048576),
       chromeMb: null, diskFreeMb: diskFreeMb(ctx.paths.data), gpuPercent: null,
       workload: { rendering: count(ctx, "SELECT count(*) n FROM render_jobs WHERE status = 'rendering'") > 0, ingesting: count(ctx, "SELECT count(*) n FROM assets WHERE status = 'ingesting'"),
         downloading: count(ctx, "SELECT count(*) n FROM models WHERE status IN ('downloading','verifying')"), agentRuns: s3(ctx).runs.size } };

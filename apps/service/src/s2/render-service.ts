@@ -1,6 +1,7 @@
 // Render queue (API_SPECIFICATION §6.11, PERFORMANCE §2/§7, ARCHITECTURE §6.2): preflight + estimate, one Render Job at a time,
 // renderMedia/renderStill from the prebuilt Engine bundle with a per-job media grant, progress SSE, ffprobe validation, Outputs.
 // @remotion/renderer is imported lazily inside the job so the Service (and its tests) start without Chrome.
+import { availableMemBytes } from '../services/memory.js';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -126,7 +127,9 @@ export class RenderService {
     const free = await freeBytes(fs.existsSync(folder) ? folder : ctx.paths.outputs);
     const needDisk = 3 * (estimate.bytes ?? 0) + 500_000_000;
     checks.push({ check: 'disk', ok: free >= needDisk, ...(free >= needDisk ? {} : { code: 'EM-3102' }), details: { needBytes: needDisk, freeBytes: free } });
-    const mem = (this.opts.freeMemBytes ?? os.freemem)();
+    // EM_TEST_FREE_MEM_MB: development-only fault injection (GOLDEN_SCENARIOS §1 EM_TEST_*), ignored in packaged builds.
+    const testMem = ctx.cfg.dev ? Number(process.env['EM_TEST_FREE_MEM_MB'] ?? NaN) : NaN;
+    const mem = Number.isFinite(testMem) ? testMem * 1048576 : (this.opts.freeMemBytes ?? availableMemBytes)();
     const needMem = MEM_NEED[input.performanceProfile];
     checks.push({ check: 'memory', ok: mem >= needMem, ...(mem >= needMem ? {} : { code: 'EM-3101' }), details: { needBytes: needMem, freeBytes: mem } });
     if (this.queue.size > 0) notices.push('EM-3208');

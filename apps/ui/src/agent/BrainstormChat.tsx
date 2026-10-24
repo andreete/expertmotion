@@ -20,7 +20,7 @@ export function BrainstormChat() {
     if (!ok) setValue(text);                            // composer restored on failure (IX-12 point 9)
   };
   return (
-    <section data-el="agent.brainstorm.panel" aria-label={t('ui.agent.brainstorm.title')} className="flex min-h-0 flex-1 flex-col border-b border-em-line">
+    <section data-el="agent.brainstorm.panel" aria-label={t('ui.agent.brainstorm.title')} className="flex min-h-[11rem] flex-1 flex-col border-b border-em-line">
       <div className="flex items-center gap-1 px-3 pt-2">
         <span className="t-label flex-1">{t('ui.agent.brainstorm.title')}</span>
         <span title={t('ui.agent.brainstorm.help')} aria-label={t('ui.agent.brainstorm.help')} className="text-em-muted"><CircleHelp size={14} /></span>

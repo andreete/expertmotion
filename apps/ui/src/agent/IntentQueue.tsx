@@ -37,7 +37,7 @@ export function IntentQueue() {
   const needsAgent = all.some((i) => i.status === 'queued' && (i.needsInterpretation || !i.parentIntentId));
   const running = Boolean(state.streaming.editor) || state.plan?.status === 'draft' || state.plan?.status === 'executing';
   return (
-    <div className="flex max-h-[45%] min-h-0 flex-col border-b border-em-line">
+    <div className="flex max-h-[45%] min-h-[5.5rem] shrink-0 flex-col border-b border-em-line">
       <div className="flex items-center gap-1.5 px-3 py-1.5">
         <span className="t-label flex-1">{t('ui.agent.editor.intentqueue.title', { count: top.length })}</span>
         <Button el="agent.editor.plan" size={28} disabledReason={needsAgent ? null : t('ui.agent.editor.plan.disabled')} onClick={() => void actions.plan()}>{t('ui.agent.editor.plan')}</Button>
@@ -50,7 +50,7 @@ export function IntentQueue() {
         {top.map((i) => {
           const kids = all.filter((c) => c.parentIntentId === i.id);
           return (
-            <li key={i.id} className="flex flex-col gap-0.5">
+            <li key={i.id} className="flex shrink-0 flex-col gap-0.5">
               <IntentItem intent={i} all={all} />
               {kids.length > 0 && kids.some((k) => k.status !== i.status) && (
                 <ul className="ml-5 flex flex-col gap-0.5 border-l border-em-line pl-2">

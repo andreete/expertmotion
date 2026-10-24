@@ -31,7 +31,7 @@ export function ModelBar() {
 export function AgentPanel() {
   const { t } = useStore();
   return (
-    <aside aria-label={t('a11y.region.agent')} data-region="agent" className="flex h-full min-h-0 flex-col bg-em-panel">
+    <aside aria-label={t('a11y.region.agent')} data-region="agent" className="flex h-full min-h-0 flex-col overflow-y-auto bg-em-panel">
       <ModelBar />
       <BrainstormChat />
       <EditorChat />

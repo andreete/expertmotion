@@ -37,7 +37,7 @@ export function OutputSettings() {
   const resReason = (r: Resolution) => (tier === 'T0' && (r === '2k' || r === '2160p') ? t('ui.agent.output.resolution.needsgpu') : null);
   const summary = `${ratio} · ${res} · ${t(`ui.agent.output.profile.${profile}`)}`;
   return (
-    <section data-el="agent.output" aria-label={t('ui.agent.output.title')} className="border-t border-em-line">
+    <section data-el="agent.output" aria-label={t('ui.agent.output.title')} className="shrink-0 border-t border-em-line">
       <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<span className="t-label flex-1 text-left">{t('ui.agent.output.title')}</span>
         {!open && <span className="t-mono text-em-muted">{summary}</span>}

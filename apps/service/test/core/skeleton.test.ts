@@ -188,3 +188,15 @@ describe('SSE resync notice', () => {
     } finally { await s.close(); }
   });
 });
+
+describe('available memory', () => {
+  it('uses MemAvailable on Linux and caps by the cgroup headroom', async () => {
+    const { availableMemBytes } = await import('../../src/services/memory.js');
+    const files: Record<string, string> = { '/proc/meminfo': 'MemTotal: 2000000 kB\nMemFree: 180000 kB\nMemAvailable: 750000 kB\n', '/proc/self/cgroup': '0::/user.slice/x.scope\n',
+      '/sys/fs/cgroup/user.slice/x.scope/memory.max': '1258291200\n', '/sys/fs/cgroup/user.slice/x.scope/memory.current': '1000000000\n' };
+    const read = (p: string) => { const v = files[p]; if (v === undefined) throw new Error('ENOENT'); return v; };
+    expect(availableMemBytes(read, 'linux')).toBe(1258291200 - 1000000000);
+    delete files['/proc/self/cgroup'];
+    expect(availableMemBytes(read, 'linux')).toBe(750000 * 1024);
+  });
+});
