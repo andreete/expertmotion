@@ -26,7 +26,7 @@ export async function startService(opts: { modules?: readonly ServiceModule[]; d
   const cfg: ServiceConfig = { port, token: crypto.randomBytes(32).toString('base64url'), dataDir, dbKeyHex: crypto.randomBytes(32).toString('hex'), dev: true,
     uiOrigin: 'http://127.0.0.1:4120', version: '0.1.0-test', mediaGrantTtlMs: 60_000, ...opts.cfg };
   const b = await boot(cfg, { echoLogs: false, ...(opts.modules ? { modules: opts.modules } : {}),
-    resources: { engineBundle: path.join(dataDir, 'no-bundle'), ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', loopsDir: path.join(dataDir, 'loops') } });
+    resources: { engineBundle: path.join(dataDir, 'no-bundle'), ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', loopsDir: path.join(dataDir, 'loops'), licenseDir: path.join(dataDir, 'license') } });
   const server = http.createServer(b.app);
   await new Promise<void>((r) => server.listen(port, '127.0.0.1', () => r()));
   const base = `http://127.0.0.1:${port}`;

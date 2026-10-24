@@ -172,3 +172,19 @@ describe('media CORS exception', () => {
     expect((await fetch(`${s.base}/api/v1/version`, { headers: { Origin: 'http://localhost:4130', Authorization: `Bearer ${s.token}` } })).status).toBe(403);
   });
 });
+
+describe('SSE resync notice', () => {
+  it('a Last-Event-ID older than the buffer gets service.notice resync instead of a partial replay', async () => {
+    const s = await startService({ modules: [health, { name: 'sse', register(router, ctx) { router.get('/events', (req, res) => ctx.bus.attach(req, res)); } }] });
+    try {
+      for (let i = 0; i < 600; i++) s.ctx.bus.emit('x', { i });
+      const ac = new AbortController();
+      const r = await fetch(`${s.base}/api/v1/events?token=${s.token}`, { headers: { 'Last-Event-ID': '3' }, signal: ac.signal });
+      const reader = r.body!.getReader(); let text = '';
+      while (!text.includes('service.notice')) text += new TextDecoder().decode((await reader.read()).value);
+      expect(text).toContain('"kind":"resync"');
+      expect(text).not.toContain('event: x');
+      ac.abort();
+    } finally { await s.close(); }
+  });
+});

@@ -219,7 +219,7 @@ export const agentsModule: ServiceModule = {
         accepted.push(p.id);
         intents.push(...r.value.map((i) => (p.needsInterpretation && !i.needsInterpretation ? { ...i, needsInterpretation: true } : i)));
       }
-      const enqueue = (ctx.hooks as unknown as Partial<HandoffHooks>).enqueueIntents;
+      const enqueue = ctx.hooks.enqueueIntents?.bind(ctx.hooks);
       let queue: unknown = null;
       if (intents.length && enqueue) queue = enqueue(project.id, intents).queue;
       const now = ctx.now();

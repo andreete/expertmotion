@@ -20,7 +20,12 @@ export class EventBus {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.write('retry: 2000\n\n');
     const last = Number(req.headers['last-event-id'] ?? req.query['lastEventId'] ?? 0);
-    if (last > 0) for (const ev of this.buffer) if (ev.seq > last && filter(ev)) write(res, ev);
+    if (last > 0) {
+      const oldest = this.buffer[0]?.seq ?? this.seq + 1;
+      // Gap larger than the buffer (API_SPECIFICATION §7.2): tell the client to refetch state instead of replaying a partial history.
+      if (last < oldest - 1) res.write(`event: service.notice\ndata: ${JSON.stringify({ seq: this.seq, kind: 'resync', lastEventId: last, oldestSeq: oldest })}\n\n`);
+      else for (const ev of this.buffer) if (ev.seq > last && filter(ev)) write(res, ev);
+    }
     const client: Client = { res, filter };
     this.clients.add(client);
     const hb = setInterval(() => res.write(': ping\n\n'), 15_000);

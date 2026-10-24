@@ -16,7 +16,9 @@ import { createSecretBox } from '../s3/crypto.js';
 import { audit, emit } from '../s3/dto.js';
 
 /** Compiled release date (LICENSE_OPERATIONS §6 step 9). Doc gap: the build script should inject it; until then this constant is the Stage 3 date. */
-export const BUILD_DATE = '2026-10-24';
+/** Release date, injected by the service build (scripts/build.mjs define EM_BUILD_DATE); source runs use the value below. */
+declare const EM_BUILD_DATE: string | undefined;
+export const BUILD_DATE: string = typeof EM_BUILD_DATE === 'string' ? EM_BUILD_DATE : '2026-10-24';
 const TOKEN_AAD = 'license:token';
 
 export interface LicenseOptions {
@@ -39,7 +41,7 @@ const MESSAGES: Record<string, string> = {
 };
 
 function defaultCopies(ctx: ServiceContext): Array<{ bytes: Uint8Array; signatureText: string }> {
-  const dirs = [path.join(path.dirname(path.dirname(ctx.resources.loopsDir)), 'license'), ctx.paths.data];
+  const dirs = [ctx.resources.licenseDir, ctx.paths.data];
   const out: Array<{ bytes: Uint8Array; signatureText: string }> = [];
   for (const d of dirs) {
     try {
