@@ -55,7 +55,11 @@ function opFor(pick: DesignPick, target: ElementRefT | undefined, model: Composi
   if ('params' in args) args['params'] = { ...(args['params'] as object), ...params };
   else args = { ...args, ...params };
   if (p.category === 'text') { args = { ...args, text: pick.text, atMs: Math.round(pick.playheadMs ?? 0) }; if (target?.kind === 'text') return { op: { op: 'op:text.setStyle', target, args: { ...(p.data?.['fontSize'] ? { fontSize: p.data['fontSize'] } : {}) } }, complete: true }; }
-  if (p.category === 'shape') args = { ...args, atMs: Math.round(pick.playheadMs ?? 0) };
+  if (p.category === 'shape') {
+    // size/fill/stroke/strokeWidth are first-class op:shape.add args; everything else stays in params.
+    const { size, fill, stroke, strokeWidth, ...rest } = (args['params'] ?? {}) as Record<string, unknown>;
+    args = { ...args, ...(size !== undefined ? { size } : {}), ...(fill !== undefined ? { fill } : {}), ...(stroke !== undefined ? { stroke } : {}), ...(strokeWidth !== undefined ? { strokeWidth } : {}), params: rest, atMs: Math.round(pick.playheadMs ?? 0) };
+  }
   if (p.category === 'font' && target?.kind === 'text') return { op: { op: 'op:text.setStyle', target, args: { fontFamily: args['fontFamily'] } }, complete: true };
   if (pick.assetId) args['assetId'] = pick.assetId;
   if (p.id === 'preset:audio.sfx-hit') args['atMs'] = Math.round(pick.playheadMs ?? 0);

@@ -14,8 +14,6 @@
  * This is a .cjs config consumed by the electron-builder CLI on the Windows build machine. It is
  * not executed on the Linux dev server; its shape is unit-checked (test/electron-builder.test.ts).
  */
-const { flipFuses, FuseVersion, FuseV1Options } = require('@electron/fuses');
-const path = require('node:path');
 
 /** @type {import('electron-builder').Configuration} */
 const config = {
@@ -48,6 +46,7 @@ const config = {
     '!**/.env*',
     '!**/tsconfig*.json',
     '!native/**', // the optional C++ addon, built separately and unpacked if present
+    '!**/node_modules/@remotion/compositor-{linux,darwin}-*/**', // other platforms' compositors (the Windows one ships in engine/compositor)
   ],
 
   // Everything the Creator needs ships here; nothing is fetched at first run except models (ADR-008).
@@ -91,28 +90,4 @@ const config = {
   publish: [{ provider: 'generic', url: process.env.EM_FEED_URL || 'https://updates.expertmotion.example/win' }],
 };
 
-/** Fuse values (SEC-028). Exported so afterPack.cjs and the unit test share one source. */
-const FUSE_CONFIG = {
-  version: FuseVersion.V1,
-  resetAdHocDarwinSignature: false,
-  [FuseV1Options.RunAsNode]: false,
-  [FuseV1Options.EnableCookieEncryption]: true,
-  [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
-  [FuseV1Options.EnableNodeCliInspectArguments]: false,
-  [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
-  [FuseV1Options.OnlyLoadAppFromAsar]: true,
-  [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
-};
-
-/** Executable name per platform, used by afterPack to locate the binary to flip. */
-function packagedExecutable(appOutDir, electronPlatformName, productName) {
-  if (electronPlatformName === 'win32') return path.join(appOutDir, `${productName}.exe`);
-  if (electronPlatformName === 'darwin') return path.join(appOutDir, `${productName}.app`, 'Contents', 'MacOS', productName);
-  return path.join(appOutDir, productName);
-}
-
 module.exports = config;
-module.exports.default = config;
-module.exports.FUSE_CONFIG = FUSE_CONFIG;
-module.exports.flipFuses = flipFuses;
-module.exports.packagedExecutable = packagedExecutable;

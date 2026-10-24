@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Stages every build output where apps/desktop/electron-builder.config.cjs expects it (DEPLOYMENT_AND_PACKAGING §3).
-// Run on the Windows build machine after: npm run build:all. Usage: node scripts/stage-desktop.mjs [--check]
+// Run on the Windows build machine after: npm run build:all. Usage: node scripts/stage-desktop.mjs [--check] [--platform=win32]
 //   apps/service/dist/service.cjs        → apps/desktop/dist/service/service.cjs
 //   apps/ui/dist/**                      → apps/desktop/dist/ui/**
 //   resources/engine/bundle/**           → apps/desktop/resources/engine/bundle/**
@@ -17,7 +17,9 @@ import path from 'node:path';
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
 const desk = path.join(root, 'apps', 'desktop');
 const check = process.argv.includes('--check');
-const plat = process.platform === 'win32' ? { chrome: 'win64', compositor: 'compositor-win32-x64-msvc' } : { chrome: 'linux64', compositor: 'compositor-linux-x64-gnu' };
+// --platform=win32 stages the Windows binaries on another host (scripts/cross-build-win.sh).
+const targetPlatform = process.argv.find((a) => a.startsWith('--platform='))?.split('=')[1] ?? process.platform;
+const plat = targetPlatform === 'win32' ? { chrome: 'win64', compositor: 'compositor-win32-x64-msvc' } : { chrome: 'linux64', compositor: 'compositor-linux-x64-gnu' };
 const problems = [];
 const need = (p, what) => { if (!fs.existsSync(p)) problems.push(`${what} missing: ${path.relative(root, p)}`); return p; };
 

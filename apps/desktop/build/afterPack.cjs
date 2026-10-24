@@ -4,8 +4,7 @@
 // Runs on the Windows build machine; never on the Linux dev server.
 /** @param {import('electron-builder').AfterPackContext} context */
 module.exports = async function afterPack(context) {
-  // Required lazily so the config → afterPack → config require cycle resolves cleanly.
-  const { FUSE_CONFIG, flipFuses, packagedExecutable } = require('../electron-builder.config.cjs');
+  const { FUSE_CONFIG, flipFuses, packagedExecutable } = require('./fuses.cjs');
   const { appOutDir, electronPlatformName, packager } = context;
   const productName = packager.appInfo.productFilename;
   const exe = packagedExecutable(appOutDir, electronPlatformName, productName);

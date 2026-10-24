@@ -86,7 +86,10 @@ for (const step of steps) {
       const dir = target === 'editor' ? join(root, 'dist/ui/assets') : join(root, 'resources/engine/bundle');
       const cfg = lib.obfuscationConfig(target);
       if (!lib.isRenderSafe(cfg)) throw new Error(`${target} obfuscation config is not render-safe`);
+      // EM_OBFUSCATE_MAX_BYTES: low-memory hosts (the 1.9 GB Linux server) skip the largest chunks; unset on the build machine.
+      const maxBytes = Number(process.env.EM_OBFUSCATE_MAX_BYTES ?? Infinity);
       for (const file of listJs(dir)) {
+        if (statSync(file).size > maxBytes) { console.log(`obfuscate: ${target} ${relative(root, file)} skipped (larger than EM_OBFUSCATE_MAX_BYTES)`); continue; }
         const out = JsObfuscator.obfuscate(readFileSync(file, 'utf8'), cfg).getObfuscatedCode();
         writeFileSync(file, out);
       }

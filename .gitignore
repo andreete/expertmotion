@@ -8,3 +8,4 @@ coverage/
 *.tsbuildinfo
 poc/slice-v0/out/
 poc/browser/out/
+release/

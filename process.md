@@ -5,9 +5,24 @@ Append an entry after every meaningful work unit. Newest entry first. Each entry
 ## Current state (keep this block up to date)
 
 - **Current stage**: Stage 3 (foundation, P0 code) **code-complete on Linux on 2026-10-24**; the Windows-only proofs and the installer build are the Operator's next step ("pengetesan di windows secara manual di belakang").
-- **Verified here**: `bash scripts/verify.sh` → typecheck of all workspaces clean, **609 tests passed** (1 opt-in render smoke skipped by default, run separately and passing), docs-check green; `poc/e2e/run.mjs` → **18/18** (real Editor in headless Chrome against the real service: import, ingest, Insert, Fade pick via Compile, playback through the cut, 720p export).
+- **Verified here**: `bash scripts/verify.sh` → typecheck of all workspaces clean, **610 tests passed** (1 opt-in render smoke skipped by default, run separately and passing), docs-check green; `poc/e2e/run.mjs` → **18/18** (real Editor in headless Chrome against the real service: import, ingest, Insert, Fade pick via Compile, playback through the cut, 720p export).
 - **Blockers (all need the Operator)**: Windows machine for the installer and Electron runtime checks (`poc/WINDOWS_RUNBOOK.md` §6); a provider key for live agent runs; pinned model hashes (`packages/models` registry, SEC-074) before any model can install; the production licence public key (`tools/license-cli keygen --kid A1 --seal`, paste into `apps/service/src/license/keys.ts`); the real storefront host (`EXTERNAL_HOSTS`, `VITE_EM_STORE_URL`); Remotion licence answer (BRD-010); legal review of the compositor FFmpeg (RISK-030); OV code-signing certificate.
-- **Next actionable tasks**: see Entry 5.
+- **Windows test build**: portable ZIP produced on this server (Entry 6); not yet run on Windows.
+- **Next actionable tasks**: see Entry 6, then Entry 5.
+
+---
+
+## 2026-10-24 — Entry 6: Windows test build produced on the Linux server
+
+- **Stage**: 3.
+- **Completed**:
+  - `scripts/cross-build-win.sh` + `stage-desktop.mjs --platform=win32`: Windows build from Linux with Chrome Headless Shell 157.0.8080.0 win64, `@remotion/compositor-win32-x64-msvc@4.0.535`, FFmpeg n8.1 LGPL shared (BtbN). Inputs and a **test** Ed25519 release key live in `~/em-win-deps` (outside git; `SHA256SUMS` there). Runbook §7.
+  - Output: `release/0.0.0/Expertmotion-0.0.0-win-x64-portable.zip` (393 MB, copy in `~/`), unzip and run `Expertmotion.exe`. The NSIS `Setup.exe` was **not** produced: electron-builder needs `wine` for the uninstaller and wine was not allowed on this server; build the installer on Windows (`npm run release:win`).
+  - Startup integrity check wired in the Shell (`checkIntegrity` in `apps/desktop/src/main.ts`, new **EM-8007**): it was signed at build time but never verified before. Replayed against the built tree: 12/12 entries match, signature valid, key embedded in `main.cjs`.
+- **Bugs found (fixed)**: `electron-builder.config.cjs` exported `default`/helpers on the config object (circular JSON, the Windows build would have failed too); helpers moved to `apps/desktop/build/fuses.cjs`. Five shape presets (rect, star, arrow, pie, polygon) compiled shape-specific keys at the top level of `op:shape.add` and were rejected (EM-2102); now in `params` (catalogue + `intents.ts` hoists size/fill/stroke/strokeWidth), plus a test that every preset's compiled args pass its op schema. Obfuscating the 5.6 MB Engine chunk ran out of memory here; `EM_OBFUSCATE_MAX_BYTES` (default 2.5 MB in the cross-build only) skips the two largest Engine chunks.
+- **Verification**: `bash scripts/verify.sh` → typecheck clean, **610 passed**, docs-check green; catalogue loops 83 rendered, 0 failed.
+- **Known gaps (honest)**: test build has no V8 bytecode (bytenode needs Windows) and is unsigned (SmartScreen warning); the two largest Engine chunks are not obfuscated in it; `encrypt:prompts` is a no-op because the service build emits no `prompts.json` and the service has no decrypt path, so the prompts ship inside `service.cjs` (bytecode on the Windows build is their protection until this is wired). Electron runtime still unverified until the Operator runs the ZIP on Windows.
+- **Next tasks**: Operator runs the ZIP on Windows 10/11 (runbook §6 step 9 checks) and reports errors from `%APPDATA%\Expertmotion\logs\shell.log` and `service.log`; then the Windows `release:win` build for the real installer; wire `prompts.json` emission + service-side decrypt.
 
 ---
 

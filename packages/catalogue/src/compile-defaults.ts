@@ -10,7 +10,7 @@ export const COMPILE_RULES: Readonly<Record<Category, CompileRule>> = Object.fre
   caption: { op: 'op:caption.setStyle', requires: [], argsFrom: (p) => ({ presetId: p.id, params: params(p) }) },
   background: { op: 'op:background.set', requires: [], argsFrom: (p) => ({ presetId: p.id, params: params(p) }) },
   motion: { op: 'op:motion.set', requires: ['target'], argsFrom: (p) => ({ presetId: p.id, params: params(p) }) },
-  shape: { op: 'op:shape.add', requires: ['atMs'], argsFrom: (p) => ({ presetId: p.id, durationMs: 2000, ...params(p) }) },
+  shape: { op: 'op:shape.add', requires: ['atMs'], argsFrom: (p) => { const { size, fill, stroke, strokeWidth, ...rest } = p.defaults as Record<string, unknown>; return { presetId: p.id, durationMs: 2000, ...(size !== undefined ? { size } : {}), ...(fill !== undefined ? { fill } : {}), ...(stroke !== undefined ? { stroke } : {}), ...(strokeWidth !== undefined ? { strokeWidth } : {}), params: rest }; } },   // shape-specific keys (cornerRadius, points, …) live in params, which the Engine reads
   easing: { op: 'op:easing.setDefault', requires: [], argsFrom: (p) => ({ easingId: p.id }) },
   effect: { op: 'op:effect.add', requires: ['target'], argsFrom: (p) => ({ presetId: p.id, params: params(p) }) },
   audio: { op: 'op:audio.setDucking', requires: ['target'], argsFrom: (p) => ({ presetId: p.id, params: params(p) }) },

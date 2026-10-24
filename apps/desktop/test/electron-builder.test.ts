@@ -6,11 +6,8 @@ import { createRequire } from 'node:module';
 // maximum-compression / protection requirements stay enforced.
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const mod = require('../electron-builder.config.cjs') as {
-  default: Record<string, any>;
-  FUSE_CONFIG: Record<string, unknown>;
-};
-const config = mod.default;
+const config = require('../electron-builder.config.cjs') as Record<string, any>;
+const mod = require('../build/fuses.cjs') as { FUSE_CONFIG: Record<string, unknown> };
 
 describe('electron-builder config (DEPLOYMENT §3)', () => {
   it('is NSIS per-user x64 with no elevation', () => {

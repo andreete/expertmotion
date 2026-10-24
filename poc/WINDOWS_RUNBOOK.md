@@ -59,3 +59,18 @@ The application code now exists; these steps build the installer from it on the 
 9. Smoke test on a clean Windows VM: install without admin, first run, licence screen shows a Machine Code, import a clip, Insert, pick Fade, Export 720p in Trial Mode (watermark visible), uninstall keeps or removes data as chosen.
 
 Record installer size, cold start, idle RAM and the export time in `docs/POC_PLAN.md` §4 (POC-001, POC-007, POC-008).
+
+## 7. Test installer built on the Linux server (added 2026-10-24)
+
+`scripts/cross-build-win.sh` builds the NSIS installer on the Linux server so the Operator can download and try it without setting up a build machine. Inputs were fetched outside git: Chrome Headless Shell 157.0.8080.0 win64 (Chrome for Testing), `@remotion/compositor-win32-x64-msvc@4.0.535` (npm pack), FFmpeg n8.1 LGPL shared win64 (BtbN; DLLs beside `ffmpeg.exe`/`ffprobe.exe`). better-sqlite3-multiple-ciphers ships N-API prebuilds for win32-x64, so no native rebuild is needed (`-c.npmRebuild=false`).
+
+Differences from the Windows release path (§6), all deliberate:
+
+| Item | Linux test build | Windows release build |
+|---|---|---|
+| V8 bytecode for main and service (bytenode) | skipped (needs the pinned Electron on Windows) | yes |
+| Code signing (signtool, OV certificate) | none: SmartScreen shows "Windows protected your PC" (More info → Run anyway) | signed |
+| Obfuscation, startup integrity check (EM-8007), Electron fuses, asar | yes | yes |
+| Release key | a test key in `~/em-win-deps/keys` on the server, never in git | the Operator's release key |
+
+Use the test installer for the §6 step 9 smoke test; ship only the signed Windows build.

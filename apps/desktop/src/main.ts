@@ -21,8 +21,8 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, safeStorage, screen, session, shell, Tray, utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { randomBytes, createHash, verify as nodeVerify } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes, createHash, createPublicKey, verify as nodeVerify } from 'node:crypto';
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { redact } from '@expertmotion/shared';
@@ -41,6 +41,7 @@ import { editorEntryUrl, resolveDevRules, type DevRules } from './lib/dev-mode.j
 import { buildBootstrap, parseServiceMessage, shutdownMessage } from './lib/bootstrap.js';
 import { evaluateKeyring } from './lib/keyring.js';
 import { shouldCheckForUpdates, updaterConfig } from './lib/updater-policy.js';
+import { verifyManifest, type SignedManifest } from './lib/integrity.js';
 
 /** Build-time constants injected by esbuild `define` (see scripts/build-main.mjs). */
 declare const __EM_FEED_URL__: string;
@@ -482,8 +483,12 @@ function boot(): void {
     configureUpdater();
     createWindow();
     createTray();
-    void startService();
     pushServiceState({ status: 'starting' });
+    void checkIntegrity().then((ok) => {
+      if (ok) { void startService(); return; }
+      fatalDialog('EM-8007', 'Some Expertmotion program files are missing or were changed. Reinstall Expertmotion from the original installer; your projects are kept.');
+      app.quit();
+    });
   });
 
   app.on('window-all-closed', () => {
@@ -502,4 +507,31 @@ export function sha256File(path: string): Promise<string> {
   });
 }
 
-export const __verify = nodeVerify; // referenced so the import is retained for the integrity path.
+/**
+ * Startup integrity check (SEC-061, SEC-133): verifies the signed manifest written by
+ * scripts/harden.mjs against the installed files. Packaged builds with an embedded release key
+ * refuse to start on any mismatch (EM-8007); dev runs and builds without a key skip it.
+ */
+async function checkIntegrity(): Promise<boolean> {
+  const keyB64 = typeof __EM_ENGINE_PUBLIC_KEY_B64__ === 'string' ? __EM_ENGINE_PUBLIC_KEY_B64__ : '';
+  if (!app.isPackaged || keyB64 === '') { logLine('info', 'integrity check skipped', { packaged: app.isPackaged }); return true; }
+  try {
+    const signed = JSON.parse(readFileSync(join(process.resourcesPath, 'integrity-manifest.json'), 'utf8')) as SignedManifest;
+    const fileFor = (logical: string) => logical.startsWith('dist/')
+      ? join(process.resourcesPath, 'app.asar', ...logical.split('/'))
+      : join(process.resourcesPath, ...logical.split('/'));
+    const digests = new Map<string, { sha256: string; bytes: number }>();
+    for (const entry of signed.manifest.entries) {
+      const file = fileFor(entry.path);
+      if (!existsSync(file)) continue;
+      digests.set(entry.path, { sha256: await sha256File(file), bytes: statSync(file).size });
+    }
+    const publicKey = createPublicKey({ key: Buffer.from(keyB64, 'base64'), format: 'der', type: 'spki' });
+    const result = verifyManifest(signed, new Uint8Array(0), digests, (msg, sig) => nodeVerify(null, msg, publicKey, Buffer.from(sig, 'base64')));
+    if (!result.ok) logLine('error', 'integrity check failed', { code: result.code, path: result.path });
+    return result.ok;
+  } catch (err) {
+    logLine('error', 'integrity check failed', { error: (err as Error).message });
+    return false;
+  }
+}

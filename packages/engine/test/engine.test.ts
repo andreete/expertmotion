@@ -58,3 +58,21 @@ describe('preset implementation coverage (BLUEPRINT §3.3)', () => {
     for (const id of Object.keys(NOT_IMPLEMENTED)) expect(getPreset(id)?.priority).toBe('p2');
   });
 });
+
+describe('every Design Pick compiles to op args the operation schema accepts', () => {
+  it('catalogue defaults pass OPERATIONS[op].args', async () => {
+    const { listPresets, compileDefaults } = await import('@expertmotion/catalogue');
+    const { OPERATIONS } = await import('@expertmotion/composition-model');
+    const bad: string[] = [];
+    for (const p of listPresets({})) {
+      const c = compileDefaults(p.id);
+      if (!c) continue;
+      const def = (OPERATIONS as Record<string, { args: { safeParse: (v: unknown) => { success: boolean; error?: { message: string } } } }>)[c.op];
+      if (!def) { bad.push(`${p.id}: unknown op ${c.op}`); continue; }
+      const fill: Record<string, unknown> = { atMs: 0, text: 'Halo', assetId: 'a1', ...c.args };
+      const r = def.args.safeParse(Object.fromEntries(Object.entries(fill).filter(([k]) => k in c.args || c.requires.includes(k))));
+      if (!r.success) bad.push(`${p.id}: ${r.error?.message.slice(0, 160)}`);
+    }
+    expect(bad).toEqual([]);
+  });
+});
