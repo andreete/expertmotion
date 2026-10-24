@@ -19,4 +19,14 @@ CREATE INDEX IF NOT EXISTS idx_plans_idem ON edit_plans(project_id, idempotency_
 CREATE INDEX IF NOT EXISTS idx_plans_project_status ON edit_plans(project_id, status);
 `,
   },
+  {
+    version: 11,
+    name: 's1_sample_project',
+    // ONBOARDING_TOUR §2 / API R-025: the tour's Sample Project is flagged so it can be found (idempotent create) and hard-deleted
+    // when the Creator creates or opens another project. At most one live sample is kept by the service, not by a constraint.
+    sql: `
+ALTER TABLE projects ADD COLUMN is_sample INTEGER NOT NULL DEFAULT 0 CHECK(is_sample IN (0,1));
+CREATE INDEX IF NOT EXISTS idx_projects_sample ON projects(is_sample) WHERE is_sample = 1;
+`,
+  },
 ];

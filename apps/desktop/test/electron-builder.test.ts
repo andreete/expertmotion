@@ -30,7 +30,7 @@ describe('electron-builder config (DEPLOYMENT §3)', () => {
 
   it('carries everything for zero-manual-install (coordinator item 1)', () => {
     const dests = config.extraResources.map((r: { to: string }) => r.to);
-    for (const needed of ['engine/bundle', 'engine/chrome', 'engine/compositor', 'bin']) {
+    for (const needed of ['engine/bundle', 'engine/chrome', 'engine/compositor', 'bin', 'sample']) {
       expect(dests).toContain(needed);
     }
   });

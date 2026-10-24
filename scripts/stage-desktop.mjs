@@ -7,6 +7,7 @@
 //   resources/catalogue/<category>/*.webm (build-loops) → apps/desktop/dist/ui/catalogue/** (served over app:// with the Editor)
 //   node_modules/.remotion/chrome-headless-shell/<platform>/<dir>/**  → apps/desktop/resources/engine/chrome/**
 //   node_modules/@remotion/compositor-<platform>/**                    → apps/desktop/resources/engine/compositor/**
+//   resources/sample/** (onboarding Sample Project, CC0; node packages/engine/scripts/build-sample.mjs) → apps/desktop/resources/sample/**
 //   resources/bin/** (full LGPL FFmpeg + ffprobe for ingestion, ADR-019; placed by the Operator) → apps/desktop/resources/bin/**
 // Writes resources/engine-manifest.json (sha256 of every staged engine file) and THIRD_PARTY_NOTICES.txt.
 import crypto from 'node:crypto';
@@ -29,6 +30,7 @@ const plan = [
   [need(path.join(root, 'resources/engine/bundle'), 'Engine bundle (npm run build:bundle -w @expertmotion/engine)'), path.join(desk, 'resources/engine/bundle')],
   [need(chromeDir, 'Chrome Headless Shell (npx remotion browser ensure)'), path.join(desk, 'resources/engine/chrome')],
   [need(path.join(root, 'node_modules/@remotion', plat.compositor), 'Remotion compositor'), path.join(desk, 'resources/engine/compositor')],
+  [need(path.join(root, 'resources/sample'), 'Sample Project media (node packages/engine/scripts/build-sample.mjs)'), path.join(desk, 'resources/sample')],
   [need(path.join(root, 'resources/bin'), 'ingestion FFmpeg/ffprobe (resources/bin, ADR-019)'), path.join(desk, 'resources/bin')],
 ];
 if (problems.length) { console.error(`stage-desktop: ${problems.length} input(s) missing:\n  ${problems.join('\n  ')}`); process.exit(1); }

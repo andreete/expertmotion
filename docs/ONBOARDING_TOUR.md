@@ -44,6 +44,7 @@ Behaviour notes:
 | Private Mode | Not offered in the wizard (it would block ONB-3); the tour step TOUR-9 introduces it. |
 | Re-run | File ▸ (none). The wizard itself is not re-runnable; its pieces are: Licence (`hdr.action.license`), Providers (`agent.modelbar`), Hardware (`hdr.action.hardware`), Tour (`hdr.menu.help.tour`). |
 | Sample project for the tour | "Sample · Kafe Senja" / "Contoh · Kafe Senja": three bundled 5 s clips (CC0), one SRT, Theme `preset:palette.editorial-dark`; created only when the tour starts; deleted when the Creator creates or opens another project unless they saved it under a new name. |
+| Sample implementation | Created by API R-025 `POST /projects/sample` (idempotent; `isSample: true` in `ProjectDto`; hard-deleted by the Service when R-011 creates or R-016 opens another project; Save As keeps a normal copy). Media: `resources/sample/` (three 5 s 1280×720 clips and `kafe-senja.srt`, CC0 1.0, rendered by our own Engine) built by `packages/engine/scripts/build-sample.mjs` and shipped as `extraResources` `sample/`. |
 
 ## 3. In-app tour (10 steps)
 

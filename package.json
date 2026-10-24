@@ -18,7 +18,7 @@
     "test:coverage": "vitest run --coverage",
     "verify": "bash scripts/verify.sh",
     "docs:check": "bash tools/docs-check.sh",
-    "build:all": "tsc -b packages/engine packages/models && npm run build -w @expertmotion/service && npm run build -w @expertmotion/ui && npm run fonts -w @expertmotion/engine && npm run build:bundle -w @expertmotion/engine && npm run build:main -w @expertmotion/desktop",
+    "build:all": "tsc -b packages/engine packages/models && npm run build -w @expertmotion/service && npm run build -w @expertmotion/ui && npm run fonts -w @expertmotion/engine && npm run build:bundle -w @expertmotion/engine && node packages/engine/scripts/build-sample.mjs && npm run build:main -w @expertmotion/desktop",
     "stage:desktop": "node scripts/stage-desktop.mjs",
     "release:win": "npm run build:all && npm run stage:desktop && npm run harden -w @expertmotion/desktop && npm run pack:win -w @expertmotion/desktop"
   },

@@ -56,6 +56,7 @@ const config = {
     { from: 'resources/engine/chrome', to: 'engine/chrome' },
     { from: 'resources/engine/compositor', to: 'engine/compositor' },
     { from: 'resources/bin', to: 'bin' },
+    { from: 'resources/sample', to: 'sample' },                 // onboarding Sample Project (CC0, build-sample.mjs; API R-025)
     { from: 'resources/engine-manifest.json', to: 'engine-manifest.json' },
     { from: 'resources/integrity-manifest.json', to: 'integrity-manifest.json' },
     { from: 'resources/THIRD_PARTY_NOTICES.txt', to: 'THIRD_PARTY_NOTICES.txt' },

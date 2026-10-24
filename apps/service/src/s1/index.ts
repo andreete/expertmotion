@@ -4,10 +4,11 @@ import type { ServiceContext } from '../context.js';
 import { Backups } from './backup.js';
 import { Checkpoints } from './checkpoints.js';
 import { Projects } from './projects-svc.js';
+import { SampleProjects } from './sample.js';
 import { CompositionStore } from './store.js';
 import { Workflow } from './workflow.js';
 
-export interface S1 { store: CompositionStore; checkpoints: Checkpoints; workflow: Workflow; projects: Projects; backups: Backups; recovered: boolean }
+export interface S1 { store: CompositionStore; checkpoints: Checkpoints; workflow: Workflow; projects: Projects; backups: Backups; sample: SampleProjects; recovered: boolean }
 const runtimes = new WeakMap<ServiceContext, S1>();
 
 export function s1(ctx: ServiceContext): S1 {
@@ -16,7 +17,8 @@ export function s1(ctx: ServiceContext): S1 {
     const store = new CompositionStore(ctx);
     const checkpoints = new Checkpoints(ctx, store);
     const workflow = new Workflow(ctx, store, checkpoints);
-    r = { store, checkpoints, workflow, projects: new Projects(ctx, store, checkpoints, workflow), backups: new Backups(ctx, store), recovered: false };
+    const projects = new Projects(ctx, store, checkpoints, workflow);
+    r = { store, checkpoints, workflow, projects, backups: new Backups(ctx, store), sample: new SampleProjects(ctx, store, projects), recovered: false };
     runtimes.set(ctx, r);
   }
   return r;

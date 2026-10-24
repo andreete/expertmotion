@@ -89,24 +89,36 @@ export class Projects {
   purge(): string[] {
     const cutoff = new Date(Date.now() - PURGE_AFTER_MS).toISOString();
     const ids = (this.ctx.db.prepare('SELECT id FROM projects WHERE deleted_at IS NOT NULL AND deleted_at < ?').all(cutoff) as Array<{ id: string }>).map((r) => r.id);
-    for (const id of ids) {
-      try {
-        this.ctx.db.transaction(() => {
-          // operations_history / edit_plans reference versions without cascade between them: delete children first.
-          for (const t of ['operations_history', 'usage_records', 'outputs', 'render_jobs', 'generator_jobs', 'edit_plans', 'recovery_checkpoints', 'edit_intents', 'messages', 'conversations', 'agent_runs']) {
-            if (t === 'messages') this.ctx.db.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE project_id = ?)').run(id);
-            else this.ctx.db.prepare(`DELETE FROM ${t} WHERE project_id = ?`).run(id);
-          }
-          this.ctx.db.prepare('UPDATE composition_versions SET parent_id = NULL WHERE project_id = ?').run(id);
-          this.ctx.db.prepare('DELETE FROM composition_versions WHERE project_id = ?').run(id);
-          this.ctx.db.prepare('DELETE FROM assets WHERE project_id = ?').run(id);
-          this.ctx.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
-        })();
-        fs.rmSync(path.join(this.ctx.paths.media, id), { recursive: true, force: true });
-        this.ckpt.removeProjectFiles(id);
-      } catch (e) { this.ctx.log.warn({ projectId: id, err: String(e) }, 'purge failed'); }
-    }
+    for (const id of ids) this.hardDelete(id);
     return ids;
+  }
+
+  /**
+   * Removes a project for good: rows (children first: operations_history / edit_plans reference versions without cascade between
+   * them), media folder and checkpoint files. Used by the 30-day purge and for the Sample Project (R-025). Returns false (and
+   * keeps the project) when a render or agent run is active or the delete fails.
+   */
+  hardDelete(id: string): boolean {
+    const busy = this.ctx.db.prepare("SELECT (SELECT count(*) FROM render_jobs WHERE project_id = ? AND status IN ('queued','rendering')) + (SELECT count(*) FROM agent_runs WHERE project_id = ? AND status = 'running') AS n").get(id, id) as { n: number };
+    if (busy.n > 0 || this.wf.activeRun(id)) { this.ctx.log.warn({ projectId: id }, 'hard delete skipped: project busy'); return false; }
+    try {
+      this.ctx.db.transaction(() => {
+        for (const t of ['operations_history', 'usage_records', 'outputs', 'render_jobs', 'generator_jobs', 'edit_plans', 'recovery_checkpoints', 'edit_intents', 'messages', 'conversations', 'agent_runs']) {
+          if (t === 'messages') this.ctx.db.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE project_id = ?)').run(id);
+          else this.ctx.db.prepare(`DELETE FROM ${t} WHERE project_id = ?`).run(id);
+        }
+        this.ctx.db.prepare('UPDATE composition_versions SET parent_id = NULL WHERE project_id = ?').run(id);
+        this.ctx.db.prepare('DELETE FROM composition_versions WHERE project_id = ?').run(id);
+        this.ctx.db.prepare('DELETE FROM assets WHERE project_id = ?').run(id);
+        this.ctx.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+      })();
+      this.ctx.grants.revokeProject(id);
+      this.ckpt.autosave.cancel(id);
+      this.store.forget(id);
+      fs.rmSync(path.join(this.ctx.paths.media, id), { recursive: true, force: true });
+      this.ckpt.removeProjectFiles(id);
+      return true;
+    } catch (e) { this.ctx.log.warn({ projectId: id, err: String(e) }, 'hard delete failed'); return false; }
   }
 
   /** R-016: one call restores the Editor state. Lazy model migration; corrupt head → newest valid checkpoint (FR-166). */

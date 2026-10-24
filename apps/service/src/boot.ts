@@ -38,6 +38,7 @@ export function defaultResources(env: NodeJS.ProcessEnv = process.env): Resource
     loopsDir: path.join(root, 'catalogue'),
     licenseDir: env['EM_LICENSE_DIR'] ?? path.join(root, 'license'),
     enginesDir: env['EM_ENGINES'] ?? path.join(root, 'engines'),
+    sampleDir: env['EM_SAMPLE_DIR'] ?? path.join(root, 'sample'),
   };
 }
 

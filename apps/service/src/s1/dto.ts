@@ -17,6 +17,7 @@ export const ProjectCreateInput = z.object({
   language: z.enum(['id', 'en']).default('id'),
   theme: Theme.partial().optional(),
 }).strict();
+export const SampleCreateInput = z.object({ language: z.enum(['id', 'en']).default('id') }).strict();
 export const ProjectPatchInput = z.object({ name: z.string().trim().min(1).max(120).optional(), language: z.enum(['id', 'en']).optional() }).strict();
 export const ProjectListQuery = PageQuery.extend({ includeDeleted: boolQ });
 export const DuplicateInput = z.object({ name: z.string().trim().min(1).max(120), copyMedia: z.boolean().default(true) }).strict();
@@ -63,7 +64,7 @@ export const ExecuteInput = z.object({ confirmDestructive: z.boolean().default(f
 export const NotesInput = z.object({ notes: z.string().max(1000) }).strict();
 
 // ───────────────────────────── rows and DTOs ─────────────────────────────
-export interface ProjectRow { id: string; name: string; settings_json: string; head_version_id: string | null; language: 'id' | 'en'; created_at: string; updated_at: string; opened_at: string | null; deleted_at: string | null }
+export interface ProjectRow { id: string; name: string; settings_json: string; head_version_id: string | null; language: 'id' | 'en'; created_at: string; updated_at: string; opened_at: string | null; deleted_at: string | null; is_sample?: number }
 export interface ProjectListRow extends ProjectRow { head_hash: string | null; head_duration: number | null; head_parent: string | null; asset_count: number; ckpt_version: string | null }
 export interface VersionRow { id: string; project_id: string; parent_id: string | null; hash: string; model_json: string; cause: VersionCause; plan_id: string | null; duration_ms: number; created_at: string }
 export type VersionCause = 'insert' | 'compile' | 'execute' | 'undo' | 'redo' | 'restore' | 'system';
@@ -79,7 +80,7 @@ export function projectDto(r: ProjectListRow) {
   const dirty = r.ckpt_version !== null ? r.ckpt_version !== r.head_version_id : r.head_parent !== null;
   return { id: r.id, name: r.name, settings: JSON.parse(r.settings_json) as unknown, language: r.language, headVersionId: r.head_version_id, headHash: r.head_hash,
     durationMs: r.head_duration ?? 0, assetCount: r.asset_count, createdAt: r.created_at, updatedAt: r.updated_at, openedAt: r.opened_at, dirty,
-    ...(r.deleted_at ? { deletedAt: r.deleted_at } : {}) };
+    ...(r.deleted_at ? { deletedAt: r.deleted_at } : {}), ...(r.is_sample === 1 ? { isSample: true as const } : {}) };
 }
 export type ProjectDto = ReturnType<typeof projectDto>;
 

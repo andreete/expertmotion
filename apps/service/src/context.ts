@@ -19,6 +19,7 @@ export interface Resources {
   loopsDir: string;
   licenseDir: string;
   enginesDir: string;                   // resources/engines/<engine>/<version>/ (whisper.cpp, sherpa-onnx, sd.cpp; LOCAL_AI_MODELS §3)                   // resources/license (embedded revoked.json + .sig)                     // resources/catalogue (<category>/<name>.webm, DESIGN_CATALOGUE §2)
+  sampleDir: string;                    // resources/sample (onboarding Sample Project media, CC0; packages/engine/scripts/build-sample.mjs; API R-025)
 }
 
 export interface Hooks {

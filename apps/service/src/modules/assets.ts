@@ -73,7 +73,7 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
           const raw = (req.body ?? {}) as { paths?: unknown };
           if (Array.isArray(raw.paths) && raw.paths.length > MAX_PATHS) throw em('EM-1010', 'You can import up to 50 files at a time.', { details: { count: raw.paths.length, limit: MAX_PATHS } });
           const body = parseOrThrow(PathsBody, req.body, 'body');
-          const files = body.paths.map((p) => canonicalImportPath(p, roots()));   // one path outside the roots refuses the whole request
+          const files = body.paths.map((p) => canonicalImportPath(p, [...roots(), ctx.resources.sampleDir]));   // sampleDir: bundled CC0 sample media (R-025)   // one path outside the roots refuses the whole request
           const items: AssetRow[] = []; const notices: Array<{ code: string; name: string; index: number; details?: unknown }> = []; const errors: EmError[] = [];
           for (const [index, file] of files.entries()) {
             const name = path.basename(body.paths[index]!.replace(/\\/g, '/'));
