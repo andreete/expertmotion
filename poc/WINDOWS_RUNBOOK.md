@@ -43,3 +43,19 @@ Date · hardware (CPU, RAM, GPU, Windows build) · exact command · pass/fail pe
 ## 5. Known unverified items to confirm while doing this (from the docs)
 
 `electronFuses` option names in electron-builder; binary file names inside `@remotion/compositor-win32-x64-msvc`; Chrome Headless Shell size; whether `bytenode` works on the pinned Electron (ASSESSMENT §5 says it crashes on Electron ≥ 42); fuse-flip vs ASAR-hash ordering in `afterPack`; `--force-color-profile=srgb`; whisper.cpp CLI flags. Each is marked **[UNVERIFIED]** where it is used.
+
+## 6. Building the real installer (Stage 3 code, added 2026-10-24)
+
+The application code now exists; these steps build the installer from it on the Windows build machine (Node 22, Git, Visual Studio Build Tools for native modules).
+
+1. `npm ci` (downloads Electron; the Linux server skipped it with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`).
+2. `npx remotion browser ensure` (Chrome Headless Shell into `node_modules/.remotion`).
+3. Put the LGPL full FFmpeg and ffprobe for ingestion into `resources/bin/` (ADR-019; record the build URL and hash in `docs/DEPLOYMENT_AND_PACKAGING.md`).
+4. `npm run build:all` (service bundle, Editor, engine fonts and bundle, desktop main).
+5. `node packages/engine/scripts/build-loops.mjs` (all catalogue loops; about 8 s each on this server, faster on a GPU). Check `resources/catalogue/report.json` has no failures.
+6. `node scripts/stage-desktop.mjs --check`, then `npm run stage:desktop`. Review the `REVIEW:` line of the notices output (GPL or unknown licences).
+7. `npm run harden -w @expertmotion/desktop` (bytenode, obfuscation, encrypted prompts, signed integrity manifest; the signing key comes from a file outside the repo).
+8. `npm run pack:win -w @expertmotion/desktop`; the installer lands in `release/<version>/`.
+9. Smoke test on a clean Windows VM: install without admin, first run, licence screen shows a Machine Code, import a clip, Insert, pick Fade, Export 720p in Trial Mode (watermark visible), uninstall keeps or removes data as chosen.
+
+Record installer size, cold start, idle RAM and the export time in `docs/POC_PLAN.md` §4 (POC-001, POC-007, POC-008).
