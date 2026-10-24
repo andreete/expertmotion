@@ -23,6 +23,7 @@ export const EditIntent = z.object({
   instruction: z.string().max(2000).optional(),
   status: z.enum(INTENT_STATUSES),
   restoredAt: z.string().datetime().optional(),
+  appliedVersion: z.number().int().min(1).optional(),   // ordinal of the Composition Version that applied it (Intent Queue grouping)
   rejectionReason: z.string().optional(),
   supersedes: z.array(z.string()).default([]),
   baseVersion: z.string(),

@@ -992,6 +992,20 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     });
     return accepted(job);
   });
+  r('POST', '/generator-jobs/:jid/insert', (m) => {           // R-134: apply a finished job's proposed ops later, idempotent
+    for (const p of projects.values()) {
+      const j = p.genJobs.find((x) => x.id === m[1]); if (!j) continue;
+      if (j.status !== 'done') throw new HttpError(422, 'EM-9002', 'This result is not ready yet.');
+      if (typeof j.result?.['versionId'] === 'string') return { versionId: j.result['versionId'], notice: 'EM-2308' };
+      const ops = (j.result?.['proposedOps'] ?? []) as OperationT[];
+      if (!ops.length) throw new HttpError(422, 'EM-9002', 'This result has nothing to insert.');
+      const res = applyOperations(head(p).model, ops, { assets: facts(p), tier: hardware.tier, newId });
+      if (!res.ok) throw new HttpError(422, res.issues[0]?.code ?? 'EM-2102', res.issues[0]?.message ?? 'Invalid.');
+      const versionId = commit(p, res.value.model, 'system', res.value.diff).id; j.result = { ...(j.result ?? {}), versionId };
+      return { versionId };
+    }
+    throw new HttpError(404, 'EM-9003', 'Not found.');
+  });
   r('GET', '/projects/:id/generator-jobs', (m) => ({ items: proj(m[1]!).genJobs, nextCursor: null }));
   r('GET', '/generator-jobs/:jid', (m) => { for (const p of projects.values()) { const j = p.genJobs.find((x) => x.id === m[1]); if (j) return j; } throw new HttpError(404, 'EM-9003', 'Not found.'); });
   r('POST', '/generator-jobs/:jid/cancel', (m) => { for (const p of projects.values()) { const j = p.genJobs.find((x) => x.id === m[1]); if (j) { if (j.status === 'running') j.status = 'cancelled'; return j; } } throw new HttpError(404, 'EM-9003', 'Not found.'); });

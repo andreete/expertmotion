@@ -43,6 +43,9 @@ export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceMod
       route(router, 'get', '/generator-jobs/:jobId', { params: z.object({ jobId: Id }) }, ({ params }) => {   // R-132
         const r = svc.get(params.jobId); if (!r) throw em('EM-9003', 'Not found.'); return toGenDto(r);
       });
+      route(router, 'post', '/generator-jobs/:jobId/insert', { params: z.object({ jobId: Id }) }, ({ params }) => {   // R-134
+        const r = svc.insertResult(params.jobId); if (!r) throw em('EM-9003', 'Not found.'); return r;
+      });
       route(router, 'post', '/generator-jobs/:jobId/cancel', { params: z.object({ jobId: Id }) }, ({ params }) => {   // R-133
         const r = svc.cancel(params.jobId); if (!r) throw em('EM-9003', 'Not found.'); return r;
       });

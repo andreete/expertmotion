@@ -146,6 +146,18 @@ export class GeneratorsService {
     } });
     return toGenDto(this.get(id)!);
   }
+  /** R-134: insert a finished job's result later (no re-run). Idempotent: a second call returns the same version with notice EM-2308. */
+  insertResult(id: string): { versionId: string; notice?: string } | undefined {
+    const ctx = this.ctx; const r = this.get(id); if (!r) return undefined;
+    if (r.status !== 'done') throw em('EM-9002', 'This result is not ready yet.', { status: 422, details: { reason: 'not-done', status: r.status } });
+    const result = (r.result_json ? JSON.parse(r.result_json) : {}) as Record<string, unknown>;
+    if (typeof result['versionId'] === 'string') return { versionId: result['versionId'], notice: 'EM-2308' };
+    const ops = result['proposedOps'] as OperationT[] | undefined;
+    if (!ops?.length) throw em('EM-9002', 'This result has nothing to insert.', { status: 422, details: { reason: 'no-ops' } });
+    const versionId = ctx.hooks.applyOps(r.project_id, ops, { kind: 'generator', ref: id, summary: `Inserted generated ${r.kind}` });
+    ctx.db.prepare('UPDATE generator_jobs SET result_json = ? WHERE id = ?').run(JSON.stringify({ ...result, versionId }), id);
+    return { versionId };
+  }
   cancel(id: string): Record<string, unknown> | undefined {
     const r = this.get(id); if (!r) return undefined;
     this.runner.cancel(id);

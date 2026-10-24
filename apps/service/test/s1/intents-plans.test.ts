@@ -22,6 +22,9 @@ describe('intents R-060…R-064', () => {
     expect(r.body.planId).toBeTruthy();
     expect(r.body.queue.lockedKeys.sort()).toEqual(['cut:0.transition', 'cut:1.transition']);
     expect(r.body.queue.headHash).toBe(r.body.appliedVersion.hash);
+    const executed = (r.body.queue.items as Array<{ status: string; appliedVersion?: number }>).filter((i) => i.status === 'executed');
+    expect(executed.length).toBeGreaterThan(0);
+    expect(executed.every((i) => typeof i.appliedVersion === 'number' && i.appliedVersion >= 2)).toBe(true);
     const m = (await s.json(`/projects/${pid}/composition`)).body.head.model;
     expect(m.transitions.map((t: any) => t.presetId)).toEqual(['preset:transition.fade', 'preset:transition.fade']);
     const names = s.events.map((e) => e.name);

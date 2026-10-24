@@ -1,7 +1,7 @@
 // Generator sheets (scr.generate.*): forms that call R-130 and show "needs model", running, done, failed states (IX-08).
 // In v1.0 (P0) the Local Service answers EM-9004 for every kind; the sheet shows that copy honestly.
-// Insert is deterministic (no Editor Agent plan): a generated Asset goes in with R-035; a result without an Asset (captions)
-// is re-run with R-130 `insert: true`, which applies the generator's proposed ops directly.
+// Insert is deterministic (no Editor Agent plan): R-134 applies the finished job's proposed ops (no re-run); a generated Asset
+// without proposed ops falls back to R-035.
 import { useEffect, useState } from 'react';
 import { Copy } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
@@ -49,16 +49,12 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const insert = async () => {
     if (!state.project || !job) return;
     if (job.result?.['versionId']) { inserted(); return; }                  // already applied by an insert:true run
-    if (job.resultAssetId) {
-      try {
-        await runtime.api.insertAssets(state.project.id, { assetIds: [job.resultAssetId], order: 'given', ...(kind === 'voice' ? { atMs: state.playheadMs } : {}) });
-        inserted();
-      } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); }
-      return;
-    }
-    setInserting(true);
-    const j = await run(true);
-    if (j) setInsertJobId(j.id); else setInserting(false);
+    try {
+      if (Array.isArray(job.result?.['proposedOps']) && (job.result!['proposedOps'] as unknown[]).length) await runtime.api.insertGeneratorResult(job.id);
+      else if (job.resultAssetId) await runtime.api.insertAssets(state.project.id, { assetIds: [job.resultAssetId], order: 'given', ...(kind === 'voice' ? { atMs: state.playheadMs } : {}) });
+      else { setError('EM-9002'); return; }
+      inserted();
+    } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); }
   };
   const hashtags = Array.isArray(job?.result?.['hashtags']) ? (job!.result!['hashtags'] as unknown[]).map(String) : [];
   return (

@@ -116,6 +116,19 @@ describe('generators (R-130…R-133) with fake engines', () => {
     expect(s.applied.at(-1)!.ops[0]).toMatchObject({ op: 'op:audio.addLayer', args: { assetId: j.resultAssetId, atMs: 500 } });
     expect(s.events.some((e) => e.name === 'service.notice' && e.data['kind'] === 'generator' && e.data['jobId'] === j.id && e.data['done'] === true)).toBe(true);
   });
+  it.skipIf(!hasFfmpeg)('R-134: a finished job is inserted later without re-running; a second call is idempotent (EM-2308)', async () => {
+    const j = await final((await json<GenJob>(await gen('voice', { text: 'Nanti saja', voiceId: 'piper-test', language: 'id', atMs: 0 }))).id);
+    expect(j.status).toBe('done');
+    const before = s.applied.length;
+    const r1 = await json<{ versionId: string; notice?: string }>(await s.api(`/generator-jobs/${j.id}/insert`, { method: 'POST' }));
+    expect(r1.versionId).toBeTruthy(); expect(r1.notice).toBeUndefined();
+    expect(s.applied.length).toBe(before + 1);
+    expect(s.applied.at(-1)!.ops[0]).toMatchObject({ op: 'op:audio.addLayer', args: { assetId: j.resultAssetId } });
+    const r2 = await json<{ versionId: string; notice?: string }>(await s.api(`/generator-jobs/${j.id}/insert`, { method: 'POST' }));
+    expect(r2).toEqual({ versionId: r1.versionId, notice: 'EM-2308' });
+    expect(s.applied.length).toBe(before + 1);
+    expect((await s.api('/generator-jobs/01ZZZZZZZZZZZZZZZZZZZZZZZZ/insert', { method: 'POST' })).status).toBe(404);
+  });
   it('jobs run one at a time; a queued job can be cancelled; the model is in use while queued (EM-7104)', async () => {
     let open!: () => void; gate = new Promise((r) => { open = r; }); calls = [];
     const a = await json<GenJob>(await gen('voice', { text: 'satu', voiceId: 'piper-test', language: 'id' }));

@@ -416,7 +416,9 @@ export class Workflow {
           inTx: (_versionId, hash) => {
             result = { planId, ok: true, fromVersion: head.hash, toVersion: hash, appliedOps: ops.length, diff: predicted.diff, durationMs: Math.round(performance.now() - t0) };
             const before = this.loadQueue(projectId);
-            const after = before.map((i) => (own.has(i.id) && (i.status === 'queued' || i.status === 'planned' || i.status === 'compiled') ? { ...i, status: 'executed' as const } : i));
+            // Version ordinal (1-based, counting every version row of the project incl. this one) for "Applied in v{n}" grouping.
+            const ordinal = (this.ctx.db.prepare('SELECT count(*) AS n FROM composition_versions WHERE project_id = ?').get(projectId) as { n: number }).n;
+            const after = before.map((i) => (own.has(i.id) && (i.status === 'queued' || i.status === 'planned' || i.status === 'compiled') ? { ...i, status: 'executed' as const, appliedVersion: ordinal } : i));
             intentChanged = this.saveQueue(projectId, before, after);
             this.updatePlan(planId, v.plan, 'executed', { result, ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}) });
           },

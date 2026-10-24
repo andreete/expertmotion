@@ -229,6 +229,7 @@ export class ApiClient {
   listGeneratorJobs(id: Id): Promise<Page<GeneratorJobDto>> { return this.get(`/projects/${id}/generator-jobs`); }          // R-131
   getGeneratorJob(jobId: Id): Promise<GeneratorJobDto> { return this.get(`/generator-jobs/${jobId}`); }                    // R-132
   cancelGeneratorJob(jobId: Id): Promise<GeneratorJobDto> { return this.post(`/generator-jobs/${jobId}/cancel`); }         // R-133
+  insertGeneratorResult(jobId: Id): Promise<{ versionId: Id; notice?: string }> { return this.post(`/generator-jobs/${jobId}/insert`); } // R-134
   // ── 6.14 models ──
   listModels(): Promise<{ items: ModelStateDto[]; tier: string; totalInstalledBytes: number; diskFreeBytes: number }> { return this.get('/models'); } // R-140
   getModel(key: string): Promise<ModelStateDto> { return this.get(`/models/${encodeURIComponent(key)}`); }                 // R-141

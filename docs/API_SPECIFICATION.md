@@ -264,6 +264,7 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **gra
 | R-131 | GET | `/projects/:id/generator-jobs` | T | list jobs | 6.13 |
 | R-132 | GET | `/generator-jobs/:jobId` | T | job | 6.13 |
 | R-133 | POST | `/generator-jobs/:jobId/cancel` | T | cancel | 6.13 |
+| R-134 | POST | `/generator-jobs/:jobId/insert` | T | insert a finished job's result later: applies its proposed ops as one version without re-running the engine; idempotent (second call → same `versionId` + notice EM-2308); 422 EM-9002 when not done or nothing to insert | 6.13 |
 | R-140 | GET | `/models` | T | Model Manager list | 6.14 |
 | R-141 | GET | `/models/:key` | T | one model with progress | 6.14 |
 | R-142 | POST | `/models/:key/install` | T | start download (outbound) | 6.14 |
