@@ -1,7 +1,8 @@
 // ServiceContext: everything a module needs, created once at startup. Cross-module calls go through `hooks`, which the owning
 // module installs in its `start()`; defaults keep every module usable (and testable) on its own.
 import { EmError, newId as ulid, type EmCode, type Logger } from '@expertmotion/shared';
-import type { AssetFacts, Tier } from '@expertmotion/composition-model';
+import type { AssetFacts, CompositionModelT, OperationT, Tier } from '@expertmotion/composition-model';
+import type { EditPlanT } from '@expertmotion/agents';
 import type { ChatProvider, ChatUsage } from '@expertmotion/agents';
 import type { ServiceConfig, Paths } from './config.js';
 import type { DB } from './db/open.js';
@@ -32,6 +33,12 @@ export interface Hooks {
   isTrial(): boolean;
   /** projects module: notify that the project head changed (autosave, SSE). */
   headChanged(projectId: string, versionId: string): void;
+  /** composition module (S1): current head of a project (EM-9003 when unknown). */
+  composition(projectId: string): { model: CompositionModelT; versionId: string };
+  /** composition module (S1): apply ops as one new version (validated, transactional); returns the new version id. */
+  applyOps(projectId: string, ops: OperationT[], source: { kind: 'generator' | 'asset' | 'system'; ref?: string; summary: string }): string;
+  /** intents module (S1): create an Edit Plan from the Intent Queue and/or a typed instruction (Compile or Editor Agent). */
+  createPlan(projectId: string, input: { instruction?: string; mode?: 'auto' | 'compile' | 'agent'; signal?: AbortSignal }): Promise<EditPlanT & { planId: string }>;
 }
 
 export interface ServiceContext {
@@ -43,6 +50,7 @@ export function defaultHooks(): Hooks {
   const no = (code: EmCode) => (): never => { throw new EmError(code, 'Not available.'); };
   return {
     assetFacts: () => [], tier: () => 'T1', providerFor: no('EM-4001'), recordUsage: () => {}, budgetCheck: () => {}, isTrial: () => true, headChanged: () => {},
+    composition: no('EM-9003'), applyOps: no('EM-9003'), createPlan: async () => no('EM-9003')(),
   };
 }
 export const newId = (): string => ulid();
