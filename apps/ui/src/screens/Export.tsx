@@ -33,7 +33,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const start = async () => { const id = await actions.startRender(body); if (id) setJobId(id); };
   const reveal = async () => {
     if (!output) return;
-    try { const r = await runtime.api.revealOutput(output.id); await window.expertmotion?.revealPath?.(r.path); } catch (e) { actions.error(e); }
+    try { const r = await runtime.api.revealOutput(output.id); await window.expertmotion?.openFolder?.(r.path); } catch (e) { actions.error(e); }
   };
   const running = job && (job.status === 'queued' || job.status === 'rendering');
   const s = currentOutputProfile(state);

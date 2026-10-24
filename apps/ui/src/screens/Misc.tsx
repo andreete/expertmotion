@@ -86,8 +86,8 @@ export function BackupDialog({ mode, onClose }: { mode: 'backup' | 'restore'; on
       ) : (
         <div className="flex flex-col gap-1">
           <Field label={t('ui.scr.restore.file')} htmlFor="em-rs-f">
-            <div className="flex gap-2"><input id="em-rs-f" data-el="scr.backup.restore.file" className={inputCls} value={file} onChange={(e) => setFile(e.target.value)} placeholder="…\\project.emzip" />
-              <Button onClick={() => void window.expertmotion?.pickFiles?.({ accept: '.emzip,.zip' }).then((p) => { if (p[0]) setFile(p[0]); })}>{t('ui.scr.project.open.browse')}</Button></div>
+            <div className="flex gap-2"><input id="em-rs-f" data-el="scr.backup.restore.file" className={inputCls} value={file} onChange={(e) => setFile(e.target.value)} placeholder="…\\project.emproj" />
+              <Button onClick={() => void window.expertmotion?.pickFiles?.({ filters: [{ name: 'Expertmotion backup', extensions: ['emproj', 'zip'] }], multiple: false }).then((p) => { if (p[0]) setFile(p[0]); })}>{t('ui.scr.project.open.browse')}</Button></div>
           </Field>
           <Field label={t('ui.scr.restore.passphrase')} htmlFor="em-rs-p"><input id="em-rs-p" data-el="scr.backup.restore.passphrase" type="password" className={inputCls} value={pass} onChange={(e) => setPass(e.target.value)} /></Field>
           <p className="text-[12px] text-em-muted">{t('ui.scr.restore.note')}</p>

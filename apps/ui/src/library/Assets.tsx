@@ -24,7 +24,8 @@ export function AssetPanel() {
   const pick = async (acc?: string) => {
     const shell = window.expertmotion;
     if (runtime.mode === 'live' && shell?.pickFiles && state.project) {
-      const paths = await shell.pickFiles(acc ? { accept: acc } : undefined);
+      const exts = (acc ?? ACCEPT).split(',').map((x) => x.trim().replace(/^\./, '')).filter(Boolean);
+      const paths = await shell.pickFiles({ filters: [{ name: t('ui.lib.assets.title'), extensions: exts }], multiple: true });
       if (paths.length) {
         try { const r = await runtime.api.importAssetPaths(state.project.id, paths); actions.toast('info', 'ui.lib.assets.importing', { count: r.items.length }); }
         catch (e) { actions.error(e); }
@@ -44,7 +45,12 @@ export function AssetPanel() {
     e.preventDefault(); setOver(false);
     if (dragId) { setDragId(null); return; }
     const files = [...e.dataTransfer.files];
-    if (files.length) void actions.upload(files);
+    if (!files.length) return;
+    // Packaged app: dropped files are imported by path (trusted-caller route); the raw upload exists only in development.
+    const shell = window.expertmotion;
+    const paths = runtime.mode === 'live' && shell?.getPathsForFiles ? shell.getPathsForFiles(files) : [];
+    if (paths.length && state.project) { void runtime.api.importAssetPaths(state.project.id, paths).then((r) => actions.toast('info', 'ui.lib.assets.importing', { count: r.items.length })).catch((err) => actions.error(err)); return; }
+    void actions.upload(files);
   };
   const toggle = (id: string) => actions.setAssetSelection(state.assetSelection.includes(id) ? state.assetSelection.filter((x) => x !== id) : [...state.assetSelection, id]);
   const cycleBadge = (a: AssetDto) => {

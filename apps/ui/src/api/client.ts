@@ -19,13 +19,18 @@ const ErrorEnvelope = z.object({ error: z.object({ code: z.string(), message: z.
 /** Shape the Desktop Shell preload exposes (BLUEPRINT.md §3.8). Everything optional: the browser dev build has no bridge. */
 export interface ShellBridge {
   getBootstrap?: () => { port: number; token: string } | Promise<{ port: number; token: string }>;
-  pickFiles?: (filters?: unknown) => Promise<string[]>;
-  pickFolder?: () => Promise<string | null>;
-  revealPath?: (path: string) => Promise<void> | void;
+  pickFiles?: (options?: { filters?: { name: string; extensions: string[] }[]; multiple?: boolean }) => Promise<string[]>;
+  pickFolder?: (options?: { defaultPath?: string }) => Promise<string | null>;
+  pickSavePath?: (options?: { defaultPath?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>;
+  openFolder?: (path: string) => Promise<void> | void;
   openExternal?: (url: string) => Promise<void> | void;
+  getPathsForFiles?: (files: readonly File[]) => string[];
   onServiceState?: (cb: (state: unknown) => void) => void;
 }
 declare global { interface Window { expertmotion?: ShellBridge } }
+
+/** Storefront for Purchase (LICENSE_OPERATIONS §11). Set by the Operator at build time; must be on the Shell's EXTERNAL_HOSTS. */
+export const STORE_URL: string = (import.meta.env as Record<string, string | undefined>)['VITE_EM_STORE_URL'] ?? 'https://expertmotion.app/buy';
 
 const Boot = z.object({ port: z.number().int().min(1).max(65535), token: z.string().min(8) });
 

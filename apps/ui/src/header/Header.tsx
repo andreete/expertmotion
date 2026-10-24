@@ -1,4 +1,5 @@
 // Header (hdr.*): menu tabs, Project Title, header actions, render chip. UI_UX_SPECIFICATION.md §4, EDITOR_INTERACTION_MODEL.md IX-21…IX-25.
+import { STORE_URL } from '../api/client.js';
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   Activity, Archive, ArchiveRestore, BadgeCheck, Boxes, ChevronDown, CircleHelp, Download, Folder, KeyRound, Minus, Redo2, Save, Sparkles, Square, Type, Undo2, Wrench, X,
@@ -133,7 +134,7 @@ export function Header() {
                 <p className="mb-2">{licensed ? t('ui.hdr.license.licensed', { name: state.licence?.licenseeHash ?? '', date: state.licence?.updatesUntil?.slice(0, 10) ?? '' }) : t('ui.hdr.license.trial')}</p>
                 <div className="flex gap-2">
                   <Button size={28} onClick={() => { close(); actions.setScreen({ kind: 'license' }); }}>{t('ui.hdr.license.enterkey')}</Button>
-                  {!licensed && <Button size={28} variant="primary" onClick={() => { close(); void shell?.openExternal?.('https://expertmotion.app/buy'); actions.setScreen({ kind: 'license' }); }}>{t('ui.hdr.action.purchase')}</Button>}
+                  {!licensed && <Button size={28} variant="primary" onClick={() => { close(); void shell?.openExternal?.(STORE_URL); actions.setScreen({ kind: 'license' }); }}>{t('ui.hdr.action.purchase')}</Button>}
                 </div>
               </div>
             </Popover>

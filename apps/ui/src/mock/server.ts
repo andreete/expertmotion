@@ -551,12 +551,12 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   });
   r('POST', '/projects/:id/backup', (m, b) => {
     const p = proj(m[1]!), jobId = newId(), body = obj(b);
-    [25, 60, 100].forEach((percent, i) => later(250 * (i + 1), () => emit('service.notice', { projectId: p.dto.id, kind: 'backup', jobId, percent, ...(percent === 100 ? { done: true, path: `${String(body['folder'] ?? settings.outputFolder)}\\${p.dto.name}.emzip` } : {}) })));
+    [25, 60, 100].forEach((percent, i) => later(250 * (i + 1), () => emit('service.notice', { projectId: p.dto.id, kind: 'backup', jobId, percent, ...(percent === 100 ? { done: true, path: `${String(body['folder'] ?? settings.outputFolder)}\\${p.dto.name}.emproj` } : {}) })));
     return accepted({ jobId });
   });
   r('POST', '/projects/restore', (_m, b) => {
     const path = String(obj(b)['path'] ?? '');
-    if (!path.toLowerCase().endsWith('.emzip') && !path.toLowerCase().endsWith('.zip')) throw new HttpError(422, 'EM-6302', 'This file is not an Expertmotion backup.');
+    if (!path.toLowerCase().endsWith('.emproj') && !path.toLowerCase().endsWith('.zip')) throw new HttpError(422, 'EM-6302', 'This file is not an Expertmotion backup.');
     const jobId = newId();
     later(600, () => { const p = makeProject(`${path.split(/[\\/]/).pop()?.replace(/\.(em)?zip$/i, '') ?? 'Restored'} (restored)`); emit('service.notice', { kind: 'restore', jobId, percent: 100, done: true, projectId: p.dto.id }); });
     return accepted({ jobId });

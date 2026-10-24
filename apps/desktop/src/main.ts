@@ -27,7 +27,7 @@ import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { redact } from '@expertmotion/shared';
 import {
-  APP_HOST, APP_ORIGIN, APP_SCHEME, EM, IPC, READY_TIMEOUT_MS, SHELL_CALLER_HEADER, SHELL_CALLER_VALUE,
+  APP_HOST, APP_ORIGIN, APP_SCHEME, EM, IPC, isAllowedExternal, READY_TIMEOUT_MS, SHELL_CALLER_HEADER, SHELL_CALLER_VALUE,
   SHUTDOWN_KILL_AFTER_MS, SHUTDOWN_REQUEST_WAIT_MS,
 } from './lib/constants.js';
 import { pickPort } from './lib/port.js';
@@ -355,6 +355,11 @@ function registerIpc(): void {
   ipcMain.handle(IPC.openFolder, (event, targetPath: unknown) => {
     if (!senderOk(event) || typeof targetPath !== 'string') return;
     shell.showItemInFolder(targetPath);
+  });
+
+  ipcMain.handle(IPC.openExternal, async (event, url: unknown) => {
+    if (!senderOk(event) || typeof url !== 'string' || !isAllowedExternal(url)) return;
+    await shell.openExternal(url);
   });
 }
 

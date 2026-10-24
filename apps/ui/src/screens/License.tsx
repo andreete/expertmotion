@@ -1,5 +1,6 @@
 // Licence screen (scr.license): status, Machine Code + copy, key entry, activate, trial, buy, deactivate, rebind, errors.
 // Formal "Anda" register is allowed here (licence text, GLOSSARY "Words to avoid").
+import { STORE_URL } from '../api/client.js';
 import { useState } from 'react';
 import { Copy } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
@@ -54,7 +55,7 @@ export function LicenseForm({ onDone, compact }: { onDone?: () => void; compact?
       <div className="flex flex-wrap items-center gap-2">
         <Button el="scr.license.activate" variant="primary" loading={busy} disabledReason={key.trim().length < 40 ? t('ui.scr.license.input.short') : null} onClick={() => void activate()}>{t('ui.scr.license.activate')}</Button>
         {lic?.status !== 'active' && <Button el="scr.license.trial.continue" variant="ghost" onClick={() => onDone?.()}>{t('ui.scr.license.trial.continue')}</Button>}
-        <button type="button" data-el="scr.license.buy" className="text-em-accent underline" onClick={() => void window.expertmotion?.openExternal?.('https://expertmotion.app/buy')}>{t('ui.scr.license.buy')}</button>
+        <button type="button" data-el="scr.license.buy" className="text-em-accent underline" onClick={() => void window.expertmotion?.openExternal?.(STORE_URL)}>{t('ui.scr.license.buy')}</button>
         <span className="flex-1" />
         {lic?.status === 'active' && !compact && (confirmRemove
           ? <><span className="text-[12px]">{t('ui.scr.license.remove.confirm')}</span><Button variant="danger" size={28} onClick={() => void remove()}>{t('ui.common.confirm')}</Button></>

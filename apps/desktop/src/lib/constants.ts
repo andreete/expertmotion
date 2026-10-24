@@ -49,6 +49,7 @@ export const IPC = {
   pickFolder: 'em:pick-folder',
   pickSavePath: 'em:pick-save-path',
   openFolder: 'em:open-folder',
+  openExternal: 'em:open-external',
   serviceState: 'em:service-state',
 } as const;
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
@@ -57,7 +58,16 @@ export type IpcChannel = (typeof IPC)[keyof typeof IPC];
  * The complete key set of `window.expertmotion` (SEC-003, SEC-031). A test enumerates it.
  * `pickSavePath` is the save dialog required by the Desktop Shell brief; see README "Bridge surface".
  */
-export const BRIDGE_KEYS = ['getBootstrap', 'pickFiles', 'pickFolder', 'pickSavePath', 'openFolder', 'onServiceState'] as const;
+export const BRIDGE_KEYS = ['getBootstrap', 'pickFiles', 'pickFolder', 'pickSavePath', 'openFolder', 'openExternal', 'getPathsForFiles', 'onServiceState'] as const;
+
+/**
+ * Hosts `openExternal` may open in the system browser (Purchase / licence help). HTTPS only; everything else is refused.
+ * The Operator sets the real storefront host before release (LICENSE_OPERATIONS §11); `expertmotion.app` is a placeholder.
+ */
+export const EXTERNAL_HOSTS: readonly string[] = ['expertmotion.app'];
+export function isAllowedExternal(url: string, hosts: readonly string[] = EXTERNAL_HOSTS): boolean {
+  try { const u = new URL(url); return u.protocol === 'https:' && !u.username && !u.password && hosts.some((h) => u.hostname === h || u.hostname.endsWith(`.${h}`)); } catch { return false; }
+}
 export type BridgeKey = (typeof BRIDGE_KEYS)[number];
 
 /** Error codes used by the Shell (ERROR_CATALOGUE.md §6.6, §6.8). */

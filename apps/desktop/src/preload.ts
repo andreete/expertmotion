@@ -9,9 +9,11 @@
  *   pickFolder(options?)       → string | null
  *   pickSavePath(options?)     → string | null
  *   openFolder(path)           → void       (reveal a folder/file in the OS file manager)
+ *   openExternal(url)          → void       (system browser; HTTPS on EXTERNAL_HOSTS only, checked in main)
+ *   getPathsForFiles(files)    → string[]   (paths of files dropped on the Editor; Electron webUtils, no IPC)
  *   onServiceState(cb)         → unsubscribe (service up/down + re-bootstrap token push)
  */
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from './lib/constants.js';
 
 export interface Bootstrap {
@@ -47,6 +49,9 @@ const api = {
   pickFolder: (options?: PickFolderOptions): Promise<string | null> => ipcRenderer.invoke(IPC.pickFolder, options ?? {}) as Promise<string | null>,
   pickSavePath: (options?: PickSaveOptions): Promise<string | null> => ipcRenderer.invoke(IPC.pickSavePath, options ?? {}) as Promise<string | null>,
   openFolder: (targetPath: string): Promise<void> => ipcRenderer.invoke(IPC.openFolder, targetPath) as Promise<void>,
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke(IPC.openExternal, url) as Promise<void>,
+  // Drag-and-drop import: File.path was removed in Electron 32; webUtils returns the OS path of a dropped File ('' otherwise).
+  getPathsForFiles: (files: readonly File[]): string[] => files.map((f) => webUtils.getPathForFile(f)).filter((p) => p.length > 0),
   onServiceState: (cb: (state: ServiceState) => void): (() => void) => {
     const listener = (_event: unknown, state: ServiceState): void => cb(state);
     ipcRenderer.on(IPC.serviceState, listener);
