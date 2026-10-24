@@ -3,28 +3,16 @@ import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Highlight, Underline, Circle as RoughCircle } from '@remotion/rough-notation';
 import { getPreset } from '@expertmotion/catalogue';
 import type { TextLayerT } from '@expertmotion/composition-model';
-import { fitText } from '@expertmotion/shared';
 import { useTheme } from '../theme.js';
 import type { Layout } from '../layout.js';
 import { motionStyle } from '../motion.js';
-
-const charWidthFor = (weight: number) => (weight >= 700 ? 0.6 : weight >= 600 ? 0.57 : 0.54);
+import { textLayerFit } from '../text-fit.js';
 
 /** One Text Layer inside its own <Sequence> (frame 0 = layer start). Deterministic fitting (shared estimator) keeps preview = render. */
 export const TextElement: React.FC<{ layer: TextLayerT; layout: Layout; durationInFrames: number }> = ({ layer, layout, durationInFrames }) => {
   const t = useTheme(); const frame = useCurrentFrame(); const { fps } = useVideoConfig();
   const v = (getPreset(layer.variantId)?.data ?? {}) as Record<string, unknown>;
-  const weight = layer.style.weight ?? Number(v['weight'] ?? t.textDefaults.weight);
-  const wantU = layer.style.fontSize ?? Number(v['fontSize'] ?? t.textDefaults.fontSize);
-  // The box is centred on its anchor. Keep it inside the safe area wherever the anchor is (lower thirds, corner callouts):
-  // its width is limited to twice the room between the anchor and the nearer safe edge; when that room is very small
-  // (anchor close to an edge) a minimum width is kept and the box is shifted inward instead.
-  const anchor = layout.toPx(layer.position.x, layer.position.y);
-  const room = 2 * Math.max(0, Math.min(anchor.left - layout.safe.left, layout.width - layout.safe.right - anchor.left));
-  const minW = 0.3 * layout.contentW;
-  const boxW = Math.max(minW, Math.min((layer.maxWidth ?? Infinity) * layout.u, layout.contentW, room));
-  const boxLeft = Math.min(Math.max(anchor.left, layout.safe.left + boxW / 2), layout.width - layout.safe.right - boxW / 2);
-  const fit = fitText(layer.text, { width: boxW, height: layout.contentH * 0.5, maxSize: wantU * layout.u, minSize: Math.min(34, wantU) * layout.u, charWidth: charWidthFor(weight), maxLines: 6 });
+  const { weight, boxW, boxLeft, anchor, fit } = textLayerFit(layer, layout, t.textDefaults);
   const align = layer.style.align ?? (v['align'] as 'left' | 'center' | 'right' | undefined) ?? t.textDefaults.align;
   const colour = layer.style.colour ?? t.textDefaults.colour;
   const family = layer.style.fontFamily ?? t.textDefaults.fontFamily ?? (layer.variantId === 'preset:text.lower-third' ? t.bodyFont : t.headingFont);

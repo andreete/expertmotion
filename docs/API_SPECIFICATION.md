@@ -144,7 +144,7 @@ export const AssetDto = z.object({ id: Id, projectId: Id, kind: z.enum(['video',
   probe: z.record(z.unknown()).optional(), createdAt: Iso, updatedAt: Iso });
 export const RenderJobDto = z.object({ id: Id, projectId: Id, versionId: Id, outputProfile: OutputProfile, performanceProfile: PerformanceProfile,
   status: z.enum(['queued','rendering','done','failed','cancelled']), progress: z.number().min(0).max(1), renderedFrames: z.number().int().nullable(), totalFrames: z.number().int().nullable(),
-  etaMs: z.number().int().nullable(), outputId: Id.nullable(), errorCode: z.string().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(),
+  etaMs: z.number().int().nullable(), outputId: Id.nullable(), errorCode: z.string().nullable(), failedFrame: z.number().int().min(0).nullable() /* FR-143: frame a failed job stopped at (renderer error, else last progress); null = unknown */, width: z.number().int().nullable(), height: z.number().int().nullable(),
   createdAt: Iso, startedAt: Iso.nullable(), finishedAt: Iso.nullable() });
 export const OutputDto = z.object({ id: Id, projectId: Id, renderJobId: Id, kind: z.enum(['video','gif','still','audio']), fileName: z.string(), bytes: z.number().int(),
   width: z.number().int().nullable(), height: z.number().int().nullable(), fps: z.number().nullable(), durationMs: z.number().int().nullable(), validated: z.boolean(), watermarked: z.boolean(),
@@ -491,13 +491,13 @@ export const DesignPickInput = z.object({
   plan: z.enum(['auto','none']).default('auto'),                   // auto: compile immediately or start a plan when autoPlan is on
   // Deterministic Text Panel / Output picks (Compile path, no LLM):
   field: z.enum(['fontFamily','fontSize','weight','italic','colour','align','opacity','content']).optional(), value: z.unknown().optional(),   // FR-020…FR-028; content → op:text.setContent, opacity on shape/image → op:overlay.setOpacity
-  output: z.object({ kind: z.enum(['ratio','resolution','fps','autoRatio']), value: z.unknown(), customRatio: z.object({ w, h }).optional() }).optional(),
+  output: z.object({ kind: z.enum(['ratio','resolution','fps','autoRatio','performanceProfile']), value: z.unknown(), customRatio: z.object({ w, h }).optional() }).optional(),   // performanceProfile: value ∈ PerformanceProfile, zero-op settings intent (FR-090)
   assetId: z.string().optional(),                                  // music bed / sfx asset
   text: z.string().min(1).max(500).optional(),                     // FR-027 Add Text content with a `preset:text.*` variant; without it a variant pick re-styles the selected Text Layer (FR-025)
 });
 ```
 
-Pipeline steps 2–7 (AI_WORKFLOW.md §2): capture, catalogue validation (`422 EM-2101`, `400 EM-2102`, `422 EM-2103` warn, `EM-2104`, `EM-2105`), Target Resolution (`422 EM-2201`, `EM-2202`), queue reduction (supersede/merge), then: if `needsInterpretation` is false and `plan='auto'`, the intent is compiled and applied immediately (new version, intent `status:'executed'`, plan row `origin:'compile'`); otherwise it stays `queued` and, when `settings.autoPlan` is on, a plan run starts (R-070 semantics) and `planId` is returned. Response `201 { intent: EditIntent, queue: IntentQueueDto, superseded: string[], appliedVersion: VersionDto | null, planId: Id | null, notices: [{code}] }` (`EM-2403` when a text pick with nothing selected compiled to `op:theme.setTextDefaults`, i.e. applied to the Theme defaults for new text). Errors: `409 EM-2301` when `baseVersion` is not the head. Events: `intent.updated`; `composition.updated` when applied; `plan.ready`/`plan.invalid` when a plan was started.
+Pipeline steps 2–7 (AI_WORKFLOW.md §2): capture, catalogue validation (`422 EM-2101`, `400 EM-2102`, `422 EM-2103` warn, `EM-2104`, `EM-2105`), Target Resolution (`422 EM-2201`, `EM-2202`), queue reduction (supersede/merge), then: if `needsInterpretation` is false and `plan='auto'`, the intent is compiled and applied immediately (new version, intent `status:'executed'`, plan row `origin:'compile'`); otherwise it stays `queued` and, when `settings.autoPlan` is on, a plan run starts (R-070 semantics) and `planId` is returned. Response `201 { intent: EditIntent, queue: IntentQueueDto, superseded: string[], appliedVersion: VersionDto | null, planId: Id | null, notices: [{code}] }` (`EM-2403` when a text pick with nothing selected compiled to `op:theme.setTextDefaults`, i.e. applied to the Theme defaults for new text). An executed intent carries `appliedVersion` (ordinal) and `appliedHash` (the version hash, FR-085). `output.kind:'performanceProfile'` (FR-090/FR-097) is a zero-op settings intent: it is applied to Settings `defaultPerformanceProfile` at once regardless of `plan`, recorded `executed` with `params.__previous` (the replaced profile), and answers `appliedVersion: null, planId: null`; R-062 Restore of the superseded profile intent applies that profile again (Undo); an unknown value answers `400 EM-9002`. Errors: `409 EM-2301` when `baseVersion` is not the head. Events: `intent.updated`; `composition.updated` when applied; `settings.changed {scope:'settings'}` for a profile intent; `plan.ready`/`plan.invalid` when a plan was started.
 
 ```http
 POST /api/v1/projects/01JAZK…/intents
@@ -788,7 +788,7 @@ data: {"seq":419,"at":"2026-10-24T03:05:12.410Z","projectId":"01JAZK…","jobId"
 | `render.queued` | `{ job: RenderJobDto }` | R-111 accepted |
 | `render.progress` | `{ jobId, progress, renderedFrames, totalFrames, etaMs: number|null, stage: 'preparing'|'rendering'|'encoding'|'validating' }` | ≤ 4× per second per job (ported 250 ms throttle); `etaMs` null until ≥ 5 % and 3 samples |
 | `render.done` | `{ jobId, output: OutputDto, notices: string[] }` | ffprobe validation passed, row written |
-| `render.failed` | `{ jobId, code: 'EM-3201'|'EM-3203'|'EM-3204'|'EM-3205'|'EM-3207'|'EM-3002', percent }` | job failed; partial file removed (kept under `_failed\` for EM-3205) |
+| `render.failed` | `{ jobId, code: 'EM-3201'|'EM-3203'|'EM-3204'|'EM-3205'|'EM-3207'|'EM-3002', percent, frame: number | null }` (`frame` = FR-143 failure frame, as `RenderJobDto.failedFrame`) | job failed; partial file removed (kept under `_failed\` for EM-3205) |
 | `render.cancelled` | `{ jobId, percent }` | R-114 or shutdown |
 | `ingest.progress` | `{ assetId, stage: 'probe'|'transcode'|'proxy'|'thumbs'|'filmstrip'|'waveform'|'hash', progress }` | per asset, ≤ 4× per second |
 | `ingest.done` | `{ asset: AssetDto }` | asset `ready`; `media.*` URLs populated |

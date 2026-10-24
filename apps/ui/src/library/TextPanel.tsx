@@ -6,6 +6,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlignCenter, AlignLeft, AlignRight, Plus } from 'lucide-react';
 import { getPreset, listPresets } from '@expertmotion/catalogue';
+import { layoutFor, textLayerFit, MIN_FIT_U } from '@expertmotion/engine';
+import { resolveDimensions } from '@expertmotion/engine/formats';
 import { useStore } from '../state/store.js';
 import { Button, IconButton, Segmented, inputCls, cx } from '../components/ui.js';
 import { CatalogueCard } from './Catalogue.js';
@@ -56,6 +58,15 @@ export function TextPanel() {
   const opValue = opEl ? ('style' in opEl ? opEl.style.opacity ?? defaults?.opacity ?? 1 : opEl.opacity ?? 1) : 1;
   const styleKey = STYLES.find((s) => s.italic === Boolean(cur.italic) && (s.weight >= 700) === ((cur.weight ?? 400) >= 700))?.key ?? null;
   const contrast = cur.colour ? contrastRatio(cur.colour, bg) : null;
+  // FR-021: the renderer's own fit (engine textLayerFit) tells whether the selected text keeps its size inside the safe area.
+  const fit = (() => {
+    if (!layer || !model) return null;
+    try {
+      const d = resolveDimensions(model.settings.ratio, model.settings.resolution, model.settings.customRatio);
+      const f = textLayerFit(layer, layoutFor(model.settings.ratio, d.width, d.height), model.theme.textDefaults);
+      return f.fit.overflow ? { kind: 'overflow' as const, size: Math.min(MIN_FIT_U, f.wantU) } : f.fontSizeU < f.wantU ? { kind: 'shrunk' as const, size: f.fontSizeU } : null;
+    } catch { return null; }
+  })();
 
   useEffect(() => { setContent(null); setContentError(null); }, [layer?.id]);
   useEffect(() => { if (focusContent && layer) { contentRef.current?.focus(); contentRef.current?.select(); setFocusContent(false); } }, [focusContent, layer]);
@@ -144,6 +155,7 @@ export function TextPanel() {
             placeholder={t('ui.lib.text.size.custom', { min: MIN_FONT_SIZE, max: MAX_FONT_SIZE })} value={customSize} className={cx(inputCls, sizeError && 'border-em-danger')}
             onChange={(e) => { setCustomSize(e.target.value); setSizeError(false); }} onBlur={applySize} onKeyDown={(e) => { if (e.key === 'Enter') applySize(); }} />
           <p className={cx('text-[11px]', sizeError ? 'text-em-danger' : 'text-em-muted')} role={sizeError ? 'alert' : undefined}>{sizeError ? t('ui.lib.text.size.range', { min: MIN_FONT_SIZE, max: MAX_FONT_SIZE }) : t('ui.lib.text.size.help')}</p>
+          {fit && <p data-el="lib.text.size.overflow" data-kind={fit.kind} role="status" className="text-[11px] text-em-warn">{t(`ui.lib.text.size.${fit.kind}`, { size: fit.size, ratio: model?.settings.ratio ?? '' })}</p>}
         </div>
       ))}
       {row(t('ui.lib.text.weight'), (

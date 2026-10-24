@@ -351,15 +351,35 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     }
     const planId = newId();
     const v = commit(p, r.value.model, 'compile', r.value.diff, planId);
-    for (const l of leaves) { l.status = 'executed'; l.appliedVersion = p.pointer + 1; }
+    for (const l of leaves) { l.status = 'executed'; l.appliedVersion = p.pointer + 1; l.appliedHash = v.hash; }
     p.plans.push({ id: planId, projectId: p.dto.id, baseVersion: v.hash, origin: 'compile', goal: 'Compiled Design Pick', steps: [{ n: 1, tool: 'composition.applyOps', ops, args: {}, expectedDiff: `${ops.length} change(s)`, dependsOn: [] }], touchesLockedKeys: [], risks: [], status: 'executed', validation: [] });
     return strip(v);
   }
 
   const opsStore = new Map<string, OperationT[]>();               // intentId → compiled ops (for restore / plans)
 
+  /** FR-090 / FR-097: zero-op settings intent (Performance Profile), applied to Settings and recorded as executed, as the Local Service. */
+  const PROFILES = ['standard', 'accelerated', 'turbo'];
+  const settingsValueOf = (i: EditIntent) => { const o = i.params['__output'] as { kind?: string; value?: unknown } | undefined; return o?.kind === 'performanceProfile' && PROFILES.includes(String(o.value)) ? String(o.value) as SettingsDto['defaultPerformanceProfile'] : null; };
+  function applySettingsIntent(it: EditIntent) {
+    const v = settingsValueOf(it); if (!v) return;
+    it.status = 'executed';
+    settings = { ...settings, defaultPerformanceProfile: v };
+    emit('settings.changed', { scope: 'settings', settings });
+  }
+
   function createIntent(p: ProjectState, body: DesignPickInput, source: EditIntent['source']) {
     if (body.baseVersion !== head(p).hash) throw new HttpError(409, 'EM-2301', 'The composition changed after this pick was made.', { baseVersion: body.baseVersion, headVersion: head(p).hash });
+    if (body.output?.kind === 'performanceProfile') {
+      if (!PROFILES.includes(String(body.output.value))) throw new HttpError(400, 'EM-9002', 'Unknown performance profile.');
+      const it: EditIntent = { id: newId(), projectId: p.dto.id, source, createdAt: nowIso(), category: 'output', params: { __output: body.output, __previous: settings.defaultPerformanceProfile, targetLabel: String(body.output.value) },
+        target: { kind: 'project' }, resolvedTargets: [{ kind: 'project' }], propertyKey: 'project.performanceProfile', propertyClass: 'scalar', needsInterpretation: false, status: 'queued', supersedes: [], baseVersion: body.baseVersion };
+      p.intents.push(it);
+      const superseded = supersedeFor(p, it); it.supersedes = superseded;
+      applySettingsIntent(it);
+      emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [it.id, ...superseded], reason: 'executed' });
+      return { intent: it, queue: queueDto(p), superseded, appliedVersion: null, planId: null, notices: [] };
+    }
     const res = resolve(p, body);
     const preset = body.presetId ? getPreset(body.presetId) : undefined;
     const propertyClass = (preset?.propertyClass ?? (body.category === 'shape' ? 'list' : body.category === 'text' && body.presetId ? 'list' : 'scalar')) as EditIntent['propertyClass'];
@@ -820,7 +840,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     for (const tgt of targets) { tgt.status = 'queued'; tgt.restoredAt = nowIso(); superseded.push(...supersedeFor(p, tgt)); }
     if (kids.length) { it.status = 'queued'; it.restoredAt = nowIso(); }
     let appliedVersion: VersionDto | null = null;
-    if (!it.needsInterpretation && targets.every((x) => opsStore.has(x.id))) appliedVersion = compileAndApply(p, targets, opsStore);
+    if (settingsValueOf(it)) applySettingsIntent(it);
+    else if (!it.needsInterpretation && targets.every((x) => opsStore.has(x.id))) appliedVersion = compileAndApply(p, targets, opsStore);
     if (kids.length && appliedVersion) it.status = 'executed';
     settleParents(p);
     emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: [it.id, ...superseded], reason: 'restored' });

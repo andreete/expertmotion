@@ -223,6 +223,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.menu.file.recent.item` | one Recent project row | Opens that Project. |
 | `lib.catalogue` | Catalogue grid container | Holds the category tabs and Catalogue Cards. |
 | `lib.text.size.preset` | one font-size preset chip | Text Panel size pick (deterministic, Compile path). |
+| `lib.text.size.overflow` | Fit warning under Font Size | FR-021: shown for the selected Text Layer when the renderer's fit (engine `textLayerFit`) shrinks it below the chosen size (`data-kind="shrunk"`) or it would not fit the safe area even at 34 u (`data-kind="overflow"`). |
 | `lib.text.weight.italic` | "Italic" style option | FR-022: italic, regular weight (`italic` field of `op:text.setStyle` / `op:theme.setTextDefaults`; bundled italic fonts). |
 | `lib.text.weight.regular` | "Regular" style option | FR-022: weight 400, not italic. |
 | `lib.text.weight.bold` | "Bold" style option | FR-022: weight 800, not italic. |
@@ -327,6 +328,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.export.done.copypath` | Copy path | Copies the Output's absolute path. |
 | `scr.export.again` | Export another | Back to the setup state. |
 | `scr.export.diagnostics` | Open Diagnostics on failure | Next to Try again in the failed state (FR-143). |
+| `scr.export.failed.frame` | Failure frame | "Stopped at frame {n} of {total} ({time})" under the failure message (FR-143, `RenderJobDto.failedFrame`); absent when the frame is unknown. |
 | `scr.diagnostics.licence` | Licence state row | Status and code, never the key (FR-150); `.private` appears while Private Mode is on (FR-163). |
 | `scr.diagnostics.private` | "Private Mode on" | Context in Diagnostics (FR-163). |
 | `scr.diagnostics.codes` | Recent EM codes | R-182 list with time, source and job/run id (FR-150). |

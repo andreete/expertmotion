@@ -57,7 +57,7 @@ export const DesignPickInput = z.object({
   plan: z.enum(['auto', 'none']).default('auto'),
   field: z.enum(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity', 'content']).optional(),
   value: z.unknown().optional(),
-  output: z.object({ kind: z.enum(['ratio', 'resolution', 'fps', 'autoRatio']), value: z.unknown(), customRatio: z.object({ w: z.number().int().min(1), h: z.number().int().min(1) }).optional() }).optional(),
+  output: z.object({ kind: z.enum(['ratio', 'resolution', 'fps', 'autoRatio', 'performanceProfile']), value: z.unknown(), customRatio: z.object({ w: z.number().int().min(1), h: z.number().int().min(1) }).optional() }).optional(),
   assetId: z.string().max(64).optional(),
   text: z.string().min(1).max(500).optional(),
   /** FR-068 (P1): Timeline drag on the video Track (op:clip.move / op:clip.setTrim). */

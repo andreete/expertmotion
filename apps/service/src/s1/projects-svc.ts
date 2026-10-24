@@ -358,5 +358,5 @@ function renderJobDto(r: Record<string, unknown>) {
   const json = (v: unknown) => { try { return typeof v === 'string' ? JSON.parse(v) as unknown : null; } catch { return null; } };
   return { id: r['id'], projectId: r['project_id'], versionId: r['version_id'], outputProfile: json(r['output_profile_json']), performanceProfile: r['performance_profile'], status: r['status'],
     progress: r['progress'], renderedFrames: r['rendered_frames'] ?? null, totalFrames: r['total_frames'] ?? null, etaMs: r['eta_ms'] ?? null, outputId: r['output_id'] ?? null,
-    errorCode: r['error_code'] ?? null, width: null, height: null, createdAt: r['created_at'], startedAt: r['started_at'] ?? null, finishedAt: r['finished_at'] ?? null };
+    errorCode: r['error_code'] ?? null, failedFrame: r['failed_frame'] ?? null, width: null, height: null, createdAt: r['created_at'], startedAt: r['started_at'] ?? null, finishedAt: r['finished_at'] ?? null };
 }

@@ -68,6 +68,7 @@ export const EditIntent = z.object({
   status: z.enum(['queued','superseded','compiled','planned','executed','rejected','removed']), // removed = Creator removed it from the queue; Restore sets a superseded intent back to 'queued' and stamps restoredAt
   restoredAt: z.string().datetime().optional(),
   appliedVersion: z.number().int().min(1).optional(),   // 1-based ordinal of the Composition Version that applied it ("Applied in v{n}" grouping, Stage 3)
+  appliedHash: z.string().optional(),                   // hash of that Composition Version; the "Applied directly" line shows it short (FR-085). Absent for zero-op settings intents
   supersedes: z.array(z.string()).default([]),
   baseVersion: z.string(),              // Composition Version hash at capture time
 });
@@ -134,7 +135,7 @@ Applied when `target.kind` is `selection` or `playhead`, or when a category need
 | shape | — | new Shape at playhead, centred, default size | — |
 | easing | selected Clip/Text motion | Theme default easing | each selected |
 | layout (ratio, resolution, palette, font pair) | — | **project** Output Profile or Theme (`op:output.*`, `op:theme.set`); palette and font-pair Design Picks use category `layout` because they change the whole project look | — |
-| output (profile) | — | project | — |
+| output (profile) | — | project: a **zero-op settings intent** (FR-090/FR-097): `propertyKey` `project.performanceProfile`, scalar, never interpreted; Compile emits no operation; the Local Service applies it to Settings (`defaultPerformanceProfile`), marks it `executed` (no Composition Version, no plan) and keeps the replaced value in `params.__previous`; Restore of the superseded predecessor applies that profile again (Undo) | — |
 | asset (insert, trim) | the Asset/Clip given explicitly | reject | explicit list |
 | generate (voice, music, thumbnail, captions, hashtags) | — | project; result inserted at playhead or as new layer | — |
 

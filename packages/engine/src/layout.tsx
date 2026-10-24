@@ -7,6 +7,10 @@ export interface Layout { width: number; height: number; ratio: Ratio; u: number
 /** Layout unit u = min(width, height) / 1080 (ported from the predecessor layout.tsx). */
 export function useLayout(ratio: Ratio): Layout {
   const { width, height } = useVideoConfig();
+  return layoutFor(ratio, width, height);
+}
+/** The same layout without a Remotion context (Editor-side checks such as the FR-021 overflow warning). */
+export function layoutFor(ratio: Ratio, width: number, height: number): Layout {
   const u = Math.min(width, height) / 1080;
   const safe = safeAreaFor(ratio, width, height);
   return { width, height, ratio, u, safe, contentW: width - safe.left - safe.right, contentH: height - safe.top - safe.bottom, isLandscape: width >= height,

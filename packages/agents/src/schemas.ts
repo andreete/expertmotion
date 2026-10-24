@@ -24,6 +24,7 @@ export const EditIntent = z.object({
   status: z.enum(INTENT_STATUSES),
   restoredAt: z.string().datetime().optional(),
   appliedVersion: z.number().int().min(1).optional(),   // ordinal of the Composition Version that applied it (Intent Queue grouping)
+  appliedHash: z.string().optional(),                   // hash of that Composition Version (FR-085 "Applied directly" line shows it short)
   rejectionReason: z.string().optional(),
   supersedes: z.array(z.string()).default([]),
   baseVersion: z.string(),

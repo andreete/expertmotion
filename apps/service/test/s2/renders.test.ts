@@ -9,7 +9,7 @@ import { health } from '../../src/modules/health.js';
 import { createAssetsModule } from '../../src/modules/assets.js';
 import { mediaModule } from '../../src/modules/media.js';
 import { createRendersModule } from '../../src/modules/renders.js';
-import { defaultFileStem, gifPaletteArgs, renderServiceOf, type RendererLike } from '../../src/s2/render-service.js';
+import { defaultFileStem, failedFrameOf, gifPaletteArgs, renderServiceOf, type RendererLike } from '../../src/s2/render-service.js';
 import { engineStatus, verifyBundleHash } from '../../src/s2/engine-check.js';
 import type { ServiceContext } from '../../src/context.js';
 import { tempDir } from '../helpers.js';
@@ -18,7 +18,7 @@ import { json, startS2, type S2Service } from './harness.js';
 type Job = { id: string; status: string; errorCode: string | null; outputId: string | null; width: number; height: number; notices?: string[]; notice?: string; outputProfile: { resolution: string } };
 
 /** Fake @remotion/renderer: progress ticks, honours the cancel signal, writes the output file; records concurrency and inputs. */
-function fakeRenderer(behaviour: { mode: 'ok' | 'fail' | 'hang' | 'compose-fail'; steps?: number; stepMs?: number }) {
+function fakeRenderer(behaviour: { mode: 'ok' | 'fail' | 'fail-frame' | 'hang' | 'compose-fail'; steps?: number; stepMs?: number }) {
   const seen = { running: 0, maxRunning: 0, calls: [] as Array<Record<string, unknown>>, mediaStatus: [] as number[] };
   const r: RendererLike = {
     makeCancelSignal() {
@@ -43,6 +43,7 @@ function fakeRenderer(behaviour: { mode: 'ok' | 'fail' | 'hang' | 'compose-fail'
           (o['onProgress'] as (p: { progress: number; renderedFrames: number }) => void)({ progress: i / steps, renderedFrames: i * 10 });
         }
         if (behaviour.mode === 'fail') throw new Error('Chrome crashed');
+        if (behaviour.mode === 'fail-frame') throw new Error('Error while rendering frame 13: Target closed');
         fs.writeFileSync(o['outputLocation'] as string, crypto.randomBytes(2048));
       } finally { seen.running--; }
     },
@@ -149,12 +150,16 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
   });
 
   it('failures map to EM-3201 (render), EM-3002 (browser) and EM-3207 (stall)', async () => {
-    for (const [mode, code] of [['fail', 'EM-3201'], ['compose-fail', 'EM-3002'], ['hang', 'EM-3207']] as const) {
+    // FR-143: the failure frame comes from the renderer error, else the last progress report; none before rendering starts.
+    for (const [mode, code, frame] of [['fail', 'EM-3201', 20], ['fail-frame', 'EM-3201', 13], ['compose-fail', 'EM-3002', null], ['hang', 'EM-3207', null]] as const) {
       fake = fakeRenderer({ mode, steps: 2, stepMs: 20 });
       const j = await json<Job>(await create());
       const ev = await waitFinal(j.id);
-      expect(ev.name).toBe('render.failed'); expect(ev.data['code']).toBe(code);
+      expect(ev.name).toBe('render.failed'); expect(ev.data['code']).toBe(code); expect(ev.data['frame'], mode).toBe(frame);
+      expect((await json<Job & { failedFrame: number | null }>(await s.api(`/renders/${j.id}`))).failedFrame, mode).toBe(frame);
     }
+    expect(failedFrameOf(Object.assign(new Error('x'), { frame: 7 }), 3)).toBe(7);
+    expect(failedFrameOf(new Error('no frame info'), null)).toBeNull();
     expect((await s.api('/health', { auth: false })).status).toBe(200);
   });
 
@@ -233,13 +238,14 @@ describe('render recovery on start', () => {
     const dataDir = tempDir(); const dbKeyHex = crypto.randomBytes(32).toString('hex');
     const a = await startS2([health, createRendersModule()], { dataDir, cfg: { dbKeyHex } });
     const pid = a.project(); const id = newId();
-    a.ctx.db.prepare("INSERT INTO render_jobs (id, project_id, version_id, output_profile_json, performance_profile, status, created_at) VALUES (?,?,?,?,'standard','rendering',?)")
+    a.ctx.db.prepare("INSERT INTO render_jobs (id, project_id, version_id, output_profile_json, performance_profile, status, rendered_frames, created_at) VALUES (?,?,?,?,'standard','rendering',42,?)")
       .run(id, pid, a.heads.get(pid)!.versionId, JSON.stringify(profile), new Date().toISOString());
     fs.mkdirSync(path.join(a.ctx.paths.tmp, `render-${id}`));
     await a.close();
     const b = await startS2([health, createRendersModule()], { dataDir, cfg: { dbKeyHex } });
     const j = await json<Job>(await b.api(`/renders/${id}`));
     expect(j.status).toBe('failed'); expect(j.errorCode).toBe('EM-3203');
+    expect((j as Job & { failedFrame: number | null }).failedFrame).toBe(42);                            // FR-143: last frame reported before the crash
     expect(fs.existsSync(path.join(b.ctx.paths.tmp, `render-${id}`))).toBe(false);
     await b.close();
     void renderServiceOf;

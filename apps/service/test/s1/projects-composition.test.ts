@@ -101,6 +101,34 @@ describe('projects R-010…R-019', () => {
       expect((await t.json(`/projects/${p.id}/settings`)).body).toMatchObject({ ratio: '16:9', resolution: '2k', autoRatio: true });
     } finally { await t.close(); }
   });
+  it('FR-090/FR-097: a Performance Profile pick is a zero-op settings intent (executed, supersedable, restore undoes it); FR-085: applied intents carry the version hash', async () => {
+    const p = await newProject(s, 'Profile');
+    s.ctx.settings.update({ defaultPerformanceProfile: 'standard' });
+    const pick = async (output: Record<string, unknown>, category = 'output') => s.json(`/projects/${p.id}/intents`, { method: 'POST', json: { source: 'ui', category, target: { kind: 'project' }, output, baseVersion: await headHash(s, p.id) } });
+    const head0 = await headHash(s, p.id);
+    const plans0 = (s.ctx.db.prepare('SELECT count(*) AS n FROM edit_plans').get() as { n: number }).n;
+    const a = await pick({ kind: 'performanceProfile', value: 'accelerated' });
+    expect(a.status).toBe(201);
+    expect(a.body.intent).toMatchObject({ category: 'output', propertyKey: 'project.performanceProfile', status: 'executed', needsInterpretation: false, params: { __previous: 'standard' } });
+    expect([a.body.appliedVersion, a.body.planId]).toEqual([null, null]);
+    expect(s.ctx.settings.get().defaultPerformanceProfile).toBe('accelerated');
+    expect(await headHash(s, p.id)).toBe(head0);                                                   // no Composition Version, no plan
+    expect((s.ctx.db.prepare('SELECT count(*) AS n FROM edit_plans').get() as { n: number }).n).toBe(plans0);
+    expect(s.events.some((e) => e.name === 'settings.changed' && (e.data['settings'] as any)?.defaultPerformanceProfile === 'accelerated')).toBe(true);
+    const b = await pick({ kind: 'performanceProfile', value: 'turbo' });
+    expect(b.body.superseded).toEqual([a.body.intent.id]);
+    expect(b.body.intent.params.__previous).toBe('accelerated');
+    expect(s.ctx.settings.get().defaultPerformanceProfile).toBe('turbo');
+    const undo = await s.json(`/projects/${p.id}/intents/${a.body.intent.id}/restore`, { method: 'POST' });   // Undo = restore the replaced pick
+    expect(undo.body.intent.status).toBe('executed');
+    expect(undo.body.queue.items.find((i: any) => i.id === b.body.intent.id).status).toBe('superseded');
+    expect(s.ctx.settings.get().defaultPerformanceProfile).toBe('accelerated');
+    expect((await pick({ kind: 'performanceProfile', value: 'warp' })).body.error.code).toBe('EM-9002');
+    const r = await pick({ kind: 'ratio', value: '1:1' }, 'layout');
+    expect(r.body.intent.appliedHash).toBe(r.body.appliedVersion.hash);
+    expect(r.body.intent.appliedVersion).toBeGreaterThan(0);
+    s.ctx.settings.update({ defaultPerformanceProfile: 'standard' });
+  });
   it('soft-deletes (204), then the project is gone; delete refuses while an agent run is active', async () => {
     const p = await newProject(s, 'Delete me');
     s.ctx.db.prepare("INSERT INTO agent_runs (id, project_id, agent, model_id, status, started_at) VALUES ('R1', ?, 'editor', 'm', 'running', 'now')").run(p.id);

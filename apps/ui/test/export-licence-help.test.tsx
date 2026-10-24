@@ -3,9 +3,12 @@
 // offline Help (FR-148), Diagnostics/About (FR-150, FR-151), update banner (FR-152, FR-162), Private Mode queue (FR-160), Generator Cards (FR-100…FR-108).
 import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
-import { act, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { renderEditor, el, els } from './setup-dom.js';
-import { toastDismissMs } from '../src/App.js';
+import { App, toastDismissMs } from '../src/App.js';
+import { StoreProvider } from '../src/state/store.js';
+import { createMockRuntime } from '../src/state/runtime.js';
+import { MockBus } from '../src/mock/MockEventSource.js';
 import { recoveryFor, QUALITY_CRF } from '../src/screens/Export.js';
 import { licenceView } from '../src/screens/License.js';
 import { generatedList, retimePage } from '../src/screens/Generate.js';
@@ -139,6 +142,25 @@ describe('Editor screens (mock mode)', () => {
     await act(async () => { fireEvent.click(el('scr.export.done.play')!); });
     await waitFor(() => { if (!s.openPath.mock.calls.length) throw new Error('no play'); });
     expect(String(s.openPath.mock.calls[0]![0])).toMatch(/\.mp4$/);
+  });
+
+  it('FR-143: the failure dialog names the EM code, the percent and the frame the render stopped at, with Try again and Diagnostics', async () => {
+    try { localStorage.clear(); } catch { /* ignore */ }
+    const bus = new MockBus();
+    const runtime = createMockRuntime({ seed: 'sample', delays: false, bus });
+    const real = runtime.api.createRender.bind(runtime.api);
+    let jobId = '';
+    vi.spyOn(runtime.api, 'createRender').mockImplementation(async (b) => { const j = await real(b); jobId = j.id; await runtime.api.cancelRender(j.id); bus.emit('render.failed', { projectId: j.projectId, jobId: j.id, code: 'EM-3201', percent: 40, frame: 120 }); return { ...j, status: 'failed', errorCode: 'EM-3201', progress: 0.4, failedFrame: 120 }; });
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    await waitFor(() => { if (!el('agent.output.ratio.9x16')?.hasAttribute('aria-checked')) throw new Error('boot'); });
+    await act(async () => { fireEvent.click(el('hdr.action.export')!); });
+    await waitFor(() => { if (!el('scr.export.start') || el('scr.export.start')!.hasAttribute('disabled')) throw new Error('start disabled'); });
+    await act(async () => { fireEvent.click(el('scr.export.start')!); });
+    await waitFor(() => { if (!el('scr.export.failed.frame')) throw new Error('no failure frame'); });
+    expect(jobId).not.toBe('');
+    expect(el('scr.export.failed.frame')!.textContent).toMatch(/^Stopped at frame 120 of \d+ \(0:04\)$/);
+    expect(el('scr.export')!.textContent).toContain('Rendering stopped at 40 %');
+    expect(el('scr.export.diagnostics')).not.toBeNull();
   });
 
   it('FR-100: Generator Cards follow R-135 (priority, model, installed state; Coming soon only for kinds the service disables)', async () => {

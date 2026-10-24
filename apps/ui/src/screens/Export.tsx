@@ -178,10 +178,13 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           {output && <code className="t-mono max-w-full truncate text-[11px] text-em-muted select-all">{output.path}</code>}
         </div>
       )}
-      {job && job.status === 'failed' && <ErrorBox code={job.errorCode ?? 'EM-3201'} actions={<>
+      {job && job.status === 'failed' && <ErrorBox code={job.errorCode ?? 'EM-3201'} vars={{ percent: Math.round(job.progress * 100), name }} actions={<>
         <Button size={28} onClick={() => setJobId(null)}>{t('ui.sys.toast.tryagain')}</Button>
         <Button el="scr.export.diagnostics" size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'diagnostics' })}>{t('ui.scr.export.fix.diagnostics')}</Button>
       </>} />}
+      {job && job.status === 'failed' && typeof job.failedFrame === 'number' && (   // FR-143: the frame the render stopped at
+        <div data-el="scr.export.failed.frame" className="t-mono text-[12px] text-em-muted">{job.totalFrames ? t('ui.scr.export.failed.frameof', { frame: job.failedFrame, total: job.totalFrames, time: formatDuration(Math.round((job.failedFrame / job.outputProfile.fps) * 1000)) }) : t('ui.scr.export.failed.frame', { frame: job.failedFrame })}</div>
+      )}
       {job && job.status === 'cancelled' && <div className="flex items-center gap-2 text-em-muted"><XCircle size={16} />{t('ui.scr.export.cancelled')}</div>}
     </Modal>
   );

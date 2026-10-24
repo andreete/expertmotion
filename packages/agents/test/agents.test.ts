@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { applyOperations, createEmptyModel, hashModel, type AssetFacts, type CompositionModelT } from '@expertmotion/composition-model';
 import { createIntents, enqueue, restore, remove, clearQueue, lockedKeysFromQueue, compileIntents, pickFromIntent, resolveTargets, validatePlan, buildCompilePlan,
-  parseModelReply, extractJson, buildRewriteEnvelope, fakeProvider, runEditorAgent, runBrainstorm, windowMessages, windowThread, threadBudgetChars, ReplyStreamer, mapProviderError, estimateCost, PROMPT_SET_VERSION,
+  parseModelReply, extractJson, settingsPatchOf, buildRewriteEnvelope, fakeProvider, runEditorAgent, runBrainstorm, windowMessages, windowThread, threadBudgetChars, ReplyStreamer, mapProviderError, estimateCost, PROMPT_SET_VERSION,
   type DesignPick, type EditIntentT } from '../src/index.js';
 
 const ASSETS: AssetFacts[] = [
@@ -102,6 +102,19 @@ describe('Compile (AI_WORKFLOW §7)', () => {
     const v = validatePlan(plan, { model: m, baseVersion: hashModel(m), assets: ASSETS, tier: 'T1', lockedKeys: [], newId });
     expect(v.plan.status).toBe('valid');
     expect(v.predicted?.model.transitions.length).toBe(2);
+  });
+  it('FR-090: a Performance Profile pick is a scalar settings intent that compiles to zero ops and supersedes the previous one', () => {
+    const m = base();
+    const [a] = intents(m, { output: { kind: 'performanceProfile', value: 'accelerated' } });
+    expect(a).toMatchObject({ category: 'output', propertyKey: 'project.performanceProfile', propertyClass: 'scalar', needsInterpretation: false, resolvedTargets: [{ kind: 'project' }] });
+    expect(settingsPatchOf(a!)).toEqual({ performanceProfile: 'accelerated' });
+    expect(settingsPatchOf(intents(m, { output: { kind: 'ratio', value: '1:1' } })[0]!)).toBeNull();
+    const ops = compileIntents([a!, ...intents(m, { output: { kind: 'ratio', value: '1:1' } })], (i) => pickFromIntent(i), m);
+    expect(ops.ok && ops.value.map((o) => o.op)).toEqual(['op:output.setRatio']);
+    const [b] = intents(m, { output: { kind: 'performanceProfile', value: 'turbo' } });
+    const q = enqueue(enqueue([], [{ ...a!, status: 'executed' }]), [b!]);
+    expect(q.map((i) => i.status)).toEqual(['superseded', 'queued']);
+    expect(createIntents(pick({ output: { kind: 'performanceProfile', value: 'warp' } }), { model: m, baseVersion: hashModel(m), newId })).toMatchObject({ ok: false, issues: [{ code: 'EM-9002' }] });
   });
   it('text-panel and output picks compile; interpretive intents refuse to compile', () => {
     const m = base();

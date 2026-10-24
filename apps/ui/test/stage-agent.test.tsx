@@ -243,6 +243,8 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     await act(async () => { fireEvent.click(el('agent.output.ratio.1x1')!); });
     await waitFor(() => { if (!el('agent.editor.message.applied')) throw new Error('no applied line'); });
     expect(el('agent.editor.message.applied')?.textContent).toMatch(/Applied directly: Ratio 1:1/);
+    const hash = (await runtime.api.getComposition(runtime.seededProjectId!)).head.hash;
+    expect(el('agent.editor.message.applied')?.textContent).toContain(`· ${hash.slice(0, 6)}`);       // FR-085: the short version hash, not v{n}
     fireEvent.change(el('agent.editor.composer')!, { target: { value: 'buat judul pembuka yang kuat' } });
     await act(async () => { fireEvent.keyDown(el('agent.editor.composer')!, { key: 'Enter' }); });
     await waitFor(() => { if (el('agent.editor.plancard')?.getAttribute('data-status') !== 'valid') throw new Error('no plan'); });
@@ -251,5 +253,31 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     await act(async () => { fireEvent.click(within(el('agent.editor.plancard')!).getByRole('button', { name: /Execute plan/ })); });
     await waitFor(() => { if (!el('agent.editor.plancard.result')) throw new Error(`no result ${el('agent.editor.plancard')?.getAttribute('data-status')} ${el('agent.editor.plancard')?.textContent}`); });
     expect(el('agent.editor.plancard.result')?.textContent).toMatch(/1 added/);
+  }, 20_000);
+});
+
+describe('FR-090 / FR-097 Performance Profile through the Intent Queue', () => {
+  it('a profile pick is a queue item (applied directly, no model), the next pick supersedes it, Undo restores the previous profile', async () => {
+    try { localStorage.clear(); } catch { /* ignore */ }
+    const runtime = createMockRuntime({ seed: 'sample', delays: false });
+    const hw = runtime.api.hardwareProfile.bind(runtime.api);
+    vi.spyOn(runtime.api, 'hardwareProfile').mockImplementation(async () => ({ ...(await hw()), tier: 'T2' }));
+    const spy = vi.spyOn(runtime.api, 'createIntent');
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    await waitFor(() => { if (!el('agent.output.ratio.9x16')?.hasAttribute('aria-checked') || el('agent.output.profile.turbo')?.getAttribute('aria-disabled') === 'true') throw new Error('not booted on T2'); });
+    const queue = () => [...els('agent.editor.intentqueue.item'), ...els('agent.editor.intentqueue.item.superseded')];
+    await act(async () => { fireEvent.click(el('agent.output.profile.turbo')!); });
+    expect(spy.mock.calls.at(-1)![1]).toMatchObject({ category: 'output', output: { kind: 'performanceProfile', value: 'turbo' } });
+    await waitFor(async () => expect((await runtime.api.getSettings()).defaultPerformanceProfile).toBe('turbo'));
+    await waitFor(() => { if (!queue().some((i) => i.textContent?.includes('Performance profile Turbo') && i.getAttribute('data-status') === 'executed')) throw new Error(queue().map((i) => i.textContent).join('|')); });
+    await waitFor(() => { if (!els('agent.editor.message.applied').some((x) => /Applied directly: Performance profile Turbo/.test(x.textContent ?? ''))) throw new Error('no applied line'); });
+    await act(async () => { fireEvent.click(el('agent.output.profile.accelerated')!); });
+    await waitFor(() => { if (!els('agent.editor.intentqueue.item.superseded').some((i) => i.textContent?.includes('Turbo'))) throw new Error('turbo not superseded'); });
+    expect(el('agent.output.profile.accelerated')?.getAttribute('aria-checked')).toBe('true');
+    const undo = els('sys.toast').filter((x) => x.textContent?.includes('Accelerated')).at(-1)!.querySelector<HTMLElement>('[data-el="sys.toast.action"]')!;
+    await act(async () => { fireEvent.click(undo); });
+    await waitFor(() => expect(el('agent.output.profile.turbo')?.getAttribute('aria-checked')).toBe('true'));
+    expect((await runtime.api.getSettings()).defaultPerformanceProfile).toBe('turbo');
+    await waitFor(() => { if (!els('agent.editor.intentqueue.item.superseded').some((i) => i.textContent?.includes('Accelerated'))) throw new Error('accelerated not superseded'); });
   }, 20_000);
 });

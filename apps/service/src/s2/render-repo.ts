@@ -12,7 +12,7 @@ export interface OutputProfileT {
 export interface RenderJobRow {
   id: string; project_id: string; version_id: string; output_profile_json: string; performance_profile: 'standard' | 'accelerated' | 'turbo';
   status: 'queued' | 'rendering' | 'done' | 'failed' | 'cancelled'; progress: number; rendered_frames: number | null; total_frames: number | null; eta_ms: number | null;
-  output_id: string | null; error_code: string | null; error_detail: string | null; created_at: string; started_at: string | null; finished_at: string | null;
+  output_id: string | null; error_code: string | null; error_detail: string | null; failed_frame?: number | null; created_at: string; started_at: string | null; finished_at: string | null;
 }
 export interface OutputRow {
   id: string; project_id: string; render_job_id: string; path: string; thumb_path: string | null; kind: 'video' | 'gif' | 'still' | 'audio'; bytes: number;
@@ -39,7 +39,7 @@ export function toJobDto(r: RenderJobRow): Record<string, unknown> {
   let dims: { width: number | null; height: number | null } = { width: null, height: null };
   try { dims = profileDims(profile); } catch { /* invalid custom ratio */ }
   return { id: r.id, projectId: r.project_id, versionId: r.version_id, outputProfile: profile, performanceProfile: r.performance_profile, status: r.status, progress: r.progress,
-    renderedFrames: r.rendered_frames, totalFrames: r.total_frames, etaMs: r.eta_ms, outputId: r.output_id, errorCode: r.error_code, width: dims.width, height: dims.height,
+    renderedFrames: r.rendered_frames, totalFrames: r.total_frames, etaMs: r.eta_ms, outputId: r.output_id, errorCode: r.error_code, failedFrame: r.failed_frame ?? null, width: dims.width, height: dims.height,
     createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at };
 }
 export function toOutputDto(ctx: ServiceContext, o: OutputRow): Record<string, unknown> {

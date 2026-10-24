@@ -186,7 +186,7 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     case 'render.queued': return { ...state, renders: upsert(state.renders, [ev.data.job], true) };
     case 'render.progress': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'rendering', progress: ev.data.progress, renderedFrames: ev.data.renderedFrames, totalFrames: ev.data.totalFrames, etaMs: ev.data.etaMs } : j)) };
     case 'render.done': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'done', progress: 1, outputId: ev.data.output.id, etaMs: 0 } : j)), outputs: upsert(state.outputs, [ev.data.output], true) };
-    case 'render.failed': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'failed', errorCode: ev.data.code } : j)) };
+    case 'render.failed': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'failed', errorCode: ev.data.code, progress: ev.data.percent / 100, failedFrame: ev.data.frame ?? j.failedFrame ?? null } : j)) };
     case 'render.cancelled': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'cancelled' } : j)) };
     case 'ingest.progress': return { ...state, assets: state.assets.map((a) => (a.id === ev.data.assetId ? { ...a, progress: ev.data.progress } : a)), ingestStage: { ...state.ingestStage, [ev.data.assetId]: ev.data.stage } };
     case 'ingest.done': return { ...state, assets: upsert(state.assets, [ev.data.asset]) };
@@ -208,7 +208,7 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     case 'hardware.tick': return { ...state, tick: ev.data };
     case 'license.changed': return { ...state, licence: ev.data.licence };
     case 'settings.changed': {
-      if (ev.data.settings) return { ...state, settings: ev.data.settings };
+      if (ev.data.settings) return { ...state, settings: ev.data.settings, performanceProfile: ev.data.settings.defaultPerformanceProfile ?? state.performanceProfile };
       if (ev.data.privateMode !== undefined && state.settings) return { ...state, settings: { ...state.settings, privateMode: ev.data.privateMode } };
       return state;
     }

@@ -50,6 +50,7 @@ export function intentTitle(i: Pick<EditIntent, 'category' | 'presetId' | 'instr
   const out = i.params['__output'] as { kind?: string; value?: unknown; customRatio?: { w: number; h: number } } | undefined;
   if (out?.kind) {                                                              // Output Settings picks (FR-097)
     if (out.kind === 'autoRatio') return t(out.value === true ? 'ui.agent.output.ratio.auto.on' : 'ui.agent.output.ratio.auto.off');
+    if (out.kind === 'performanceProfile') return t('ui.agent.intent.output.performanceProfile', { value: t(`ui.agent.output.profile.${String(out.value)}`) });   // FR-090
     const v = out.kind === 'ratio' && out.value === 'custom' && out.customRatio ? `${out.customRatio.w}:${out.customRatio.h}` : String(out.value);
     return t(`ui.agent.intent.output.${out.kind}`, { value: v });
   }

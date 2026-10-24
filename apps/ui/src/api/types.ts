@@ -46,6 +46,8 @@ export interface RenderJobDto {
   id: Id; projectId: Id; versionId: Id; outputProfile: OutputProfile; performanceProfile: PerformanceProfile; status: RenderStatus; progress: number;
   renderedFrames: number | null; totalFrames: number | null; etaMs: number | null; outputId: Id | null; errorCode: string | null; width: number | null; height: number | null;
   createdAt: Iso; startedAt: Iso | null; finishedAt: Iso | null; notices?: string[];
+  /** FR-143: frame the job failed at (null = unknown / not failed). */
+  failedFrame?: number | null;
 }
 export interface OutputDto {
   id: Id; projectId: Id; renderJobId: Id; kind: 'video' | 'gif' | 'still' | 'audio'; fileName: string; bytes: number; width: number | null; height: number | null;
@@ -59,8 +61,10 @@ export interface EditIntent {
   id: Id; projectId: Id; source: 'ui' | 'brainstorm' | 'chat' | 'system'; createdAt: Iso; category: IntentCategory; presetId?: string; params: Record<string, unknown>;
   target: ElementRefT; resolvedTargets: ElementRefT[]; propertyKey: string; parentIntentId?: string; propertyClass: 'scalar' | 'list' | 'exclusive-group';
   needsInterpretation: boolean; instruction?: string; status: IntentStatus; restoredAt?: Iso; rejectionReason?: string; supersedes: string[]; baseVersion: string;
-  /** Not in AI_WORKFLOW §3; tolerated when the Service adds it (version label of the version that applied the intent). */
+  /** AI_WORKFLOW §3: ordinal of the Composition Version that applied the intent ("Applied in v{n}" grouping). */
   appliedVersion?: number;
+  /** AI_WORKFLOW §3: hash of that Composition Version (FR-085 shows it short). */
+  appliedHash?: string;
 }
 export interface IntentQueueDto { projectId: Id; headHash: string; items: EditIntent[]; lockedKeys: string[] }
 
@@ -186,8 +190,8 @@ export interface HealthDto {
 export interface DesignPickInput {
   source: 'ui' | 'chat'; category: IntentCategory; presetId?: string; params?: Record<string, unknown>; target: ElementRefT; selection?: ElementRefT[]; playheadMs?: number;
   instruction?: string; baseVersion: string; plan?: 'auto' | 'none';
-  /** Output Settings pick (FR-087…FR-097): compiled to op:output.setRatio / .setResolution / .setAutoRatio. */
-  output?: { kind: 'ratio' | 'resolution' | 'fps' | 'autoRatio'; value: unknown; customRatio?: { w: number; h: number } };
+  /** Output Settings pick (FR-087…FR-097): compiled to op:output.setRatio / .setResolution / .setAutoRatio; `performanceProfile` is a zero-op settings intent (FR-090). */
+  output?: { kind: 'ratio' | 'resolution' | 'fps' | 'autoRatio' | 'performanceProfile'; value: unknown; customRatio?: { w: number; h: number } };
   /** FR-068 (P1): Timeline drag on the video Track. */
   clipEdit?: { clipId: Id; toIndex?: number; trimBeforeMs?: number; durationMs?: number };
   /** Deterministic Text Panel field pick (FR-020…FR-028; `content` edits the selected text, FR-027). */
@@ -224,7 +228,7 @@ export interface EventMap {
   'render.queued': { job: RenderJobDto };
   'render.progress': { jobId: Id; progress: number; renderedFrames: number; totalFrames: number; etaMs: number | null; stage: string };
   'render.done': { jobId: Id; output: OutputDto; notices: string[] };
-  'render.failed': { jobId: Id; code: string; percent: number };
+  'render.failed': { jobId: Id; code: string; percent: number; frame?: number | null };
   'render.cancelled': { jobId: Id; percent: number };
   'ingest.progress': { assetId: Id; stage: string; progress: number };
   'ingest.done': { asset: AssetDto };

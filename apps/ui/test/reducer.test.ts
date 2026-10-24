@@ -77,8 +77,8 @@ describe('reducer', () => {
     let s = reducer(withProject(), { type: 'event', event: ev({ name: 'render.queued', data: { projectId: 'P', job: { ...job, outputProfile: { ...job.outputProfile } } } }) });
     s = reducer(s, { type: 'event', event: ev({ name: 'render.progress', data: { projectId: 'P', jobId: 'J', progress: 0.5, renderedFrames: 150, totalFrames: 300, etaMs: 2000, stage: 'rendering' } }) });
     expect(s.renders[0]).toMatchObject({ status: 'rendering', progress: 0.5, etaMs: 2000 });
-    s = reducer(s, { type: 'event', event: ev({ name: 'render.failed', data: { projectId: 'P', jobId: 'J', code: 'EM-3203', percent: 50 } }) });
-    expect(s.renders[0]).toMatchObject({ status: 'failed', errorCode: 'EM-3203' });
+    s = reducer(s, { type: 'event', event: ev({ name: 'render.failed', data: { projectId: 'P', jobId: 'J', code: 'EM-3203', percent: 50, frame: 150 } }) });
+    expect(s.renders[0]).toMatchObject({ status: 'failed', errorCode: 'EM-3203', progress: 0.5, failedFrame: 150 });   // FR-143
   });
 
   it('streams agent deltas and appends the final message', () => {

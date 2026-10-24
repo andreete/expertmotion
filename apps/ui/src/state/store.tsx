@@ -399,10 +399,24 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       },
       async setLanguage(l) { try { dispatch({ type: 'settings', settings: await api.putSettings({ uiLanguage: l }) }); } catch (e) { error(e); } },
       async putSettings(patch) { try { dispatch({ type: 'settings', settings: await api.putSettings(patch) }); } catch (e) { error(e); } },
+      // FR-090 / FR-097: a profile pick is a zero-op `output` intent: recorded in the Intent Queue (visible, supersedable, restorable),
+      // applied to Settings by the Service, never sent to a model. Undo restores the replaced pick (R-062) or re-picks the previous profile.
       async setProfile(p) {
-        dispatch({ type: 'performanceProfile', profile: p });
-        setPrefs({ draft: p !== 'turbo' });
-        try { dispatch({ type: 'settings', settings: await api.putSettings({ defaultPerformanceProfile: p }) }); } catch (e) { error(e); }
+        const prev = stateRef.current.performanceProfile;
+        if (p === prev) return;
+        const apply = (x: PerformanceProfile) => { dispatch({ type: 'performanceProfile', profile: x }); setPrefs({ draft: x !== 'turbo' }); };
+        apply(p);
+        const id = pid();
+        if (!id) { try { dispatch({ type: 'settings', settings: await api.putSettings({ defaultPerformanceProfile: p }) }); } catch (e) { error(e); } return; }
+        const L = stateRef.current.settings?.uiLanguage ?? 'en';
+        const res = await createIntent({ source: 'ui', category: 'output', output: { kind: 'performanceProfile', value: p }, target: { kind: 'project' }, plan: 'auto' }, translate(L, `ui.agent.output.profile.${p}`));
+        if (!res || res.intent.status !== 'executed') { apply(prev); return; }
+        const replaced = res.superseded[0];
+        const undoProfile = async () => {
+          if (!replaced) { await self.setProfile(prev); return; }
+          try { const r = await api.restoreIntent(id, replaced); dispatch({ type: 'queue', queue: r.queue }); apply(prev); } catch (e) { error(e); }
+        };
+        toast('success', 'ui.sys.toast.applieddirect', { label: translate(L, `ui.agent.output.profile.${p}`) }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undoProfile(); } } });
       },
       // FR-095: the Project defaults (Settings ▸ default ratio / resolution), profile Standard, Auto off — one Composition Version.
       async resetOutput() {

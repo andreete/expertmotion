@@ -13,7 +13,7 @@ export interface DesignPick {
   source: EditIntentT['source'];
   presetId?: string;                         // catalogue card
   field?: TextField; value?: unknown;        // Text Panel value (deterministic)
-  output?: { kind: 'ratio' | 'resolution' | 'fps' | 'autoRatio' | 'durationPolicy'; value: unknown; customRatio?: { w: number; h: number }; fixedMs?: number };
+  output?: { kind: 'ratio' | 'resolution' | 'fps' | 'autoRatio' | 'durationPolicy' | SettingsOutputKind; value: unknown; customRatio?: { w: number; h: number }; fixedMs?: number };
   category?: IntentCategory;                 // required for instruction-only picks (chat / brainstorm)
   params?: Record<string, unknown>;
   instruction?: string;
@@ -23,6 +23,21 @@ export interface DesignPick {
   text?: string;                             // content for a text variant
   /** FR-068 (P1): Timeline drag on the video Track — reorder (toIndex) or trim (trimBeforeMs + durationMs, frame-snapped by the Editor). */
   clipEdit?: { clipId: string; toIndex?: number; trimBeforeMs?: number; durationMs?: number };
+}
+/**
+ * FR-090 / FR-097: Output Settings that live outside the Composition Model (Project Settings, not an op). They are recorded in the
+ * Intent Queue like any Output pick (visible, supersedable, restorable) but compile to zero operations: the Local Service applies
+ * them to settings and records the intent as executed (AI_WORKFLOW §4 "output (profile)").
+ */
+export type SettingsOutputKind = 'performanceProfile';
+export const PERFORMANCE_PROFILES = ['standard', 'accelerated', 'turbo'] as const;
+export type PerformanceProfileT = (typeof PERFORMANCE_PROFILES)[number];
+export const PERFORMANCE_PROFILE_KEY = 'project.performanceProfile';
+/** The settings patch a zero-op settings intent stands for, or null for every other intent. */
+export function settingsPatchOf(i: Pick<EditIntentT, 'params'>): { performanceProfile: PerformanceProfileT } | null {
+  const o = i.params?.['__output'] as { kind?: string; value?: unknown } | undefined;
+  if (o?.kind !== 'performanceProfile' || !(PERFORMANCE_PROFILES as readonly unknown[]).includes(o.value)) return null;
+  return { performanceProfile: o.value as PerformanceProfileT };
 }
 export interface IntentContext { model: CompositionModelT; baseVersion: string; newId: () => string; now?: () => string }
 
@@ -167,6 +182,10 @@ export function createIntents(pick: DesignPick, ctx: IntentContext): Result<Edit
     ...(pick.instruction ? { instruction: pick.instruction } : {}), status: 'queued', supersedes: [], baseVersion: ctx.baseVersion, ...over,
   });
   if (instructionOnly) return ok([base({ propertyKey: `instruction:${ctx.newId()}`, propertyClass: 'list', needsInterpretation: true })]);
+  if (pick.output?.kind === 'performanceProfile') {
+    if (!(PERFORMANCE_PROFILES as readonly unknown[]).includes(pick.output.value)) return fail([issue('EM-9002', 'Unknown performance profile.', 'block', 'output.value')]);
+    return ok([base({ category: 'output', target: { kind: 'project' }, resolvedTargets: [{ kind: 'project' }], propertyKey: PERFORMANCE_PROFILE_KEY, propertyClass: 'scalar', needsInterpretation: false, params: { ...stash, targetLabel: String(pick.output.value) } })]);
+  }
   const r = resolveTargets(pick, ctx.model);
   if (!r.ok) return r;
   const { targets, label } = r.value;
@@ -244,7 +263,7 @@ export function lockedKeysFromQueue(queue: readonly EditIntentT[]): string[] {
 export function compileIntents(intents: readonly EditIntentT[], pickOf: (i: EditIntentT) => DesignPick, model: CompositionModelT): Result<OperationT[]> {
   const ops: OperationT[] = [];
   for (const i of intents) {
-    if (i.propertyKey.startsWith('group:')) continue;
+    if (i.propertyKey.startsWith('group:') || settingsPatchOf(i)) continue;   // settings intents compile to zero ops
     if (i.needsInterpretation) return fail([issue('EM-2303', `Intent ${i.id} needs the Editor Agent.`, 'block', i.id)]);
     const b = opFor(pickOf(i), i.resolvedTargets[0], model);
     if (!b || !b.complete) return fail([issue('EM-2303', `Intent ${i.id} cannot be compiled.`, 'block', i.id)]);

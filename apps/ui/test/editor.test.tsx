@@ -25,6 +25,7 @@ const NOT_IN_MOCK: Record<string, string> = {
   'agent.brainstorm.message.copy': 'needs a brainstorm reply (stage-agent.test.tsx)', 'agent.editor.message.copy': 'needs an editor message (stage-agent.test.tsx)',
   'agent.brainstorm.message.retry': 'saved failure only (stage-agent.test.tsx)', 'agent.editor.message.retry': 'saved failure only',
   'agent.editor.message.applied': 'needs a compiled pick (stage-agent.test.tsx)',
+  'lib.text.size.overflow': 'needs a selected Text Layer that does not keep its size (library.test.tsx, FR-021)',
   'agent.brainstorm.attach.file': 'attach menu (stage-agent.test.tsx)', 'agent.editor.attach.file': 'attach menu',
   'agent.brainstorm.attach.error': 'attachment notice (stage-agent.test.tsx)', 'agent.editor.attach.error': 'attachment notice',
   'agent.brainstorm.footer.model.option': 'footer model picker (stage-agent.test.tsx)', 'agent.editor.footer.model.option': 'footer model picker',

@@ -68,7 +68,7 @@ export function EditorChat() {
       ) });
     }
     for (const i of appliedDirectly(visibleQueue(state))) {
-      const v = i.appliedVersion !== undefined ? ` · v${i.appliedVersion}` : '';
+      const v = i.appliedHash ? ` · ${i.appliedHash.slice(0, 6)}` : i.appliedVersion !== undefined ? ` · v${i.appliedVersion}` : '';   // FR-085: short version hash
       rows.push({ at: i.createdAt, key: `applied-${i.id}`, node: (
         <div key={`applied-${i.id}`} data-el="agent.editor.message.applied" data-role="system" className="mx-auto flex max-w-[95%] items-center gap-1 text-center text-[11px] text-em-muted">
           <Check size={12} className="text-em-accent-2" aria-hidden />{t('ui.agent.editor.applieddirect', { label: `${intentTitle(i, t, lang)} → ${targetText(i, state.head?.model, t)}` })}{v}

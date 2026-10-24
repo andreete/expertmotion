@@ -12,6 +12,14 @@ Append an entry after every meaningful work unit. Newest entry first. Each entry
 
 ---
 
+## 2026-10-24 — Entry 7b: partial FRs closed (FR-090/097, FR-085, FR-021, FR-143, FR-038, FR-042, FR-115 doc)
+
+- **Stage**: 3.
+- **Completed**: FR-090/FR-097 Performance Profile is a zero-op settings intent (`output.kind:'performanceProfile'`, key `project.performanceProfile`; agents `settingsPatchOf`, Compile emits no op; the Service applies it to Settings and records it `executed` with `params.__previous`; Undo = Restore of the replaced pick, else re-pick); FR-085 intents carry `appliedHash`, the Editor line shows the short hash; FR-021 engine `textLayerFit`/`layoutFor` (shared with the renderer) drive `lib.text.size.overflow`; FR-143 migration 20 `render_jobs.failed_frame` (renderer error frame, else last progress; recovery copies `rendered_frames`), `render.failed.frame`, `scr.export.failed.frame`; FR-038 fixture test (P0 gpu preset: badge, pick works, EM-2103 once); FR-042 filmstrip test with a mocked FFmpeg runner; FR-115 FRD aligned to AGD-004 (refuse no-JSON-output models; code unchanged).
+- **Docs**: FRD FR-090/FR-115, AI_WORKFLOW §3/§4, API_SPECIFICATION R-060/RenderJobDto/`render.failed`, DATABASE_SCHEMA §3/§5.1, ELEMENT_IDS, ADR-024 note.
+- **Verification**: `bash scripts/verify.sh` → typecheck clean, 754 tests passed (1 skipped), docs-check PASS.
+- **Not done / notes**: global Undo (Ctrl+Z) still walks Composition Versions only; the profile's Undo is the toast action / queue Restore. Profile stays an app setting (`defaultPerformanceProfile`), not per-project.
+
 ## 2026-10-24 — Entry 7: FR gap audit (read-only, 4 parallel auditors)
 
 FRD has FR-001…FR-178 (not 204; docs-check counts other "FR-" mentions). Static code reading against each row:

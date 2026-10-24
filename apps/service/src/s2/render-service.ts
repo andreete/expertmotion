@@ -90,7 +90,7 @@ export class RenderService {
   /** Marks interrupted jobs failed (EM-3203) and sweeps their temp folders (DATABASE_SCHEMA §7, SEC-062). */
   recover(): number {
     const now = this.ctx.now();
-    const r = this.ctx.db.prepare("UPDATE render_jobs SET status = 'failed', error_code = 'EM-3203', error_detail = 'interrupted', finished_at = ? WHERE status IN ('queued','rendering')").run(now);
+    const r = this.ctx.db.prepare("UPDATE render_jobs SET status = 'failed', error_code = 'EM-3203', error_detail = 'interrupted', failed_frame = CASE WHEN status = 'rendering' THEN rendered_frames END, finished_at = ? WHERE status IN ('queued','rendering')").run(now);
     for (const d of fs.readdirSync(this.ctx.paths.tmp)) if (d.startsWith('render-')) fs.rmSync(path.join(this.ctx.paths.tmp, d), { recursive: true, force: true });
     return r.changes;
   }
@@ -230,13 +230,13 @@ export class RenderService {
     for (const r of this.ctx.db.prepare("SELECT id FROM render_jobs WHERE status IN ('queued','rendering')").all() as Array<{ id: string }>) this.cancel(r.id, 'shutdown');
   }
 
-  private finish(job: RenderJobRow, status: 'done' | 'failed' | 'cancelled', code: string | null, detail?: string, extra: Record<string, unknown> = {}): void {
+  private finish(job: RenderJobRow, status: 'done' | 'failed' | 'cancelled', code: string | null, detail?: string, extra: Record<string, unknown> = {}, failedFrame: number | null = null): void {
     const ctx = this.ctx;
-    ctx.db.prepare('UPDATE render_jobs SET status = ?, error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?').run(status, code, detail ?? null, ctx.now(), job.id);
+    ctx.db.prepare('UPDATE render_jobs SET status = ?, error_code = ?, error_detail = ?, failed_frame = ?, finished_at = ? WHERE id = ?').run(status, code, detail ?? null, status === 'failed' ? failedFrame : null, ctx.now(), job.id);
     ctx.grants.revokeJob(job.id);
     this.inputs.delete(job.id);
     const percent = Math.round((getJob(ctx, job.id)?.progress ?? 0) * 100);
-    if (status === 'failed') emit(ctx, 'render.failed', { projectId: job.project_id, jobId: job.id, code, percent });
+    if (status === 'failed') emit(ctx, 'render.failed', { projectId: job.project_id, jobId: job.id, code, percent, frame: status === 'failed' ? failedFrame : null });
     else if (status === 'cancelled') emit(ctx, 'render.cancelled', { projectId: job.project_id, jobId: job.id, percent, notices: ['EM-3202'] });
     else emit(ctx, 'render.done', { projectId: job.project_id, jobId: job.id, ...extra });
     s2(ctx).events.emit('render.final', job.id);
@@ -255,10 +255,11 @@ export class RenderService {
       ctx.db.prepare("UPDATE render_jobs SET status = 'rendering', started_at = ? WHERE id = ?").run(ctx.now(), jobId);
       const grant = ctx.grants.issueRender(input.projectId, jobId, prep.assetIds);
       const origins: string[] = [];
-      let lastProgressAt = Date.now(); let samples = 0; let progress = 0;
+      let lastProgressAt = Date.now(); let samples = 0; let progress = 0; let lastFrame: number | null = null;   // FR-143: frame of a failure
       const tickSse = throttle(250), tickDb = throttle(1000);
       const report = (p: number, rendered: number | null, stage: 'preparing' | 'rendering' | 'encoding' | 'validating', force = false) => {
         progress = clamp01(p); lastProgressAt = Date.now(); samples++;
+        if (rendered !== null && stage === 'rendering') lastFrame = rendered;
         const elapsed = Date.now() - startedAt;
         const etaMs = progress >= 0.05 && samples >= 3 ? Math.round((elapsed / progress) * (1 - progress)) : null;
         if (tickDb(force)) ctx.db.prepare('UPDATE render_jobs SET progress = ?, rendered_frames = ?, eta_ms = ? WHERE id = ?').run(progress, rendered, etaMs, jobId);
@@ -351,12 +352,12 @@ export class RenderService {
       } catch (e) {
         const job = getJob(ctx, jobId)!;
         if (ctl.reason === 'user' || ctl.reason === 'shutdown') this.finish(job, 'cancelled', null);
-        else if (ctl.reason === 'stalled') this.finish(job, 'failed', 'EM-3207', 'stalled');
+        else if (ctl.reason === 'stalled') this.finish(job, 'failed', 'EM-3207', 'stalled', {}, lastFrame);
         else {
           const msg = errorMessage(e);
           const code = e instanceof EmError ? e.code : stage === 'compose' ? 'EM-3002' : /ENOSPC|EACCES|EPERM|write/i.test(msg) && stage !== 'render' ? 'EM-3204' : 'EM-3201';
           ctx.log.error({ jobId, stage, err: msg.slice(0, 500) }, 'render failed');
-          this.finish(job, 'failed', code, stage);
+          this.finish(job, 'failed', code, stage, {}, stage === 'compose' ? null : failedFrameOf(e, lastFrame));
         }
       } finally {
         if (warm) engineBrowserOf(ctx)?.release(getJob(ctx, jobId)?.status === 'done');
@@ -368,6 +369,14 @@ export class RenderService {
       }
     });
   }
+}
+
+/** FR-143: the frame a render failed at: Remotion errors carry `frame` (or say "frame N"); otherwise the last reported frame. */
+export function failedFrameOf(e: unknown, lastFrame: number | null): number | null {
+  const f = (e as { frame?: unknown } | null)?.frame;
+  if (typeof f === 'number' && Number.isInteger(f) && f >= 0) return f;
+  const m = /\bframe\s+(?:#|no\.?\s*)?(\d+)/i.exec(errorMessage(e));
+  return m ? Number(m[1]) : lastFrame;
 }
 
 /** SEC-068 / FR-145: dimensions equal, duration ± 1 frame (+50 ms container slack). A missing ffprobe leaves `validated` false. */

@@ -3,7 +3,7 @@
 // The LLM never mutates: every model change goes through CompositionStore.commit after deterministic validation (AI-001, AI-004).
 import {
   EditIntent, buildCompilePlan, buildRewriteEnvelope, compileIntents, createIntents, enqueue, lockedKeysFromQueue, pickFromIntent, planOps, remove, restore,
-  runEditorAgent, validatePlan, type ChatUsage, type DesignPick, type EditIntentT, type EditPlanT,
+  runEditorAgent, settingsPatchOf, validatePlan, type ChatUsage, type DesignPick, type EditIntentT, type EditPlanT,
 } from '@expertmotion/agents';
 import { validateParams } from '@expertmotion/catalogue';
 import { OPERATIONS, type CompositionModelT, type ElementRefT, type OperationT } from '@expertmotion/composition-model';
@@ -89,6 +89,8 @@ export class Workflow {
     };
     const r = createIntents(pick, { model: head.model, baseVersion: head.hash, newId: this.ctx.newId, now: this.ctx.now });
     if (!r.ok) throw issueError(r.issues[0] ?? issue('EM-2303', 'This pick cannot be used.'));
+    // FR-090: a settings intent remembers the value it replaces, so Undo can put it back even without a queued predecessor.
+    if (settingsPatchOf(r.value[0]!)) r.value[0]!.params = { ...r.value[0]!.params, __previous: this.ctx.settings.get().defaultPerformanceProfile };
     return this.enqueueAndMaybeApply(projectId, r.value, { auto: b.plan === 'auto', reason: 'created' });
   }
 
@@ -102,7 +104,15 @@ export class Workflow {
     const top = incoming[0]!;
     const notices: Array<{ code: string }> = [];
     let appliedVersion: VersionDto | null = null, planId: string | null = null;
-    if (!top.needsInterpretation && o.auto) {
+    const settingsPatch = settingsPatchOf(top);
+    if (settingsPatch) {
+      // FR-090 / FR-097: zero-op settings intent (no Composition Model op): applied to Settings at once, recorded as executed.
+      const mid = this.loadQueue(projectId);
+      const done = this.saveQueue(projectId, mid, mid.map((i) => (i.id === top.id ? { ...i, status: 'executed' as const } : i)));
+      const next = this.ctx.settings.update({ defaultPerformanceProfile: settingsPatch.performanceProfile });
+      this.emitQueue(projectId, [...new Set([...changed, ...done])], 'executed');
+      this.ctx.bus.emit('settings.changed', { at: this.ctx.now(), scope: 'settings', settings: next });
+    } else if (!top.needsInterpretation && o.auto) {
       const res = this.applyNow(projectId, incoming.map((i) => i.id), { reason: o.reason, changedBefore: changed });
       appliedVersion = res.version; planId = res.planId; notices.push(...res.notices);
     } else {
@@ -424,7 +434,7 @@ export class Workflow {
             const before = this.loadQueue(projectId);
             // Version ordinal (1-based, counting every version row of the project incl. this one) for "Applied in v{n}" grouping.
             const ordinal = (this.ctx.db.prepare('SELECT count(*) AS n FROM composition_versions WHERE project_id = ?').get(projectId) as { n: number }).n;
-            const after = before.map((i) => (own.has(i.id) && (i.status === 'queued' || i.status === 'planned' || i.status === 'compiled') ? { ...i, status: 'executed' as const, appliedVersion: ordinal } : i));
+            const after = before.map((i) => (own.has(i.id) && (i.status === 'queued' || i.status === 'planned' || i.status === 'compiled') ? { ...i, status: 'executed' as const, appliedVersion: ordinal, appliedHash: hash } : i));
             intentChanged = this.saveQueue(projectId, before, after);
             this.updatePlan(planId, v.plan, 'executed', { result, ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}) });
           },

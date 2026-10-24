@@ -10,6 +10,8 @@ import { StoreProvider } from '../src/state/store.js';
 import { createMockRuntime } from '../src/state/runtime.js';
 import { contrastRatio } from '../src/library/contrast.js';
 import { reorderPreview } from '../src/library/Assets.js';
+import { resetGpuWarning } from '../src/library/Catalogue.js';
+import { listPresets } from '@expertmotion/catalogue';
 import type { AssetDto } from '../src/api/types.js';
 
 afterEach(() => { cleanup(); delete (window as { expertmotion?: unknown }).expertmotion; });
@@ -69,6 +71,24 @@ describe('Text Panel', () => {
     expect(opacity.parentElement!.getAttribute('title')).toBe('Select an element first');
   });
 
+  it('FR-021: the size row warns when the selected text cannot keep its size inside the safe area (the renderer\'s own fit)', async () => {
+    const { runtime } = await renderEditor('sample');
+    home();
+    await act(async () => { fireEvent.click(el('lib.text.add')!); });
+    await waitFor(() => { if (!el('lib.text.add.input')) throw new Error('no content field'); });
+    expect(el('lib.text.size.overflow')).toBeNull();                                         // "Your text" fits
+    fireEvent.change(el('lib.text.add.input')!, { target: { value: 'Diskon besar untuk semua menu kopi susu setiap hari Jumat sore di semua cabang kami, khusus member baru yang daftar minggu ini' } });
+    await act(async () => { fireEvent.click(el('lib.text.add.confirm')!); });
+    await act(async () => { fireEvent.click(els('lib.text.size.preset')[0]!); });           // Display 110
+    await waitFor(() => expect(el('lib.text.size.overflow')?.getAttribute('data-kind')).toBe('shrunk'));
+    expect(el('lib.text.size.overflow')!.textContent).toMatch(/^Too large for this text at 9:16: shown at \d+ so it stays inside the safe area$/);
+    const head = (await runtime.api.getComposition(runtime.seededProjectId!)).head;
+    const textId = head.model!.tracks.text[0]!.id;
+    await act(async () => { await runtime.api.createIntent(runtime.seededProjectId!, { source: 'ui', category: 'text', field: 'content', value: 'kata '.repeat(100).trim(), target: { kind: 'text', id: textId }, selection: [{ kind: 'text', id: textId }], baseVersion: head.hash, plan: 'auto' }); });
+    await waitFor(() => expect(el('lib.text.size.overflow')?.getAttribute('data-kind')).toBe('overflow'));
+    expect(el('lib.text.size.overflow')!.textContent).toContain('does not fit inside the safe area at 9:16, even at 34');
+  });
+
   it('FR-026 a text effect with nothing selected is queued for the Editor Agent', async () => {
     await renderEditor('sample');
     home();
@@ -109,6 +129,26 @@ describe('Catalogue Search', () => {
     await waitFor(() => { if (!card('preset:caption.karaoke')) throw new Error('no karaoke'); });
     fireEvent.change(el('lib.search.input')!, { target: { value: '' } });
     await waitFor(() => { if (!document.querySelector('[data-el="lib.catalogue.tab"][data-category="caption"][aria-selected="true"]')) throw new Error('captions tab not selected'); });
+  });
+
+  it('FR-038: a P0 preset flagged gpu shows the GPU badge on T0, still applies, and EM-2103 appears once per session', async () => {
+    const fixture = listPresets({ priority: ['p0'] }).find((p) => p.flags.includes('gpu') && p.category === 'effect');
+    expect(fixture, 'fixture: a P0 effect preset flagged gpu').toBeDefined();
+    resetGpuWarning();
+    const { runtime } = await renderEditor('sample');
+    const spy = vi.spyOn(runtime.api, 'createIntent');
+    fireEvent.click(document.querySelector('[data-el="lib.catalogue.tab"][data-category="effect"]')!);
+    await waitFor(() => { if (!card(fixture!.id)) throw new Error('no fixture card'); });
+    expect(card(fixture!.id)!.querySelector('[data-el="lib.catalogue.card.badge.gpu"]')).not.toBeNull();
+    expect(card(fixture!.id)!.getAttribute('aria-label')).toContain('GPU');
+    const gpuToasts = () => els('sys.toast').filter((x) => x.textContent?.includes('EM-2103'));
+    await act(async () => { fireEvent.click(card(fixture!.id)!); });
+    await waitFor(() => expect(gpuToasts()).toHaveLength(1));
+    expect(spy.mock.calls.at(-1)![1]).toMatchObject({ presetId: fixture!.id });                 // the pick still works
+    await act(async () => { fireEvent.click(card(fixture!.id)!); });
+    await waitFor(() => expect(spy.mock.calls.filter((c) => c[1].presetId === fixture!.id)).toHaveLength(2));
+    expect(gpuToasts()).toHaveLength(1);
+    expect(gpuToasts()[0]!.textContent).not.toContain('×2');                                      // shown once, not repeated
   });
 
   it('FR-038 GPU badge on T0; FR-054 the search filters assets in Home mode', async () => {

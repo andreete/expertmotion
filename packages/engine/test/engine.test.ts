@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import { resolveDimensions, safeAreaFor, calculateMetadata, missingImplementations, NOT_IMPLEMENTED, EMPTY_INPUT, type EngineInputProps } from '../src/index.js';
-import { applyOperations, createEmptyModel, type Ratio, type Resolution } from '@expertmotion/composition-model';
+import { resolveDimensions, safeAreaFor, calculateMetadata, missingImplementations, NOT_IMPLEMENTED, EMPTY_INPUT, layoutFor, textLayerFit, type EngineInputProps } from '../src/index.js';
+import { applyOperations, createEmptyModel, type Ratio, type Resolution, type TextLayerT } from '@expertmotion/composition-model';
 
 const perf = fs.readFileSync(new URL('../../../docs/PERFORMANCE.md', import.meta.url), 'utf8');
 const rows = perf.split('## 3.')[1]!.split('Rules:')[0]!.split('\n').filter((l) => /^\| (16:9|9:16|1:1|4:5|5:4|4:3|3:4) \|/.test(l));
@@ -74,5 +74,23 @@ describe('every Design Pick compiles to op args the operation schema accepts', (
       if (!r.success) bad.push(`${p.id}: ${r.error?.message.slice(0, 160)}`);
     }
     expect(bad).toEqual([]);
+  });
+});
+
+describe('textLayerFit (renderer + FR-021 Editor warning share it)', () => {
+  const layer = (text: string, fontSize: number): TextLayerT => ({ id: 't1', variantId: 'preset:text.title', text, timing: { atMs: 0, durationMs: 3000 }, position: { x: 0, y: 0 }, style: { fontSize }, effect: null, motion: null });
+  const defaults = createEmptyModel('p').theme.textDefaults;
+  const vertical = layoutFor('9:16', 1080, 1920);
+  it('keeps the asked size when the text fits', () => {
+    const f = textLayerFit(layer('Promo kopi', 72), vertical, defaults);
+    expect([f.fontSizeU, f.wantU, f.fit.overflow]).toEqual([72, 72, false]);
+    expect(f.boxLeft - f.boxW / 2).toBeGreaterThanOrEqual(vertical.safe.left);
+  });
+  it('shrinks long text to stay in the safe area, and reports overflow when even 34 u does not fit', () => {
+    const shrunk = textLayerFit(layer('Diskon besar untuk semua menu kopi susu setiap hari Jumat sore di semua cabang kami', 200), vertical, defaults);
+    expect(shrunk.fit.overflow).toBe(false); expect(shrunk.fontSizeU).toBeLessThan(200);
+    const over = textLayerFit(layer('kata '.repeat(100).trim(), 72), vertical, defaults);
+    expect(over.fit.overflow).toBe(true); expect(over.fontSizeU).toBe(34);
+    expect(layoutFor('9:16', 720, 1280).u).toBeCloseTo(720 / 1080);
   });
 });
