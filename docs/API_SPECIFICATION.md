@@ -166,7 +166,7 @@ export const HardwareProfileDto = z.object({ tier: z.enum(['T0','T1','T2']), cpu
   gpuModel: z.string().nullable(), vramMb: z.number().int().nullable(), nvenc: z.boolean(), detectedAt: Iso, warnings: z.array(z.string()) });
 export const HardwareTickDto = z.object({ at: Iso, cpuPercent: z.number(), ramFreeMb: z.number().int(), ramTotalMb: z.number().int(), processMb: z.number().int(), chromeMb: z.number().int().nullable(),
   diskFreeMb: z.number().int().nullable(), gpuPercent: z.number().nullable(), workload: z.object({ rendering: z.boolean(), ingesting: z.number().int(), downloading: z.number().int(), agentRuns: z.number().int() }) });
-export const LicenseDto = z.object({ status: z.enum(['trial','active','revoked','invalid']), tier: z.string().nullable(), licenseeHash: z.string().nullable(), updatesUntil: Iso.nullable(),
+export const LicenseDto = z.object({ status: z.enum(['trial','active','revoked','invalid','updates-expired']), code: z.string().regex(/^EM-\d{4}$/).nullable(), clockAnomaly: z.boolean(), warnings: z.array(z.object({ code: z.literal('EM-5007'), lastSeen: Iso, now: Iso })), licenseeName: z.string().nullable(), tier: z.string().nullable(), licenseeHash: z.string().nullable(), updatesUntil: Iso.nullable(),
   updatesEligible: z.boolean(), machineCode: z.string(), limits: z.object({ watermark: z.boolean(), maxResolution: Resolution }) });
 export const SettingsDto = z.object({ privateMode: z.boolean(), outputFolder: z.string(), autoPlan: z.boolean(), uiLanguage: z.enum(['en','id']), theme: z.enum(['dark','light','system']),
   defaultPerformanceProfile: PerformanceProfile, defaultRatio: Ratio, defaultResolution: Resolution, defaultFps: Fps, checkUpdates: z.boolean(), diagnosticsIncludeStructure: z.boolean() });

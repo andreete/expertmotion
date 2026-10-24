@@ -155,7 +155,7 @@ Runs at Local Service start (ARCHITECTURE §5 step 2), on `POST /license/activat
 | 9 | Updates eligibility: compare the compiled `buildDate` (ISO date of the release, DEPLOYMENT_AND_PACKAGING.md) with `upd`: `buildDate ≤ upd` → covered; otherwise the licence is genuine but does not cover this build | EM-5005 updates expired for this build → state `updatesExpired` (exports behave as Trial Mode; §7) |
 | 10 | Clock check (§9): update `lastSeen`, set `clockAnomaly` if the clock went backwards by more than 24 h; never fails the licence | EM-5007 (info) |
 | 11 | Persist `{licenseKey, lid, tier, name, upd, status, lastVerifiedAt, clockAnomaly}` in the encrypted database table `license_state` (DATABASE_SCHEMA.md); keep the decision in memory for the session | — |
-| 12 | Emit SSE `license.updated {status, tier, upd}` so `hdr.action.license` and `scr.license` refresh | — |
+| 12 | Emit SSE `license.changed {status, tier, upd}` (API_SPECIFICATION events table) so `hdr.action.license` and `scr.license` refresh | — |
 
 Resulting states: `trial` (no key or a rejected key — the rejected key is kept so the Creator can see the error and copy it to support), `licensed`, `updatesExpired`. The Editor receives only the state and the error code, never the reason internals.
 

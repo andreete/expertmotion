@@ -1,5 +1,6 @@
 // App settings (settings table, DATABASE_SCHEMA §3). Non-secret preferences only; secrets live in provider_connections.
 import { z } from 'zod';
+import { FPS_VALUES, RATIOS, RESOLUTIONS } from '@expertmotion/composition-model';
 import type { DB } from '../db/open.js';
 
 export const SettingsSchema = z.object({
@@ -14,6 +15,14 @@ export const SettingsSchema = z.object({
   telemetry: z.literal(false).default(false),
   updateChannel: z.enum(['stable', 'off']).default('stable'),
   onboardingDone: z.boolean().default(false),
+  // SettingsDto fields (API_SPECIFICATION §4): defaults for new Projects and app behaviour.
+  theme: z.enum(['dark', 'light', 'system']).default('dark'),
+  defaultPerformanceProfile: z.enum(['standard', 'accelerated', 'turbo']).default('standard'),
+  defaultRatio: z.enum(RATIOS).default('16:9'),
+  defaultResolution: z.enum(RESOLUTIONS).default('1080p'),
+  defaultFps: z.union(FPS_VALUES.map((v) => z.literal(v)) as unknown as [z.ZodLiteral<24>, z.ZodLiteral<25>, z.ZodLiteral<30>, z.ZodLiteral<50>, z.ZodLiteral<60>]).default(30),
+  checkUpdates: z.boolean().default(true),
+  diagnosticsIncludeStructure: z.boolean().default(false),
 }).strict();
 export type Settings = z.infer<typeof SettingsSchema>;
 

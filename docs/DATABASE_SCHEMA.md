@@ -407,9 +407,18 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 
 ## 5. Migrations
 
-- Files `apps/service/src/db/migrations/NNN_name.sql` applied in a transaction at startup; `schema_migrations` records them. Down migrations are not supported; forward-only with a pre-migration backup copy of the DB file (`expertmotion.db.bak-<version>`).
+- Migrations are TypeScript modules in `apps/service/src/db/migrations/` (`001_init.ts` = §3; ranges `010–019` projects/composition/intents, `020–029` assets/renders/models, `030–039` providers/agents/licence) so the bundled service needs no SQL files on disk; each is applied in a transaction at startup; `schema_migrations` records them. Down migrations are not supported; forward-only with a pre-migration backup copy of the DB file (`expertmotion.db.bak-<version>`).
 - Composition Model `schemaVersion` migrations are code (`migrateModel(v1 → v2)`) run lazily when a version is loaded; a migrated model gets a new version row with `cause = 'system'`.
 - Any schema change requires: ADR note, migration file, Zod update, `migrateModel` step with a golden fixture (old JSON → expected new JSON), test fixture update (DEFINITION_OF_DONE.md D-OP, STAGE_MANAGEMENT.md §9).
+
+### 5.1 Applied migrations
+
+| Version | Name | Adds |
+|---|---|---|
+| 1 | init | the §3 DDL |
+| 30 | s3_budgets_defaults_handoffs | `project_budgets(project_id, limit_usd, updated_at)` (per-project AI cap per calendar month, NULL or 0 = no limit, FR-117); `provider_defaults(default_connection_id)` (R-097); `brainstorm_handoffs(id, project_id, message_id, intents_json, status pending/enqueued, created_at)` (R-082 payloads until the intents module enqueues them); `agent_runs.plan_id`; indexes on runs and `usage_records` |
+
+Later migrations append rows here.
 
 ## 6. Backup, restore, portability
 
