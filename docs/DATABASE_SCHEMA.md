@@ -420,7 +420,7 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 | 11 | s1_sample_project | `projects.is_sample INTEGER NOT NULL DEFAULT 0 CHECK(is_sample IN (0,1))` and a partial index on it: flags the onboarding Sample Project (API R-025) so it is found again (idempotent create) and hard-deleted when the Creator creates or opens another project. Duplicates (R-019) and restored backups are never samples |
 | 30 | s3_budgets_defaults_handoffs | `project_budgets(project_id, limit_usd, updated_at)` (per-project AI cap per calendar month, NULL or 0 = no limit, FR-117); `provider_defaults(default_connection_id)` (R-097); `brainstorm_handoffs(id, project_id, message_id, intents_json, status pending/enqueued, created_at)` (R-082 payloads until the intents module enqueues them); `agent_runs.plan_id`; indexes on runs and `usage_records` |
 
-Later migrations append rows here.
+Later migrations append rows here (ADR-024).
 
 ## 6. Backup, restore, portability
 

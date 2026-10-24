@@ -200,3 +200,11 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Status**: accepted (2026-10-24, Stage 2 implementation)
 - **Problem**: AGENT_DESIGN prefers tool calling with `composition.validateOps` for capable models; not every OpenRouter model supports tools, and the runtime validates every plan deterministically anyway.
 - **Selected**: the MVP sends the Rewrite envelope and asks for the EditPlan JSON (SYSTEM_PROMPT P-2) for every model; the runtime performs the dry-run that `composition.validateOps` would have done and re-prompts with the issues (max 2 corrections). Tool calling becomes an optimisation for capable models in P1. Provider: Vercel AI SDK 6.0.315 + `@openrouter/ai-sdk-provider` 2.10.0 (latest provider 3.x needs AI SDK 7; upgrade is a later, deliberate step).
+
+## ADR-024 Schema additions made while building the Local Service (Stage 3)
+
+- **Status**: accepted (2026-10-24)
+- **Problem**: implementing the service against DATABASE_SCHEMA §3 surfaced needs the initial DDL did not cover; the schema may only change through migrations (DATABASE_SCHEMA §5).
+- **Selected**: migration 10 (undo/redo rows repeat a model hash, so the unique index on `composition_versions(project_id, hash)` becomes a plain index; `edit_plans` gains `intent_ids_json`, `message`, `result_json`, `idempotency_key`); migration 11 (`projects.is_sample` for the tour's Sample Project, R-025); migration 30 (`project_budgets`, `provider_defaults`, `brainstorm_handoffs`, `agent_runs.plan_id`). Migrations are TypeScript modules so the bundled service needs no SQL files; each workspace area owns a version range (10–19, 20–29, 30–39).
+- **Alternatives**: editing 001 in place (rejected: breaks databases already migrated); a JSON side store (rejected: no transactions with the rest).
+- **Consequences**: DATABASE_SCHEMA §5.1 lists every applied migration; a new migration also needs a test and a row there.
