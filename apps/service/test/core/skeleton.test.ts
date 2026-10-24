@@ -153,3 +153,22 @@ describe('SSE over HTTP', () => {
     ac.abort();
   });
 });
+
+describe('media CORS exception', () => {
+  let s: TestService;
+  const media: ServiceModule = { name: 'm', register() {}, registerRoot(router) { router.get('/media/:g/:a/:v', (_req, res) => { res.type('text/plain').send('bytes'); }); } };
+  beforeAll(async () => { s = await startService({ modules: [health, media] }); });
+  afterAll(async () => { await s.close(); });
+  it('media needs no Bearer; app:// and registered render origins get CORS; others are refused', async () => {
+    const u = `${s.base}/media/${'x'.repeat(43)}/A/playable`;
+    expect((await fetch(u)).status).toBe(200);
+    const app = await fetch(u, { headers: { Origin: 'app://expertmotion' } });
+    expect(app.headers.get('access-control-allow-origin')).toBe('app://expertmotion');
+    expect((await fetch(u, { headers: { Origin: 'http://localhost:4130' } })).status).toBe(403);
+    s.ctx.mediaOrigins.add('http://localhost:4130');
+    const r = await fetch(u, { headers: { Origin: 'http://localhost:4130' } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('access-control-expose-headers')).toContain('Content-Range');
+    expect((await fetch(`${s.base}/api/v1/version`, { headers: { Origin: 'http://localhost:4130', Authorization: `Bearer ${s.token}` } })).status).toBe(403);
+  });
+});

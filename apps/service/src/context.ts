@@ -44,6 +44,8 @@ export interface Hooks {
 export interface ServiceContext {
   cfg: ServiceConfig; paths: Paths; db: DB; bus: EventBus; grants: GrantStore; egress: Egress; settings: SettingsStore; log: Logger;
   resources: Resources; hooks: Hooks; newId: () => string; now: () => string;
+  /** Origins of Remotion render pages allowed to fetch /media/ during a render job (renders module adds/removes them). */
+  mediaOrigins: Set<string>;
 }
 
 export function defaultHooks(): Hooks {

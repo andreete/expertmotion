@@ -49,7 +49,7 @@ export async function boot(cfg: ServiceConfig, opts: { resources?: Resources; mo
   const ctx: ServiceContext = {
     cfg, paths: p, db, bus: new EventBus(), grants: new GrantStore(cfg.mediaGrantTtlMs), settings, log,
     egress: createEgress({ isPrivate: () => settings.get().privateMode }),
-    resources: opts.resources ?? defaultResources(), hooks: defaultHooks(), newId, now: nowIso,
+    resources: opts.resources ?? defaultResources(), hooks: defaultHooks(), newId, now: nowIso, mediaOrigins: new Set<string>(),
   };
   const modules = opts.modules ?? MODULES;
   for (const m of modules) await m.start?.(ctx);

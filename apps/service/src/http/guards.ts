@@ -10,13 +10,29 @@ export function makeTokenMatcher(token: string): (candidate: unknown) => boolean
   return (c) => crypto.timingSafeEqual(crypto.createHash('sha256').update(String(c ?? '')).digest(), h);
 }
 
-/** Host / Origin / Sec-Fetch-Site allow-list; OPTIONS refused except for the dev UI origin (no CORS in production). */
-export function hostOriginGuard(cfg: ServiceConfig) {
+/**
+ * Host / Origin / Sec-Fetch-Site allow-list; OPTIONS refused except for the dev UI origin (no CORS in production).
+ * Exception for `/media/<grant>/…` (R-040/R-041; the grant in the path is the credential, SEC-010): the Player (`app://expertmotion`,
+ * dev UI origin) and the Remotion render page during a render job (`mediaOrigins`, added by the renders module for the job's
+ * duration) fetch media cross-origin with Range, so those origins get CORS headers on media paths only.
+ */
+export function hostOriginGuard(cfg: ServiceConfig, mediaOrigins: ReadonlySet<string> = new Set()) {
   const hosts = new Set([`127.0.0.1:${cfg.port}`, `localhost:${cfg.port}`]);
   const origins = new Set(['app://expertmotion', ...(cfg.dev && cfg.uiOrigin ? [cfg.uiOrigin, cfg.uiOrigin.replace('127.0.0.1', 'localhost')] : [])]);
   return (req: Request, res: Response, next: NextFunction) => {
     if (!hosts.has(String(req.headers.host ?? '').toLowerCase())) return err(res, 403, 'EM-8005', 'Request refused.');
     const origin = req.headers.origin;
+    const media = req.path.startsWith('/media/') && (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS');
+    if (media) {
+      if (origin !== undefined && !origins.has(origin) && !mediaOrigins.has(origin)) return err(res, 403, 'EM-8005', 'Request refused.');
+      if (origin !== undefined) {
+        res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD'); res.setHeader('Access-Control-Allow-Headers', 'Range');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Type');
+      }
+      if (req.method === 'OPTIONS') return res.status(204).end();
+      return next();
+    }
     if (origin !== undefined && !origins.has(origin)) return err(res, 403, 'EM-8005', 'Request refused.');
     const sfs = req.headers['sec-fetch-site'];
     const devOrigin = cfg.dev && origin !== undefined && origins.has(origin) && origin !== 'app://expertmotion';

@@ -9,13 +9,16 @@ export function createApp(ctx: ServiceContext, modules: readonly ServiceModule[]
   const app = express();
   app.disable('x-powered-by');
   app.set('etag', false);
-  app.use(hostOriginGuard(ctx.cfg));
+  app.use(hostOriginGuard(ctx.cfg, ctx.mediaOrigins));
   app.use(authGuard(ctx.cfg));
   app.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff'); next(); });
   app.use('/api/v1', express.json({ limit: '2mb' }));
   const router = express.Router();
   for (const m of modules) m.register(router, ctx);
   app.use('/api/v1', router);
+  const rootRouter = express.Router();
+  for (const m of modules) m.registerRoot?.(rootRouter, ctx);
+  app.use(rootRouter);
   app.use((_req, res) => { res.status(404).json({ error: { code: 'EM-9003', message: 'Not found.' } }); });
   app.use(errorMapper((o) => ctx.log.error(o)));
   return app;
