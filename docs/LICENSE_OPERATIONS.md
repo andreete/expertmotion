@@ -510,3 +510,20 @@ Flow "Move to another computer": `scr.license.rebind` shows a dialog with the Ma
 | 6 | **Closed**: ERROR_CATALOGUE.md (final) defines EM-5007 as `info`, licence unaffected (matches §9 and ADR-014); EM-5008 "transfer limit reached" is raised by the Operator CLI / support flow only (§8.1 re-bind limit), never by the app's verifier; EM-5009 unknown `kid` adopted as `warn` | ERROR_CATALOGUE.md | done |
 | 7 | Library choice libsodium vs `@noble/ed25519` | TRD.md | Stage 2 |
 | 8 | **Closed**: GLOSSARY.md reserves `LIC-` for licence-operations requirements; this document keeps its step/section references for now and numbers any future requirement list `LIC-001…` | GLOSSARY.md owner | done |
+
+## Implementation notes (Stage 3, 2026-10-24; provisional until the Operator confirms)
+
+These choices were made while implementing `apps/service/src/license/` and `tools/license-cli/`, where this document left a detail open.
+
+| Topic | Choice |
+|---|---|
+| Status names | `trial`, `active`, `invalid`, `revoked`, `updates-expired` (the `license.status` CHECK was extended). A rejected key is `invalid` and keeps Trial Mode exports. |
+| Machine Code checksum | CRC-16/CCITT-FALSE (polynomial 0x1021, init 0xFFFF). |
+| `revoked.json.sig` | One line `EMREV1-<kid>-<BASE32(sig)>`, signed over `"EMREV1" ‖ 0 ‖ kid ‖ 0 ‖ bytes`. `generatedAt` is the time of the latest revoking audit row, so repeated exports are byte-identical. |
+| Fingerprint sources | Windows disk serial from `Win32_DiskDrive.SerialNumber` of the system volume (lowest disk index as fallback) via `execFile`; CPU from `os.cpus()[0].model`. |
+| Sealed signing key | scrypt + AES-256-GCM (libsodium is not a dependency); passphrase from `EXPERTMOTION_LICENSE_PASSPHRASE` or `--passphrase-file`. |
+| Signature strictness | Strict RFC 8032 (`zip215: false`); the payload `fp` must equal SHA-256 of `fpc`. |
+| Clock check | Runs on every path, Trial Mode included, so `lastSeen` keeps moving forward. |
+| CLI policy | `issue` needs a Machine Code; rebind revokes the previous key; the fourth rebind within 12 months is refused with EM-5008 unless `--override "<reason>"` is given and logged; renew revokes the previous key; signing refuses to run while a network interface is up (`--dev-allow-network` for development only). |
+| CLI exit codes | 0 ok, 1 key not valid, 2 usage, 3 refused by policy, 4 environment. |
+| Production key | `PRODUCTION_PUBLIC_KEY_A1_HEX` in `keys.ts` is a placeholder; until the Operator runs `keygen --kid A1 --seal` and pastes the public key, every key reports EM-5009. |
