@@ -37,7 +37,14 @@ describe('main editor element ids', () => {
     sweep();
     // File menu
     fireEvent.click(el('hdr.menu.file')!); sweep();
+    if (el('hdr.menu.file.recent')) { fireEvent.click(el('hdr.menu.file.recent')!); await waitFor(() => { if (!el('hdr.menu.file.recent.item')) throw new Error('no recent'); }); sweep(); }
     fireEvent.click(el('hdr.menu.file')!);
+    // Help menu
+    fireEvent.click(el('hdr.menu.help')!); sweep();
+    fireEvent.click(el('hdr.menu.help')!);
+    // Player menu
+    fireEvent.click(el('stage.player.menu')!); sweep();
+    fireEvent.click(el('stage.player.menu')!);
     // Design mode extras: upcoming presets with GPU badges, empty search, suggestions
     fireEvent.click(document.querySelector('input[type="checkbox"]')!);
     for (const tab of document.querySelectorAll<HTMLElement>('[data-el="lib.catalogue.tab"]')) { fireEvent.click(tab); sweep(); }
