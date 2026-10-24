@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+/* Design tokens: UI_UX_SPECIFICATION.md §1.2–§1.4 (dark theme is the default). */
+:root, :root[data-theme="dark"] {
+  --em-bg: #0E0F12; --em-panel: #16181D; --em-panel-2: #1C1F26; --em-line: #262A33; --em-line-strong: #343946;
+  --em-text: #F4F5F7; --em-text-2: #C7CCD6; --em-muted: #9AA3B2;
+  --em-accent: #E8913A; --em-accent-hover: #F0A458; --em-accent-ink: #1A1206; --em-accent-2: #4FD1A5;
+  --em-success: #3DBE7A; --em-warn: #F2C14E; --em-danger: #E5534B; --em-info: #6AA7F8;
+  --em-overlay: rgba(14,15,18,0.72); --em-focus: #FFD27A; --em-private: #B48CFF;
+  --sh-1: 0 1px 2px rgba(0,0,0,.4); --sh-2: 0 6px 20px rgba(0,0,0,.45); --sh-3: 0 16px 48px rgba(0,0,0,.6);
+  --t-fast: 120ms; --t-base: 200ms; --t-slow: 320ms; --ease: cubic-bezier(.2,.8,.2,1);
+  color-scheme: dark;
+}
+@media (prefers-reduced-motion: reduce) { :root { --t-fast: 0ms; --t-base: 0ms; --t-slow: 0ms; } }
+
+@theme {
+  --color-em-bg: var(--em-bg); --color-em-panel: var(--em-panel); --color-em-panel-2: var(--em-panel-2);
+  --color-em-line: var(--em-line); --color-em-line-strong: var(--em-line-strong);
+  --color-em-text: var(--em-text); --color-em-text-2: var(--em-text-2); --color-em-muted: var(--em-muted);
+  --color-em-accent: var(--em-accent); --color-em-accent-hover: var(--em-accent-hover); --color-em-accent-ink: var(--em-accent-ink); --color-em-accent-2: var(--em-accent-2);
+  --color-em-success: var(--em-success); --color-em-warn: var(--em-warn); --color-em-danger: var(--em-danger); --color-em-info: var(--em-info);
+  --color-em-focus: var(--em-focus); --color-em-private: var(--em-private);
+  --font-sans: Inter, "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+}
+
+/* Bundled fonts (served from packages/engine/public via Vite publicDir; no network fonts, I18N-08). */
+@font-face { font-family: Inter; font-weight: 400; font-display: swap; src: url("/fonts/inter-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: Inter; font-weight: 500; font-display: swap; src: url("/fonts/inter-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: Inter; font-weight: 600; font-display: swap; src: url("/fonts/inter-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: Inter; font-weight: 700; font-display: swap; src: url("/fonts/inter-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; font-display: swap; src: url("/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2"); }
+
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--em-bg); color: var(--em-text); font-family: var(--font-sans); font-size: 13px; line-height: 18px; -webkit-font-smoothing: antialiased; }
+* { box-sizing: border-box; }
+*:focus-visible { outline: 2px solid var(--em-focus); outline-offset: 2px; }
+button { font: inherit; color: inherit; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--em-line-strong); border-radius: 999px; border: 2px solid var(--em-panel); }
+
+.t-label { font-size: 11px; line-height: 16px; letter-spacing: .04em; text-transform: uppercase; font-weight: 600; color: var(--em-muted); }
+.t-mono { font-family: var(--font-mono); font-size: 12px; line-height: 16px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.em-trans { transition: all var(--t-fast) var(--ease); }
+@keyframes em-pulse { 0% { box-shadow: 0 0 0 0 var(--em-accent); } 100% { box-shadow: 0 0 0 6px transparent; } }
+.em-pulse { animation: em-pulse var(--t-base) var(--ease) 3; }
+@keyframes em-spin { to { transform: rotate(360deg); } }
+.em-spin { animation: em-spin 900ms linear infinite; }
+@keyframes em-shimmer { 0% { opacity: .5; } 50% { opacity: 1; } 100% { opacity: .5; } }
+.em-skeleton { background: var(--em-panel-2); animation: em-shimmer 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .em-spin, .em-skeleton, .em-pulse { animation: none; } }

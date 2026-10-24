@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { CaptionPage, Hex, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
 
-export const TARGET_KINDS = ['sequence', 'clip', 'cut', 'text', 'caption', 'audio', 'shape', 'background', 'effect', 'project', 'selection', 'playhead'] as const;
+export const TARGET_KINDS = ['sequence', 'clip', 'cut', 'text', 'caption', 'audio', 'shape', 'image', 'background', 'effect', 'project', 'selection', 'playhead'] as const;
 export type TargetKind = (typeof TARGET_KINDS)[number];
 export const ElementRef = z.object({ kind: z.enum(TARGET_KINDS), id: z.string().optional(), index: z.number().int().min(0).optional() }).strict();
 export type ElementRefT = z.infer<typeof ElementRef>;
@@ -60,6 +60,9 @@ export const OPERATIONS = {
   'op:effect.setParams': def({ presetId: PresetId, params: Params }, ['clip'], 'scalar'),
   'op:shape.add': def({ presetId: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), fill: Hex.optional(), stroke: Hex.optional(), strokeWidth: z.number().min(0).max(100).optional(), motionId: PresetId.optional(), params: Params.optional() }, null, 'list'),
   'op:shape.remove': def({}, ['shape'], null, true),
+  // ADR-020 addition (Stage 3): image overlays (FR-029 "Insert Image", logo/product photo). size = width in u; height follows the image aspect.
+  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional() }, null, 'list'),
+  'op:overlay.remove': def({}, ['image'], null, true),
   'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),
   'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, null, 'list'),
   'op:audio.setDucking': def({ presetId: PresetId, params: Params.optional() }, ['audio'], 'exclusive-group'),
@@ -95,7 +98,7 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:text.setStyle': return fields(['fontFamily', 'fontSize', 'weight', 'colour', 'align', 'opacity']).map((f) => `${el}.${f}`);
     case 'op:text.setEffect': return [`${el}.effect`];
     case 'op:text.setTiming': return [`${el}.timing`];
-    case 'op:text.remove': case 'op:shape.remove': case 'op:audio.remove': return [el];
+    case 'op:text.remove': case 'op:shape.remove': case 'op:audio.remove': case 'op:overlay.remove': return [el];
     case 'op:caption.importSrt': case 'op:caption.setPages': return ['project.captionPages'];
     case 'op:caption.setStyle': return ['project.captionStyle'];
     case 'op:caption.clear': return ['project.captionStyle', 'project.captionPages'];

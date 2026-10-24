@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "dev:mock": "VITE_EM_MOCK=1 vite",
+    "build": "vite build",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@expertmotion/shared": "0.0.0",

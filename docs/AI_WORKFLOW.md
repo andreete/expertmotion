@@ -172,6 +172,8 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:effect.setParams` | element+preset | `{params}` | scalar | |
 | `op:shape.add` | absolute | `{presetId, atMs, durationMs, position, size, fill, stroke?}` | list | |
 | `op:shape.remove` | shape | `{}` | — | |
+| `op:overlay.addImage` | absolute | `{assetId, atMs, durationMs?=5000, position?, size? (width in u; height from the image aspect), objectFit?='contain', opacity?=1}` | list | ADR-020 addition (FR-029 Insert Image) |
+| `op:overlay.remove` | image | `{}` | — | ADR-020 addition |
 | `op:audio.addBed` | project | `{assetId, volume, loop, duckingPresetId?}` | list | background music |
 | `op:audio.addLayer` | absolute | `{assetId, atMs, volume, fadeInMs?, fadeOutMs?}` | list | voice, sfx |
 | `op:audio.setDucking` | audio | `{presetId, params?}` | exclusive-group | |

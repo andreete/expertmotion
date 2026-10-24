@@ -234,6 +234,20 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       return;
     }
     case 'op:shape.remove': m.tracks.overlay.splice(findIndex(m.tracks.overlay, needTarget(op, path).id, 'shape', path), 1); return;
+    case 'op:overlay.addImage': {
+      const as = asset(ctx, a.assetId, ['image'], path);
+      const w = Number(a.size ?? 480);
+      const h = as.width && as.height ? Math.round((w * as.height) / as.width) : w;
+      const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
+      m.tracks.overlay.push({ kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, motion: null, effects: [] });
+      return;
+    }
+    case 'op:overlay.remove': {
+      const id = needTarget(op, path).id;
+      const i = m.tracks.overlay.findIndex((o) => o.kind === 'image' && o.id === id);
+      if (i < 0) stop('EM-2203', `The image ${id ?? '(none)'} no longer exists.`, `${path}.target`);
+      m.tracks.overlay.splice(i, 1); return;
+    }
     case 'op:audio.addBed': case 'op:audio.addLayer': {
       const as = asset(ctx, a.assetId, ['audio'], path);
       const layer: AudioLayerT = op.op === 'op:audio.addBed'

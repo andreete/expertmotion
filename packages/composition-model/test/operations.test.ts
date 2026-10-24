@@ -11,7 +11,7 @@ describe('vocabulary matches docs/AI_WORKFLOW.md §5', () => {
     const doc = fs.readFileSync(new URL('../../../docs/AI_WORKFLOW.md', import.meta.url), 'utf8').split('## 5.')[1]!.split('## 6.')[0]!;
     const docOps = new Set([...doc.matchAll(/^\| `(op:[a-z]+\.[a-zA-Z]+)`/gm)].map((m) => m[1]!));
     expect([...docOps].sort()).toEqual([...OP_NAMES].sort());
-    expect(OP_NAMES.length).toBe(41);
+    expect(OP_NAMES.length).toBe(43);
   });
 });
 

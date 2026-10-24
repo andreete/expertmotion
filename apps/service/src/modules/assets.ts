@@ -144,7 +144,7 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
 
       // R-035 Insert → one version through hooks.applyOps
       route(router, 'post', '/projects/:id/assets/insert', {
-        params: P, body: z.object({ assetIds: z.array(Id).min(1).max(50), order: z.enum(['badge', 'given']).default('badge'), atIndex: z.number().int().min(0).optional(), asOverlay: z.boolean().default(false) }),
+        params: P, body: z.object({ assetIds: z.array(Id).min(1).max(50), order: z.enum(['badge', 'given']).default('badge'), atIndex: z.number().int().min(0).optional(), asOverlay: z.boolean().default(false), atMs: z.number().int().min(0).optional() }),
       }, ({ params, body }) => {
         requireProject(ctx, params.id);
         const rows = [...new Set(body.assetIds)].map((id) => requireAsset(ctx, params.id, id));
@@ -153,10 +153,10 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
         const ordered = body.order === 'given' ? rows : [...rows].sort((a, b) =>
           (a.sequence_badge ?? Infinity) - (b.sequence_badge ?? Infinity) || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
         const warnings: Array<{ code: string; path: string; message: string; severity: 'warn' }> = [];
-        if (body.asOverlay) warnings.push({ code: 'EM-9004', path: 'body.asOverlay', message: 'Overlay insert is not in the operation vocabulary yet; images were inserted as Clips.', severity: 'warn' });
         const ops: OperationT[] = []; let clipIndex = body.atIndex;
         for (const r of ordered) {
-          if (r.kind === 'video' || r.kind === 'image') { ops.push({ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: r.id, ...(clipIndex === undefined ? {} : { atIndex: clipIndex }) } }); if (clipIndex !== undefined) clipIndex++; }
+          if (r.kind === 'image' && body.asOverlay) ops.push({ op: 'op:overlay.addImage', args: { assetId: r.id, atMs: body.atMs ?? 0 } });   // FR-029 (ADR-020 addition)
+          else if (r.kind === 'video' || r.kind === 'image') { ops.push({ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: r.id, ...(clipIndex === undefined ? {} : { atIndex: clipIndex }) } }); if (clipIndex !== undefined) clipIndex++; }
           else if (r.kind === 'audio') ops.push({ op: 'op:audio.addLayer', args: { assetId: r.id, atMs: 0, volume: 1, role: 'voice' } });
           else ops.push({ op: 'op:caption.importSrt', target: { kind: 'project' }, args: { assetId: r.id } });
         }

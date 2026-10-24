@@ -1,0 +1,194 @@
+// DTO types of docs/API_SPECIFICATION.md §3 (the owner). The Local Service defines them as Zod in apps/service/src/http/dto.ts
+// and BLUEPRINT.md says they are re-exported from @expertmotion/shared/dto; that subpath does not exist yet, so the Editor
+// mirrors them here as plain types (structure only, no logic). Replace with the shared import once it exists.
+import type { CompositionModelT, ElementRefT, OperationT, ProjectSettingsT, Ratio, Resolution, ThemeT } from '@expertmotion/composition-model';
+import type { Issue } from '@expertmotion/shared';
+
+export type { Ratio, Resolution };
+export type Iso = string;
+export type Id = string;
+export type Fps = 24 | 25 | 30 | 50 | 60;
+export type PerformanceProfile = 'standard' | 'accelerated' | 'turbo';
+export type Tier = 'T0' | 'T1' | 'T2';
+export type AgentKind = 'brainstorm' | 'editor';
+export type Lang = 'en' | 'id';
+
+export interface Page<T> { items: T[]; nextCursor: string | null; total?: number }
+
+export interface OutputProfile {
+  ratio: Ratio; customRatio?: { w: number; h: number }; resolution: Resolution; fps: Fps;
+  format: 'mp4' | 'webm' | 'gif' | 'png' | 'wav'; codec?: 'h264' | 'vp9' | 'gif' | 'png' | 'pcm'; crf?: number; alpha?: boolean; stillAtMs?: number;
+}
+
+export interface ProjectDto {
+  id: Id; name: string; settings: ProjectSettingsT; language: Lang; headVersionId: Id | null; headHash: string | null; durationMs: number;
+  assetCount: number; createdAt: Iso; updatedAt: Iso; openedAt: Iso | null; dirty: boolean; warnings?: string[];
+}
+export type VersionCause = 'insert' | 'compile' | 'execute' | 'undo' | 'redo' | 'restore' | 'system';
+export interface VersionDto { id: Id; projectId: Id; parentId: Id | null; hash: string; cause: VersionCause; planId: Id | null; durationMs: number; createdAt: Iso; model?: CompositionModelT }
+
+export type AssetKind = 'video' | 'image' | 'audio' | 'subtitle';
+export type MediaVariant = 'original' | 'playable' | 'proxy' | 'thumb' | 'filmstrip' | 'waveform';
+export interface AssetDto {
+  id: Id; projectId: Id; kind: AssetKind; name: string; bytes: number; sha256: string; status: 'ingesting' | 'ready' | 'failed'; progress: number;
+  errorCode: string | null; durationMs: number | null; width: number | null; height: number | null; fps: number | null; hasAudio: boolean | null;
+  sequenceBadge: number | null; media: { original: true; playable: boolean; proxy: boolean; thumb: boolean; filmstrip: boolean; waveform: boolean };
+  probe?: Record<string, unknown>; createdAt: Iso; updatedAt: Iso;
+}
+
+export type RenderStatus = 'queued' | 'rendering' | 'done' | 'failed' | 'cancelled';
+export interface RenderJobDto {
+  id: Id; projectId: Id; versionId: Id; outputProfile: OutputProfile; performanceProfile: PerformanceProfile; status: RenderStatus; progress: number;
+  renderedFrames: number | null; totalFrames: number | null; etaMs: number | null; outputId: Id | null; errorCode: string | null; width: number | null; height: number | null;
+  createdAt: Iso; startedAt: Iso | null; finishedAt: Iso | null; notices?: string[];
+}
+export interface OutputDto {
+  id: Id; projectId: Id; renderJobId: Id; kind: 'video' | 'gif' | 'still' | 'audio'; fileName: string; bytes: number; width: number | null; height: number | null;
+  fps: number | null; durationMs: number | null; validated: boolean; watermarked: boolean; path: string; media: { file: true; thumb: boolean }; createdAt: Iso;
+}
+export interface MediaGrantDto { grant: string; projectId: Id; kind: 'preview'; expiresAt: Iso; baseUrl: string }
+
+export type IntentCategory = 'transition' | 'caption' | 'background' | 'motion' | 'shape' | 'easing' | 'effect' | 'audio' | 'text' | 'layout' | 'output' | 'asset' | 'generate';
+export type IntentStatus = 'queued' | 'superseded' | 'compiled' | 'planned' | 'executed' | 'rejected' | 'removed';
+export interface EditIntent {
+  id: Id; projectId: Id; source: 'ui' | 'brainstorm' | 'chat' | 'system'; createdAt: Iso; category: IntentCategory; presetId?: string; params: Record<string, unknown>;
+  target: ElementRefT; resolvedTargets: ElementRefT[]; propertyKey: string; parentIntentId?: string; propertyClass: 'scalar' | 'list' | 'exclusive-group';
+  needsInterpretation: boolean; instruction?: string; status: IntentStatus; restoredAt?: Iso; rejectionReason?: string; supersedes: string[]; baseVersion: string;
+  /** Not in AI_WORKFLOW §3; tolerated when the Service adds it (version label of the version that applied the intent). */
+  appliedVersion?: number;
+}
+export interface IntentQueueDto { projectId: Id; headHash: string; items: EditIntent[]; lockedKeys: string[] }
+
+export interface PlanStep { n: number; tool: string; ops: OperationT[]; args: Record<string, unknown>; expectedDiff: string; dependsOn: number[] }
+export interface Risk { code: string; message: string; severity: 'info' | 'warn' | 'block' }
+export interface Usage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean }
+export type PlanStatus = 'draft' | 'valid' | 'invalid' | 'stale' | 'executing' | 'executed' | 'failed' | 'cancelled';
+export interface PlanDto {
+  id: Id; projectId: Id; baseVersion: string; origin: 'compile' | 'editor-agent'; goal: string; steps: PlanStep[]; touchesLockedKeys: string[]; risks: Risk[];
+  notes?: string; status: PlanStatus; validation: Array<{ path: string; message: string; code: string }>; usage?: Usage; stale?: boolean; headHash?: string;
+  /** Error code of a failed execution or interrupted run (Editor-side; filled from plan.invalid / ExecutionResult). */
+  errorCode?: string;
+}
+export interface ExecutionResult {
+  planId: Id; ok: boolean; fromVersion: string; toVersion?: string; appliedOps: number; diff: ElementDiff[];
+  error?: { code: string; message: string; step?: number; path?: string }; rollback?: { performed: boolean; toVersion: string }; durationMs: number; notice?: string;
+}
+export interface ElementDiff { elementId: string; change: 'added' | 'removed' | 'modified'; fields: string[] }
+export interface CheckpointDto { id: Id; projectId: Id; versionId: Id; reason: 'autosave' | 'pre-execute' | 'pre-render' | 'manual'; createdAt: Iso; durationMs: number }
+
+export type ProviderKind = 'openrouter' | 'openai' | 'anthropic' | 'google' | 'custom';
+export interface ConnectionDto {
+  id: Id; provider: ProviderKind; label: string; baseUrl: string | null; secretHint: string; status: 'unvalidated' | 'valid' | 'invalid'; validatedAt: Iso | null;
+  modelsFetchedAt: Iso | null; budgetMonthUsd: number | null; createdAt: Iso; updatedAt: Iso;
+}
+export interface CapabilityRow {
+  modelId: string; label: string; contextLength: number | null; toolCalling: boolean; structuredOutput: boolean; streaming: boolean; imageInput: boolean;
+  pricePerMInput: number | null; pricePerMOutput: number | null;
+}
+export interface AssignmentDto { agent: AgentKind; connectionId: Id; modelId: string; settings: { temperature?: number; maxTokens?: number; effort?: 'low' | 'medium' | 'high' } }
+export interface AssignmentsDto { brainstorm: AssignmentDto | null; editor: AssignmentDto | null; defaultConnectionId: Id | null; warnings?: Issue[] }
+export interface UsageNumbers { inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; contextLength: number | null }
+export interface AgentRunDto {
+  id: Id; projectId: Id; agent: AgentKind; status: 'running' | 'done' | 'failed' | 'cancelled'; modelId: string; connectionId: Id | null; planId: Id | null;
+  errorCode: string | null; usage: UsageNumbers | null; startedAt: Iso; finishedAt: Iso | null;
+}
+export type MessageBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_call'; name: string; input: unknown }
+  | { type: 'tool_result'; name: string; output: unknown }
+  | { type: 'proposed_intents'; intents: EditIntent[]; handoffState: 'pending' | 'sent' | 'dismissed' }
+  | { type: 'attachment'; assetId?: Id; mime: string; name: string };
+export interface MessageDto { id: Id; role: 'user' | 'assistant' | 'system' | 'tool'; blocks: MessageBlock[]; agentRunId: Id | null; createdAt: Iso }
+export interface ConversationDto {
+  conversationId: Id; agent: AgentKind; summary: unknown; assignment: AssignmentDto | null; contextUsage: { usedTokens: number; contextLength: number } | null; messages: Page<MessageDto>;
+}
+export interface HardwareProfileDto {
+  tier: Tier; cpuModel: string | null; cpuThreads: number; ramTotalMb: number; gpuVendor: string | null; gpuModel: string | null; vramMb: number | null; nvenc: boolean;
+  detectedAt: Iso; warnings: string[];
+}
+export interface HardwareTickDto {
+  at: Iso; cpuPercent: number; ramFreeMb: number; ramTotalMb: number; processMb: number; chromeMb: number | null; diskFreeMb: number | null; gpuPercent: number | null;
+  workload: { rendering: boolean; ingesting: number; downloading: number; agentRuns: number };
+}
+export interface LicenseDto {
+  status: 'trial' | 'active' | 'revoked' | 'invalid'; tier: string | null; licenseeHash: string | null; updatesUntil: Iso | null; updatesEligible: boolean; machineCode: string;
+  limits: { watermark: boolean; maxResolution: Resolution }; warnings?: string[];
+}
+export interface SettingsDto {
+  privateMode: boolean; outputFolder: string; autoPlan: boolean; uiLanguage: Lang; theme: 'dark' | 'light' | 'system'; defaultPerformanceProfile: PerformanceProfile;
+  defaultRatio: Ratio; defaultResolution: Resolution; defaultFps: Fps; checkUpdates: boolean; diagnosticsIncludeStructure: boolean;
+}
+export type ModelTask = 'stt' | 'tts' | 'image' | 'music';
+export interface ModelStateDto {
+  key: string; engine: string; version: string; task: ModelTask; label: string; licence: { name: string; url: string }; tiers: Tier[]; bytesTotal: number; bytesDone: number;
+  status: 'not-installed' | 'downloading' | 'verifying' | 'installed' | 'failed'; errorCode: string | null; installedAt: Iso | null;
+}
+export type GeneratorKind = 'voice' | 'music' | 'thumbnail' | 'captions' | 'hashtags';
+export interface GeneratorJobDto {
+  id: Id; projectId: Id; kind: GeneratorKind; status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'; progress: number; modelKey: string | null; resultAssetId: Id | null;
+  result: Record<string, unknown> | null; errorCode: string | null; createdAt: Iso; startedAt: Iso | null; finishedAt: Iso | null;
+}
+
+export interface HealthDto {
+  status: 'ok'; version: string; mode: 'production' | 'development'; uptimeMs: number; tier?: Tier; licence?: Pick<LicenseDto, 'status' | 'tier' | 'updatesEligible'>;
+  privateMode?: boolean; engine?: { bundleVersion: string; remotionVersion: string; browserReady: boolean; ffmpeg: boolean }; db?: { schemaVersion: number; ok: boolean };
+  workload?: { rendering: boolean; ingesting: number; agentRuns: number; downloading: number }; seq?: number;
+}
+
+// ── request bodies ──
+export interface DesignPickInput {
+  source: 'ui' | 'chat'; category: IntentCategory; presetId?: string; params?: Record<string, unknown>; target: ElementRefT; selection?: ElementRefT[]; playheadMs?: number;
+  instruction?: string; baseVersion: string; plan?: 'auto' | 'none';
+}
+export interface IntentCreateResponse { intent: EditIntent; queue: IntentQueueDto; superseded: string[]; appliedVersion: VersionDto | null; planId: Id | null; notices: Array<{ code: string }> }
+export interface OpenProjectResponse {
+  project: ProjectDto; head: VersionDto; mediaGrant: MediaGrantDto; checkpointNewerThanSave: CheckpointDto | null; intentQueue: IntentQueueDto; latestPlan: PlanDto | null; renderJobs: RenderJobDto[];
+}
+export interface CompositionHeadResponse { head: VersionDto; canUndo: boolean; canRedo: boolean; timing: { durationMs: number; cutStartMs: number[] }; issues: Issue[] }
+export interface RenderCreateInput { projectId: Id; versionId?: Id; outputProfile: OutputProfile; performanceProfile: PerformanceProfile; fileName?: string; folder?: string }
+export type PreflightCheckName = 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence';
+export interface RenderEstimate {
+  ok: boolean; dimensions: { width: number; height: number }; totalFrames: number; durationMs: number;
+  estimate: { seconds: number | null; bytes: number | null; confidence: 'low' | 'medium' | 'high' };
+  checks: Array<{ check: PreflightCheckName; ok: boolean; code?: string; details?: unknown }>; effectiveProfile: OutputProfile; watermark: boolean; warnings: Issue[];
+}
+export interface CatalogueItemDto {
+  id: string; category: string; label: { en: string; id: string }; tags: string[]; propertyClass: string; priority: string; flags: string[]; preview: string;
+  paramsSchema: Record<string, unknown>; defaults: Record<string, unknown>; availability: { ok: boolean; reason?: 'gpu' | 'webgpu' | 'model-missing' | 'licence'; code?: string };
+}
+export interface ProjectCreateInput { name: string; settings?: Partial<ProjectSettingsT>; language?: Lang; theme?: Partial<ThemeT> }
+
+// ── SSE ──
+export interface EventEnvelope { seq: number; at: Iso; projectId?: Id }
+export interface EventMap {
+  'intent.updated': { queue: IntentQueueDto; changed: Id[]; reason: string };
+  'plan.ready': { plan: PlanDto; runId?: Id };
+  'plan.invalid': { planId: Id; status: 'invalid' | 'stale' | 'failed' | 'cancelled'; code: string; validation: Issue[]; touchesLockedKeys: string[] };
+  'composition.updated': { version: VersionDto; previousHash: string | null; diff: ElementDiff[]; cause: VersionCause; canUndo: boolean; canRedo: boolean; durationMs: number; issues: Issue[] };
+  'render.queued': { job: RenderJobDto };
+  'render.progress': { jobId: Id; progress: number; renderedFrames: number; totalFrames: number; etaMs: number | null; stage: string };
+  'render.done': { jobId: Id; output: OutputDto; notices: string[] };
+  'render.failed': { jobId: Id; code: string; percent: number };
+  'render.cancelled': { jobId: Id; percent: number };
+  'ingest.progress': { assetId: Id; stage: string; progress: number };
+  'ingest.done': { asset: AssetDto };
+  'ingest.failed': { assetId: Id; code: string; name: string };
+  'agent.run.started': { run: AgentRunDto; agent: AgentKind; modelId: string; planId?: Id };
+  'agent.run.delta': { runId: Id; agent: AgentKind; delta: string; toolCall?: { name: string; input: unknown } };
+  'agent.run.done': { run: AgentRunDto; message: MessageDto; usage: UsageNumbers | null; contextUsage: { usedTokens: number; contextLength: number } | null };
+  'agent.run.failed': { runId: Id; agent: AgentKind; code: string; retryable: boolean };
+  'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' };
+  'model.installed': { model: ModelStateDto };
+  'model.failed': { key: string; code: string };
+  'hardware.tick': HardwareTickDto;
+  'license.changed': { licence: LicenseDto };
+  'settings.changed': { scope: string; settings?: SettingsDto; privateMode?: boolean };
+  'service.notice': { kind: string; code?: string; jobId?: Id; percent?: number; done?: boolean; path?: string; projectId?: Id; [k: string]: unknown };
+}
+export type EventName = keyof EventMap;
+export const EVENT_NAMES: readonly EventName[] = [
+  'intent.updated', 'plan.ready', 'plan.invalid', 'composition.updated', 'render.queued', 'render.progress', 'render.done', 'render.failed', 'render.cancelled',
+  'ingest.progress', 'ingest.done', 'ingest.failed', 'agent.run.started', 'agent.run.delta', 'agent.run.done', 'agent.run.failed', 'model.progress', 'model.installed',
+  'model.failed', 'hardware.tick', 'license.changed', 'settings.changed', 'service.notice',
+];
+export type ServiceEvent = { [K in EventName]: { name: K; data: EventMap[K] & EventEnvelope } }[EventName];

@@ -179,6 +179,8 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Selected**: add `op:audio.setFades {fadeInMs?, fadeOutMs?}` (target `audio`, scalar per field, propertyKeys `audio:<id>.fadeInMs` / `audio:<id>.fadeOutMs`). The P2 preset `preset:audio.visualizer-bars` gets no Compile rule until its P2 operation is designed (no mapping onto `op:shape.add`, which only accepts shape presets).
 - **Consequences**: AI_WORKFLOW.md §5 row added; `packages/composition-model` implements it with tests; the closed vocabulary now has 41 operations.
 
+- **Addition (2026-10-24, Stage 3)**: `op:overlay.addImage` and `op:overlay.remove` with the new target kind `image`, because FR-029 (Insert Image as an overlay) had no operation; the Engine already rendered `OverlayImage`.
+
 ## ADR-021 Maximum protection pipeline (Operator requirement 2026-10-24)
 
 - **Status**: accepted
