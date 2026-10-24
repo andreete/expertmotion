@@ -56,6 +56,9 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 | Risks | `docs/RISKS_AND_ASSUMPTIONS.md` |
 | Runtime prompts (versioned) | `SYSTEM_PROMPT.md` (v1.0.1) |
 | Consistency checks | `bash tools/docs-check.sh` (greps only; must pass before every commit) |
+| Code map (Stage 3) | `packages/{shared,catalogue,composition-model,engine,agents,models}`; `apps/service` (modules in `src/modules`, per-area code in `src/s1` projects/composition/intents, `src/s2` assets/media/renders/generators/models, `src/s3` providers/agents/settings/hardware/licence/diagnostics, licence verification in `src/license`, migrations as code in `src/db/migrations`); `apps/ui` (Editor; mock mode `VITE_EM_MOCK=1`); `apps/desktop` (Electron shell, hardening, electron-builder); `tools/license-cli` (Operator licence CLI) |
+| Whole-system check | `bash scripts/verify.sh` (typecheck all workspaces + every test + docs-check); end-to-end `poc/e2e/run.mjs` (real Editor in headless Chrome against the real service) |
+| Release build | `poc/WINDOWS_RUNBOOK.md` §6 (`npm run build:all`, `build-loops`, `build-sample`, `stage:desktop`, `harden`, `pack:win`) |
 
 ## 5. Important discoveries (verified 2026-10-24; URLs in `docs/ASSESSMENT.md`)
 
@@ -69,6 +72,8 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 
 ## 6. Known limitations and open questions
 
+- Stage 3 (2026-10-24, Linux): every P0 module coded and integrated; 580+ tests green; end-to-end Editor ↔ service 18/18 incl. a real 720p render. Not verifiable here: Electron runtime, installer, DPAPI, bytenode, NVENC, Windows fingerprint (Operator's Windows run). Nothing installable from the model registry until the Operator pins hashes; licences report EM-5009 until the production public key is pasted into `apps/service/src/license/keys.ts`.
+- Linux gotchas found in Stage 3: `os.freemem()` is MemFree (use `services/memory.ts`); Remotion's render page fetches media cross-origin from its own port (pin the port, CORS for `/media` on that origin); the slim compositor FFmpeg lacks `fps`/`tile` filters and `s16le`/`ipod` muxers.
 - Stage 2 results so far (2026-10-24, Linux): POC-010 curl matrix 44/44; POC-005 DB half 69/69 over 3 runs; POC-004 offline half 19/19 (live half needs a key). Windows proofs not run. SEC-011 and NFR-020 were amended from these results.
 
 - Indonesian TTS quality from open models is "news reader", not expressive.
@@ -84,4 +89,4 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 - Every doc starts with the header table (Status, Owner, Last updated, Depends on, Used by).
 - Times in the Composition Model are milliseconds; frames are derived at render.
 - Commit after every batch of documents; `process.md` entry after every meaningful work unit.
-- Phase rule (Operator, 2026-10-24): documentation phase ended and Stage 2 (PoC) started the same day on the Operator's instruction; proof code is throwaway under `poc/`, run on the shared server only via `bash poc/run-capped.sh`. Product code (Stage 3) only after Stage 2 exit criteria pass.
+- Phase rule (Operator, 2026-10-24): documentation phase ended and Stage 2 (PoC) started the same day on the Operator's instruction; proof code is throwaway under `poc/`, run on the shared server only via `bash poc/run-capped.sh`. Product code (Stage 3) only after Stage 2 exit criteria pass. **Superseded the same day**: the Operator asked to code every feature now and test on Windows afterwards, so Stage 3 runs in parallel with the Windows-only Stage 2 proofs.
