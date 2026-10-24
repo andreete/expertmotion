@@ -4,12 +4,30 @@ Append an entry after every meaningful work unit. Newest entry first. Each entry
 
 ## Current state (keep this block up to date)
 
-- **Current stage**: Stage 3 (foundation, P0 code) **in progress since 2026-10-24**, run in parallel with the Windows-only Stage 2 proofs, which the Operator will test manually later ("pengetesan di windows secara manual di belakang"). All Linux-runnable proofs passed (Entry 3, plus POC-010 browser half and POC-002 Linux parity).
-- **Current objective**: finish every P0 module in code (Local Service modules, Editor UI, Desktop Shell, Model Manager, licensing), integrate them, keep all tests green on Linux; hand the Windows checks to the Operator (`poc/WINDOWS_RUNBOOK.md`).
-- **Blockers**: Windows machine for Electron/packaging proofs; OpenRouter test key for live agent runs; Operator-pinned model hashes (nothing is installable until pinned, SEC-074); production licence public key (`keygen --kid A1 --seal`); Remotion licence answer (BRD-010); legal review of the compositor FFmpeg (RISK-030).
-- **Next actionable tasks**: see Entry 4 below.
+- **Current stage**: Stage 3 (foundation, P0 code) **code-complete on Linux on 2026-10-24**; the Windows-only proofs and the installer build are the Operator's next step ("pengetesan di windows secara manual di belakang").
+- **Verified here**: `bash scripts/verify.sh` → typecheck of all workspaces clean, **609 tests passed** (1 opt-in render smoke skipped by default, run separately and passing), docs-check green; `poc/e2e/run.mjs` → **18/18** (real Editor in headless Chrome against the real service: import, ingest, Insert, Fade pick via Compile, playback through the cut, 720p export).
+- **Blockers (all need the Operator)**: Windows machine for the installer and Electron runtime checks (`poc/WINDOWS_RUNBOOK.md` §6); a provider key for live agent runs; pinned model hashes (`packages/models` registry, SEC-074) before any model can install; the production licence public key (`tools/license-cli keygen --kid A1 --seal`, paste into `apps/service/src/license/keys.ts`); the real storefront host (`EXTERNAL_HOSTS`, `VITE_EM_STORE_URL`); Remotion licence answer (BRD-010); legal review of the compositor FFmpeg (RISK-030); OV code-signing certificate.
+- **Next actionable tasks**: see Entry 5.
 
 ---
+
+## 2026-10-24 — Entry 5: integration, end-to-end run, gap closing
+
+- **Stage**: 3.
+- **Completed** (commits on `main` after Entry 4):
+  - Service modules S1 (projects, composition, undo/redo, autosave/checkpoints, crash recovery, backup/restore, Intent Queue, plans, Execute with rollback), S2 (assets/ingest, media with grants and Range, render queue, catalogue, generators, Model Manager routes), S3 (providers OpenRouter/OpenAI/Anthropic/Gemini with encrypted keys, assignments, budgets, conversations and agent runs, brainstorm handoff, usage, settings, hardware, licence routes, diagnostics, shutdown, events) integrated through `ctx.hooks`.
+  - Editor UI (`apps/ui`): all regions, mock mode, EN/ID i18n, onboarding tour on the real Editor with the Sample Project, resizable panels, preset parameter popover, executed-pick grouping, deterministic generator Insert.
+  - New contract pieces: R-025 Sample Project ("Kafe Senja", engine-rendered CC0 media via `packages/engine/scripts/build-sample.mjs`), R-134 insert a finished generator result, `op:overlay.addImage`/`op:overlay.remove` (ADR-020 addition), `EditIntent.appliedVersion`, migrations 10/11/30 (ADR-024), `/media` CORS exception for the Player and render origins, root-mounted media routes, EM-1011, EM-7109, EM-7110.
+  - Build: `scripts/stage-desktop.mjs`, `npm run build:all` / `release:win`, `build-loops.mjs` (catalogue previews at `resources/catalogue/<category>/<name>.webm`, served with the Editor), desktop window minimum 1280×720 with remembered bounds.
+- **Bugs found by running things for real (fixed)**: Remotion auto-picked port 3001 and its render page fetched media cross-origin (pinned ports 4130 dev / 47600–47699, per-job CORS origins); `os.freemem()` under-reported on Linux so renders were refused (`services/memory.ts`); Intent Queue rows collapsed and the agent column overlapped; catalogue loops were requested from the service; preload/UI bridge names and picker options disagreed; drag-and-drop would have failed in the packaged app (now `webUtils` paths); restore picker used a wrong extension; lower-third and corner text overflowed the frame; licence `updates-expired` violated the DB CHECK; model error codes clashed with storage codes.
+- **Verification**: see Current state. Golden scenarios: harness (a) GS-01…07, 13, 16, 19 and package-level replays GS-08, 09, 10, 17, 18, 20 green.
+- **Not verified (needs Windows or keys)**: Electron runtime, NSIS installer, DPAPI keyring, bytenode/obfuscation on the real bundles, NVENC, Windows Machine Fingerprint, live provider calls, real model downloads (unpinned), GPU tiers.
+- **Next tasks** (Operator or the next implementation agent):
+  1. Windows: `poc/WINDOWS_RUNBOOK.md` §6 (build, loops, sample, stage, harden, pack, clean-VM smoke) and the Stage 2 POCs it lists; record results in `docs/POC_PLAN.md` §4.
+  2. Pin model hashes and sizes in `packages/models/src/registry.ts`, then install/run each engine on Windows (whisper.cpp, sherpa-onnx + Piper id, sd.cpp, ACE-Step).
+  3. Live agent evaluation `npm run eval:agents` per GOLDEN_SCENARIOS §4.3 with an OpenRouter key.
+  4. Golden frames (pixel references) on Windows CI; remaining UI items listed in `apps/ui/README.md` (Brainstorm/Editor inner divider, tour resume offer, light theme, timeline editing which is P1).
+- **How to continue**: read `AGENTS.md`, `memory.md`, this entry, `docs/INDEX.md`; run `bash scripts/verify.sh` and `poc/e2e/run.mjs` (see its header) before and after changes; heavy commands only through `bash scripts/run-capped.sh` on the shared server.
 
 ## 2026-10-24 — Entry 4: Stage 3 foundation code (packages, service skeleton, licence, desktop, models)
 
