@@ -13,13 +13,28 @@ import { createLogger, pruneLogs } from './services/logger.js';
 import type { ServiceModule } from './modules/types.js';
 import { MODULES } from './modules/index.js';
 
+/**
+ * Resource locations. Packaged (Electron utilityProcess): `process.resourcesPath` holds engine/bundle, engine/chrome,
+ * engine/compositor and bin/ (DEPLOYMENT_AND_PACKAGING §3, staged by scripts/stage-desktop.mjs). Development: repo `resources/`
+ * plus Remotion's own Chrome Headless Shell and compositor from node_modules. Every path can be overridden with EM_* env vars.
+ */
 export function defaultResources(env: NodeJS.ProcessEnv = process.env): Resources {
-  const root = env['EM_RESOURCES'] ?? path.resolve(process.cwd(), 'resources');
+  const packaged = (process as { resourcesPath?: string }).resourcesPath;
+  const root = env['EM_RESOURCES'] ?? (packaged && !env['EM_DEV'] ? packaged : path.resolve(process.cwd(), 'resources'));
+  const win = process.platform === 'win32';
+  const exe = (n: string) => (win ? `${n}.exe` : n);
+  const isPackaged = root === packaged;
+  const chrome = isPackaged ? path.join(root, 'engine', 'chrome', exe('chrome-headless-shell')) : undefined;
+  const compositor = isPackaged ? path.join(root, 'engine', 'compositor') : undefined;
+  const ffmpegDir = isPackaged ? path.join(root, 'bin') : undefined;
+  const browser = env['EM_BROWSER'] ?? chrome;
+  const binaries = env['EM_COMPOSITOR'] ?? compositor;
   return {
     engineBundle: env['EM_ENGINE_BUNDLE'] ?? path.join(root, 'engine', 'bundle'),
-    ...(env['EM_BROWSER'] ? { browserExecutable: env['EM_BROWSER'] } : {}),
-    ...(env['EM_COMPOSITOR'] ? { binariesDirectory: env['EM_COMPOSITOR'] } : {}),
-    ffmpeg: env['EM_FFMPEG'] ?? 'ffmpeg', ffprobe: env['EM_FFPROBE'] ?? 'ffprobe',
+    ...(browser ? { browserExecutable: browser } : {}),
+    ...(binaries ? { binariesDirectory: binaries } : {}),
+    ffmpeg: env['EM_FFMPEG'] ?? (ffmpegDir ? path.join(ffmpegDir, exe('ffmpeg')) : 'ffmpeg'),
+    ffprobe: env['EM_FFPROBE'] ?? (ffmpegDir ? path.join(ffmpegDir, exe('ffprobe')) : 'ffprobe'),
     loopsDir: path.join(root, 'catalogue', 'loops'),
   };
 }

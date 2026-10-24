@@ -13,11 +13,14 @@
     "tools/*"
   ],
   "scripts": {
-    "typecheck": "tsc -b packages/shared packages/catalogue packages/composition-model packages/agents packages/models && tsc -p apps/service --noEmit && tsc -p apps/desktop --noEmit",
+    "typecheck": "tsc -b packages/shared packages/catalogue packages/composition-model packages/agents packages/models packages/engine && tsc -p apps/service --noEmit && tsc -p apps/desktop --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "verify": "bash scripts/verify.sh",
-    "docs:check": "bash tools/docs-check.sh"
+    "docs:check": "bash tools/docs-check.sh",
+    "build:all": "tsc -b packages/engine packages/models && npm run build -w @expertmotion/service && npm run build -w @expertmotion/ui && npm run fonts -w @expertmotion/engine && npm run build:bundle -w @expertmotion/engine && npm run build:main -w @expertmotion/desktop",
+    "stage:desktop": "node scripts/stage-desktop.mjs",
+    "release:win": "npm run build:all && npm run stage:desktop && npm run harden -w @expertmotion/desktop && npm run pack:win -w @expertmotion/desktop"
   },
   "devDependencies": {
     "@remotion/player": "4.0.535",
