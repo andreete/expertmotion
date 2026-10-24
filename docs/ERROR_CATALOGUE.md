@@ -15,7 +15,7 @@
 1. Every failure that the Creator can see maps to exactly one `EM-` code. The Local Service maps internal exceptions to a code in the `http` module (ARCHITECTURE.md §4); the Editor never invents copy.
 2. **Stack traces, exception class names, file paths of the installation, SQL text and provider payloads never appear in the UI.** They go to `logs/service.log` and the Diagnostics bundle only (`scr.diagnostics`). The UI shows the code (small, grey, copyable) so support can find the log line.
 3. A code has one severity. If the same underlying cause can be a warning in one place and a blocker in another, two codes exist.
-4. Copy is stored under i18n keys `em.<code>.title`, `em.<code>.body`, `em.<code>.action` (ACCESSIBILITY_AND_I18N.md). English is shown in the MVP UI (ADR-012); the Indonesian variant is used for Indonesian chat replies and for the later Indonesian UI.
+4. Copy is stored under i18n keys `err.<code>.title`, `err.<code>.body`, `err.<code>.action` (several actions joined with " · "; generated into `apps/ui/src/i18n/*.json` by `apps/ui/scripts/sync-error-copy.mjs`) (ACCESSIBILITY_AND_I18N.md). English is shown in the MVP UI (ADR-012); the Indonesian variant is used for Indonesian chat replies and for the later Indonesian UI.
 5. The recovery action is a real button or link, not advice. If no action is possible, the only button is "OK" / "Oke" and the body says what will happen next.
 6. Codes marked **reserved** below were already cited by other documents before this catalogue existed; their meaning is fixed by those documents.
 

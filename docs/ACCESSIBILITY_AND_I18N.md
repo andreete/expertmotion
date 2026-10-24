@@ -90,7 +90,7 @@ ADR-012: English UI in MVP; every string behind a key; Indonesian variants for e
 |---|---|---|---|
 | UI strings | `ui.<region>.<element>.<state>` where `<region>` ∈ `hdr, lib, stage, agent, scr, sys, modal, window` (mirrors ELEMENT_IDS.md regions, plus `modal`/`window`), `<element>` = element id tail with dots kept, `<state>` optional (`label, tooltip, placeholder, empty, disabled, loading, error, help, a11y`) | `ui.agent.output.profile.help`, `ui.lib.assets.insert.disabled`, `ui.hdr.export.disabled` | UI_UX_SPECIFICATION.md |
 | Accessibility names | `a11y.<element id>` | `a11y.lib.catalogue.card` | this document §2 |
-| Errors | `err.<code>` with sub-keys `.title`, `.body`, `.action.<n>` | `err.EM-3102.title`, `err.EM-3102.body`, `err.EM-3102.action.1` | ERROR_CATALOGUE.md |
+| Errors | `err.<code>` with sub-keys `.title`, `.body`, `.action` | `err.EM-3102.title`, `err.EM-3102.body`, `err.EM-3102.action` | ERROR_CATALOGUE.md |
 | Tour and onboarding | `tour.<step>` with `.title`, `.body`, `.next`; `onb.<step>.<field>` | `tour.3.title`, `onb.provider.validate` | ONBOARDING_TOUR.md |
 | Catalogue | `preset.<id>.label`, `preset.<id>.tags`, `preset.<id>.param.<name>` | `preset.transition.fade.label` | DESIGN_CATALOGUE.md (labels EN/ID), generated into locale files at build |
 | Shortcuts | `key.<action>` | `key.execute` → "Ctrl+Enter" (platform-mapped) | EDITOR_INTERACTION_MODEL.md |

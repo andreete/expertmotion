@@ -215,6 +215,30 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `sys.privatemode.banner` | Banner while Private Mode is on. |
 | `sys.live` | Visually hidden ARIA live region for status announcements. |
 
+## Additions found while building the Editor (Stage 3, 2026-10-24)
+
+| ID | Element | Behaviour |
+|---|---|---|
+| `hdr.menu.help.shortcuts` | Help ▸ Keyboard shortcuts | Opens `scr.shortcuts`. |
+| `hdr.menu.file.recent.item` | one Recent project row | Opens that Project. |
+| `lib.catalogue` | Catalogue grid container | Holds the category tabs and Catalogue Cards. |
+| `lib.text.size.preset` | one font-size preset chip | Text Panel size pick (deterministic, Compile path). |
+| `lib.text.weight.italic` | italic toggle | Disabled: the text style has no italic field yet. |
+| `stage.player.menu.safearea` | Player menu item | Toggles the safe-area overlay. |
+| `stage.player.menu.draft` | Player menu item | Draft / full preview quality. |
+| `stage.player.menu.loop` | Player menu item | Loop playback. |
+| `stage.player.menu.mute` | Player menu item | Mute preview audio. |
+| `stage.player.menu.seekonselect` | Player menu item | Seek the Player when a Timeline Element is selected. |
+| `scr.confirm` | Confirmation dialog | Shared confirm for destructive actions (Clear picks, delete). |
+| `scr.shortcuts` | Shortcuts dialog | Lists keyboard shortcuts. |
+| `scr.export.codec.mp4` | Export format option | MP4 (H.264). |
+| `scr.export.codec.gif` | Export format option | Animated GIF. |
+| `scr.export.codec.png` | Export format option | PNG still. |
+| `scr.project.new.name` | New Project name field | Project name input. |
+| `scr.project.settings.language` | Project Settings language toggle | Project language id/en (stored in project settings). |
+
+State variants (UI implementation rule): a superseded queue row uses `agent.editor.intentqueue.item.superseded`; a stale base version `agent.editor.baseversion.stale`; the play button swaps to `stage.player.controls.pause` while playing. Other states keep the base id and use `data-variant`, `aria-pressed` or `aria-selected`. Timeline Elements use `stage.timeline.element` with `data-kind="clip|transition|text|caption|audio|shape|image"`.
+
 ## Assumptions where the mockup does not define behaviour
 
 1. The mockup shows only Design mode of the Library Panel; Home and Tools modes are derived from the yellow cards.

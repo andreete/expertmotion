@@ -412,8 +412,8 @@ Exports: none consumed by other packages. Every interactive element carries `dat
 ```
 apps/desktop/src/
   main/index.ts        single-instance lock, safeStorage keyring (wrap/unwrap Database Key), random free loopback port 47600–47699 (SEC-008), `utilityProcess.fork(service.cjs)` + bootstrap `postMessage({token, port, dataDir, dbKeyHex})` (SEC-002), wait for `{type:'ready'}`, restart backoff 1 s/3 s/9 s (EM-8001/8002), window, app:// protocol for apps/ui/dist, close flow (EM-8304), tray, updater
-  main/ipc.ts          handlers: pickFiles(filters) → paths; pickFolder; revealPath(path); openExternal(storeUrl); getBootstrap() → {port, token}
-  preload/index.ts     contextBridge.exposeInMainWorld('expertmotion', { getBootstrap, pickFiles, pickFolder, revealPath, openExternal, onServiceState })
+  main.ts (IPC)        handlers: pickFiles({filters, multiple}) → paths; pickFolder; pickSavePath; openFolder(path); openExternal(url: HTTPS on EXTERNAL_HOSTS only); getBootstrap() → {port, token}
+  preload.ts           contextBridge.exposeInMainWorld('expertmotion', { getBootstrap, pickFiles, pickFolder, pickSavePath, openFolder, openExternal, getPathsForFiles (webUtils, drag-and-drop), onServiceState }) — closed set, asserted by test/bridge-surface.test.ts
   main/license/        bytecode-protected (ADR-007): nothing else lives here; verification itself is in apps/service/license (also bytecode)
 ```
 
@@ -565,7 +565,7 @@ Build order: `shared → catalogue → composition-model → engine (lib) → ag
 | `packages/agents` | `schemas.ts`, `intents/capture.ts`, `intents/resolveTargets.ts` (transition row only), `intents/reduceQueue.ts` (exclusive-group), `intents/compile.ts` (transition category), `intents/validatePlan.ts` |
 | `apps/service` | `main.ts`, `config.ts`, `http/{app,guards,sse,errors,route}.ts`, `routes/{health,projects,assets,media,composition,intents,plans,renders,outputs,events}.ts`, `db/{open,tx}.ts`, migrations `001_init.sql`, repositories `projects, assets, compositionVersions, editIntents, editPlans, operationsHistory, renderJobs, outputs`, `ingest/{pipeline,ffprobe,ffmpeg,limits}.ts`, `render/{queue,bundle,browser,stills,preflight,validateOutput,profiles}.ts`, `media/{server,grants}.ts`, `composition/service.ts`, `intents/service.ts`, `plans/service.ts`, `diagnostics/logger.ts` |
 | `apps/ui` | `api/{client,events}.ts`, `state/{service,project}.tsx`, `header/` (File ▸ New, Export only), `library/assets/*`, `library/catalogue/CatalogueCard.tsx` (transitions tab only), `stage/Player.tsx`, `stage/Timeline.tsx` (video track + transition), `agent-panel/editor/IntentQueue.tsx`, `agent-panel/output/OutputSettings.tsx` (ratio + resolution + profile), `screens/export/*`, `components/ui.tsx` |
-| `apps/desktop` | Stage 3: `main/index.ts` (`utilityProcess.fork`, bootstrap `postMessage`, token, window), `preload/index.ts` (`getBootstrap`, `pickFiles`, `revealPath`); not needed to run the slice in a browser |
+| `apps/desktop` | Stage 3: `main/index.ts` (`utilityProcess.fork`, bootstrap `postMessage`, token, window), `preload.ts` (closed bridge set, see §3.8); not needed to run the slice in a browser |
 | `test` | `fixtures/media/clip-5s-1080p30.mp4` (CC0), `golden/transition.fade/*.png`, `e2e/p0-slice.spec.ts` |
 
 Explicitly **not** in the slice: agents runtime, providers, Brainstorming, captions, text, audio, licence, Model Manager, hardware tiers beyond a stub `T0`, undo/redo UI, backup/restore. Each is added as its own increment against the same API.
