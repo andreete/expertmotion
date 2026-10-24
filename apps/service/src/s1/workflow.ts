@@ -1,0 +1,528 @@
+// Edit-intent pipeline in the Local Service (AI_WORKFLOW §2–§7, §12; API §6.7–6.8): Design Pick → createIntents → Intent Queue
+// (edit_intents) → Compile (no LLM) or Editor Agent → validatePlan → Execute as one transaction with rollback.
+// The LLM never mutates: every model change goes through CompositionStore.commit after deterministic validation (AI-001, AI-004).
+import {
+  EditIntent, buildCompilePlan, buildRewriteEnvelope, compileIntents, createIntents, enqueue, lockedKeysFromQueue, pickFromIntent, planOps, remove, restore,
+  runEditorAgent, validatePlan, type ChatUsage, type DesignPick, type EditIntentT, type EditPlanT,
+} from '@expertmotion/agents';
+import { validateParams } from '@expertmotion/catalogue';
+import { OPERATIONS, type CompositionModelT, type ElementRefT, type OperationT } from '@expertmotion/composition-model';
+import { EmError, issue, type EmCode, type Issue } from '@expertmotion/shared';
+import type { ServiceContext } from '../context.js';
+import { parseIntent, planDto, versionDto, type DesignPickInputT, type PlanRow, type VersionDto } from './dto.js';
+import type { Checkpoints } from './checkpoints.js';
+import { issueError, type CompositionStore } from './store.js';
+
+type Reason = 'created' | 'superseded' | 'restored' | 'removed' | 'cleared' | 'compiled' | 'executed' | 'rejected';
+export interface ExecutionResultT {
+  planId: string; ok: boolean; fromVersion: string; toVersion?: string; appliedOps: number;
+  diff: Array<{ elementId: string; change: 'added' | 'removed' | 'modified'; fields: string[] }>;
+  error?: { code: string; message: string; step?: number; path?: string }; rollback?: { performed: boolean; toVersion: string }; durationMs: number;
+}
+export interface PickResult { intent: EditIntentT; queue: ReturnType<Workflow['queueDto']>; superseded: string[]; appliedVersion: VersionDto | null; planId: string | null; notices: Array<{ code: string }> }
+interface Run { ac: AbortController; runId: string; projectId: string; planId: string; external: boolean }
+
+/** Ops that need `confirmDestructive` (API R-073 list ∪ OPERATIONS[*].destructive). */
+const DESTRUCTIVE = new Set(['op:clip.remove', 'op:caption.clear', 'op:background.clear', ...Object.entries(OPERATIONS).filter(([, d]) => d.destructive).map(([k]) => k)]);
+/** API: baseVersion may be the head hash or the head version id. */
+export const isHeadRef = (head: { hash: string; versionId: string }, ref: string): boolean => ref === head.hash || ref === head.versionId;
+const stale = (headHash: string, baseVersion: string) => new EmError('EM-2301', 'The composition changed after this plan was made. Ask the Editor Agent to plan again; nothing was applied.', { details: { baseVersion, headVersion: headHash }, path: 'body.baseVersion' });
+const notFound = (route: string, id: string) => new EmError('EM-9003', 'The item you asked for no longer exists.', { details: { route, id } });
+
+export class Workflow {
+  private readonly runs = new Map<string, Run>();
+  private readonly executing = new Set<string>();
+  constructor(private readonly ctx: ServiceContext, private readonly store: CompositionStore, private readonly checkpoints: Checkpoints) {
+    store.onCommit((pid, head) => this.markStale(pid, (r) => r.baseVersion !== head.hash));
+  }
+
+  // ───────────────────────────── Intent Queue persistence ─────────────────────────────
+  loadQueue(projectId: string): EditIntentT[] {
+    const rows = this.ctx.db.prepare("SELECT intent_json FROM edit_intents WHERE project_id = ? AND status != 'removed' ORDER BY created_at, id").all(projectId) as Array<{ intent_json: string }>;
+    return rows.map((r) => parseIntent(r.intent_json));
+  }
+  /** Upserts intents whose JSON changed; returns the changed ids. */
+  saveQueue(projectId: string, before: readonly EditIntentT[], after: readonly EditIntentT[]): string[] {
+    const prev = new Map(before.map((i) => [i.id, JSON.stringify(i)]));
+    const now = this.ctx.now(); const changed: string[] = [];
+    const up = this.ctx.db.prepare(`INSERT INTO edit_intents (id, project_id, intent_json, status, property_key, created_at, updated_at) VALUES (?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET intent_json = excluded.intent_json, status = excluded.status, property_key = excluded.property_key, updated_at = excluded.updated_at`);
+    this.ctx.db.transaction(() => {
+      for (const i of after) { const j = JSON.stringify(i); if (prev.get(i.id) === j) continue; up.run(i.id, projectId, j, i.status, i.propertyKey, i.createdAt, now); changed.push(i.id); }
+    })();
+    return changed;
+  }
+  queueDto(projectId: string, opts: { status?: string[] | undefined; limit?: number } = {}) {
+    const all = this.loadQueue(projectId);
+    const headHash = this.store.head(projectId).hash;
+    const items = all.filter((i) => !opts.status || opts.status.includes(i.status)).reverse().slice(0, opts.limit ?? 100);
+    return { projectId, headHash, items, lockedKeys: lockedKeysFromQueue(all) };
+  }
+  private emitQueue(projectId: string, changed: string[], reason: Reason): void {
+    if (!changed.length) return;
+    this.ctx.bus.emit('intent.updated', { at: this.ctx.now(), projectId, queue: this.queueDto(projectId), changed, reason });
+  }
+  private setIntentStatus(projectId: string, ids: readonly string[], status: EditIntentT['status'], extra: Partial<EditIntentT> = {}): string[] {
+    if (!ids.length) return [];
+    const before = this.loadQueue(projectId);
+    const set = new Set(ids);
+    const after = before.map((i) => (set.has(i.id) ? { ...i, status, ...extra } : i));
+    return this.saveQueue(projectId, before, after);
+  }
+
+  // ───────────────────────────── R-060 Design Pick ─────────────────────────────
+  createIntent(projectId: string, b: DesignPickInputT): PickResult {
+    const head = this.store.head(projectId);
+    if (!isHeadRef(head, b.baseVersion)) throw stale(head.hash, b.baseVersion);
+    if (b.presetId && b.presetId.length && Object.keys(b.params).length) {
+      const v = validateParams(b.presetId, b.params);
+      if (!v.ok) throw issueError({ ...v.issues[0]!, path: `body.${v.issues[0]!.path}` });
+    }
+    const explicit = !['selection', 'playhead', 'project'].includes(b.target.kind);
+    const pick: DesignPick = {
+      projectId, source: b.source, category: b.category, params: b.params, playheadMs: b.playheadMs,
+      selection: explicit ? [b.target, ...b.selection] : b.selection,
+      ...(b.presetId ? { presetId: b.presetId } : {}), ...(b.instruction ? { instruction: b.instruction } : {}),
+      ...(b.field ? { field: b.field, value: b.value } : {}), ...(b.output ? { output: { kind: b.output.kind, value: b.output.value, ...(b.output.customRatio ? { customRatio: b.output.customRatio } : {}) } } : {}),
+      ...(b.assetId ? { assetId: b.assetId } : {}), ...(b.text ? { text: b.text } : {}),
+    };
+    const r = createIntents(pick, { model: head.model, baseVersion: head.hash, newId: this.ctx.newId, now: this.ctx.now });
+    if (!r.ok) throw issueError(r.issues[0] ?? issue('EM-2303', 'This pick cannot be used.'));
+    return this.enqueueAndMaybeApply(projectId, r.value, { auto: b.plan === 'auto', reason: 'created' });
+  }
+
+  /** Enqueue (supersede), then apply directly when fully specified (AI-004) or start a plan run when autoPlan is on. */
+  private enqueueAndMaybeApply(projectId: string, incoming: EditIntentT[], o: { auto: boolean; reason: Reason; restoredId?: string; before?: EditIntentT[]; after?: EditIntentT[] }): PickResult {
+    const before = o.before ?? this.loadQueue(projectId);
+    const after = o.after ?? enqueue(before, incoming);
+    const wasSup = new Set(before.filter((i) => i.status === 'superseded').map((i) => i.id));
+    const superseded = after.filter((i) => i.status === 'superseded' && !wasSup.has(i.id)).map((i) => i.id);
+    const changed = this.saveQueue(projectId, before, after);
+    const top = incoming[0]!;
+    const notices: Array<{ code: string }> = [];
+    let appliedVersion: VersionDto | null = null, planId: string | null = null;
+    if (!top.needsInterpretation && o.auto) {
+      const res = this.applyNow(projectId, incoming.map((i) => i.id), { reason: o.reason, changedBefore: changed });
+      appliedVersion = res.version; planId = res.planId; notices.push(...res.notices);
+    } else {
+      this.emitQueue(projectId, changed, o.reason);
+      if (top.needsInterpretation && o.auto && this.ctx.settings.get().autoPlan) {
+        try {
+          const head = this.store.head(projectId);
+          const started = this.createPlan(projectId, { intentIds: incoming.map((i) => i.id), baseVersion: head.hash, mode: 'agent' });
+          planId = started.plan.id;
+          started.done.catch(() => {});
+        } catch (e) { if (e instanceof EmError) notices.push({ code: e.code }); else throw e; }
+      }
+    }
+    const intent = this.loadQueue(projectId).find((i) => i.id === top.id) ?? top;
+    return { intent, queue: this.queueDto(projectId), superseded, appliedVersion, planId, notices };
+  }
+
+  /** Compile + Execute in one go for fully specified intents (R-060 auto path, R-062, R-018). Rejects the intents on failure. */
+  applyNow(projectId: string, intentIds: string[], o: { reason: Reason; changedBefore?: string[]; goal?: string }): { version: VersionDto | null; planId: string; notices: Array<{ code: string }> } {
+    const queue = this.loadQueue(projectId);
+    const ids = new Set(intentIds);
+    const intents = queue.filter((i) => ids.has(i.id));
+    const head = this.store.head(projectId);
+    const reject = (iss: Issue) => {
+      const ch = this.setIntentStatus(projectId, intents.map((i) => i.id), 'rejected', { rejectionReason: iss.message.slice(0, 300) });
+      this.emitQueue(projectId, [...new Set([...(o.changedBefore ?? []), ...ch])], 'rejected');
+      return issueError(iss);
+    };
+    const comp = compileIntents(intents, (i) => pickFromIntent(i), head.model);
+    if (!comp.ok) throw reject(comp.issues[0]!);
+    const planId = this.ctx.newId();
+    const label = String(intents[0]?.params['targetLabel'] ?? intents[0]?.propertyKey ?? 'pick');
+    const plan = buildCompilePlan(comp.value, { id: planId, projectId, baseVersion: head.hash, goal: o.goal ?? `${intents[0]?.category ?? 'pick'}${intents[0]?.presetId ? ` · ${intents[0].presetId}` : ''} → ${label}`, expectedDiff: label });
+    const v = validatePlan(plan, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: lockedKeysFromQueue(queue), newId: this.ctx.newId });
+    if (v.plan.status !== 'valid') throw reject(v.issues.find((i) => i.severity === 'block') ?? issue('EM-2303', 'The change could not be applied.'));
+    this.insertPlan({ plan: v.plan, baseVersionId: head.versionId, intentIds, message: null, agentRunId: null });
+    const notices = comp.value.some((op) => op.op === 'op:theme.setTextDefaults') && intents.some((i) => i.category === 'text') ? [{ code: 'EM-2403' }] : [];
+    const res = this.executeRow(this.planRow(planId), { checkpoint: false, extraChanged: o.changedBefore ?? [] });
+    if (!res.result.ok) throw reject(issue(res.result.error?.code ?? 'EM-2307', res.result.error?.message ?? 'The change could not be applied.'));
+    return { version: res.version, planId, notices };
+  }
+
+  // ───────────────────────────── R-062 / R-063 / R-064 ─────────────────────────────
+  restoreIntent(projectId: string, intentId: string): PickResult {
+    const before = this.loadQueue(projectId);
+    const t = before.find((i) => i.id === intentId);
+    if (!t) throw notFound('intent', intentId);
+    const r = restore(before, intentId, this.ctx.now);
+    if (!r.ok) throw issueError(r.issues[0]!);
+    const head = this.store.head(projectId);
+    const family = r.value.filter((i) => i.id === intentId || i.parentIntentId === intentId);
+    for (const i of family) for (const ref of i.resolvedTargets) if (!targetExists(head.model, ref))
+      throw new EmError('EM-2203', 'This pick targeted an element that was removed, so it can no longer be restored.', { status: 422, details: { intentId, targetId: ref.id ?? ref.index } });
+    const restored = r.value.find((i) => i.id === intentId)!;
+    return this.enqueueAndMaybeApply(projectId, [restored, ...family.filter((i) => i.id !== intentId)], { auto: this.ctx.settings.get().autoPlan, reason: 'restored', before, after: r.value });
+  }
+
+  removeIntent(projectId: string, intentId: string) {
+    const before = this.loadQueue(projectId);
+    const t = before.find((i) => i.id === intentId);
+    if (!t) throw notFound('intent', intentId);
+    if (t.status === 'executed' || t.status === 'compiled') throw new EmError('EM-9002', 'Applied picks stay in history; use Undo to revert them.', { status: 422, details: { reason: 'executed' } });
+    const r = remove(before, intentId);
+    if (!r.ok) throw issueError(r.issues[0]!);
+    this.emitQueue(projectId, this.saveQueue(projectId, before, r.value), 'removed');
+    this.markStale(projectId, () => true);
+    return this.queueDto(projectId);
+  }
+
+  clearIntents(projectId: string, status: 'queued' | 'superseded') {
+    const before = this.loadQueue(projectId);
+    const after = before.map((i) => (i.status === status ? { ...i, status: 'removed' as const } : { ...i }));
+    for (const p of after.filter((i) => i.propertyKey.startsWith('group:') && i.status !== 'removed')) {
+      const kids = after.filter((c) => c.parentIntentId === p.id);
+      if (kids.length && kids.every((c) => c.status === 'removed')) p.status = 'removed';
+    }
+    this.emitQueue(projectId, this.saveQueue(projectId, before, after), 'cleared');
+    this.markStale(projectId, () => true);
+    return this.queueDto(projectId);
+  }
+
+  // ───────────────────────────── plans: persistence ─────────────────────────────
+  planRow(planId: string): PlanRow {
+    const r = this.ctx.db.prepare('SELECT * FROM edit_plans WHERE id = ?').get(planId) as PlanRow | undefined;
+    if (!r) throw notFound('plan', planId);
+    return r;
+  }
+  private insertPlan(p: { plan: EditPlanT; baseVersionId: string; intentIds: string[]; message: string | null; agentRunId: string | null }): void {
+    const now = this.ctx.now();
+    this.ctx.db.prepare(`INSERT INTO edit_plans (id, project_id, base_version_id, origin, plan_json, status, agent_run_id, created_at, updated_at, intent_ids_json, message)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(p.plan.id, p.plan.projectId, p.baseVersionId, p.plan.origin, JSON.stringify(p.plan), p.plan.status, p.agentRunId, now, now, JSON.stringify(p.intentIds), p.message);
+  }
+  private updatePlan(planId: string, plan: EditPlanT | null, status: EditPlanT['status'], extra: { result?: ExecutionResultT; idempotencyKey?: string } = {}): void {
+    const sets = ['status = @status', 'updated_at = @now'];
+    if (plan) sets.push('plan_json = @plan');
+    if (extra.result) sets.push('result_json = @result');
+    if (extra.idempotencyKey) sets.push('idempotency_key = @key');
+    this.ctx.db.prepare(`UPDATE edit_plans SET ${sets.join(', ')} WHERE id = @id`).run({ id: planId, status, now: this.ctx.now(), plan: plan ? JSON.stringify({ ...plan, status }) : null,
+      result: extra.result ? JSON.stringify(extra.result) : null, key: extra.idempotencyKey ?? null });
+  }
+  planDtoFor(planId: string, withOps = true) {
+    const r = this.planRow(planId);
+    const dto = planDto(r, { withOps });
+    let headHash: string | null = null;
+    try { headHash = this.store.head(r.project_id).hash; } catch { /* deleted project */ }
+    return { ...dto, stale: dto.status === 'stale' || ((dto.status === 'valid' || dto.status === 'draft') && headHash !== null && headHash !== dto.baseVersion), headHash };
+  }
+  private emitPlanReady(planId: string, runId?: string): void {
+    const r = this.planRow(planId);
+    this.ctx.bus.emit('plan.ready', { at: this.ctx.now(), projectId: r.project_id, plan: planDto(r, { withOps: false }), ...(runId ? { runId } : {}) });
+  }
+  private emitPlanInvalid(projectId: string, plan: Pick<EditPlanT, 'id' | 'validation' | 'touchesLockedKeys'>, status: string, code: string): void {
+    this.ctx.bus.emit('plan.invalid', { at: this.ctx.now(), projectId, planId: plan.id, status, code, validation: plan.validation.map((v) => ({ ...v, severity: 'block' })), touchesLockedKeys: plan.touchesLockedKeys });
+  }
+  /** Valid plans whose base moved become stale (AI-013); emitted as plan.invalid EM-2301. */
+  markStale(projectId: string, pred: (r: { baseVersion: string }) => boolean): void {
+    const rows = this.ctx.db.prepare("SELECT * FROM edit_plans WHERE project_id = ? AND status = 'valid'").all(projectId) as PlanRow[];
+    for (const r of rows) {
+      const p = JSON.parse(r.plan_json) as EditPlanT;
+      if (!pred({ baseVersion: p.baseVersion })) continue;
+      this.updatePlan(r.id, null, 'stale');
+      this.emitPlanInvalid(projectId, p, 'stale', 'EM-2301');
+    }
+  }
+  listPlans(projectId: string, q: { status?: string[] | undefined; limit: number; cursor?: string | undefined }, cursor?: Record<string, string>) {
+    const where = ['project_id = @pid']; const args: Record<string, unknown> = { pid: projectId, limit: q.limit + 1 };
+    if (q.status?.length) { where.push(`status IN (${q.status.map((_, i) => `@s${i}`).join(',')})`); q.status.forEach((s, i) => { args[`s${i}`] = s; }); }
+    if (cursor?.['c'] && cursor['id']) { where.push('(created_at < @cc OR (created_at = @cc AND id < @cid))'); args['cc'] = cursor['c']; args['cid'] = cursor['id']; }
+    const rows = this.ctx.db.prepare(`SELECT * FROM edit_plans WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT @limit`).all(args) as PlanRow[];
+    const more = rows.length > q.limit; const page = rows.slice(0, q.limit);
+    return { rows: page, more };
+  }
+
+  // ───────────────────────────── R-070 create plan ─────────────────────────────
+  createPlan(projectId: string, input: { intentIds: string[]; message?: string | undefined; baseVersion: string; mode: 'auto' | 'compile-only' | 'agent'; signal?: AbortSignal | undefined; runId?: string | undefined })
+    : { plan: ReturnType<Workflow['planDtoFor']>; runId?: string; done: Promise<ReturnType<Workflow['planDtoFor']>> } {
+    const head = this.store.head(projectId);
+    if (!isHeadRef(head, input.baseVersion)) throw stale(head.hash, input.baseVersion);
+    const queue = this.loadQueue(projectId);
+    let selected: EditIntentT[];
+    if (input.intentIds.length) {
+      selected = [];
+      for (const id of input.intentIds) {
+        const i = queue.find((x) => x.id === id);
+        if (!i || i.status !== 'queued') throw new EmError('EM-9003', 'The item you asked for no longer exists.', { details: { route: 'intent', id } });
+        selected.push(i);
+        for (const kid of queue) if (kid.parentIntentId === i.id && kid.status === 'queued' && !input.intentIds.includes(kid.id)) selected.push(kid);
+      }
+    } else selected = queue.filter((i) => i.status === 'queued');
+    const message = input.message?.trim() || undefined;
+    const needAgent = !!message || selected.some((i) => i.needsInterpretation);
+    if (!message && !selected.length) throw new EmError('EM-9002', 'There is nothing to plan: the Intent Queue is empty and no message was given.', { status: 422, details: { reason: 'empty' } });
+    if (input.mode === 'compile-only' && needAgent) throw new EmError('EM-2303', 'These picks need the Editor Agent; they cannot be compiled directly.', { details: { intentIds: selected.filter((i) => i.needsInterpretation).map((i) => i.id) } });
+    if (input.mode === 'agent' || needAgent) return this.startAgentPlan(projectId, selected, message, input.signal, input.runId);
+
+    const comp = compileIntents(selected, (i) => pickFromIntent(i), head.model);
+    if (!comp.ok) throw issueError(comp.issues[0]!);
+    const planId = this.ctx.newId();
+    const plan = buildCompilePlan(comp.value, { id: planId, projectId, baseVersion: head.hash, goal: `Apply ${selected.filter((i) => !i.propertyKey.startsWith('group:')).length} pick(s)`, expectedDiff: selected.map((i) => i.category).join(', ') });
+    const v = validatePlan(plan, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: lockedKeysFromQueue(queue), newId: this.ctx.newId });
+    this.insertPlan({ plan: v.plan, baseVersionId: head.versionId, intentIds: selected.map((i) => i.id), message: null, agentRunId: null });
+    if (v.plan.status === 'valid') this.emitPlanReady(planId);
+    else this.emitPlanInvalid(projectId, v.plan, v.plan.status, v.plan.touchesLockedKeys.length ? 'EM-2302' : v.issues.find((i) => i.severity === 'block' && /^EM-23\d\d$/.test(i.code))?.code ?? 'EM-2303');
+    const dto = this.planDtoFor(planId);
+    return { plan: dto, done: Promise.resolve(dto) };
+  }
+
+  activeRun(projectId: string): Run | undefined { for (const r of this.runs.values()) if (r.projectId === projectId) return r; return undefined; }
+
+  /** `externalRunId`: the caller (S3 editor chat) owns that agent_runs row, its events and usage; only plan_id is linked here. */
+  private startAgentPlan(projectId: string, intents: EditIntentT[], message: string | undefined, signal?: AbortSignal, externalRunId?: string) {
+    if (this.ctx.settings.get().privateMode) throw new EmError('EM-4401', 'Agents are off while Private Mode is on. Designs and exports keep working.');
+    const active = this.activeRun(projectId);
+    if (active) throw new EmError('EM-4305', 'Wait for the current answer to finish, or cancel it, before sending another message.', { details: { agent: 'editor', activeRunId: active.runId } });
+    const head = this.store.head(projectId);
+    if (!head.model.tracks.video.length) throw new EmError('EM-2202', 'Insert at least one asset before applying designs or asking the Editor Agent.', { details: { projectId } });
+    const provider = this.ctx.hooks.providerFor('editor', projectId);
+    this.ctx.hooks.budgetCheck(projectId);
+    const external = !!externalRunId;
+    const planId = this.ctx.newId(), runId = externalRunId ?? this.ctx.newId(), now = this.ctx.now();
+    const draft: EditPlanT = { id: planId, projectId, baseVersion: head.hash, origin: 'editor-agent', goal: (message ?? 'Plan the queued picks').slice(0, 300), steps: [], touchesLockedKeys: [], risks: [], status: 'draft', validation: [] };
+    if (!external) this.ctx.db.prepare("INSERT INTO agent_runs (id, project_id, agent, connection_id, model_id, status, started_at) VALUES (?,?,'editor',NULL,?,'running',?)").run(runId, projectId, provider.model, now);
+    this.insertPlan({ plan: draft, baseVersionId: head.versionId, intentIds: intents.map((i) => i.id), message: message ?? null, agentRunId: runId });
+    try { this.ctx.db.prepare('UPDATE agent_runs SET plan_id = ? WHERE id = ?').run(planId, runId); } catch { /* column from migration 30 */ }
+    const ac = new AbortController();
+    if (signal) { if (signal.aborted) ac.abort(); else signal.addEventListener('abort', () => ac.abort(), { once: true }); }
+    const run: Run = { ac, runId, projectId, planId, external };
+    this.runs.set(planId, run);
+    if (!external) this.ctx.bus.emit('agent.run.started', { at: now, projectId, run: this.runDto(runId), agent: 'editor', modelId: provider.model, planId });
+
+    const done = (async () => {
+      const queue = this.loadQueue(projectId);
+      const assets = this.store.facts(projectId), tier = this.ctx.hooks.tier(), lockedKeys = lockedKeysFromQueue(queue);
+      const notes = (this.ctx.db.prepare("SELECT json_extract(plan_json, '$.notes') AS n FROM edit_plans WHERE project_id = ? AND id != ? AND json_extract(plan_json, '$.notes') IS NOT NULL ORDER BY updated_at DESC LIMIT 1").get(projectId, planId) as { n: string } | undefined)?.n;
+      const env = buildRewriteEnvelope({ model: head.model, baseVersion: head.hash, assets, intents, lockedKeys, tier, ...(message ? { creatorMessage: message } : {}), ...(notes ? { creatorNotes: notes } : {}) });
+      let usage: ChatUsage[] = [];
+      try {
+        const r = await runEditorAgent(env, provider, { model: head.model, baseVersion: head.hash, assets, tier, lockedKeys, newId: this.ctx.newId, planId, projectId },
+          { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId) });
+        usage = r.usage;
+        if (usage.length && !external) { try { this.ctx.hooks.recordUsage(projectId, 'editor', runId, usage); } catch (e) { this.ctx.log.warn({ err: String(e) }, 'recordUsage failed'); } }
+        const current = this.planRow(planId);
+        if (current.status === 'cancelled' || ac.signal.aborted) { this.finishCancelled(run); return this.planDtoFor(planId); }
+        const agg = aggregate(usage);
+        if (r.ok) {
+          let status: EditPlanT['status'] = 'valid';
+          try { if (this.store.head(projectId).hash !== head.hash) status = 'stale'; } catch { status = 'cancelled'; }
+          const plan: EditPlanT = { ...r.plan, ...(agg ? { usage: agg } : {}), ...(JSON.parse(current.plan_json).notes ? { notes: JSON.parse(current.plan_json).notes as string } : {}) };
+          this.updatePlan(planId, plan, status);
+          if (!external) this.finishRun(runId, 'done', null);
+          if (!external) this.ctx.bus.emit('agent.run.done', { at: this.ctx.now(), projectId, run: this.runDto(runId), usage: agg, contextUsage: { usedTokens: agg?.inputTokens ?? 0, contextLength: null }, planId });
+          if (status === 'valid') this.emitPlanReady(planId, runId); else this.emitPlanInvalid(projectId, plan, status, 'EM-2301');
+        } else {
+          const code = r.error.code;
+          const status: EditPlanT['status'] = code === 'EM-2301' ? 'stale' : code === 'EM-4301' ? 'invalid' : 'failed';
+          const plan: EditPlanT = { ...JSON.parse(current.plan_json) as EditPlanT, validation: [{ path: '', message: r.error.message, code }], ...(agg ? { usage: agg } : {}) };
+          this.updatePlan(planId, plan, status);
+          if (!external) {
+            this.finishRun(runId, 'failed', code);
+            this.ctx.bus.emit('agent.run.failed', { at: this.ctx.now(), projectId, runId, agent: 'editor', code, retryable: code !== 'EM-4002' && code !== 'EM-4201' });
+          }
+          this.emitPlanInvalid(projectId, plan, status, code);
+        }
+      } catch (e) {
+        const em = e instanceof EmError ? e : new EmError('EM-9001', 'Something went wrong.', { cause: e });
+        if (ac.signal.aborted) this.finishCancelled(run);
+        else {
+          const cur = JSON.parse(this.planRow(planId).plan_json) as EditPlanT;
+          const plan: EditPlanT = { ...cur, validation: [{ path: '', message: em.message, code: em.code }] };
+          this.updatePlan(planId, plan, 'failed');
+          if (!external) { this.finishRun(runId, 'failed', em.code); this.ctx.bus.emit('agent.run.failed', { at: this.ctx.now(), projectId, runId, agent: 'editor', code: em.code, retryable: true }); }
+          this.emitPlanInvalid(projectId, plan, 'failed', em.code);
+          this.ctx.log.warn({ projectId, code: em.code, err: em.message }, 'editor plan run failed');
+        }
+      } finally { this.runs.delete(planId); }
+      return this.planDtoFor(planId);
+    })();
+    return { plan: this.planDtoFor(planId), runId, done };
+  }
+
+  private finishRun(runId: string, status: 'done' | 'failed' | 'cancelled', code: string | null): void {
+    this.ctx.db.prepare("UPDATE agent_runs SET status = ?, error_code = ?, finished_at = ? WHERE id = ? AND status = 'running'").run(status, code, this.ctx.now(), runId);
+  }
+  private finishCancelled(run: Run): void {
+    const r = this.planRow(run.planId);
+    const p = JSON.parse(r.plan_json) as EditPlanT;
+    if (r.status !== 'cancelled') this.updatePlan(run.planId, p, 'cancelled');
+    if (run.external) { if (r.status !== 'cancelled') this.emitPlanInvalid(run.projectId, p, 'cancelled', 'EM-4303'); return; }
+    if ((this.ctx.db.prepare('SELECT status FROM agent_runs WHERE id = ?').get(run.runId) as { status: string } | undefined)?.status === 'running') {
+      this.finishRun(run.runId, 'cancelled', 'EM-4303');
+      this.ctx.bus.emit('agent.run.failed', { at: this.ctx.now(), projectId: run.projectId, runId: run.runId, agent: 'editor', code: 'EM-4303', retryable: true });
+      this.emitPlanInvalid(run.projectId, p, 'cancelled', 'EM-4303');
+    }
+  }
+  runDto(runId: string) {
+    const r = this.ctx.db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(runId) as { id: string; project_id: string; agent: string; status: string; model_id: string; connection_id: string | null; error_code: string | null; started_at: string; finished_at: string | null } | undefined;
+    if (!r) return null;
+    const plan = this.ctx.db.prepare('SELECT id FROM edit_plans WHERE agent_run_id = ?').get(runId) as { id: string } | undefined;
+    return { id: r.id, projectId: r.project_id, agent: r.agent, status: r.status, modelId: r.model_id, connectionId: r.connection_id, planId: plan?.id ?? null, errorCode: r.error_code, usage: null, startedAt: r.started_at, finishedAt: r.finished_at };
+  }
+
+  // ───────────────────────────── R-073 Execute ─────────────────────────────
+  execute(planId: string, o: { confirmDestructive: boolean; idempotencyKey?: string | undefined }): ExecutionResultT & { notice?: string } {
+    const row = this.planRow(planId);
+    if (o.idempotencyKey) {
+      const prior = this.ctx.db.prepare("SELECT result_json FROM edit_plans WHERE project_id = ? AND idempotency_key = ? AND result_json IS NOT NULL AND updated_at > ? ORDER BY updated_at DESC LIMIT 1")
+        .get(row.project_id, o.idempotencyKey, new Date(Date.now() - 24 * 3_600_000).toISOString()) as { result_json: string } | undefined;
+      if (prior) return { ...(JSON.parse(prior.result_json) as ExecutionResultT), notice: 'EM-2308' };
+    }
+    if (row.status === 'executed' && row.result_json) return { ...(JSON.parse(row.result_json) as ExecutionResultT), notice: 'EM-2308' };
+    if (row.status === 'executing' || row.status === 'draft' || this.executing.has(row.project_id)) throw new EmError('EM-2309', 'Another change is being applied. Wait for it to finish, then try again.', { details: { projectId: row.project_id, activePlanId: planId } });
+    const plan = JSON.parse(row.plan_json) as EditPlanT;
+    if (row.status === 'stale') throw stale(this.store.head(row.project_id).hash, plan.baseVersion);
+    if (row.status === 'cancelled' || row.status === 'invalid') throw new EmError('EM-2303', 'This plan cannot be executed.', { details: { planId, status: row.status } });
+    const destructive = [...new Set(planOps(plan).filter((op) => DESTRUCTIVE.has(op.op)).map((op) => op.op))];
+    if (destructive.length && !o.confirmDestructive) throw new EmError('EM-9002', 'This plan removes content; confirm to continue.', { status: 422, path: 'body.confirmDestructive', details: { destructive } });
+    return this.executeRow(row, { checkpoint: true, ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}) }).result;
+  }
+
+  /** The Execute core shared by R-073 and the compile-now path. One transaction; rollback reported as ExecutionResult ok:false. */
+  private executeRow(row: PlanRow, o: { checkpoint: boolean; idempotencyKey?: string; extraChanged?: string[] }): { result: ExecutionResultT; version: VersionDto | null } {
+    const projectId = row.project_id, planId = row.id;
+    const t0 = performance.now();
+    const plan = JSON.parse(row.plan_json) as EditPlanT;
+    const head = this.store.head(projectId);
+    if (plan.baseVersion !== head.hash) {
+      this.updatePlan(planId, plan, 'stale'); this.emitPlanInvalid(projectId, plan, 'stale', 'EM-2301');
+      throw stale(head.hash, plan.baseVersion);
+    }
+    const intentIds = row.intent_ids_json ? (JSON.parse(row.intent_ids_json) as string[]) : [];
+    const own = new Set(intentIds);
+    const queue = this.loadQueue(projectId);
+    const v = validatePlan({ ...plan, status: 'draft' }, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: lockedKeysFromQueue(queue.filter((i) => !own.has(i.id))), newId: this.ctx.newId });
+    if (v.plan.status !== 'valid' || (!v.predicted && planOps(plan).length > 0)) {
+      const st = v.plan.status === 'stale' ? 'stale' : 'invalid';
+      this.updatePlan(planId, v.plan, st);
+      const code: EmCode = v.plan.touchesLockedKeys.length ? 'EM-2302' : 'EM-2303';
+      this.emitPlanInvalid(projectId, v.plan, st, code);
+      const first = v.issues.find((i) => i.severity === 'block');
+      throw new EmError(code, code === 'EM-2302' ? `The plan would change settings you already picked (${v.plan.touchesLockedKeys.join(', ')}).` : first?.message ?? 'The plan is not valid.', { details: { planId, touchesLockedKeys: v.plan.touchesLockedKeys, validation: v.plan.validation.slice(0, 10) } });
+    }
+    this.executing.add(projectId);
+    try {
+      this.updatePlan(planId, v.plan, 'executing');
+      if (o.checkpoint) { try { this.checkpoints.write(projectId, 'pre-execute'); } catch (e) { this.ctx.log.warn({ projectId, err: String(e) }, 'pre-execute checkpoint failed'); } }
+      const ops: OperationT[] = planOps(v.plan);
+      const predicted = v.predicted ?? { model: head.model, diff: [] };
+      let result!: ExecutionResultT; let intentChanged: string[] = [];
+      try {
+        const c = this.store.commit(projectId, predicted.model, {
+          cause: v.plan.origin === 'compile' ? 'compile' : 'execute', planId, ops, diff: predicted.diff,
+          inTx: (_versionId, hash) => {
+            result = { planId, ok: true, fromVersion: head.hash, toVersion: hash, appliedOps: ops.length, diff: predicted.diff, durationMs: Math.round(performance.now() - t0) };
+            const before = this.loadQueue(projectId);
+            const after = before.map((i) => (own.has(i.id) && (i.status === 'queued' || i.status === 'planned' || i.status === 'compiled') ? { ...i, status: 'executed' as const } : i));
+            intentChanged = this.saveQueue(projectId, before, after);
+            this.updatePlan(planId, v.plan, 'executed', { result, ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}) });
+          },
+          beforeEvent: () => this.emitQueue(projectId, [...new Set([...(o.extraChanged ?? []), ...intentChanged])], 'executed'),
+        });
+        this.emitPlanReady(planId);
+        return { result, version: c.changed ? c.version : versionDto(this.store.versionRow(projectId, c.version.id)) };
+      } catch (e) {
+        // SQLite rolled the transaction back: head, intents and history are unchanged (AI_WORKFLOW §12).
+        this.ctx.log.error({ projectId, planId, err: String(e) }, 'execute failed; rolled back');
+        result = { planId, ok: false, fromVersion: head.hash, appliedOps: 0, diff: [], error: { code: 'EM-2307', message: 'A step failed, so the whole change was undone. Your project is unchanged.', step: 1 },
+          rollback: { performed: true, toVersion: head.hash }, durationMs: Math.round(performance.now() - t0) };
+        this.updatePlan(planId, v.plan, 'failed', { result });
+        this.emitPlanInvalid(projectId, { ...v.plan, validation: [{ path: '', message: result.error!.message, code: 'EM-2307' }] }, 'failed', 'EM-2307');
+        return { result, version: null };
+      }
+    } finally { this.executing.delete(projectId); }
+  }
+
+  // ───────────────────────────── R-074 / R-075 ─────────────────────────────
+  cancel(planId: string) {
+    const row = this.planRow(planId);
+    if (row.status === 'executing') throw new EmError('EM-2309', 'Another change is being applied. Wait for it to finish, then try again.', { details: { projectId: row.project_id, activePlanId: planId } });
+    if (row.status === 'executed') throw new EmError('EM-9002', 'An executed plan cannot be cancelled; use Undo.', { status: 422, details: { reason: 'executed' } });
+    if (row.status === 'cancelled') return this.planDtoFor(planId);
+    const run = this.runs.get(planId);
+    if (run) { run.ac.abort(); this.finishCancelled(run); return this.planDtoFor(planId); }
+    const p = JSON.parse(row.plan_json) as EditPlanT;
+    this.updatePlan(planId, p, 'cancelled');
+    if (row.agent_run_id) this.finishRun(row.agent_run_id, 'cancelled', 'EM-4303');
+    this.emitPlanInvalid(row.project_id, p, 'cancelled', 'EM-4303');
+    return this.planDtoFor(planId);
+  }
+  setNotes(planId: string, notes: string) {
+    const row = this.planRow(planId);
+    const p = JSON.parse(row.plan_json) as EditPlanT;
+    this.updatePlan(planId, { ...p, notes }, row.status);
+    return this.planDtoFor(planId);
+  }
+
+  // ───────────────────────────── Brainstorm hand-off (hooks.enqueueIntents) ─────────────────────────────
+  /**
+   * Enqueues already-built intents (Brainstorm hand-off, AI_WORKFLOW §6/§9). They are normalised to this project, the current
+   * head and status 'queued'; an intent whose key is a Locked Key is kept but 'rejected' so it never supersedes the Creator's pick.
+   */
+  enqueueExternal(projectId: string, raw: readonly unknown[]): { queue: EditIntentT[] } {
+    const head = this.store.head(projectId);
+    const before = this.loadQueue(projectId);
+    const locked = lockedKeysFromQueue(before);
+    const taken = (id: string) => !!this.ctx.db.prepare('SELECT 1 FROM edit_intents WHERE id = ?').get(id);
+    const idMap = new Map<string, string>();
+    const parsed = raw.map((x) => EditIntent.parse(x));
+    for (const i of parsed) idMap.set(i.id, taken(i.id) || idMap.has(i.id) ? this.ctx.newId() : i.id);
+    const incoming: EditIntentT[] = [], rejected: EditIntentT[] = [];
+    for (const i of parsed) {
+      const n: EditIntentT = { ...i, id: idMap.get(i.id)!, projectId, status: 'queued', baseVersion: head.hash, supersedes: [], ...(i.parentIntentId ? { parentIntentId: idMap.get(i.parentIntentId) ?? i.parentIntentId } : {}) };
+      const keys = n.propertyKey.split('|');
+      if (keys.some((k) => locked.includes(k))) rejected.push({ ...n, status: 'rejected', rejectionReason: 'This setting is one you picked yourself, so the suggestion was not applied.' });
+      else incoming.push(n);
+    }
+    const after = [...enqueue(before, incoming), ...rejected];
+    const changed = this.saveQueue(projectId, before, after);
+    this.emitQueue(projectId, changed, 'created');
+    return { queue: this.loadQueue(projectId) };
+  }
+  /** Drains R-082 hand-offs that S3 stored before hooks.enqueueIntents existed (table from migration 30). */
+  drainHandoffs(): void {
+    let rows: Array<{ id: string; project_id: string; intents_json: string }> = [];
+    try { rows = this.ctx.db.prepare("SELECT id, project_id, intents_json FROM brainstorm_handoffs WHERE status = 'pending' ORDER BY created_at").all() as typeof rows; } catch { return; }
+    for (const r of rows) {
+      try {
+        this.enqueueExternal(r.project_id, JSON.parse(r.intents_json) as unknown[]);
+        this.ctx.db.prepare("UPDATE brainstorm_handoffs SET status = 'enqueued' WHERE id = ?").run(r.id);
+      } catch (e) { this.ctx.log.warn({ projectId: r.project_id, err: String(e) }, 'handoff drain failed'); }
+    }
+  }
+
+  // ───────────────────────────── lifecycle ─────────────────────────────
+  /** FR-172: plans left `executing` → failed (the transaction was rolled back); planning runs → cancelled (EM-4304). */
+  recoverOnStart(): void {
+    const db = this.ctx.db, now = this.ctx.now();
+    const rows = db.prepare("SELECT * FROM edit_plans WHERE status IN ('executing','draft')").all() as PlanRow[];
+    for (const r of rows) {
+      const p = JSON.parse(r.plan_json) as EditPlanT;
+      const status = r.status === 'executing' ? 'failed' : 'cancelled';
+      const code = r.status === 'executing' ? 'EM-2307' : 'EM-4304';
+      this.updatePlan(r.id, { ...p, validation: [{ path: '', message: code === 'EM-4304' ? 'Expertmotion restarted during the agent request. Send it again.' : 'Execute was interrupted; nothing was applied.', code }] }, status);
+      if (r.agent_run_id) db.prepare("UPDATE agent_runs SET status = 'cancelled', error_code = 'EM-4304', finished_at = ? WHERE id = ? AND status = 'running'").run(now, r.agent_run_id);
+    }
+  }
+  stop(): void { for (const r of this.runs.values()) r.ac.abort(); }
+}
+
+function aggregate(usage: ChatUsage[]): EditPlanT['usage'] | undefined {
+  if (!usage.length) return undefined;
+  const cost = usage.every((u) => u.costUsd !== null) ? usage.reduce((s, u) => s + (u.costUsd ?? 0), 0) : null;
+  return { model: usage[usage.length - 1]!.model, inputTokens: usage.reduce((s, u) => s + u.inputTokens, 0), outputTokens: usage.reduce((s, u) => s + u.outputTokens, 0), costUsd: cost, approximate: usage.some((u) => u.approximate) };
+}
+
+export function targetExists(m: CompositionModelT, ref: ElementRefT): boolean {
+  switch (ref.kind) {
+    case 'clip': return m.tracks.video.some((c) => c.id === ref.id);
+    case 'text': return m.tracks.text.some((t) => t.id === ref.id);
+    case 'audio': return m.tracks.audio.some((a) => a.id === ref.id);
+    case 'shape': return m.tracks.overlay.some((o) => o.id === ref.id);
+    case 'cut': return ref.index !== undefined && ref.index < m.tracks.video.length - 1;
+    default: return true;
+  }
+}

@@ -1,0 +1,112 @@
+// Request schemas and response mappers for the S1 routes (API_SPECIFICATION §3, §6.2–6.3, §6.6–6.8). Names follow the spec.
+import { z } from 'zod';
+import { ElementRef, Operation, ProjectSettings, Theme, type CompositionModelT } from '@expertmotion/composition-model';
+import { EditIntent, INTENT_CATEGORIES, type EditIntentT, type EditPlanT } from '@expertmotion/agents';
+import { ULID_RE } from '@expertmotion/shared';
+
+export const Id = z.string().regex(ULID_RE, 'must be an id');
+export const ProjectParams = z.object({ id: Id });
+export const PlanParams = z.object({ planId: Id });
+
+const boolQ = z.enum(['true', 'false']).optional().transform((v) => v === 'true');
+export const PageQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), cursor: z.string().max(400).optional() });
+
+export const ProjectCreateInput = z.object({
+  name: z.string().trim().min(1).max(120),
+  settings: ProjectSettings.partial().optional(),
+  language: z.enum(['id', 'en']).default('id'),
+  theme: Theme.partial().optional(),
+}).strict();
+export const ProjectPatchInput = z.object({ name: z.string().trim().min(1).max(120).optional(), language: z.enum(['id', 'en']).optional() }).strict();
+export const ProjectListQuery = PageQuery.extend({ includeDeleted: boolQ });
+export const DuplicateInput = z.object({ name: z.string().trim().min(1).max(120), copyMedia: z.boolean().default(true) }).strict();
+export const BackupInput = z.object({ folder: z.string().min(1).max(1024), passphrase: z.string().min(8).max(1024).optional(), includeOutputs: z.boolean().default(false) }).strict();
+export const RestoreInput = z.object({ path: z.string().min(1).max(1024), passphrase: z.string().min(1).max(1024).optional(), onConflict: z.enum(['copy', 'replace']).default('copy') }).strict();
+export const CheckpointInput = z.object({ reason: z.literal('manual').default('manual') }).strict();
+export const CheckpointParams = z.object({ id: Id, checkpointId: Id });
+
+export const CompositionQuery = z.object({ model: z.enum(['true', 'false']).default('true').transform((v) => v === 'true') });
+export const VersionParams = z.object({ id: Id, versionId: Id });
+export const DiffQuery = z.object({ from: z.string().min(1).max(128), to: z.string().min(1).max(128) });
+export const ValidateInput = z.object({ baseVersion: z.string().min(1).max(128), ops: z.array(Operation).max(200) }).strict();
+
+/** API §6.7 DesignPickInput, plus the deterministic Text Panel / Output fields of the agents package DesignPick (field/value, output, assetId, text). */
+export const DesignPickInput = z.object({
+  source: z.enum(['ui', 'chat']),
+  category: z.enum(INTENT_CATEGORIES),
+  presetId: z.string().regex(/^preset:[a-z]+\.[a-z0-9-]+$/).optional(),
+  params: z.record(z.string(), z.unknown()).default({}),
+  target: ElementRef.default({ kind: 'selection' }),
+  selection: z.array(ElementRef).max(200).default([]),
+  playheadMs: z.number().int().min(0).default(0),
+  instruction: z.string().max(2000).optional(),
+  baseVersion: z.string().min(1).max(128),
+  plan: z.enum(['auto', 'none']).default('auto'),
+  field: z.enum(['fontFamily', 'fontSize', 'weight', 'colour', 'align', 'opacity']).optional(),
+  value: z.unknown().optional(),
+  output: z.object({ kind: z.enum(['ratio', 'resolution', 'fps']), value: z.unknown(), customRatio: z.object({ w: z.number().int().min(1), h: z.number().int().min(1) }).optional() }).optional(),
+  assetId: z.string().max(64).optional(),
+  text: z.string().min(1).max(500).optional(),
+}).strict();
+export type DesignPickInputT = z.infer<typeof DesignPickInput>;
+export const IntentParams = z.object({ id: Id, intentId: Id });
+const statusList = z.string().max(200).optional().transform((s) => (s ? s.split(',').map((x) => x.trim()).filter(Boolean) : undefined));
+export const IntentListQuery = z.object({ status: statusList, limit: z.coerce.number().int().min(1).max(500).default(100) });
+export const IntentClearQuery = z.object({ status: z.enum(['queued', 'superseded']).default('queued') });
+
+export const PlanCreateInput = z.object({
+  intentIds: z.array(Id).max(200).default([]), message: z.string().max(4000).optional(), baseVersion: z.string().min(1).max(128),
+  mode: z.enum(['auto', 'compile-only', 'agent']).default('auto'),
+}).strict();
+export const PlanListQuery = PageQuery.extend({ status: statusList });
+export const ExecuteInput = z.object({ confirmDestructive: z.boolean().default(false) }).strict();
+export const NotesInput = z.object({ notes: z.string().max(1000) }).strict();
+
+// ───────────────────────────── rows and DTOs ─────────────────────────────
+export interface ProjectRow { id: string; name: string; settings_json: string; head_version_id: string | null; language: 'id' | 'en'; created_at: string; updated_at: string; opened_at: string | null; deleted_at: string | null }
+export interface ProjectListRow extends ProjectRow { head_hash: string | null; head_duration: number | null; head_parent: string | null; asset_count: number; ckpt_version: string | null }
+export interface VersionRow { id: string; project_id: string; parent_id: string | null; hash: string; model_json: string; cause: VersionCause; plan_id: string | null; duration_ms: number; created_at: string }
+export type VersionCause = 'insert' | 'compile' | 'execute' | 'undo' | 'redo' | 'restore' | 'system';
+export interface CheckpointRow { id: string; project_id: string; version_id: string; file_path: string; reason: 'autosave' | 'pre-execute' | 'pre-render' | 'manual'; created_at: string }
+export interface PlanRow { id: string; project_id: string; base_version_id: string; origin: 'compile' | 'editor-agent'; plan_json: string; status: EditPlanT['status']; agent_run_id: string | null; created_at: string; updated_at: string; intent_ids_json: string | null; message: string | null; result_json: string | null; idempotency_key: string | null }
+
+export const PROJECT_SELECT = `SELECT p.*, v.hash AS head_hash, v.duration_ms AS head_duration, v.parent_id AS head_parent,
+  (SELECT count(*) FROM assets a WHERE a.project_id = p.id) AS asset_count,
+  (SELECT c.version_id FROM recovery_checkpoints c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS ckpt_version
+  FROM projects p LEFT JOIN composition_versions v ON v.id = p.head_version_id`;
+
+export function projectDto(r: ProjectListRow) {
+  const dirty = r.ckpt_version !== null ? r.ckpt_version !== r.head_version_id : r.head_parent !== null;
+  return { id: r.id, name: r.name, settings: JSON.parse(r.settings_json) as unknown, language: r.language, headVersionId: r.head_version_id, headHash: r.head_hash,
+    durationMs: r.head_duration ?? 0, assetCount: r.asset_count, createdAt: r.created_at, updatedAt: r.updated_at, openedAt: r.opened_at, dirty,
+    ...(r.deleted_at ? { deletedAt: r.deleted_at } : {}) };
+}
+export type ProjectDto = ReturnType<typeof projectDto>;
+
+export function versionDto(r: VersionRow, withModel = false) {
+  return { id: r.id, projectId: r.project_id, parentId: r.parent_id, hash: r.hash, cause: r.cause, planId: r.plan_id, durationMs: r.duration_ms, createdAt: r.created_at,
+    ...(withModel ? { model: JSON.parse(r.model_json) as CompositionModelT } : {}) };
+}
+export type VersionDto = ReturnType<typeof versionDto>;
+
+export function checkpointDto(r: CheckpointRow, durationMs: number) {
+  return { id: r.id, projectId: r.project_id, versionId: r.version_id, reason: r.reason, createdAt: r.created_at, durationMs };
+}
+
+export function planDto(r: PlanRow, opts: { withOps?: boolean } = {}) {
+  const p = JSON.parse(r.plan_json) as EditPlanT;
+  const steps = opts.withOps === false ? p.steps.map((s) => ({ ...s, ops: [], opCount: s.ops.length })) : p.steps;
+  return { ...p, steps, id: r.id, status: r.status, origin: r.origin, baseVersionId: r.base_version_id, agentRunId: r.agent_run_id,
+    intentIds: r.intent_ids_json ? (JSON.parse(r.intent_ids_json) as string[]) : [], createdAt: r.created_at, updatedAt: r.updated_at };
+}
+export type PlanDto = ReturnType<typeof planDto>;
+
+export const parseIntent = (json: string): EditIntentT => EditIntent.parse(JSON.parse(json));
+
+/** Opaque cursors: base64url JSON of the last row's sort key. */
+export const encodeCursor = (o: Record<string, string>): string => Buffer.from(JSON.stringify(o), 'utf8').toString('base64url');
+export function decodeCursor(c: string | undefined): Record<string, string> | undefined {
+  if (!c) return undefined;
+  try { const o = JSON.parse(Buffer.from(c, 'base64url').toString('utf8')) as unknown; if (o && typeof o === 'object') return o as Record<string, string>; } catch { /* fall through */ }
+  return undefined;
+}
