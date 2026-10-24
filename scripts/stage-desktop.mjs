@@ -4,6 +4,7 @@
 //   apps/service/dist/service.cjs        → apps/desktop/dist/service/service.cjs
 //   apps/ui/dist/**                      → apps/desktop/dist/ui/**
 //   resources/engine/bundle/**           → apps/desktop/resources/engine/bundle/**
+//   resources/catalogue/<category>/*.webm (build-loops) → apps/desktop/dist/ui/catalogue/** (served over app:// with the Editor)
 //   node_modules/.remotion/chrome-headless-shell/<platform>/<dir>/**  → apps/desktop/resources/engine/chrome/**
 //   node_modules/@remotion/compositor-<platform>/**                    → apps/desktop/resources/engine/compositor/**
 //   resources/bin/** (full LGPL FFmpeg + ffprobe for ingestion, ADR-019; placed by the Operator) → apps/desktop/resources/bin/**
@@ -24,6 +25,7 @@ const chromeDir = fs.existsSync(chromeBase) ? (fs.readdirSync(chromeBase).map((d
 const plan = [
   [need(path.join(root, 'apps/service/dist/service.cjs'), 'service bundle (npm run build -w @expertmotion/service)'), path.join(desk, 'dist/service/service.cjs')],
   [need(path.join(root, 'apps/ui/dist'), 'Editor build (npm run build -w @expertmotion/ui)'), path.join(desk, 'dist/ui')],
+  [need(path.join(root, 'resources/catalogue'), 'catalogue loops (node packages/engine/scripts/build-loops.mjs)'), path.join(desk, 'dist/ui/catalogue')],
   [need(path.join(root, 'resources/engine/bundle'), 'Engine bundle (npm run build:bundle -w @expertmotion/engine)'), path.join(desk, 'resources/engine/bundle')],
   [need(chromeDir, 'Chrome Headless Shell (npx remotion browser ensure)'), path.join(desk, 'resources/engine/chrome')],
   [need(path.join(root, 'node_modules/@remotion', plat.compositor), 'Remotion compositor'), path.join(desk, 'resources/engine/compositor')],

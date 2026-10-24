@@ -16,7 +16,7 @@ export interface Resources {
   browserExecutable?: string;           // Chrome Headless Shell (packaged: resources/engine/chrome)
   binariesDirectory?: string;           // Remotion compositor (packaged: resources/engine/compositor)
   ffmpeg: string; ffprobe: string;      // ingestion binaries (ADR-019)
-  loopsDir: string;                     // resources/catalogue/loops
+  loopsDir: string;                     // resources/catalogue (<category>/<name>.webm, DESIGN_CATALOGUE §2)
 }
 
 export interface Hooks {

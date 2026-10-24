@@ -35,7 +35,7 @@ export function defaultResources(env: NodeJS.ProcessEnv = process.env): Resource
     ...(binaries ? { binariesDirectory: binaries } : {}),
     ffmpeg: env['EM_FFMPEG'] ?? (ffmpegDir ? path.join(ffmpegDir, exe('ffmpeg')) : 'ffmpeg'),
     ffprobe: env['EM_FFPROBE'] ?? (ffmpegDir ? path.join(ffmpegDir, exe('ffprobe')) : 'ffprobe'),
-    loopsDir: path.join(root, 'catalogue', 'loops'),
+    loopsDir: path.join(root, 'catalogue'),
   };
 }
 

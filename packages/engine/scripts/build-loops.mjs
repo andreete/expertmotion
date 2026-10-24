@@ -1,4 +1,4 @@
-// Prerenders the Preview catalogue loops (ADR-011, DESIGN_CATALOGUE §2): resources/catalogue/loops/<category>/<name>.webm,
+// Prerenders the Preview catalogue loops (ADR-011, DESIGN_CATALOGUE §2): resources/catalogue/<category>/<name>.webm,
 // 2 s, 480 px wide (16:9 → 480×270), VP8, no audio. Build-time only; the shipped app never renders these.
 // Needs the Engine bundle (npm run build:bundle) and `tsc -b packages/engine`. Heavy: run inside the memory cap.
 //   bash scripts/run-capped.sh node packages/engine/scripts/build-loops.mjs [--only=transition,effect] [--limit=N] [--force]
@@ -12,12 +12,14 @@ import path from 'node:path';
 
 const root = new URL('../../../', import.meta.url).pathname;
 const serveUrl = path.join(root, 'resources/engine/bundle');
-const outRoot = path.join(root, 'resources/catalogue/loops');
+const outRoot = path.join(root, 'resources/catalogue');
 const fxDir = path.join(root, 'resources/catalogue/.fixtures');
 const arg = (k) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split('=')[1];
 const only = arg('only')?.split(','); const limit = Number(arg('limit') ?? Infinity); const force = process.argv.includes('--force');
 const gl = process.env.EM_GL ?? (process.platform === 'win32' ? 'angle' : 'swangle');
-const opts = { chromiumOptions: { gl }, concurrency: 1, logLevel: 'error' };
+// Fixed Remotion serve port (never let it auto-pick the 3000 range; dev ports 4110/4120 are the service and UI).
+const port = Number(process.env.EM_RENDER_PORT ?? 4130);
+const opts = { chromiumOptions: { gl }, concurrency: 1, logLevel: 'error', port };
 const log = (o) => console.log(JSON.stringify(o));
 if (!fs.existsSync(path.join(serveUrl, 'index.html'))) { console.error('Engine bundle missing: npm run build:bundle -w @expertmotion/engine'); process.exit(1); }
 
@@ -54,10 +56,11 @@ const clips = { A: await fixture('clip-a', 'preset:palette.editorial-dark', 'A')
 const grant = crypto.randomBytes(32).toString('base64url');
 const server = http.createServer((req, res) => {
   const m = /^\/media\/([\w-]{43})\/(A|B)\/playable$/.exec(req.url ?? '');
+  if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': `http://localhost:${port}`, 'Access-Control-Allow-Headers': 'Range' }); return res.end(); }
   if (!m || m[1] !== grant) { res.writeHead(404); return res.end(); }
   const f = clips[m[2]]; const size = fs.statSync(f).size; const r = /bytes=(\d*)-(\d*)/.exec(req.headers.range ?? '');
   const start = r?.[1] ? Number(r[1]) : 0; const end = r?.[2] ? Math.min(Number(r[2]), size - 1) : size - 1;
-  res.writeHead(r ? 206 : 200, { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, ...(r ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}) });
+  res.writeHead(r ? 206 : 200, { 'Access-Control-Allow-Origin': `http://localhost:${port}`, 'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length', 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, ...(r ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}) });
   fs.createReadStream(f, { start, end }).pipe(res);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));

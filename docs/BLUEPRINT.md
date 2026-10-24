@@ -89,7 +89,7 @@ expertmotion/
     fixtures/                  sample media (short, CC0), Composition Model fixtures, recorded provider replies
     golden/                    golden frames per preset × 7 ratios, Golden Scenario expectations
     e2e/                       Playwright specs (Editor against a dev Local Service)
-  resources/                   build-time outputs copied into the installer (git-ignored): engine/bundle, engine/chrome, engine/compositor (Remotion slim FFmpeg), bin/ffmpeg-full (LGPL full build for ingestion), catalogue/loops
+  resources/                   build-time outputs copied into the installer (git-ignored): engine/bundle, engine/chrome, engine/compositor (Remotion slim FFmpeg), bin/ffmpeg-full (LGPL full build for ingestion), catalogue/<category>/*.webm
   scripts/                     dev-capped.sh (Linux cgroup wrapper), verify.sh
   docs/                        this documentation
 ```
@@ -132,7 +132,7 @@ The dependency graph is therefore acyclic: `shared → catalogue → composition
 | Package | Build tool | Output | Consumed by |
 |---|---|---|---|
 | `packages/shared`, `catalogue`, `composition-model`, `agents`, `models` | `tsc -b` (ESM, d.ts) | `dist/` | service, ui (type-only or ESM); `catalogue/dist/` also feeds `build:engine` (loop list) |
-| `packages/engine` | `tsc -b` for the library; `remotion bundle` (`@remotion/bundler` `bundle()`) for the Engine bundle; `renderMedia` loop for catalogue loops | `dist/` (library); `resources/engine/bundle/` (serveUrl folder); `resources/catalogue/loops/<category>/<name>.webm` | service (`serveUrl`), ui (component via `dist/`), ui (loops as static files) |
+| `packages/engine` | `tsc -b` for the library; `remotion bundle` (`@remotion/bundler` `bundle()`) for the Engine bundle; `renderMedia` loop for catalogue loops | `dist/` (library); `resources/engine/bundle/` (serveUrl folder); `resources/catalogue/<category>/<name>.webm` | service (`serveUrl`), ui (component via `dist/`), ui (loops as static files) |
 | `apps/ui` | Vite 6 | `apps/ui/dist/` | desktop (served over the `app://` scheme), dev browser via Vite dev server |
 | `apps/service` | esbuild (single CommonJS file + externals for native modules; CJS because `utilityProcess.fork` loads a script path and the bytecode loader is CJS) | `apps/service/dist/service.cjs` | desktop (`utilityProcess.fork`) |
 | `apps/desktop` | electron-vite (main, preload); V8 bytecode only for `license/` and `prompts/` modules (ADR-007) | `apps/desktop/out/` | electron-builder |
@@ -229,7 +229,7 @@ packages/engine/
   public/fonts/*.woff2       Inter, Plus Jakarta Sans, Archivo, JetBrains Mono (OFL)
   public/sfx/*.wav           CC0 pack (P1)
   scripts/build-bundle.ts    bundle({entryPoint: src/entry.ts, publicDir, outDir: resources/engine/bundle})
-  scripts/build-loops.ts     for each preset: renderMedia 2 s webm 480 px → resources/catalogue/loops/<category>/<name>.webm (ADR-011)
+  scripts/build-loops.ts     for each preset: renderMedia 2 s webm 480 px → resources/catalogue/<category>/<name>.webm (ADR-011)
   scripts/golden-frames.ts   renderStill per preset × 7 ratios → test/golden/
 ```
 
@@ -523,10 +523,10 @@ Legend: **keep** = logic retained, **rename** = identifier or file renamed, **re
 
 | Artefact | Built by | Contents | Integrity |
 |---|---|---|---|
-| **Editor bundle** `apps/ui/dist/` | Vite 6 (`vite build`), Tailwind v4 | `index.html`, hashed JS/CSS, fonts (UI), catalogue loops copied from `resources/catalogue/loops/` | served over `app://` by the Shell; CSP `default-src 'self'; connect-src http://127.0.0.1:*; media-src http://127.0.0.1:* 'self'` |
+| **Editor bundle** `apps/ui/dist/` | Vite 6 (`vite build`), Tailwind v4 | `index.html`, hashed JS/CSS, fonts (UI), catalogue loops copied from `resources/catalogue/<category>/` into `dist/ui/catalogue/` by `scripts/stage-desktop.mjs` | served over `app://` by the Shell; CSP `default-src 'self'; connect-src http://127.0.0.1:*; media-src http://127.0.0.1:* 'self'` |
 | **Service bundle** `apps/service/dist/service.cjs` (+ `node_modules` externals for native modules) | esbuild, `--platform=node --format=cjs --minify --sourcemap=false` | Local Service entry for `utilityProcess.fork`; `license/` and `prompts/` as V8 bytecode (`.jsc`) loaded by a tiny loader | `asar` integrity fuse; `prompts.enc` decrypted in memory (ADR-007) |
 | **Engine bundle** `resources/engine/bundle/` | `packages/engine/scripts/build-bundle.ts` → `@remotion/bundler.bundle()` | webpack output + `public/` (fonts, sfx) + `manifest.json {remotionVersion, bundleVersion (sha256 of files), builtAt}` | hash listed in SBOM; `EngineBundle` verifies `manifest.json` at startup (EM-3003) |
-| **Catalogue loops** `resources/catalogue/loops/<category>/<name>.webm` | `packages/engine/scripts/build-loops.ts` (`renderMedia`, vp9, 2 s, 480 px, ≤ 40 MB total) | one loop per preset row in DESIGN_CATALOGUE.md; `index.json` with sizes | build fails if a preset lacks a loop (EM-3302 would otherwise show at runtime) |
+| **Catalogue loops** `resources/catalogue/<category>/<name>.webm` | `packages/engine/scripts/build-loops.ts` (`renderMedia`, vp9, 2 s, 480 px, ≤ 40 MB total) | one loop per preset row in DESIGN_CATALOGUE.md; `index.json` with sizes | build fails if a preset lacks a loop (EM-3302 would otherwise show at runtime) |
 | **Golden frames** `test/golden/<preset>/<ratio>.png` | `scripts/golden-frames.ts` (`renderStill`) | one still per preset × 7 ratios | compared in TEST_PLAN parity tests (≤ 1 % diff) |
 | **Chrome Headless Shell** `resources/engine/chrome/win64/` | copied from `node_modules/.remotion/chrome-headless-shell/win64/` at package time, version pinned by its `VERSION` file | browser binary | file hash recorded in SBOM; EM-3001 if missing |
 | **FFmpeg (slim) / ffprobe** `resources/engine/compositor/` | from `@remotion/compositor-win32-x64-msvc` (verified on npm 2026-10-24) | used by `@remotion/renderer` (via `binariesDirectory`) for output encoding | SBOM |
