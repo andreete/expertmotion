@@ -2,18 +2,18 @@
 // Model ids are the doc's ids (e.g. `whisper-small`); DATABASE_SCHEMA.md's `models.key` example `whisper.large-v3-turbo`
 // is accepted through normalizeModelKey().
 //
-// Pinning: LOCAL_AI_MODELS §4.2 requires Hugging Face `resolve/<commit-sha>/<file>` URLs with a sha256 per file. The doc
-// records no commit or hash yet, so every such value is the literal TO_PIN and the URL uses `resolve/main`. The download
-// manager refuses unpinned files (no download without a hash to verify, SEC-074). Sizes are the doc's rounded decimal
-// figures (`bytesExact: false`) until the Operator pins exact byte counts.
+// Pinning: LOCAL_AI_MODELS §4.2 requires Hugging Face `resolve/<commit-sha>/<file>` URLs with a sha256 per file. The pins
+// live in pins.ts (commit, sha256, exact bytes per "repo/path", read from the HF API on 2026-10-25); a file without a pin
+// keeps TO_PIN and the download manager refuses it (no download without a hash to verify, SEC-074).
 import type { DefaultTask, Language, ModelEngine, ModelTask, Tier } from './types.js';
+import { HF_PINS } from './pins.js';
 
 export const TO_PIN = 'TO_PIN' as const;
 /** Registry entry version (manifest.json `version`). */
 export const REGISTRY_VERSION = '2026.10';
 
 /** SEC-071 pinned download-host allow-list (the Operator's release host is added at runtime: `allowedHosts({ operatorHost })`). */
-export const DOWNLOAD_HOSTS: readonly string[] = ['huggingface.co', 'cdn-lfs.huggingface.co', 'cas-bridge.xethub.hf.co', 'github.com', 'objects.githubusercontent.com'];
+export const DOWNLOAD_HOSTS: readonly string[] = ['huggingface.co', 'cdn-lfs.huggingface.co', 'cas-bridge.xethub.hf.co', '*.hf.co', 'github.com', 'objects.githubusercontent.com'];
 export function allowedHosts(opts: { operatorHost?: string; extra?: readonly string[] } = {}): string[] {
   return [...DOWNLOAD_HOSTS, ...(opts.operatorHost ? [opts.operatorHost] : []), ...(opts.extra ?? [])].map((h) => h.toLowerCase());
 }
@@ -71,7 +71,13 @@ export interface ModelDef {
 const HF = (repo: string, path: string): string => `https://huggingface.co/${repo}/resolve/main/${path}`;
 const MB = 1_000_000;
 const GB = 1_000_000_000;
-const file = (name: string, bytes: number, url: string): ModelFileDef => ({ name, bytes: Math.round(bytes), bytesExact: false, sha256: TO_PIN, url, revision: TO_PIN });
+/** A registry file; when HF_PINS has its "repo/path", the URL resolves at the pinned commit with the exact size and sha256. */
+const file = (name: string, bytes: number, url: string): ModelFileDef => {
+  const m = /^https:\/\/huggingface\.co\/([^/]+\/[^/]+)\/resolve\/main\/(.+)$/.exec(url);
+  const pin = m ? HF_PINS[`${m[1]}/${m[2]}`] : undefined;
+  if (!pin || !m) return { name, bytes: Math.round(bytes), bytesExact: false, sha256: TO_PIN, url, revision: TO_PIN };   // unpinned fallback: TO_PIN (refused at download; the registry test requires a pin for every file)
+  return { name, bytes: pin.bytes, bytesExact: true, sha256: pin.sha256, url: `https://huggingface.co/${m[1]}/resolve/${pin.commit}/${m[2]}`, revision: pin.commit };
+};
 const sum = (files: readonly ModelFileDef[]): number => files.reduce((a, f) => a + f.bytes, 0);
 
 const WHISPER_LICENCE: LicenceDef = { spdx: 'MIT', name: 'MIT (whisper.cpp engine) + MIT (OpenAI Whisper weights)', url: 'https://github.com/openai/whisper/blob/main/LICENSE', redistribution: 'yes' };
@@ -93,7 +99,7 @@ const FLUX_FILES: ModelFileDef[] = [
   file('flux1-schnell-Q4_0.gguf', 6.77 * GB, HF('city96/FLUX.1-schnell-gguf', 'flux1-schnell-Q4_0.gguf')),
   file('clip_l.safetensors', 246 * MB, HF('comfyanonymous/flux_text_encoders', 'clip_l.safetensors')),
   file('t5xxl_fp8_e4m3fn.safetensors', 4.9 * GB, HF('comfyanonymous/flux_text_encoders', 't5xxl_fp8_e4m3fn.safetensors')),
-  file('ae.safetensors', 335 * MB, HF('black-forest-labs/FLUX.1-schnell', 'ae.safetensors')),
+  file('ae.safetensors', 335 * MB, HF('second-state/FLUX.1-schnell-GGUF', 'ae.safetensors')),
 ];
 
 const MODEL_LIST: ModelDef[] = [

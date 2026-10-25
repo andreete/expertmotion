@@ -14,7 +14,7 @@ import { EmError } from '@expertmotion/shared';
 import { modelCdnHost } from './model-cdn.js';
 
 export const PROVIDER_HOSTS = ['openrouter.ai', 'api.openai.com', 'api.anthropic.com', 'generativelanguage.googleapis.com'] as const;
-export const MODEL_HOSTS = ['huggingface.co', 'cdn-lfs.huggingface.co', 'cas-bridge.xethub.hf.co', 'github.com', 'objects.githubusercontent.com'] as const;
+export const MODEL_HOSTS = ['huggingface.co', 'cdn-lfs.huggingface.co', 'cas-bridge.xethub.hf.co', 'hf.co', 'github.com', 'objects.githubusercontent.com'] as const;   // hf.co: Hugging Face's regional download CDN (<x>.cdn.hf.co)
 export const LICENCE_HOSTS = [] as const;
 export const UPDATE_HOSTS = [] as const;
 

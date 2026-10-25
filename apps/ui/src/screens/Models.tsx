@@ -13,7 +13,7 @@ type Purpose = (typeof PURPOSES)[number];
 type Summary = { totalInstalledBytes: number; diskFreeBytes: number; registry?: ModelRegistrySource };
 const busyStatus = (s: ModelStateDto['status']) => s === 'downloading' || s === 'verifying' || s === 'paused';
 
-/** FR-121 model card: description, languages, source, licence summary with commercial-use note, hash, disk path label. */
+/** FR-121 model card: description, languages, licence summary (no download source: Operator decision 2026-10-25) with commercial-use note, hash, disk path label. */
 function ModelCard({ m }: { m: ModelStateDto }) {
   const { t } = useStore();
   const commercial = m.commercialUse ?? 'yes';
@@ -21,7 +21,6 @@ function ModelCard({ m }: { m: ModelStateDto }) {
     <dl data-el="scr.models.row.card" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-[6px] bg-em-panel-2 p-2 text-[12px]">
       {m.notes && m.notes.length > 0 && <><dt className="text-em-muted">{t('ui.scr.models.card.description')}</dt><dd>{m.notes.join(' · ')}</dd></>}
       <dt className="text-em-muted">{t('ui.scr.models.card.languages')}</dt><dd>{m.languages?.length ? m.languages.map((l) => t(`ui.common.lang.${l}`)).join(', ') : '—'}</dd>
-      {m.sourceUrl && <><dt className="text-em-muted">{t('ui.scr.models.card.source')}</dt><dd className="break-all"><a href={m.sourceUrl} target="_blank" rel="noreferrer" className="text-em-accent underline">{m.sourceUrl}</a></dd></>}
       <dt className="text-em-muted">{t('ui.scr.models.card.licence')}</dt>
       <dd>{m.licence.name}{m.licenceDetail?.useRestrictions ? ` · ${m.licenceDetail.useRestrictions}` : ''} · <span className={commercial === 'yes' ? 'text-em-success' : 'text-em-warn'}>{t(`ui.scr.models.card.commercial.${commercial}`)}</span>
         {m.licenceDetail?.redistribution === 'verify' && <> · <span className="text-em-warn">{t('ui.scr.models.card.verify')}</span></>}</dd>

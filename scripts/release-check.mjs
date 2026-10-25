@@ -28,12 +28,13 @@ if (!hex64(env.EM_MANIFEST_PUBLIC_KEY_M1_HEX))
 // 3. Operator model CDN (decision 2026-10-25: Cloudflare R2; DEPLOYMENT_AND_PACKAGING.md §16). Injected by apps/service/scripts/build.mjs.
 const cdn = (env.EM_MODEL_CDN_URL ?? '').trim();
 const cdnOk = /^https:\/\/[a-z0-9.-]+\.[a-z]{2,}(\/[A-Za-z0-9._~/-]*)?$/i.test(cdn) && !/PLACEHOLDER|\.(example|invalid|test|localhost)(\/|$)|example\.(com|org)|\.r2\.dev(\/|$)/i.test(cdn);
-if (!cdnOk) problems.push('EM_MODEL_CDN_URL is not set to the Operator model CDN → the https base URL of the R2 bucket\'s custom domain (not r2.dev), e.g. https://models.<your-domain>; models.json, models.json.sig and m/<sha256> must be uploaded there (tools/model-mirror).');
-// 4. Model registry hashes/revisions (LOCAL_AI_MODELS §4: pinned HF commit + sha256 per file). With the model CDN the signed
-//    `<cdn>/models.json` pins every file and the built-in Hugging Face URLs are off the allow-list, so TO_PIN is then only a note.
+// Optional since 2026-10-25 (models download from Hugging Face at pinned commits by default); validated only when set.
+if (cdn && !cdnOk) problems.push('EM_MODEL_CDN_URL is not set to the Operator model CDN → the https base URL of the R2 bucket\'s custom domain (not r2.dev), e.g. https://models.<your-domain>; models.json, models.json.sig and m/<sha256> must be uploaded there (tools/model-mirror).');
+// 4. Model registry hashes/revisions (LOCAL_AI_MODELS §4: pinned HF commit + sha256 per file, packages/models/src/pins.ts).
+//    With the optional model CDN the signed `<cdn>/models.json` pins every file, so TO_PIN is then only a note.
 {
   const reg = read('packages/models/src/registry.ts');
-  const uses = reg.split('\n').filter((l) => /\bTO_PIN\b/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l) && !/export const TO_PIN\b/.test(l) && !/\/\/.*TO_PIN/.test(l.replace(/'[^']*'/g, '')));
+  const uses = reg.split('\n').filter((l) => /\bTO_PIN\b/.test(l.replace(/'[^']*'/g, '')) && !/^\s*(\/\/|\*|\/\*)/.test(l) && !/export const TO_PIN\b/.test(l) && !/\/\/.*TO_PIN/.test(l.replace(/'[^']*'/g, '')));
   if (uses.length && !cdnOk) problems.push(`packages/models/src/registry.ts: ${uses.length} line(s) still use TO_PIN → pin every model file to an HF commit (revision) and its sha256, or set EM_MODEL_CDN_URL and publish a signed models.json (tools/model-mirror).`);
   else if (uses.length) console.log(`release-check: note — registry.ts has ${uses.length} TO_PIN line(s); downloads rely on the signed ${cdn}/models.json (upload it before shipping).`);
 }

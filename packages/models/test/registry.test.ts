@@ -59,14 +59,20 @@ describe('registry ↔ LOCAL_AI_MODELS.md', () => {
     }
   });
 
-  it('nothing is installable until the Operator pins hashes', () => {
-    for (const m of Object.values(registry)) { expect(isPinned(m)).toBe(false); expect(isInstallable(m)).toBe(false); }
+  it('every downloadable file is pinned to a Hugging Face commit with sha256 and exact size (pins.ts)', () => {
+    for (const m of Object.values(registry).filter((d) => d.availability === 'download' && d.files.length)) {
+      expect(isPinned(m), m.key).toBe(true);
+      for (const f of m.files) {
+        expect(f.url).toMatch(new RegExp(`^https://huggingface\\.co/[^/]+/[^/]+/resolve/${f.revision}/`));
+        expect(f.revision).toMatch(/^[0-9a-f]{40}$/); expect(f.sha256).toMatch(/^[0-9a-f]{64}$/); expect(f.bytesExact).toBe(true);
+      }
+    }
   });
 
   it('download hosts equal SECURITY.md SEC-071', () => {
     const sec = readFileSync(join(DOCS, 'SECURITY.md'), 'utf8');
     const row = sec.split('\n').find((l) => l.startsWith('| SEC-071 |'))!;
-    const hosts = [...row.matchAll(/`([a-z0-9.-]+\.[a-z]+)`/g)].map((m) => m[1]!);
+    const hosts = [...row.matchAll(/`((?:\*\.)?[a-z0-9.-]+\.[a-z]+)`/g)].map((m) => m[1]!);
     expect([...DOWNLOAD_HOSTS].sort()).toEqual([...new Set(hosts)].sort());
     expect(allowedHosts({ operatorHost: 'Releases.Example.org' })).toContain('releases.example.org');
   });

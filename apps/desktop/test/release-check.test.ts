@@ -30,8 +30,10 @@ describe('release-check', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('EM_FEED_URL'); expect(r.stderr).toContain('EM_PUBLISHER_NAME');
   });
-  it('flags the model CDN placeholder, http and r2.dev; with a real CDN, TO_PIN is only a note (signed CDN manifest pins the files)', () => {
-    for (const bad of ['', 'PLACEHOLDER_SET_EM_MODEL_CDN_URL', 'http://models.expertmotion.app', 'https://pub-0123.r2.dev', 'https://models.expertmotion.example']) {
+  it('the model CDN is optional; when set it must not be the placeholder, http or r2.dev; with a real CDN, TO_PIN is only a note (signed CDN manifest pins the files)', () => {
+    const { EM_MODEL_CDN_URL: _unset, ...noCdn } = good;
+    expect(run(fakeRepo(false), noCdn).status).toBe(0);                      // optional: Hugging Face at pinned commits by default
+    for (const bad of ['PLACEHOLDER_SET_EM_MODEL_CDN_URL', 'http://models.expertmotion.app', 'https://pub-0123.r2.dev', 'https://models.expertmotion.example']) {
       const r = run(fakeRepo(false), { ...good, EM_MODEL_CDN_URL: bad });
       expect(r.status, bad).toBe(1); expect(r.stderr).toContain('EM_MODEL_CDN_URL');
     }

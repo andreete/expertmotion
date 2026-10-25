@@ -172,7 +172,7 @@ export interface ModelStateDto {
   status: 'not-installed' | 'downloading' | 'verifying' | 'paused' | 'installed' | 'failed'; errorCode: string | null; installedAt: Iso | null;
   // FR-120…FR-124 model card (optional: older services omit them)
   pausedReason?: 'render' | null; recommended?: boolean; priority?: 'P1' | 'P2'; languages?: string[]; notes?: string[]; commercialUse?: 'yes' | 'conditional' | 'no';
-  licenceDetail?: { spdx: string | null; redistribution: 'yes' | 'no' | 'verify'; useRestrictions: string | null }; sourceUrl?: string; hashes?: Array<{ name: string; sha256: string | null }>;
+  licenceDetail?: { spdx: string | null; redistribution: 'yes' | 'no' | 'verify'; useRestrictions: string | null }; hashes?: Array<{ name: string; sha256: string | null }>;
   pathLabel?: string; usedBy?: { generators: string[]; presets: string[] }; engineNotices?: Array<{ label: string; licence: string; spdx: string | null; url: string }>;
 }
 /** R-140 `registry` (SEC-072): which model list is in use. */

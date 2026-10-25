@@ -247,7 +247,9 @@ describe('installModel / verify / remove', () => {
 
   it('Private Mode precheck → EM-7006; unpinned registry entry → EM-7003; non-downloadable → RangeError', async () => {
     await expectEm(installModel(def(), { modelsDir: tmp.dir, fetch: server().fetch, freeBytes: BIG_FREE, privateMode: () => true }), 'EM-7006');
-    await expectEm(installModel(registry['whisper-small']!, { modelsDir: tmp.dir, fetch: server().fetch, freeBytes: BIG_FREE }), 'EM-7003');
+    const ws = registry['whisper-small']!;
+    const unpinned = { ...ws, files: ws.files.map((f) => ({ ...f, sha256: 'TO_PIN', revision: 'TO_PIN' })) };
+    await expectEm(installModel(unpinned, { modelsDir: tmp.dir, fetch: server().fetch, freeBytes: BIG_FREE }), 'EM-7003');
     await expect(installModel(registry['frame-composite']!, { modelsDir: tmp.dir, fetch: server().fetch, freeBytes: BIG_FREE })).rejects.toThrow(RangeError);
   });
 

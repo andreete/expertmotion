@@ -196,7 +196,7 @@ export const ModelStateDto = z.object({ key: z.string(), engine: z.string(), ver
   // FR-120…FR-124: paused = waiting for a Standard/Accelerated render; model card and marks
   pausedReason: z.enum(['render']).nullable(), recommended: z.boolean() /* registry recommendedFor includes the current tier */, priority: z.enum(['P1','P2']), languages: z.array(z.string()), notes: z.array(z.string()),
   commercialUse: z.enum(['yes','conditional','no']), licenceDetail: z.object({ spdx: z.string().nullable(), redistribution: z.enum(['yes','no','verify']), useRestrictions: z.string().nullable() }),
-  sourceUrl: z.string(), hashes: z.array(z.object({ name: z.string(), sha256: z.string().nullable() /* null = TO_PIN */ })), pathLabel: z.string(),
+  /* no download source (Operator decision 2026-10-25); licence.url is the SPDX licence text page when the licence has an SPDX id */ hashes: z.array(z.object({ name: z.string(), sha256: z.string().nullable() /* null = TO_PIN */ })), pathLabel: z.string(),
   usedBy: z.object({ generators: z.array(z.string()), presets: z.array(z.string()) }), engineNotices: z.array(z.object({ label: z.string(), licence: z.string(), spdx: z.string().nullable(), url: z.string() })),
   ramBytes: z.number().int(), vramBytes: z.number().int().nullable() });
 export const GeneratorJobDto = z.object({ id: Id, projectId: Id, kind: z.enum(['voice','music','thumbnail','captions','hashtags']), status: z.enum(['queued','running','done','failed','cancelled']),

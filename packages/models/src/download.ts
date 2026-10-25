@@ -59,7 +59,9 @@ export function assertAllowedUrl(url: string, hosts: readonly string[] = DOWNLOA
   if (u.protocol !== 'https:') throw emError('EM-8203', 'Model downloads must use https', { host: u.hostname, purpose: 'model-download', reason: 'insecure-url' });
   if (u.username || u.password) throw emError('EM-8203', 'Download URL must not carry credentials', { host: u.hostname, purpose: 'model-download', reason: 'credentials-in-url' });
   const host = u.hostname.toLowerCase();
-  if (!hosts.map((h) => h.toLowerCase()).includes(host)) throw emError('EM-8203', `Download host ${host} is not allowed`, { host, purpose: 'model-download', reason: 'host-not-allowed' });
+  // Exact match, or `*.domain` for a subdomain of a CDN the host owns (Hugging Face redirects to regional <x>.cdn.hf.co hosts).
+  const ok = hosts.map((h) => h.toLowerCase()).some((h) => (h.startsWith('*.') ? host.endsWith(h.slice(1)) && host.length > h.length - 1 : host === h));
+  if (!ok) throw emError('EM-8203', `Download host ${host} is not allowed`, { host, purpose: 'model-download', reason: 'host-not-allowed' });
   return u;
 }
 

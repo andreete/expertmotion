@@ -33,7 +33,7 @@ describe('signed model manifest (SEC-072)', () => {
     const [out] = applySignedRegistry([whisper], r.registry);
     expect(out!.files[0]).toMatchObject({ sha256: sha('weights'), bytesExact: true, revision: '0123abcd' });
     expect(out!.bytes).toBe(487_601_967);
-    expect(whisper.files[0]!.sha256).toBe('TO_PIN');                                     // built-in entry untouched
+    expect(whisper.files[0]!.sha256).not.toBe(sha('weights'));                           // built-in entry untouched (its own pins.ts pin)
   });
 
   it('rejects tampered bytes, unknown kids, revoked keys, malformed signatures, stale sequence and foreign hosts', () => {

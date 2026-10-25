@@ -16,6 +16,11 @@ import { MODEL_CDN_URL, manifestUrls, modelDownloadHosts } from '../services/mod
 import { SerialQueue, em, emit, freeBytes, throttle } from './common.js';
 import { s2 } from './state.js';
 
+/** Operator decision 2026-10-25: the Model Manager never shows where a model is downloaded from. Licence links go to the
+ *  licence text (SPDX page) instead of the model's repository; a licence without an SPDX id keeps its own URL. */
+export const licenceTextUrl = (l: { spdx?: string; url: string }): string =>
+  l.spdx && /^[A-Za-z0-9.+-]+$/.test(l.spdx) ? `https://spdx.org/licenses/${l.spdx}.html` : l.url;
+
 export interface ModelsOptions {
   /** Registry source (tests inject pinned fakes; the shipped registry has TO_PIN hashes until the Operator pins them). */
   registry?: () => readonly ModelDef[];
@@ -242,7 +247,7 @@ export class ModelsService {
     const l = this.live.get(def.key);
     const installed = st.manifest?.state === 'installed';
     const status: Status = l ? l.status : installed ? 'installed' : row?.status === 'failed' ? 'failed' : 'not-installed';
-    return { key: def.key, engine: def.engine, version: def.version, task: def.task === 'library' ? 'music' : def.task, label: def.label, licence: { name: def.licence.name, url: def.licence.url },
+    return { key: def.key, engine: def.engine, version: def.version, task: def.task === 'library' ? 'music' : def.task, label: def.label, licence: { name: def.licence.name, url: licenceTextUrl(def.licence) },
       tiers: TIERS.filter((t) => RANK[t] >= RANK[def.minTier]), bytesTotal: def.bytes, bytesDone: l ? l.bytesDone : installed ? def.bytes : st.partialBytes, status,
       errorCode: status === 'failed' ? row?.error_code ?? null : this.paused.has(def.key) && status === 'not-installed' ? 'EM-7006' : null, installedAt: installed ? st.manifest!.installedAt : null,
       ...this.card(def, l) };
@@ -252,12 +257,12 @@ export class ModelsService {
   private card(def: ModelDef, l: Live | undefined): Record<string, unknown> {
     // Bundled rows of the same engine/task, e.g. espeak-ng (GPL-3) inside the sherpa-onnx TTS engine (ADR-009).
     const engineNotices = Object.values(registry).filter((b) => b.availability === 'bundled' && b.engine === def.engine && b.task === def.task)
-      .map((b) => ({ label: b.label, licence: b.licence.name, spdx: b.licence.spdx ?? null, url: b.licence.url }));
+      .map((b) => ({ label: b.label, licence: b.licence.name, spdx: b.licence.spdx ?? null, url: licenceTextUrl(b.licence) }));
     const flag = def.flag;
     const presets = flag ? ALL_PRESETS.filter((p) => (p.flags as readonly string[]).includes(flag)).map((p) => p.id) : [];
     return { pausedReason: l?.pausedReason ?? null, recommended: def.recommendedFor.includes(this.ctx.hooks.tier()), priority: def.priority, languages: [...def.languages], notes: [...def.notes],
       commercialUse: def.commercialUse, licenceDetail: { spdx: def.licence.spdx ?? null, redistribution: def.licence.redistribution, useRestrictions: def.licence.useRestrictions ?? null },
-      sourceUrl: def.files[0]?.url ?? def.licence.url, hashes: def.files.map((f) => ({ name: f.name, sha256: /^[0-9a-f]{64}$/.test(f.sha256) ? f.sha256 : null })),
+      hashes: def.files.map((f) => ({ name: f.name, sha256: /^[0-9a-f]{64}$/.test(f.sha256) ? f.sha256 : null })),
       pathLabel: `models\\${def.engine}\\${def.key}\\`, usedBy: { generators: GENERATOR_OF[def.task] ? [GENERATOR_OF[def.task]!] : [], presets }, engineNotices,
       ramBytes: def.ramBytes, vramBytes: def.vramBytes ?? null };
   }

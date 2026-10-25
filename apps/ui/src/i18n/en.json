@@ -1402,7 +1402,6 @@
  "ui.scr.models.card.languages": "Languages",
  "ui.scr.models.card.licence": "Licence",
  "ui.scr.models.card.path": "Folder",
- "ui.scr.models.card.source": "Source",
  "ui.scr.models.card.unpinned": "not pinned yet",
  "ui.scr.models.card.verify": "licence still being verified",
  "ui.scr.models.filter.allpurposes": "All purposes",
