@@ -28,7 +28,7 @@
  */
 import { build } from 'esbuild';
 import { createHash, generateKeyPairSync, randomBytes, sign as edSign, createCipheriv } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -66,7 +66,13 @@ console.log('Hardening plan:');
 for (const s of steps) console.log(`  [${s.skipped ? 'skip' : ' run'}] ${s.id} — ${s.description}${s.skipReason ? ` (${s.skipReason})` : ''}`);
 if (planOnly) { console.log('\n--plan: no files changed.'); process.exit(0); }
 
-function sha256(file) { return createHash('sha256').update(readFileSync(file)).digest('hex'); }
+// Streams in 1 MB chunks: Chrome Headless Shell and the compositor DLLs are hundreds of MB, and reading them whole
+// pushed the 1.9 GB build server into the OOM killer.
+function sha256(file) {
+  const hash = createHash('sha256'), buf = Buffer.allocUnsafe(1 << 20), fd = openSync(file, 'r');
+  try { for (let n; (n = readSync(fd, buf, 0, buf.length, null)) > 0;) hash.update(buf.subarray(0, n)); } finally { closeSync(fd); }
+  return hash.digest('hex');
+}
 function listJs(dir) { return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.js')).map((f) => join(dir, f)) : []; }
 
 for (const step of steps) {
