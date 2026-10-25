@@ -155,6 +155,9 @@ for (const step of steps) {
         for (const f of listBinaries(base).filter((f) => lib.isEngineExecutable(f))) add(f, `engine/${sub}/${relative(base, f).split(/[\\/]/).join('/')}`);
       }
       for (const bin of listBinaries(join(root, 'resources/bin'))) add(bin, `bin/${relative(join(root, 'resources/bin'), bin).split(/[\\/]/).join('/')}`);
+      // SEC-061: Generator Engine Binaries (whisper.cpp, sherpa-onnx, stable-diffusion.cpp) and their DLLs.
+      const enginesRoot = join(root, 'resources/engines');
+      if (existsSync(enginesRoot)) for (const f of listBinaries(enginesRoot).filter((f) => lib.isEngineExecutable(f))) add(f, `engines/${relative(enginesRoot, f).split(/[\\/]/).join('/')}`);
       const manifest = lib.buildManifest({ appVersion: JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version, builtAt: new Date().toISOString(), entries });
 
       // Ed25519 signature with the release key. On the build machine the private key is supplied via

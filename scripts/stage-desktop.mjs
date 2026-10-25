@@ -36,6 +36,7 @@ const plan = [
   [need(path.join(root, 'node_modules/@remotion', plat.compositor), 'Remotion compositor'), path.join(desk, 'resources/engine/compositor')],
   [need(path.join(root, 'resources/sample'), 'Sample Project media (node packages/engine/scripts/build-sample.mjs)'), path.join(desk, 'resources/sample')],
   [need(path.join(root, 'resources/bin'), 'ingestion FFmpeg/ffprobe (resources/bin, ADR-019)'), path.join(desk, 'resources/bin')],
+  [need(path.join(root, 'resources/engines'), 'Generator Engine Binaries (node scripts/prepare-engines.mjs)'), path.join(desk, 'resources/engines')],
 ];
 if (problems.length) { console.error(`stage-desktop: ${problems.length} input(s) missing:\n  ${problems.join('\n  ')}`); process.exit(1); }
 if (check) { console.log('stage-desktop: all inputs present'); process.exit(0); }

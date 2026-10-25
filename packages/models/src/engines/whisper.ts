@@ -23,7 +23,7 @@ export const WHISPER_LANGUAGES = ['id', 'en', 'auto'] as const;
 
 /** Exact argv of LOCAL_AI_MODELS §3.2 (`-oj -ojf -ml 1 -sow -np -of <jobDir>/out`). */
 export function whisperArgs(input: { modelPath: string; wavPath: string; language: string; threads: number; outBase: string }): string[] {
-  return ['-m', input.modelPath, '-f', input.wavPath, '-l', input.language, '-t', String(input.threads), '-oj', '-ojf', '-ml', '1', '-sow', '-np', '-of', input.outBase];
+  return ['-m', input.modelPath, '-f', input.wavPath, '-l', input.language, '-t', String(input.threads), '-oj', '-ojf', '-ml', '1', '-sow', '-np', '-pp', '-of', input.outBase];   // -pp: `progress = NN%` lines on stderr
 }
 
 interface WhisperToken { text?: unknown; p?: unknown }

@@ -1,0 +1,109 @@
+{
+  "$comment": "Generator Engine Binaries shipped in the installer (LOCAL_AI_MODELS.md §3.1). Official upstream Windows x64 releases, pinned by sha256 (the GitHub release digest). scripts/prepare-engines.mjs downloads, verifies and lays them out in resources/engines/<engine>/<version>/; the Creator installs nothing. Checked 2026-10-25.",
+  "engines": [
+    {
+      "engine": "whisper.cpp",
+      "version": "1.9.5-b5454",
+      "licence": "MIT",
+      "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip",
+      "sha256": "6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb",
+      "strip": "Release/",
+      "keep": [
+        "whisper-cli.exe",
+        "whisper.dll",
+        "ggml*.dll"
+      ],
+      "vcRuntime": true,
+      "licences": [
+        {
+          "file": "whisper.cpp-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/b5454/LICENSE",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+        }
+      ]
+    },
+    {
+      "engine": "sherpa-onnx",
+      "version": "1.13.8",
+      "licence": "Apache-2.0",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release.tar.bz2",
+      "sha256": "6dffdc715a4465b989446a6105265d2cb345e7101591a17d35534b6758f6e8df",
+      "strip": "sherpa-onnx-v1.13.8-win-x64-shared-MT-Release/bin/",
+      "keep": [
+        "sherpa-onnx-offline-tts.exe",
+        "*.dll"
+      ],
+      "vcRuntime": false,
+      "$note": "MT build: static C runtime, no Visual C++ runtime needed",
+      "licences": [
+        {
+          "file": "sherpa-onnx-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.8/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "file": "onnxruntime-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.17.1/LICENSE",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        }
+      ]
+    },
+    {
+      "engine": "sherpa-onnx",
+      "version": "1.13.8",
+      "licence": "GPL-3.0-or-later (espeak-ng data, separate data files read by the engine)",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/espeak-ng-data.zip",
+      "sha256": "bc4525eafe31b4e3f5e43aea495f3169e97dd2544f1bbfe95514ce8a61baee39",
+      "strip": "",
+      "keep": [
+        "espeak-ng-data/**"
+      ],
+      "vcRuntime": false,
+      "licences": [
+        {
+          "file": "espeak-ng-COPYING.txt",
+          "url": "https://raw.githubusercontent.com/espeak-ng/espeak-ng/1.52.0/COPYING",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        }
+      ],
+      "sourceNotice": "espeak-ng-data is part of espeak-ng (GPL-3.0-or-later), used unmodified as data files read by sherpa-onnx in a separate process. Corresponding source: https://github.com/espeak-ng/espeak-ng (tag 1.52.0); this data archive: https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models. The Operator provides the source on request for three years (LICENSE_OPERATIONS / DEPLOYMENT_AND_PACKAGING)."
+    },
+    {
+      "engine": "stable-diffusion.cpp",
+      "version": "master-1006-0886f11",
+      "licence": "MIT",
+      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1006-0886f11/sd-master-0886f11-bin-win-vulkan-x64.zip",
+      "sha256": "09f1aaf89d3bdd78488aa39961dbdb126a292a2c1dd38f9f5f463f6fd3ed3773",
+      "strip": "",
+      "keep": [
+        "sd-cli.exe",
+        "stable-diffusion.dll",
+        "ggml*.dll",
+        "libwebp*.dll",
+        "libsharpyuv.dll",
+        "webm.dll"
+      ],
+      "vcRuntime": true,
+      "$note": "Vulkan build: ggml loads ggml-vulkan.dll dynamically and falls back to the CPU backends when the PC has no Vulkan driver (vulkan-1.dll comes with the GPU driver)",
+      "licences": [
+        {
+          "file": "stable-diffusion.cpp-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/leejet/stable-diffusion.cpp/0886f11/LICENSE",
+          "sha256": "b53fa08f515cb5a6fff7b9fd8fcd0961a4b80df29d74372d25e1f9171aa042ee"
+        }
+      ]
+    }
+  ],
+  "vcRuntime": {
+    "$comment": "App-local Visual C++ 2015-2022 runtime (Microsoft permits local deployment of these DLLs next to the executable). Carved from the official redistributable; no administrator rights, nothing installed system-wide.",
+    "url": "https://download.visualstudio.microsoft.com/download/pr/990c720a-46ce-4dc7-87b9-c2eb615d34b9/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+    "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
+    "dlls": [
+      "msvcp140.dll",
+      "msvcp140_codecvt_ids.dll",
+      "vcruntime140.dll",
+      "vcruntime140_1.dll",
+      "vcomp140.dll"
+    ]
+  }
+}

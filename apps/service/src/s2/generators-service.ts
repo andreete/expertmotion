@@ -82,7 +82,13 @@ function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
   return {
     captions: async (i, c) => { const r = await transcribeToPages({ modelPath: i.modelPath, wavPath: i.wavPath, language: i.language, threads: threads(), audioDurationMs: i.audioDurationMs }, ectx(c)); return { pages: r.pages, language: r.language }; },
     voice: async (i, c) => {
-      const voice = { kind: 'vits' as const, modelPath: firstWith(i.modelDir, /\.onnx$/), tokensPath: path.join(i.modelDir, 'tokens.txt') };
+      // Kokoro (sherpa-onnx export) ships a voice table; Piper/VITS voices are one .onnx + tokens.txt.
+      const kokoro = fs.existsSync(path.join(i.modelDir, 'voices.bin'));
+      const lexicon = path.join(i.modelDir, 'lexicon-us-en.txt');
+      const voice = kokoro
+        ? { kind: 'kokoro' as const, modelPath: path.join(i.modelDir, 'model.onnx'), voicesPath: path.join(i.modelDir, 'voices.bin'), tokensPath: path.join(i.modelDir, 'tokens.txt'),
+            ...(fs.existsSync(lexicon) ? { lexiconPath: lexicon } : {}) }
+        : { kind: 'vits' as const, modelPath: firstWith(i.modelDir, /\.onnx$/), tokensPath: path.join(i.modelDir, 'tokens.txt') };
       return synthesize({ voice, text: i.text, threads: threads(), ...(i.speed !== undefined ? { speed: i.speed } : {}) }, ectx(c));
     },
     music: async (i, c) => {

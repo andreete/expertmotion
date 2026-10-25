@@ -22,6 +22,7 @@ node scripts/release-check.mjs --allow-placeholders
 npm run build -w @expertmotion/ui                       # Editor (dist/ui is staged as-is)
 npm run build:release -w @expertmotion/service         # prompts → dist/assets.enc (half A in service, half B for main)
 npm run build:main -w @expertmotion/desktop             # embeds the integrity public key and prompt key half B
+node scripts/prepare-engines.mjs                         # whisper.cpp, sherpa-onnx, stable-diffusion.cpp (pinned, cached)
 node scripts/stage-desktop.mjs --platform=win32 --check
 node scripts/stage-desktop.mjs --platform=win32
 EM_OBFUSCATE_MAX_BYTES="${EM_OBFUSCATE_MAX_BYTES:-2500000}" node apps/desktop/scripts/harden.mjs   # bytecode steps are skipped off Windows

@@ -118,7 +118,7 @@ describe('whisper.cpp adapter', () => {
   const model = '/data/models/whisper.cpp/whisper-small/ggml-small.bin';
   it('argv exactly per LOCAL_AI_MODELS §3.2', () => {
     expect(whisperArgs({ modelPath: model, wavPath: '/j/in.wav', language: 'id', threads: 4, outBase: '/j/out' }))
-      .toEqual(['-m', model, '-f', '/j/in.wav', '-l', 'id', '-t', '4', '-oj', '-ojf', '-ml', '1', '-sow', '-np', '-of', '/j/out']);
+      .toEqual(['-m', model, '-f', '/j/in.wav', '-l', 'id', '-t', '4', '-oj', '-ojf', '-ml', '1', '-sow', '-np', '-pp', '-of', '/j/out']);
   });
   it('parses -ojf JSON into Caption[] (leading space, midpoint, mean token p, specials and non-speech dropped)', () => {
     const r = parseWhisperJson(WHISPER_JSON);
@@ -185,6 +185,8 @@ describe('sherpa-onnx TTS adapter', () => {
     expect(sherpaTtsArgs(voice, { engineDir, threads: 1, outPath: '/o', text: 'x', speed: 0.8 })).toContain('--vits-length-scale=1.250');
     const k = sherpaTtsArgs({ kind: 'kokoro', modelPath: '/k/model.onnx', voicesPath: '/k/voices.bin', tokensPath: '/k/tokens.txt', speakerId: 3 }, { engineDir, threads: 1, outPath: '/o', text: 'Hi' });
     expect(k.slice(0, 5)).toEqual(['--kokoro-model=/k/model.onnx', '--kokoro-voices=/k/voices.bin', '--kokoro-tokens=/k/tokens.txt', `--kokoro-data-dir=${join(engineDir, 'espeak-ng-data')}`, '--sid=3']);
+    const kl = sherpaTtsArgs({ kind: 'kokoro', modelPath: '/k/model.onnx', voicesPath: '/k/voices.bin', tokensPath: '/k/tokens.txt', lexiconPath: '/k/lexicon-us-en.txt' }, { engineDir, threads: 1, outPath: '/o', text: 'Hi' });
+    expect(kl[4]).toBe('--kokoro-lexicon=/k/lexicon-us-en.txt');
   });
   it('splits long Indonesian text on sentence ends without breaking numbers', () => {
     const t = 'Harga paket ini Rp 1.250.000 saja. Promo berlaku sampai 31 Desember 2026! Apakah kamu siap? ' + 'kata '.repeat(120);
@@ -238,10 +240,10 @@ describe('stable-diffusion.cpp adapter', () => {
   const sd15: ImageInput = { model: { kind: 'sd15', modelPath: '/m/stable-diffusion.cpp/sd15-emaonly/v1-5-pruned-emaonly.safetensors' }, prompt: 'pantai Bali saat senja', negativePrompt: 'teks', width: 512, height: 896, seed: 42, threads: 4, tier: 'T0' };
   const flux: ImageInput = { ...sd15, model: { kind: 'flux', diffusionModelPath: '/m/f/flux1-schnell-Q4_0.gguf', clipLPath: '/m/f/clip_l.safetensors', t5xxlPath: '/m/f/t5xxl_fp8_e4m3fn.safetensors', vaePath: '/m/f/ae.safetensors' }, width: 768, height: 1344, tier: 'T2' };
   it('argv per LOCAL_AI_MODELS §3.2 (SD 1.5: 20 steps cfg 7.0; FLUX: 4 steps cfg 1.0 + encoders)', () => {
-    expect(sdArgs(sd15, '/j/out.png')).toEqual(['-M', 'txt2img', '-m', sd15.model.kind === 'sd15' ? sd15.model.modelPath : '', '-p', 'pantai Bali saat senja', '-n', 'teks',
+    expect(sdArgs(sd15, '/j/out.png')).toEqual(['-M', 'img_gen', '-m', sd15.model.kind === 'sd15' ? sd15.model.modelPath : '', '-p', 'pantai Bali saat senja', '-n', 'teks',
       '-W', '512', '-H', '896', '--steps', '20', '--cfg-scale', '7.0', '-s', '42', '--vae-tiling', '--clip-on-cpu', '-o', '/j/out.png', '-t', '4']);
     const a = sdArgs(flux, '/j/out.png');
-    expect(a.slice(0, 10)).toEqual(['-M', 'txt2img', '--diffusion-model', '/m/f/flux1-schnell-Q4_0.gguf', '--clip_l', '/m/f/clip_l.safetensors', '--t5xxl', '/m/f/t5xxl_fp8_e4m3fn.safetensors', '--vae', '/m/f/ae.safetensors']);
+    expect(a.slice(0, 10)).toEqual(['-M', 'img_gen', '--diffusion-model', '/m/f/flux1-schnell-Q4_0.gguf', '--clip_l', '/m/f/clip_l.safetensors', '--t5xxl', '/m/f/t5xxl_fp8_e4m3fn.safetensors', '--vae', '/m/f/ae.safetensors']);
     expect(a).toContain('4'); expect(a[a.indexOf('--cfg-scale') + 1]).toBe('1.0');
     expect(a).not.toContain('-m');
   });

@@ -114,11 +114,13 @@ const MODEL_LIST: ModelDef[] = [
   piper('piper-en-lessac-medium', 'Piper en_US lessac (medium)', 'en', 'en/en_US/lessac/medium', 'en_US-lessac-medium',
     ['size by analogy (UNVERIFIED)', 'dataset per its MODEL_CARD (UNVERIFIED)'], ['T0', 'T1']),
   (() => {
-    const files = [file('model_q8f16.onnx', 86 * MB, HF('onnx-community/Kokoro-82M-v1.0-ONNX', 'onnx/model_q8f16.onnx'))];
+    // sherpa-onnx's Kokoro v1.0 export (model + voice table + tokens + US English lexicon); espeak-ng-data ships with the engine.
+    const K = (f: string) => HF('csukuangfj/kokoro-multi-lang-v1_0', f);
+    const files = [file('model.onnx', 326 * MB, K('model.onnx')), file('voices.bin', 28 * MB, K('voices.bin')), file('tokens.txt', 1_000, K('tokens.txt')), file('lexicon-us-en.txt', 6 * MB, K('lexicon-us-en.txt'))];
     return { key: 'kokoro-82m-v1.0', label: 'Kokoro 82M v1.0', engine: 'sherpa-onnx', task: 'tts', version: REGISTRY_VERSION, availability: 'download', files, bytes: sum(files),
-      licence: { spdx: 'Apache-2.0', name: 'Apache-2.0', url: 'https://huggingface.co/hexgrad/Kokoro-82M', redistribution: 'yes' }, commercialUse: 'yes',
+      licence: { spdx: 'Apache-2.0', name: 'Apache-2.0', url: 'https://huggingface.co/csukuangfj/kokoro-multi-lang-v1_0', redistribution: 'yes' }, commercialUse: 'yes',
       languages: ['en'], minTier: 'T0', recommendedFor: ['T2'], ramBytes: 600 * MB, flag: 'model:kokoro', priority: 'P2',
-      notes: ['no Indonesian', 'alt. onnx/model.onnx (326 MB)', 'voices/*.bin, tokens and sherpa-onnx data dir not yet specified (TO_PIN)'] } satisfies ModelDef;
+      notes: ['no Indonesian', 'sherpa-onnx Kokoro v1.0 export; US English lexicon; espeak-ng-data from the engine'] } satisfies ModelDef;
   })(),
   { key: 'espeak-ng-data', label: 'espeak-ng phonemiser data', engine: 'sherpa-onnx', task: 'tts', version: REGISTRY_VERSION, availability: 'bundled', files: [], bytes: 15 * MB,
     licence: { spdx: 'GPL-3.0-or-later', name: 'GPL-3.0-or-later (espeak-ng)', url: 'https://github.com/espeak-ng/espeak-ng', redistribution: 'yes' }, commercialUse: 'yes',

@@ -38,7 +38,7 @@ export function sdArgs(input: ImageInput, outPath: string): string[] {
   const modelArgs = input.model.kind === 'flux'
     ? ['--diffusion-model', input.model.diffusionModelPath, '--clip_l', input.model.clipLPath, '--t5xxl', input.model.t5xxlPath, '--vae', input.model.vaePath]
     : ['-m', input.model.modelPath];
-  return ['-M', 'txt2img', ...modelArgs, '-p', safeArgValue(input.prompt), '-n', safeArgValue(input.negativePrompt ?? ''),
+  return ['-M', 'img_gen', ...modelArgs, '-p', safeArgValue(input.prompt), '-n', safeArgValue(input.negativePrompt ?? ''),
     '-W', String(input.width), '-H', String(input.height), '--steps', String(steps), '--cfg-scale', cfg.toFixed(1), '-s', String(input.seed),
     '--vae-tiling', '--clip-on-cpu', '-o', outPath, '-t', String(Math.max(1, Math.floor(input.threads)))];
 }
@@ -65,7 +65,7 @@ export async function generateImage(input: ImageInput, ctx: EngineContext): Prom
   await fs.remove(outPath);
   const onLine = (line: string): void => { const p = parseSdProgress(line); if (p !== null) report(p * 0.98); };
   await runProcess({
-    engine: 'stable-diffusion.cpp', exe: join(ctx.engineDir, exeName('sd', ctx.platform)), args: sdArgs(input, outPath),
+    engine: 'stable-diffusion.cpp', exe: join(ctx.engineDir, exeName('sd-cli', ctx.platform)), args: sdArgs(input, outPath),
     cwd: ctx.jobDir, env: buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}) }),
     timeoutMs: ctx.timeoutMs ?? ENGINE_TIMEOUTS.thumbnail(input.tier), onStdoutLine: onLine, onStderrLine: onLine,
     ...(ctx.signal ? { signal: ctx.signal } : {}), ...(ctx.spawn ? { spawn: ctx.spawn } : {}), ...(ctx.killTree ? { killTree: ctx.killTree } : {}),

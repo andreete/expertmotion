@@ -12,7 +12,7 @@ export const WAV_MAX_BYTES = 500 * 1024 * 1024;
 export type TtsVoice =
   | { kind: 'vits'; modelPath: string; tokensPath: string; dataDir?: string }
   /** Kokoro flag names are UNVERIFIED against the sherpa-onnx v2.0.0 CLI (LOCAL_AI_MODELS §3.2). */
-  | { kind: 'kokoro'; modelPath: string; voicesPath: string; tokensPath: string; dataDir?: string; speakerId?: number };
+  | { kind: 'kokoro'; modelPath: string; voicesPath: string; tokensPath: string; dataDir?: string; speakerId?: number; lexiconPath?: string };
 
 export interface TtsInput {
   voice: TtsVoice;
@@ -57,6 +57,7 @@ export function sherpaTtsArgs(voice: TtsVoice, opts: { engineDir: string; thread
   const args = voice.kind === 'vits'
     ? [`--vits-model=${voice.modelPath}`, `--vits-tokens=${voice.tokensPath}`, `--vits-data-dir=${dataDir}`, ...(scale ? [`--vits-length-scale=${scale}`] : [])]
     : [`--kokoro-model=${voice.modelPath}`, `--kokoro-voices=${voice.voicesPath}`, `--kokoro-tokens=${voice.tokensPath}`, `--kokoro-data-dir=${dataDir}`,
+      ...(voice.lexiconPath ? [`--kokoro-lexicon=${voice.lexiconPath}`] : []),
       ...(scale ? [`--kokoro-length-scale=${scale}`] : []), ...(voice.speakerId !== undefined ? [`--sid=${voice.speakerId}`] : [])];
   return [...args, `--num-threads=${opts.threads}`, `--output-filename=${opts.outPath}`, safeArgValue(opts.text)];
 }
