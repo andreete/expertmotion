@@ -229,7 +229,8 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
     const r = await chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-x', f).complete(req);
     expect(r.text).toBe('halo');
     const last = seen.at(-1)!; const b = JSON.parse(String(last.init.body)) as { system: string; temperature: number; max_tokens: number };
-    expect(b).toMatchObject({ system: 'sys', temperature: 1, max_tokens: 50 });
+    expect(b).toMatchObject({ system: 'sys', max_tokens: 1024 });                       // floor for model-default thinking
+    expect(b).not.toHaveProperty('temperature');                                        // not a Messages API parameter for current models
     expect((last.init.headers as Record<string, string>)['x-api-key']).toBe('sk-ant-test-key-1234567890');
     // the connection Test sends no temperature: it must be omitted, never "temperature": null (Anthropic → HTTP 400)
     const { temperature: _t, ...noTemp } = req;
@@ -240,14 +241,14 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
     await expect(chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-x', bad.f).complete(req))
       .rejects.toMatchObject({ code: 'EM-4105', details: { status: 400, reason: 'temperature: Input should be a valid number' } });
   });
-  it('a model that refuses temperature is retried once without it and remembered (newest Claude / OpenAI reasoning models)', async () => {
+  it('a model that refuses temperature is retried once without it and remembered (OpenAI reasoning models, Gemini)', async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const { f } = mk((c) => {
       const b = JSON.parse(String(c.init.body)) as Record<string, unknown>; bodies.push(b);
-      return 'temperature' in b ? json(400, { type: 'error', error: { type: 'invalid_request_error', message: '`temperature` is not supported for this model.' } })
-        : json(200, { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 3, output_tokens: 1 } });
+      return 'temperature' in b ? json(400, { error: { message: "Unsupported value: 'temperature' does not support 0 with this model.", type: 'invalid_request_error' } })
+        : json(200, { choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 3, completion_tokens: 1 } });
     });
-    const prov = chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-sampling-free', f);
+    const prov = chatProviderFor('openai', 'sk-test-openai-key-123456789', 'o-reasoning', f);
     expect((await prov.complete({ ...req, temperature: 0 })).text).toBe('ok');
     expect(bodies.map((b) => 'temperature' in b)).toEqual([true, false]);
     await prov.complete({ ...req, temperature: 0.2 });

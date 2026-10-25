@@ -122,6 +122,8 @@ export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof 
 const usageOf = (model: string, inputTokens: unknown, outputTokens: unknown) => ({ model, inputTokens: Math.max(0, Math.trunc(num(inputTokens) ?? 0)), outputTokens: Math.max(0, Math.trunc(num(outputTokens) ?? 0)), costUsd: null, approximate: true });
 
 /** Chat adapter for a Model Assignment. The key is passed per provider instance and never logged. */
+/** Floor for Anthropic max_tokens (room for model-default thinking before the text answer). */
+export const ANTHROPIC_MIN_MAX_TOKENS = 1024;
 /** Models that refused sampling settings this session (`provider:model`); their requests omit temperature. */
 const NO_SAMPLING = new Set<string>();
 /** An EM-4105 refusal whose provider reason names a sampling parameter (temperature / top_p / top_k). */
@@ -157,7 +159,10 @@ export function chatProviderFor(p: ProviderKindT, key: string, model: string, fe
       return { text: str(c?.message?.content), usage: usageOf(model, j.usage?.prompt_tokens, j.usage?.completion_tokens) };
     } };
     case 'anthropic': return { id: 'anthropic', model, async complete(req) {
-      const j = await send(req, `${ANTHROPIC}/messages`, (w) => ({ model, system: req.system, messages: msgs(req.messages), max_tokens: req.maxTokens, ...(w ? temp(req.temperature, 1) : {}) })) as
+      // Messages API (platform.claude.com/docs/en/api/.../messages/create, checked 2026-10-26): `temperature` is not a documented
+      // parameter for current models, so it is never sent; thinking tokens count toward max_tokens and thinking behaviour when
+      // `thinking` is omitted depends on the model, so max_tokens has a floor that leaves room for it (only text blocks are read).
+      const j = await call(req, `${ANTHROPIC}/messages`, { model, system: req.system, messages: msgs(req.messages), max_tokens: Math.max(req.maxTokens, ANTHROPIC_MIN_MAX_TOKENS) }) as
         { content?: Array<{ type?: unknown; text?: unknown }>; stop_reason?: unknown; usage?: { input_tokens?: unknown; output_tokens?: unknown } };
       if (j.stop_reason === 'refusal') throw new EmError('EM-4104', 'The provider declined to answer this request.');
       const text = (j.content ?? []).filter((b) => b.type === 'text').map((b) => str(b.text)).join('');
