@@ -5,6 +5,7 @@ import { Bookmark, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, Download
 import type { CompositionModelT } from '@expertmotion/composition-model';
 import { getPreset } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
+import { localModelByRef, localModelName } from '../state/model-names.js';
 import { visibleQueue } from '../state/reducer.js';
 import type { EditIntent } from '../api/types.js';
 import { Button, IconButton, cx } from '../components/ui.js';
@@ -118,6 +119,7 @@ function IntentItem({ intent: i, all, child }: { intent: EditIntent; all: EditIn
   const replacedLabel = replacedBy ? (replacedBy.presetId ? getPreset(replacedBy.presetId)?.label[lang] ?? '' : intentTitle(replacedBy, t, lang)) : '';
   const title = `${child ? '' : `${intentTitle(i, t, lang)} → `}${targetText(i, model, t)}`;
   const rejectionCode = i.status === 'held' ? 'EM-2104' : i.rejectionReason?.match(/EM-\d{4}/)?.[0];
+  const heldName = (flag: string) => { const m = localModelByRef(state.models, flag); return m ? localModelName(m, lang) : flag.replace(/^model:/, ''); };
   const version = i.appliedVersion !== undefined ? String(i.appliedVersion) : '';
   const viaCompile = i.status === 'executed' && (i.source === 'ui' || i.source === 'brainstorm') && !i.needsInterpretation;
   let chip: { icon: ReactNode; text: string; tone: string };
@@ -130,7 +132,7 @@ function IntentItem({ intent: i, all, child }: { intent: EditIntent; all: EditIn
     case 'rejected': chip = { icon: <OctagonAlert size={12} />, text: rejectionCode ? t(`err.${rejectionCode}.title`) : t('ui.agent.intent.rejected'), tone: 'text-em-danger' }; break;
     case 'superseded': chip = { icon: <History size={12} />, text: t('ui.agent.intent.replacedby', { label: replacedLabel || '…' }), tone: 'text-em-muted' }; break;
     // FR-037: held until the model is installed (EM-2104); it applies by itself after the Model Manager installs it.
-    case 'held': chip = { icon: <DownloadCloud size={12} />, text: t('ui.agent.intent.held', { model: String(i.params['__heldFor'] ?? '').replace(/^model:/, '') }), tone: 'text-em-info' }; break;
+    case 'held': chip = { icon: <DownloadCloud size={12} />, text: t('ui.agent.intent.held', { model: heldName(String(i.params['__heldFor'] ?? '')) }), tone: 'text-em-info' }; break;
     default: chip = { icon: null, text: i.status, tone: 'text-em-muted' };
   }
   if (i.undone && (i.status === 'executed' || i.status === 'compiled')) chip = { icon: <Undo2 size={12} />, text: t('ui.agent.intent.undone'), tone: 'text-em-muted' };   // FR-167

@@ -14,7 +14,7 @@ import { s2 } from '../s2/state.js';
 
 /** FR-128: data-drive free space below this raises EM-6402 once per session. */
 export const LOW_DISK_MB = 2048;
-export interface WorkloadItem { kind: 'render' | 'download' | 'ingest' | 'generator' | 'agent'; id: string; label: string; status: string; progress: number | null; cancellable: boolean; pausedReason: 'render' | null }
+export interface WorkloadItem { kind: 'render' | 'download' | 'ingest' | 'generator' | 'agent'; id: string; label: string; /** downloads: the Creator-facing model name (en/id). */ displayName?: { en: string; id: string }; status: string; progress: number | null; cancellable: boolean; pausedReason: 'render' | null }
 
 export interface HardwareProfileDto { tier: Tier; cpuModel: string | null; cpuThreads: number; ramTotalMb: number; gpuVendor: string | null; gpuModel: string | null; vramMb: number | null; nvenc: boolean; detectedAt: string; warnings: string[] }
 export interface HardwareOptions { detect?: () => Promise<RawHardware>; detectOnStart?: boolean; startDelayMs?: number; tickMs?: number; refreshMinMs?: number;
@@ -82,7 +82,7 @@ export function createHardwareModule(opts: HardwareOptions = {}): ServiceModule 
     for (const r of rows<{ id: string; status: string; progress: number; name: string | null }>(ctx, "SELECT r.id, r.status, r.progress, p.name FROM render_jobs r LEFT JOIN projects p ON p.id = r.project_id WHERE r.status IN ('rendering','queued') ORDER BY r.created_at"))
       out.push({ kind: 'render', id: r.id, label: r.name ?? '', status: r.status, progress: r.status === 'rendering' ? r.progress : null, cancellable: true, pausedReason: null });
     for (const d of s2(ctx).models?.workload() ?? [])
-      out.push({ kind: 'download', id: d.key, label: d.label, status: d.status, progress: d.bytesTotal ? d.bytesDone / d.bytesTotal : null, cancellable: true, pausedReason: d.pausedReason });
+      out.push({ kind: 'download', id: d.key, label: d.label, displayName: d.displayName, status: d.status, progress: d.bytesTotal ? d.bytesDone / d.bytesTotal : null, cancellable: true, pausedReason: d.pausedReason });
     for (const a of rows<{ id: string; name: string }>(ctx, "SELECT id, name FROM assets WHERE status = 'ingesting' ORDER BY created_at LIMIT 50"))
       out.push({ kind: 'ingest', id: a.id, label: a.name, status: 'ingesting', progress: null, cancellable: false, pausedReason: null });
     for (const g of rows<{ id: string; kind: string; status: string; progress: number }>(ctx, "SELECT id, kind, status, progress FROM generator_jobs WHERE status IN ('running','queued') ORDER BY created_at"))

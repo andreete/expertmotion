@@ -7,6 +7,7 @@ import { Bookmark, Cpu, DownloadCloud, Info } from 'lucide-react';
 import { PresetParams } from './PresetParams.js';
 import { SUGGESTED_QUERIES, listPresets, searchPresets, type Category, type PresetDef } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
+import { localModelByRef, localModelName } from '../state/model-names.js';
 import type { CatalogueItemDto, EditIntent } from '../api/types.js';
 import type { ElementRefT } from '@expertmotion/composition-model';
 import { PresetSwatch } from './presetVisual.js';
@@ -135,6 +136,8 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
   const modelFlag = preset.flags.find((f) => f.startsWith('model:'));
   const modelKey = modelFlag?.slice(6);
   const modelMissing = Boolean(modelKey && !state.models.some((m) => m.key === modelKey && m.status === 'installed'));
+  const modelRow = modelKey ? localModelByRef(state.models, modelKey) : undefined;
+  const modelName = modelRow ? localModelName(modelRow, lang) : modelKey ?? '';                   // product name, not the flag
   // Service availability decides, except the reasons that only add a badge (gpu, missing model: the pick is held instead).
   const unavailable = item ? !item.availability.ok && item.availability.reason !== 'model-missing' : preset.flags.includes('webgpu') && tier !== 'T2';
   const label = preset.label[lang];
@@ -161,7 +164,7 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
     void actions.pick(preset.id);
   };
   const gpuLabel = preset.flags.includes('webgpu') ? t('ui.lib.catalogue.badge.webgpu') : t('ui.lib.catalogue.badge.gpu');
-  const name = [label, t(`ui.lib.catalogue.tab.${preset.category}`), selected ? t('a11y.lib.catalogue.card.inpicks') : '', gpu ? gpuLabel : '', modelMissing ? t('ui.lib.catalogue.badge.model', { model: modelKey ?? '' }) : ''].filter(Boolean).join(', ');
+  const name = [label, t(`ui.lib.catalogue.tab.${preset.category}`), selected ? t('a11y.lib.catalogue.card.inpicks') : '', gpu ? gpuLabel : '', modelMissing ? t('ui.lib.catalogue.badge.model', { model: modelName }) : ''].filter(Boolean).join(', ');
   const reason = upcoming ? t('ui.lib.catalogue.comingsoon') : unavailable ? t('ui.lib.catalogue.unavailable') : null;
   return (
     <div role="gridcell" className="relative">
@@ -185,7 +188,7 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
       </button>
       {modelMissing && (
         // FR-037: the badge is its own control (deep link to the model in the Model Manager), outside the card button.
-        <button type="button" data-el="lib.catalogue.card.badge.model" aria-label={t('ui.lib.catalogue.badge.model', { model: modelKey ?? '' })} title={t('ui.lib.catalogue.badge.model', { model: modelKey ?? '' })}
+        <button type="button" data-el="lib.catalogue.card.badge.model" aria-label={t('ui.lib.catalogue.badge.model', { model: modelName })} title={t('ui.lib.catalogue.badge.model', { model: modelName })}
           onClick={openModel} className={cx('absolute top-1 flex h-5 items-center rounded-[4px] bg-black/60 px-1 text-em-info', gpu ? 'right-7' : 'right-1')}>
           <DownloadCloud size={12} aria-hidden />
         </button>

@@ -5,3 +5,4 @@ export * from './result.js';
 export * from './i18n.js';
 export * from './logger.js';
 export * from './text/fit.js';
+export * from './model-tiers.js';

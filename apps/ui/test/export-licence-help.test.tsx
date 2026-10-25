@@ -213,7 +213,8 @@ describe('Editor screens (mock mode)', () => {
     expect(el('lib.generator.card.music')!.textContent).toContain(COMING_SOON);
     expect(el('lib.generator.card.voice')!.getAttribute('data-enabled')).toBe('true');
     expect(el('lib.generator.card.voice')!.textContent).toMatch(/P1/);
-    expect(el('lib.generator.card.voice')!.textContent).toMatch(/Piper Indonesian voice · 63/);
+    expect(el('lib.generator.card.voice')!.textContent).toMatch(/Indonesian Voice · 63/);          // product name (displayName), not the upstream label
+    expect(el('lib.generator.card.voice')!.textContent).not.toMatch(/Piper/);
     expect(el('lib.generator.card.voice')!.getAttribute('data-installed')).toBe('false');
   });
 

@@ -11,12 +11,13 @@ import { formatNumber } from '../i18n/index.js';
 import { EmError } from '@expertmotion/shared';
 
 function WorkloadItem({ item }: { item: WorkloadItemDto }) {
-  const { runtime, actions, t } = useStore();
+  const { runtime, actions, t, lang } = useStore();
   const pct = item.progress === null ? null : Math.round(item.progress * 100);
-  const text = item.pausedReason === 'render' || item.status === 'paused' ? t('ui.scr.hardware.item.paused', { name: item.label })
-    : item.status === 'queued' ? t('ui.scr.hardware.item.queued', { name: item.kind === 'generator' ? t(`ui.scr.hardware.gen.${item.label}`) : item.label })
+  const label = item.displayName?.[lang] ?? item.label;                                              // downloads: the model's product name
+  const text = item.pausedReason === 'render' || item.status === 'paused' ? t('ui.scr.hardware.item.paused', { name: label })
+    : item.status === 'queued' ? t('ui.scr.hardware.item.queued', { name: item.kind === 'generator' ? t(`ui.scr.hardware.gen.${item.label}`) : label })
     : item.kind === 'render' ? t('ui.scr.hardware.item.render', { name: item.label, percent: pct ?? 0 })
-    : item.kind === 'download' ? t('ui.scr.hardware.item.download', { name: item.label, percent: pct ?? 0 })
+    : item.kind === 'download' ? t('ui.scr.hardware.item.download', { name: label, percent: pct ?? 0 })
     : item.kind === 'ingest' ? t('ui.scr.hardware.item.ingest', { name: item.label })
     : item.kind === 'generator' ? t('ui.scr.hardware.item.generator', { name: t(`ui.scr.hardware.gen.${item.label}`), percent: pct ?? 0 })
     : t('ui.scr.hardware.item.agent', { name: t(`ui.scr.providers.assign.${item.label}`) });

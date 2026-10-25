@@ -122,7 +122,7 @@ export interface ProviderKindInfo { provider: ProviderKind; enabled: boolean; pr
 /** R-102 one row per agent (FR-116). */
 export interface ProbeResultDto { agent: AgentKind; modelId: string; ok: boolean; latencyMs: number; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; code?: string }
 /** FR-130 workload row (inside HardwareTickDto.workload.items). */
-export interface WorkloadItemDto { kind: 'render' | 'download' | 'ingest' | 'generator' | 'agent'; id: string; label: string; status: string; progress: number | null; cancellable: boolean; pausedReason: 'render' | null }
+export interface WorkloadItemDto { kind: 'render' | 'download' | 'ingest' | 'generator' | 'agent'; id: string; label: string; displayName?: DisplayNameDto; status: string; progress: number | null; cancellable: boolean; pausedReason: 'render' | null }
 export interface AssignmentDto { agent: AgentKind; connectionId: Id; modelId: string; settings: { temperature?: number; maxTokens?: number; effort?: 'low' | 'medium' | 'high' } }
 export interface AssignmentsDto { brainstorm: AssignmentDto | null; editor: AssignmentDto | null; defaultConnectionId: Id | null; warnings?: Issue[] }
 export interface UsageNumbers { inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; contextLength: number | null }
@@ -167,8 +167,10 @@ export interface SettingsDto {
 /** 'license' is no longer a step (licence screen before onboarding); old records may still contain it and are ignored. */
 export type OnboardingStep = 'provider' | 'models' | 'hardware' | 'tour';
 export type ModelTask = 'stt' | 'tts' | 'image' | 'music';
+/** Creator-facing product name of a Local Model (Model Manager rows, Generators, toasts); `label` stays the upstream name. */
+export interface DisplayNameDto { en: string; id: string }
 export interface ModelStateDto {
-  key: string; engine: string; version: string; task: ModelTask; label: string; licence: { name: string; url: string }; tiers: Tier[]; bytesTotal: number; bytesDone: number;
+  key: string; engine: string; version: string; task: ModelTask; label: string; displayName?: DisplayNameDto; flag?: string | null; licence: { name: string; url: string }; tiers: Tier[]; bytesTotal: number; bytesDone: number;
   status: 'not-installed' | 'downloading' | 'verifying' | 'paused' | 'installed' | 'failed'; errorCode: string | null; installedAt: Iso | null;
   // FR-120…FR-124 model card (optional: older services omit them)
   pausedReason?: 'render' | null; recommended?: boolean; priority?: 'P1' | 'P2'; languages?: string[]; notes?: string[]; commercialUse?: 'yes' | 'conditional' | 'no';
@@ -184,7 +186,7 @@ export interface GeneratorJobDto {
 }
 
 /** R-135 Generator Card (FR-100, FR-107). */
-export interface GeneratorModelDto { key: string; label: string; bytes: number; installed: boolean; languages: string[]; minTier: Tier; belowTier: boolean; cc0: boolean }
+export interface GeneratorModelDto { key: string; label: string; displayName?: DisplayNameDto; bytes: number; installed: boolean; languages: string[]; minTier: Tier; belowTier: boolean; cc0: boolean }
 export interface GeneratorCardDto {
   kind: GeneratorKind; enabled: boolean; priority: 'P1' | 'P2'; llm: boolean; tierHint: 'ok' | 'slow'; model: GeneratorModelDto | null; models: GeneratorModelDto[]; tier?: Tier;
 }

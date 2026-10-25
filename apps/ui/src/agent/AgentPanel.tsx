@@ -5,11 +5,14 @@ import { BrainstormChat } from './BrainstormChat.js';
 import { EditorChat } from './EditorChat.js';
 import { OutputSettings } from './OutputSettings.js';
 import { cx } from '../components/ui.js';
+import { useModelNames } from '../state/use-model-names.js';
 
 export function ModelBar() {
   const { state, actions, t } = useStore();
+  const names = useModelNames();
   const def = state.connections.find((c) => c.id === state.assignments?.defaultConnectionId) ?? state.connections[0];
-  const model = state.assignments?.editor?.modelId ?? state.assignments?.brainstorm?.modelId;
+  // Tier name ("Balanced") of the Editor Agent's model, else the Brainstorming Agent's; the raw model id stays internal.
+  const model = state.assignments?.editor ? names.agent('editor') : state.assignments?.brainstorm ? names.agent('brainstorm') : undefined;
   const priv = Boolean(state.settings?.privateMode);
   // FR-071: the last provider failure of either agent (agent.run.failed) wins over a stale "valid"; its code is shown as is.
   const runCode = [state.agentError.editor, state.agentError.brainstorm].find((c): c is string => !!c && /^EM-4[0-2]\d\d$/.test(c)) ?? null;

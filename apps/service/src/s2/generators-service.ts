@@ -10,7 +10,7 @@ import { applyOperations, deriveTiming, type CompositionModelT, type GeneratedRe
 import { compileDefaults } from '@expertmotion/catalogue';
 import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
 import { JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, removeJobDir, synthesize, transcribeToPages,
-  type JobContext, type JobEvent, type ModelDef } from '@expertmotion/models';
+  displayNameOf, type JobContext, type JobEvent, type ModelDef } from '@expertmotion/models';
 import type { ServiceContext } from '../context.js';
 import { em, emit } from './common.js';
 import { getAsset, listAssets, toFacts } from './assets-repo.js';
@@ -171,11 +171,11 @@ export class GeneratorsService {
       const task = kind === 'captions' ? 'stt' : kind === 'voice' ? 'tts' : kind === 'music' ? 'music' : 'image';
       const defKey = defaultModelFor(task, tier, { language: lang });
       const list = await Promise.all(models.defs().filter((d) => MODEL_TASKS[kind].includes(d.task)).map(async (d) => ({
-        key: d.key, label: d.label, bytes: d.bytes, installed: await models.isInstalled(d.key), languages: d.languages, minTier: d.minTier, belowTier: TIER_RANK[tier] < TIER_RANK[d.minTier],
+        key: d.key, label: d.label, displayName: displayNameOf(d), bytes: d.bytes, installed: await models.isInstalled(d.key), languages: d.languages, minTier: d.minTier, belowTier: TIER_RANK[tier] < TIER_RANK[d.minTier],
         cc0: d.engine === 'loops' })));
       const def = list.find((m) => m.key === defKey) ?? null;
       // frame-composite (T0 thumbnails) needs no model: a still of the current frame plus the title (LOCAL_AI_MODELS §5)
-      const model = def ?? (defKey === 'frame-composite' ? { key: defKey, label: 'Frame + title', bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: false } : null);
+      const model = def ?? (defKey === 'frame-composite' ? { key: defKey, label: 'Frame + title', displayName: displayNameOf({ key: defKey, label: 'Frame + title' }), bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: false } : null);
       out.push({ ...base, model, models: list, llm: false, tierHint: model?.belowTier ? 'slow' : 'ok', tier });
     }
     return out;
@@ -293,7 +293,7 @@ export class GeneratorsService {
 
   private async requireInstalled(key: string, tool: string): Promise<ModelDef> {
     const models = modelsServiceOf(this.ctx); const def = models.def(key);
-    if (!def || !(await models.isInstalled(key))) throw em('EM-7001', `"${tool}" needs the ${def?.label ?? key} model.`, { details: { modelKey: key, bytes: def?.bytes ?? null } });
+    if (!def || !(await models.isInstalled(key))) throw em('EM-7001', `"${tool}" needs the ${def ? displayNameOf(def).en : key} model.`, { details: { modelKey: key, bytes: def?.bytes ?? null } });
     return def;
   }
   /** Engine step under the heavy lock, in a per-job temp dir (SEC-062). */

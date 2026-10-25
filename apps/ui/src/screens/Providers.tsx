@@ -7,8 +7,9 @@ import { useStore } from '../state/store.js';
 import type { AgentKind, AssignmentDto, CapabilityRow, ConnectionDto, ProbeResultDto, ProviderKind, ProviderKindInfo } from '../api/types.js';
 import { Badge, Button, ErrorBox, Field, IconButton, Modal, cx, inputCls } from '../components/ui.js';
 import { formatMoney, formatNumber, formatTokens } from '../i18n/index.js';
-import { EmError } from '@expertmotion/shared';
+import { EmError, MODEL_TIERS, recommendedFor, resolveModelTiers, tierOfModel, type ModelTier } from '@expertmotion/shared';
 import type { BudgetFocus } from '../state/reducer.js';
+import { llmModelName } from '../state/model-names.js';
 
 const PROVIDERS: ProviderKind[] = ['openrouter', 'openai', 'anthropic', 'google', 'custom'];
 const AGENTS: AgentKind[] = ['brainstorm', 'editor'];
@@ -18,14 +19,10 @@ type Budget = Awaited<ReturnType<ReturnType<typeof useStore>['runtime']['api']['
 const codeOf = (e: unknown) => (e instanceof EmError ? e.code : 'EM-9001');
 const toLimit = (v: string): number | null => { const n = Number(v); return v.trim() && Number.isFinite(n) && n > 0 ? Math.min(n, 10_000) : null; };
 
-/** Deterministic "recommended for" hint from the Capability Table (unknown facts never qualify). */
-export function recommendedFor(r: CapabilityRow): AgentKind[] {
-  const ctxOk = r.contextLength === null || r.contextLength >= 32_000;
-  const out: AgentKind[] = [];
-  if (ctxOk && r.structuredOutput !== false && r.imageInput === true) out.push('brainstorm');
-  if (ctxOk && r.structuredOutput === true && r.toolCalling === true) out.push('editor');
-  return out;
-}
+/** Deterministic "recommended for" hint from the Capability Table (unknown facts never qualify); lives in @expertmotion/shared. */
+export { recommendedFor };
+/** The Balanced tier's model for an agent (the default when nothing is assigned yet), or '' when the table has no JSON-capable model. */
+const defaultModel = (rows: readonly CapabilityRow[], agent: AgentKind): string => resolveModelTiers(rows, agent).balanced ?? '';
 
 function useKinds(): ProviderKindInfo[] {
   const { runtime } = useStore();
@@ -149,24 +146,56 @@ function CapabilityTable({ rows, onRefresh }: { rows: CapabilityRow[]; onRefresh
   );
 }
 
-/** Two independent pickers (FR-115). Only `structuredOutput === false` is refused (R-098, AGD-004); missing or unknown
- *  tool calling / structured output shows EM-4005 and stays allowed; a model without image input gets a note. */
+/** Two independent pickers (FR-115). Default: three tiers per agent (Fast / Balanced / Best, resolved from the Capability
+ *  Table by @expertmotion/shared `resolveModelTiers`; the resolved model id is what gets stored). "Advanced" (collapsed)
+ *  keeps the exact model list. Only `structuredOutput === false` is refused (R-098, AGD-004); missing or unknown tool calling /
+ *  structured output shows EM-4005 and stays allowed; a model without image input gets a note. */
 function AssignFields({ rows, assign, setAssign }: { rows: CapabilityRow[]; assign: Record<AgentKind, string>; setAssign: (f: (a: Record<AgentKind, string>) => Record<AgentKind, string>) => void }) {
   const { t } = useStore();
+  const [picked, setPicked] = useState<Record<AgentKind, ModelTier | null>>({ brainstorm: null, editor: null });
   return (
     <>
       {AGENTS.map((agent) => {
         const cap = rows.find((r) => r.modelId === assign[agent]);
+        const tiers = resolveModelTiers(rows, agent);
+        const derived = tierOfModel(rows, assign[agent], agent);
+        const p = picked[agent];
+        const current = p && tiers[p] === assign[agent] ? p : derived;
+        const noTiers = !tiers.balanced;
+        const name = llmModelName(t, rows, assign[agent], agent);
         return (
-          <div key={agent}>
-            <Field label={t(`ui.scr.providers.assign.${agent}`)} htmlFor={`em-assign-${agent}`} hint={agent === 'editor' ? t('ui.scr.providers.assign.editor.hint') : undefined}>
-              <select id={`em-assign-${agent}`} data-el={`scr.providers.assign.${agent}`} className={inputCls} value={assign[agent]} onChange={(e) => setAssign((a) => ({ ...a, [agent]: e.target.value }))}>
-                <option value="">{t('ui.scr.providers.assign.none')}</option>
-                {rows.map((r) => <option key={r.modelId} value={r.modelId} disabled={r.structuredOutput === false}>{r.label}{r.structuredOutput === false ? ` — ${t('ui.scr.providers.assign.nojson')}` : ''}</option>)}
-              </select>
-            </Field>
-            {cap && agent === 'editor' && (cap.toolCalling !== true || cap.structuredOutput !== true) && <div className="-mt-2 mb-2"><Note el="scr.providers.assign.note" code="EM-4005" tone="info" vars={{ model: cap.label }} /></div>}
-            {cap && cap.imageInput !== true && <p data-el="scr.providers.assign.note" className="-mt-1 mb-2 text-[12px] text-em-muted">{t(cap.imageInput === false ? 'ui.scr.providers.assign.noimage' : 'ui.scr.providers.assign.imageunknown')}</p>}
+          <div key={agent} className="mb-3">
+            <div className="t-label mb-1" id={`em-assign-${agent}-label`}>{t(`ui.scr.providers.assign.${agent}`)}</div>
+            <div role="radiogroup" aria-labelledby={`em-assign-${agent}-label`} data-el={`scr.providers.assign.${agent}.tier`} className="grid grid-cols-3 gap-1">
+              {MODEL_TIERS.map((tier) => {
+                const on = current === tier;
+                return (
+                  <button key={tier} type="button" role="radio" aria-checked={on} data-el="scr.providers.assign.tier.option" data-tier={tier} disabled={!tiers[tier]}
+                    title={!tiers[tier] ? t('ui.scr.providers.tier.fetch') : undefined}
+                    onClick={() => { const id = tiers[tier]; if (!id) return; setPicked((x) => ({ ...x, [agent]: tier })); setAssign((a) => ({ ...a, [agent]: id })); }}
+                    className={cx('flex flex-col items-start rounded-[6px] border px-2 py-1 text-left', on ? 'border-em-accent text-em-accent' : 'border-em-line', !tiers[tier] && 'cursor-not-allowed opacity-50')}>
+                    <span className="font-medium">{t(`ui.scr.providers.tier.${tier}`)}</span>
+                    <span className="text-[11px] text-em-muted">{t(`ui.scr.providers.tier.${tier}.hint`)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {noTiers && <p data-el="scr.providers.assign.tier.empty" className="mt-1 text-[12px] text-em-muted">{t('ui.scr.providers.tier.fetch')}</p>}
+            {agent === 'editor' && <p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.providers.assign.editor.hint')}</p>}
+            {assign[agent] && !current && <p data-el="scr.providers.assign.custom" className="mt-1 text-[12px] text-em-text-2">{t('ui.scr.providers.tier.custom', { model: name })}</p>}
+            <details data-el={`scr.providers.assign.${agent}.advanced`} className="mt-1 text-[12px]">
+              <summary className="cursor-pointer text-em-muted">{t('ui.scr.providers.tier.advanced')}</summary>
+              <div className="mt-1">
+                <Field label={t('ui.scr.providers.tier.advanced.model')} htmlFor={`em-assign-${agent}`}>
+                  <select id={`em-assign-${agent}`} data-el={`scr.providers.assign.${agent}`} className={inputCls} value={assign[agent]} onChange={(e) => { setPicked((x) => ({ ...x, [agent]: null })); setAssign((a) => ({ ...a, [agent]: e.target.value })); }}>
+                    <option value="">{t('ui.scr.providers.assign.none')}</option>
+                    {rows.map((r) => <option key={r.modelId} value={r.modelId} disabled={r.structuredOutput === false}>{r.label}{r.structuredOutput === false ? ` — ${t('ui.scr.providers.assign.nojson')}` : ''}</option>)}
+                  </select>
+                </Field>
+              </div>
+            </details>
+            {cap && agent === 'editor' && (cap.toolCalling !== true || cap.structuredOutput !== true) && <div className="mt-1"><Note el="scr.providers.assign.note" code="EM-4005" tone="info" vars={{ model: name }} /></div>}
+            {cap && cap.imageInput !== true && <p data-el="scr.providers.assign.note" className="mt-1 text-[12px] text-em-muted">{t(cap.imageInput === false ? 'ui.scr.providers.assign.noimage' : 'ui.scr.providers.assign.imageunknown')}</p>}
           </div>
         );
       })}
@@ -240,8 +269,7 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
   }, [conn, runtime, dispatch, state.capabilities]);
   useEffect(() => {
     if (!rows.length) return;
-    setAssign((a) => ({ brainstorm: a.brainstorm || (rows.find((r) => recommendedFor(r).includes('brainstorm')) ?? rows[0]!).modelId,
-      editor: a.editor || (rows.find((r) => recommendedFor(r).includes('editor')) ?? rows.find((r) => r.structuredOutput !== false) ?? rows[0]!).modelId }));
+    setAssign((a) => ({ brainstorm: a.brainstorm || defaultModel(rows, 'brainstorm'), editor: a.editor || defaultModel(rows, 'editor') }));
   }, [rows.length]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!conn) return <p className="text-em-muted">{t('ui.scr.providers.none')}</p>;
   const save = async () => {
@@ -303,8 +331,7 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
     try {
       const r = await runtime.api.validateDraft(provider, secret.trim());
       setRows(r.models); setModelsCode(r.modelsCode ?? null);
-      setAssign({ brainstorm: (r.models.find((m) => recommendedFor(m).includes('brainstorm')) ?? r.models[0])?.modelId ?? '',
-        editor: (r.models.find((m) => recommendedFor(m).includes('editor')) ?? r.models.find((m) => m.structuredOutput !== false))?.modelId ?? '' });
+      setAssign({ brainstorm: defaultModel(r.models, 'brainstorm'), editor: defaultModel(r.models, 'editor') });
     } catch (e) { const c = codeOf(e); setError(c); if (c === 'EM-4002') document.getElementById('em-key')?.focus(); }
     setBusy(null);
   };

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Copy, Download, Trash2 } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
 import { useStore } from '../state/store.js';
+import { useModelNames } from '../state/use-model-names.js';
 import type { GeneratorJobDto, GeneratorKind, GeneratorModelDto } from '../api/types.js';
 import { Badge, Button, ErrorBox, Field, Modal, Progress, cx, inputCls } from '../components/ui.js';
 import { GENERATOR_MODEL, useGeneratorCards } from '../library/Generators.js';
@@ -34,6 +35,7 @@ export function generatedList(jobs: GeneratorJobDto[], now = Date.now()): Genera
 
 export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose: () => void }) {
   const { state, runtime, actions, t, lang } = useStore();
+  const names = useModelNames();
   const p = `scr.generate.${kind}`;
   const cards = useGeneratorCards();
   const card = cards?.find((c) => c.kind === kind) ?? null;
@@ -42,7 +44,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   // FR-106: every form has the id/en toggle, defaulting to the Project language (then the UI language)
   const [language, setLanguage] = useState<'id' | 'en'>(state.head?.model?.settings.language ?? state.settings?.uiLanguage ?? 'id');
   // models: the service card is the source of truth; the Model Manager list fills in live download progress
-  const fallback: GeneratorModelDto[] = state.models.filter((m) => m.task === TASK[kind]).map((m) => ({ key: m.key, label: m.label, bytes: m.bytesTotal, installed: m.status === 'installed', languages: [], minTier: m.tiers[0] ?? 'T0', belowTier: false, cc0: false }));
+  const fallback: GeneratorModelDto[] = state.models.filter((m) => m.task === TASK[kind]).map((m) => ({ key: m.key, label: m.label, ...(m.displayName ? { displayName: m.displayName } : {}), bytes: m.bytesTotal, installed: m.status === 'installed', languages: [], minTier: m.tiers[0] ?? 'T0', belowTier: false, cc0: false }));
   const options = card ? card.models : fallback;
   const defaultKey = card?.model?.key ?? GENERATOR_MODEL[kind] ?? options[0]?.key ?? '';
   const [model, setModel] = useState<string>('');
@@ -167,9 +169,9 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
           </div>
           <select id="em-gen-model" data-el={kind === 'voice' ? `${p}.voice` : undefined} className={inputCls} value={chosenKey} onChange={(e) => setModel(e.target.value)}>
             {options.length === 0 && <option value={defaultKey}>{chosenKey === 'frame-composite' ? t('ui.scr.generate.thumbnail.frame') : t('ui.scr.generate.nomodel')}</option>}
-            {options.map((m) => <option key={m.key} value={m.key}>{m.label}{m.cc0 ? ' · CC0' : ''}{m.installed ? '' : ` · ${t('ui.lib.generator.needsmodel')}`}</option>)}
+            {options.map((m) => <option key={m.key} value={m.key}>{names.local(m)}{m.cc0 ? ' · CC0' : ''}{m.installed ? '' : ` · ${t('ui.lib.generator.needsmodel')}`}</option>)}
           </select>
-          {chosen?.belowTier && <p className="text-[12px] text-em-warn">{t('err.EM-7005.body', { model: chosen.label })}</p>}
+          {chosen?.belowTier && <p className="text-[12px] text-em-warn">{t('err.EM-7005.body', { model: names.local(chosen) })}</p>}
           {kind === 'music' && (card?.tier === 'T0' || chosen?.cc0) && <p data-el={`${p}.cc0`} className="text-[12px] text-em-text-2">{t('ui.scr.generate.music.cc0')}</p>}
           {!installed && !downloading && chosenKey && chosenKey !== 'frame-composite' && (
             <Button el={`${p}.install`} size={28} icon={<Download size={14} />} disabledReason={priv ? t('err.EM-8202.title') : null} onClick={() => void install()}>
@@ -179,7 +181,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
           {live?.errorCode === 'EM-7006' && !downloading && <p className="text-[12px] text-em-private">{t('err.EM-7006.title')}</p>}
           {downloading && live && (
             <div className="flex items-center gap-2">
-              <Progress value={live.bytesTotal ? live.bytesDone / live.bytesTotal : null} label={live.label} />
+              <Progress value={live.bytesTotal ? live.bytesDone / live.bytesTotal : null} label={names.local(live)} />
               <span className="t-mono shrink-0 text-[11px] text-em-muted">{formatBytes(live.bytesDone, lang)} / {formatBytes(live.bytesTotal, lang)}</span>
               <Button size={28} variant="ghost" onClick={() => void runtime.api.cancelModel(live.key).then(() => actions.loadModels()).catch(actions.error)}>{t('ui.common.cancel')}</Button>
             </div>
@@ -248,7 +250,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
           <Field label={t('ui.scr.generate.hashtags.count', { n: count })} htmlFor="em-gen-count">
             <input id="em-gen-count" data-el={`${p}.count`} type="range" min={10} max={20} step={1} value={count} onChange={(e) => setCount(Number(e.target.value))} className="w-full" />
           </Field>
-          <div className="col-span-2 text-[12px] text-em-text-2">{t('ui.scr.generate.hashtags.model', { model: state.assignments?.brainstorm?.modelId ?? t('ui.agent.footer.nomodel') })}</div>
+          <div className="col-span-2 text-[12px] text-em-text-2">{t('ui.scr.generate.hashtags.model', { model: names.agent('brainstorm') || t('ui.agent.footer.nomodel') })}</div>
         </>}
       </div>
 

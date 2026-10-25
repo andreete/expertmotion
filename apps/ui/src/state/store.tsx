@@ -15,6 +15,7 @@ import { loadPrefs, savePrefs, type Prefs } from '../prefs.js';
 /** Window event that opens the Hardware Monitor popover (Header listens; FR-128 low-disk banner action). */
 export const OPEN_HARDWARE_EVENT = 'expertmotion:open-hardware';
 import { translate, type Lang } from '../i18n/index.js';
+import { localModelByRef, localModelName } from './model-names.js';
 
 export interface Actions {
   openProject(id: string): Promise<void>;
@@ -190,7 +191,9 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           const flag = String(res.intent.params['__heldFor'] ?? '');
           const model = flag.startsWith('model:') ? flag.slice(6) : '';
           toast('warn', 'err.EM-2104.title', undefined, { code: 'EM-2104', action: { labelKey: 'err.EM-2104.action', run: () => setScreen({ kind: 'models', ...(model ? { focus: model } : {}) }) } });
-          announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.lib.catalogue.model.held', { model }));
+          const L = stateRef.current.settings?.uiLanguage ?? 'en';
+          const row = model ? localModelByRef(stateRef.current.models, model) : undefined;
+          announce(translate(L, 'ui.lib.catalogue.model.held', { model: row ? localModelName(row, L) : model }));
         }
         if (res.appliedVersion) {
           await refreshHead();
@@ -526,7 +529,12 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       },
       async cancelRender(jobId) { try { const j = await api.cancelRender(jobId); dispatch({ type: 'renders', renders: stateRef.current.renders.map((x) => (x.id === j.id ? j : x)) }); } catch (e) { error(e); } },
       async loadProviders() {
-        try { const [c, a] = await Promise.all([api.listConnections(), api.getAssignments()]); dispatch({ type: 'providers', connections: c.items, assignments: a }); } catch (e) { error(e); }
+        try {
+          const [c, a] = await Promise.all([api.listConnections(), api.getAssignments()]); dispatch({ type: 'providers', connections: c.items, assignments: a });
+          // Tier names ("Balanced") need the assigned connection's cached Capability Table (R-095 reads the cache, no provider call).
+          for (const cid of new Set([a.brainstorm?.connectionId, a.editor?.connectionId].filter((x): x is string => Boolean(x))))
+            if (!stateRef.current.capabilities[cid]) void api.connectionModels(cid).then((r) => dispatch({ type: 'capabilities', connectionId: cid, rows: r.items })).catch(() => undefined);
+        } catch (e) { error(e); }
       },
       async addConnection(provider, secret, label) {
         try {

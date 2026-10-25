@@ -20,7 +20,7 @@ const def = (key: string, over: Partial<ModelDef> = {}): ModelDef => ({
   recommendedFor: ['T0'], ramBytes: 1, flag: 'model:piper-id', priority: 'P1', notes: ['a note'], ...over,
 });
 type Dto = { key: string; status: string; bytesDone: number; pausedReason: string | null; recommended: boolean; hashes: Array<{ sha256: string | null }>; pathLabel: string;
-  usedBy: { generators: string[] }; engineNotices: Array<{ spdx: string | null }>; languages: string[] };
+  usedBy: { generators: string[] }; engineNotices: Array<{ spdx: string | null }>; languages: string[]; displayName: { en: string; id: string }; flag: string | null; licence: { name: string } };
 
 describe('Model Manager: card, pause during render, discard, folders (FR-121…FR-126)', () => {
   let s: S2Service; let busy = false; let streamed = 0;
@@ -41,6 +41,8 @@ describe('Model Manager: card, pause during render, discard, folders (FR-121…F
     expect(v).toMatchObject({ recommended: true, languages: ['id'], usedBy: { generators: ['voice'] }, pathLabel: 'models\\sherpa-onnx\\voice-slow\\' });
     expect(v.hashes[0]!.sha256).toBe(sha(blob));
     expect(v.engineNotices.map((n) => n.spdx)).toContain('GPL-3.0-or-later');
+    // Creator-facing product name (en/id); a row without a DISPLAY_NAMES entry falls back to its label; licence unchanged
+    expect(v).toMatchObject({ displayName: { en: 'Test voice-slow', id: 'Test voice-slow' }, flag: 'model:piper-id', licence: { name: 'MIT' } });
     expect(list.items.find((i) => i.key === 'big')!.recommended).toBe(false);
     expect(list.registry).toEqual({ source: 'built-in', seq: 0, code: null, reason: null });
   });

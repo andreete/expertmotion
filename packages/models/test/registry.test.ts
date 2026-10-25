@@ -108,3 +108,19 @@ describe('registry helpers', () => {
     expect(Object.keys(TIER_DEFAULTS)).toEqual(['stt', 'tts.id', 'tts.en', 'music', 'image']);
   });
 });
+
+describe('display names (Creator-facing product names)', () => {
+  it('every registry row has an English and an Indonesian name, and the key is unchanged', async () => {
+    const { DISPLAY_NAMES, displayNameOf, registry: reg } = await import('../src/index.js');
+    for (const def of Object.values(reg)) {
+      const n = displayNameOf(def);
+      expect(DISPLAY_NAMES[def.key], def.key).toBeDefined();
+      expect(n.en.length, def.key).toBeGreaterThan(2);
+      expect(n.id.length, def.key).toBeGreaterThan(2);
+      expect(n.en, def.key).not.toMatch(/whisper|piper|kokoro|flux|stable diffusion|ace-step/i);
+    }
+    expect(displayNameOf(reg['whisper-small']!)).toEqual({ en: 'Auto Captions — Fast', id: 'Teks Otomatis — Cepat' });
+    expect(displayNameOf({ key: 'unknown-x', label: 'X model' })).toEqual({ en: 'X model', id: 'X model' });
+    expect(Object.keys(DISPLAY_NAMES).sort()).toEqual(Object.keys(reg).sort());
+  });
+});

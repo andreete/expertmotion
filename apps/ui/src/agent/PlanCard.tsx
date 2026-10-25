@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { CheckCircle2, History, Lightbulb, Loader, OctagonAlert, TriangleAlert, Info, XCircle } from 'lucide-react';
 import { useStore } from '../state/store.js';
+import { useModelNames } from '../state/use-model-names.js';
 import type { PlanDto } from '../api/types.js';
 import { Button, cx } from '../components/ui.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
@@ -55,6 +56,7 @@ export function PlanSummary({ plan }: { plan: PlanDto }) {
 
 export function PlanCard({ plan }: { plan: PlanDto }) {
   const { state, actions, t, lang } = useStore();
+  const names = useModelNames();
   const [notes, setNotes] = useState(plan.notes ?? '');
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => { setNotes(plan.notes ?? ''); }, [plan.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -137,7 +139,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
       {status === 'executed' && plan.result && <div data-el="agent.editor.plancard.result" className="text-[12px] text-em-success">{diffSummary(plan.result, t)}</div>}
       {plan.usage && (
         <div className="t-mono text-[11px] text-em-muted" title={plan.usage.approximate ? t('ui.agent.common.cost.approx') : plan.usage.costUsd === null ? t('ui.agent.common.cost.na') : undefined}>
-          <span data-el="agent.editor.plancard.model">{plan.usage.model}</span> · {t('ui.agent.plan.usage', { input: formatTokens(plan.usage.inputTokens, lang), output: formatTokens(plan.usage.outputTokens, lang), cost: formatMoney(plan.usage.costUsd, plan.usage.approximate, lang) })}
+          <span data-el="agent.editor.plancard.model" title={plan.usage.model}>{names.llm(plan.usage.model, 'editor')}</span> · {t('ui.agent.plan.usage', { input: formatTokens(plan.usage.inputTokens, lang), output: formatTokens(plan.usage.outputTokens, lang), cost: formatMoney(plan.usage.costUsd, plan.usage.approximate, lang) })}
         </div>
       )}
       <div className="flex items-center gap-2 border-t border-em-line pt-2">

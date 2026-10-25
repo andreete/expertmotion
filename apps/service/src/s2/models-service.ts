@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EmError, errorMessage } from '@expertmotion/shared';
 import { ALL_PRESETS } from '@expertmotion/catalogue';
-import { SIGNED_REGISTRY_FILE, SIGNED_REGISTRY_SIG_FILE, TIERS, applySignedRegistry, embeddedManifestKeys, getModel, installModel, isCancelled, isPinned, modelDir, partPath, readInstallState,
+import { SIGNED_REGISTRY_FILE, SIGNED_REGISTRY_SIG_FILE, TIERS, applySignedRegistry, displayNameOf, embeddedManifestKeys, getModel, installModel, isCancelled, isPinned, modelDir, partPath, readInstallState,
   registry, removeModel, requiredInstallBytes, verifySignedRegistry, type FetchLike, type ManifestKeyEntry, type ModelDef } from '@expertmotion/models';
 import type { ServiceContext } from '../context.js';
 import { MODEL_CDN_URL, manifestUrls, modelDownloadHosts } from '../services/model-cdn.js';
@@ -247,7 +247,7 @@ export class ModelsService {
     const l = this.live.get(def.key);
     const installed = st.manifest?.state === 'installed';
     const status: Status = l ? l.status : installed ? 'installed' : row?.status === 'failed' ? 'failed' : 'not-installed';
-    return { key: def.key, engine: def.engine, version: def.version, task: def.task === 'library' ? 'music' : def.task, label: def.label, licence: { name: def.licence.name, url: licenceTextUrl(def.licence) },
+    return { key: def.key, engine: def.engine, version: def.version, task: def.task === 'library' ? 'music' : def.task, label: def.label, displayName: displayNameOf(def), flag: def.flag, licence: { name: def.licence.name, url: licenceTextUrl(def.licence) },
       tiers: TIERS.filter((t) => RANK[t] >= RANK[def.minTier]), bytesTotal: def.bytes, bytesDone: l ? l.bytesDone : installed ? def.bytes : st.partialBytes, status,
       errorCode: status === 'failed' ? row?.error_code ?? null : this.paused.has(def.key) && status === 'not-installed' ? 'EM-7006' : null, installedAt: installed ? st.manifest!.installedAt : null,
       ...this.card(def, l) };
@@ -281,13 +281,13 @@ export class ModelsService {
     const ctx = this.ctx; let def = this.require(key);
     if (!isPinned(def) && !ctx.settings.get().privateMode && this.cdnUrl()) { await this.refreshRegistry(); def = this.require(key); }   // not pinned yet: the CDN list may pin it
     if (ctx.settings.get().privateMode) throw em('EM-8202', 'Private Mode is on, so the model download was not started.', { details: { action: 'model download' } });
-    if (this.live.has(def.key) || this.queue.has(def.key)) throw em('EM-7104', `${def.label} is already being downloaded.`, { status: 409, details: { modelId: def.key } });
-    if (!isPinned(def)) throw em('EM-7110', `${def.label} has no pinned checksum yet, so it cannot be verified.`, { details: { modelId: def.key, reason: 'unpinned' } });
+    if (this.live.has(def.key) || this.queue.has(def.key)) throw em('EM-7104', `${displayNameOf(def).en} is already being downloaded.`, { status: 409, details: { modelId: def.key } });
+    if (!isPinned(def)) throw em('EM-7110', `${displayNameOf(def).en} has no pinned checksum yet, so it cannot be verified.`, { details: { modelId: def.key, reason: 'unpinned' } });
     const st = await readInstallState(def, ctx.paths.models);
     if (st.manifest?.state === 'installed') return this.dto(def);
     const free = await (this.opts.freeBytes ?? freeBytes)(ctx.paths.models);
     const need = requiredInstallBytes(Math.max(0, def.bytes - st.partialBytes));
-    if (free < need) throw em('EM-7004', `${def.label} needs more free disk space.`, { details: { modelId: def.key, needBytes: need, freeBytes: free } });
+    if (free < need) throw em('EM-7004', `${displayNameOf(def).en} needs more free disk space.`, { details: { modelId: def.key, needBytes: need, freeBytes: free } });
     const entry: Live = { status: 'downloading', pausedReason: null, bytesDone: st.partialBytes, bytesTotal: def.bytes, ac: new AbortController() };
     this.live.set(def.key, entry);
     this.upsert(def, 'downloading', { bytesDone: st.partialBytes });
@@ -371,9 +371,9 @@ export class ModelsService {
   }
 
   /** FR-130 workload rows for running, paused and queued downloads. */
-  workload(): Array<{ key: string; label: string; status: Live['status']; pausedReason: 'render' | null; bytesDone: number; bytesTotal: number }> {
-    const labels = new Map(this.defs().map((d) => [d.key, d.label]));
-    return [...this.live.entries()].map(([key, l]) => ({ key, label: labels.get(key) ?? key, status: l.status, pausedReason: l.pausedReason ?? null, bytesDone: l.bytesDone, bytesTotal: l.bytesTotal }));
+  workload(): Array<{ key: string; label: string; displayName: { en: string; id: string }; status: Live['status']; pausedReason: 'render' | null; bytesDone: number; bytesTotal: number }> {
+    const defs = new Map(this.defs().map((d) => [d.key, d]));
+    return [...this.live.entries()].map(([key, l]) => { const d = defs.get(key); return { key, label: d?.label ?? key, displayName: d ? displayNameOf(d) : { en: key, id: key }, status: l.status, pausedReason: l.pausedReason ?? null, bytesDone: l.bytesDone, bytesTotal: l.bytesTotal }; });
   }
 
   /** FR-126 per-engine models folder (created on demand) for the Shell to open in Explorer. */
@@ -387,7 +387,7 @@ export class ModelsService {
   /** R-144: EM-7104 while a generator job uses the model; a running download is cancelled first. */
   async remove(key: string): Promise<void> {
     const def = this.require(key);
-    if ((s2(this.ctx).modelsInUse.get(def.key) ?? 0) > 0) throw em('EM-7104', `${def.label} is being used by a running task.`, { status: 409, details: { modelId: def.key } });
+    if ((s2(this.ctx).modelsInUse.get(def.key) ?? 0) > 0) throw em('EM-7104', `${displayNameOf(def).en} is being used by a running task.`, { status: 409, details: { modelId: def.key } });
     if (this.live.has(def.key)) await this.cancel(def.key);
     await removeModel(def, this.ctx.paths.models);
     this.ctx.db.prepare('DELETE FROM models WHERE key = ?').run(def.key);

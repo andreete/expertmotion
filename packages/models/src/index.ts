@@ -2,6 +2,7 @@
 export * from './types.js';
 export * from './errors.js';
 export * from './registry.js';
+export * from './display-names.js';
 export * from './manifest.js';
 export * from './signed-registry.js';
 export * from './download.js';

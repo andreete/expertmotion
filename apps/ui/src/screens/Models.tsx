@@ -1,4 +1,5 @@
-// Model Manager (scr.models, FR-120…FR-126): Local Models grouped by purpose with size, licence, tier, version, used-by;
+// Model Manager (scr.models, FR-120…FR-126): Local Models grouped by purpose; the row shows the product name (displayName), size,
+// tier and used-by; the licence (name + link, engine notices) is in the expanded card;
 // expandable model card; filters; install (EM-7005 confirm above the Hardware Tier), pause / resume / cancel, remove with
 // confirmation; footer with disk use, free space and per-engine "open folder" (ADR-008, F11). SEC-072 refusals: EM-7111.
 import { Fragment, useEffect, useRef, useState } from 'react';
@@ -7,6 +8,7 @@ import { useStore } from '../state/store.js';
 import type { ModelRegistrySource, ModelStateDto } from '../api/types.js';
 import { Badge, Button, Modal, Progress, cx, inputCls } from '../components/ui.js';
 import { formatBytes, formatNumber } from '../i18n/index.js';
+import { localModelName } from '../state/model-names.js';
 
 const PURPOSES = ['stt', 'tts', 'image', 'music'] as const;
 type Purpose = (typeof PURPOSES)[number];
@@ -22,7 +24,7 @@ function ModelCard({ m }: { m: ModelStateDto }) {
       {m.notes && m.notes.length > 0 && <><dt className="text-em-muted">{t('ui.scr.models.card.description')}</dt><dd>{m.notes.join(' · ')}</dd></>}
       <dt className="text-em-muted">{t('ui.scr.models.card.languages')}</dt><dd>{m.languages?.length ? m.languages.map((l) => t(`ui.common.lang.${l}`)).join(', ') : '—'}</dd>
       <dt className="text-em-muted">{t('ui.scr.models.card.licence')}</dt>
-      <dd>{m.licence.name}{m.licenceDetail?.useRestrictions ? ` · ${m.licenceDetail.useRestrictions}` : ''} · <span className={commercial === 'yes' ? 'text-em-success' : 'text-em-warn'}>{t(`ui.scr.models.card.commercial.${commercial}`)}</span>
+      <dd><a data-el="scr.models.row.licence" href={m.licence.url} target="_blank" rel="noreferrer" className="text-em-accent underline">{m.licence.name}</a>{m.licenceDetail?.useRestrictions ? ` · ${m.licenceDetail.useRestrictions}` : ''} · <span className={commercial === 'yes' ? 'text-em-success' : 'text-em-warn'}>{t(`ui.scr.models.card.commercial.${commercial}`)}</span>
         {m.licenceDetail?.redistribution === 'verify' && <> · <span className="text-em-warn">{t('ui.scr.models.card.verify')}</span></>}</dd>
       {m.engineNotices?.map((n) => (
         <Fragment key={n.label}>
@@ -49,6 +51,7 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
   const partial = m.status === 'not-installed' && m.bytesDone > 0;
   const usedBy = [...(m.usedBy?.generators ?? []).map((g) => t(`ui.scr.models.usedby.${g}`)), ...(m.usedBy?.presets ?? [])];
   const install = () => (fits ? act(runtime.api.installModel(m.key)) : setConfirm('install'));   // FR-123: EM-7005 above the tier
+  const name = localModelName(m, lang);                                                             // product name (Operator 2026-10-25); licence stays in the card
   return (
     <div data-el="scr.models.row" data-model-key={m.key} tabIndex={focus === m.key ? -1 : undefined} data-focused={focus === m.key || undefined}
       className={cx('mb-1 flex flex-col gap-1 rounded-[6px] border p-2', focus === m.key ? 'border-em-accent' : 'border-em-line')}>
@@ -56,11 +59,10 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
         <button type="button" data-el="scr.models.row.expand" aria-expanded={open} aria-label={open ? t('ui.common.close') : t('ui.common.expand')} className="text-em-muted" onClick={() => setOpen((v) => !v)}>
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
-        <span className="flex-1 font-medium">{m.label} <span className="t-mono text-[11px] text-em-muted">v{m.version}</span></span>
+        <span data-el="scr.models.row.name" className="flex-1 font-medium">{name}</span>
         {m.recommended && <Badge el="scr.models.row.recommended" tone="success">{t('ui.scr.models.recommended')}</Badge>}
         {m.priority === 'P2' && <Badge>{t('ui.scr.models.p2')}</Badge>}
         <span className="t-mono text-em-muted">{formatBytes(m.bytesTotal, lang)}</span>
-        <a href={m.licence.url} target="_blank" rel="noreferrer" className="text-[12px] text-em-accent underline">{m.licence.name}</a>
         <Badge el="scr.models.row.tier" tone={fits ? 'neutral' : 'warn'}>{fits ? t('ui.scr.models.mintier', { tier: m.tiers[0] ?? 'T0' }) : t('ui.scr.models.needsgpu', { tier: m.tiers[0] ?? 'T1' })}</Badge>
       </div>
       {usedBy.length > 0 && <div className="text-[11px] text-em-muted">{t('ui.scr.models.usedby', { list: usedBy.join(', ') })}</div>}
@@ -79,20 +81,20 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
       </div>
       {busyStatus(m.status) && (
         <div data-el="scr.models.row.progress" className="flex items-center gap-2">
-          <Progress value={m.bytesTotal ? m.bytesDone / m.bytesTotal : null} label={m.label} />
+          <Progress value={m.bytesTotal ? m.bytesDone / m.bytesTotal : null} label={name} />
           <span className="t-mono shrink-0 text-[11px] text-em-muted">{formatBytes(m.bytesDone, lang)} / {formatBytes(m.bytesTotal, lang)}</span>
         </div>
       )}
       {confirm === 'install' && (
         <div data-el="scr.models.row.install.confirm" role="alertdialog" aria-label={t('err.EM-7005.title')} className="flex flex-wrap items-center gap-2 rounded-[6px] bg-em-panel-2 p-2 text-[12px]">
-          <span className="flex-1 text-em-warn">{t('err.EM-7005.body', { model: m.label })} <span className="t-mono text-em-muted">EM-7005</span></span>
+          <span className="flex-1 text-em-warn">{t('err.EM-7005.body', { model: name })} <span className="t-mono text-em-muted">EM-7005</span></span>
           <Button size={28} variant="ghost" onClick={() => setConfirm(null)}>{t('ui.common.cancel')}</Button>
           <Button el="scr.models.row.install.anyway" size={28} variant="primary" onClick={() => act(runtime.api.installModel(m.key))}>{t('ui.scr.models.installanyway')}</Button>
         </div>
       )}
       {confirm === 'remove' && (
-        <div data-el="scr.models.row.remove.confirm" role="alertdialog" aria-label={t('ui.scr.models.remove.confirm', { model: m.label, size: formatBytes(m.bytesTotal, lang) })} className="flex flex-wrap items-center gap-2 rounded-[6px] bg-em-panel-2 p-2 text-[12px]">
-          <span className="flex-1">{t('ui.scr.models.remove.confirm', { model: m.label, size: formatBytes(m.bytesTotal, lang) })}</span>
+        <div data-el="scr.models.row.remove.confirm" role="alertdialog" aria-label={t('ui.scr.models.remove.confirm', { model: name, size: formatBytes(m.bytesTotal, lang) })} className="flex flex-wrap items-center gap-2 rounded-[6px] bg-em-panel-2 p-2 text-[12px]">
+          <span className="flex-1">{t('ui.scr.models.remove.confirm', { model: name, size: formatBytes(m.bytesTotal, lang) })}</span>
           <Button size={28} variant="ghost" onClick={() => setConfirm(null)}>{t('ui.common.cancel')}</Button>
           <Button el="scr.models.row.remove.yes" size={28} variant="danger" onClick={() => act(runtime.api.removeModel(m.key))}>{t('ui.common.remove')}</Button>
         </div>

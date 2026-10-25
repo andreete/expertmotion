@@ -191,7 +191,9 @@ export const SettingsDto = z.object({ privateMode: z.boolean(), outputFolder: z.
   defaultPerformanceProfile: PerformanceProfile, defaultRatio: Ratio, defaultResolution: Resolution, defaultFps: Fps, checkUpdates: z.boolean(), diagnosticsIncludeStructure: z.boolean(),
   onboardingDone: z.boolean(), onboardingSkippedSteps: z.array(z.enum(['license','provider','models','hardware','tour'])),   // FR-004 onboarding record ('license' only in records written before 2026-10-25; there is no Licence step any more)
   layout: z.object({ panelSizes: z.record(z.enum(['narrow','standard','wide']), z.object({ lib, agent, timeline }).partial()), libCollapsed: z.boolean(), agentCollapsed: z.boolean(), outputCollapsed: z.boolean() }).optional() });   // FR-099/FR-155 Editor layout (the settings.json state), absent until first saved
-export const ModelStateDto = z.object({ key: z.string(), engine: z.string(), version: z.string(), task: z.enum(['stt','tts','image','music']), label: z.string(), licence: z.object({ name: z.string(), url: z.string() }),
+export const ModelStateDto = z.object({ key: z.string(), engine: z.string(), version: z.string(), task: z.enum(['stt','tts','image','music']), label: z.string() /* upstream name */,
+  displayName: z.object({ en: z.string(), id: z.string() }) /* Creator-facing product name (FR-120, 2026-10-25); the Editor picks by UI language */, flag: z.string().nullable() /* Catalogue flag, e.g. 'model:whisper' */,
+  licence: z.object({ name: z.string(), url: z.string() }),
   tiers: z.array(z.enum(['T0','T1','T2'])), bytesTotal: z.number().int(), bytesDone: z.number().int(), status: z.enum(['not-installed','downloading','verifying','paused','installed','failed']), errorCode: z.string().nullable(), installedAt: Iso.nullable(),
   // FR-120…FR-124: paused = waiting for a Standard/Accelerated render; model card and marks
   pausedReason: z.enum(['render']).nullable(), recommended: z.boolean() /* registry recommendedFor includes the current tier */, priority: z.enum(['P1','P2']), languages: z.array(z.string()), notes: z.array(z.string()),
@@ -704,7 +706,7 @@ Body additions (FR-101…FR-105): `voice.speed` 0.8–1.2; `music.instrumental?:
 
 **R-134** body (optional) `{ pages?: CaptionPage[], assetId?: Id, atMs?: int ≥ 0 }` (strict); for a `thumbnail` job `assetId` picks the candidate (400 EM-9002 if it is not one) and `atMs` the overlay start (the playhead) of "Insert as overlay" (FR-103), applied as one `op:generated.insert {kind: 'thumbnail', jobId, atMs}` (an image overlay of the chosen candidate); for a `captions` job the Creator's edited pages replace the engine's in `op:caption.setPages` (FR-104; the Editor keeps timings and re-spreads word tokens over an edited page); validated by `applyOperations` like any op.
 
-**R-135 `GET /generators`** — response `{ items: Array<{ kind, enabled: boolean, priority: 'P1'|'P2', llm: boolean, tierHint: 'ok'|'slow', tier, model: GeneratorModel | null, models: GeneratorModel[] }> }` with `GeneratorModel = { key, label, bytes, installed, languages, minTier, belowTier, cc0 }`. `enabled` mirrors the build's `enabledKinds` (a disabled kind answers R-130 with `422 EM-9004`, so the Editor's "Coming later" badge always matches the Service); `model` is the tier default (LOCAL_AI_MODELS §5; `frame-composite` = no download), `models` every registry entry for the task (music includes the CC0 loop library). `hashtags` has `llm: true` and no model.
+**R-135 `GET /generators`** — response `{ items: Array<{ kind, enabled: boolean, priority: 'P1'|'P2', llm: boolean, tierHint: 'ok'|'slow', tier, model: GeneratorModel | null, models: GeneratorModel[] }> }` with `GeneratorModel = { key, label, displayName: { en, id }, bytes, installed, languages, minTier, belowTier, cc0 }` (`displayName` = the product name shown to the Creator, FR-120). `enabled` mirrors the build's `enabledKinds` (a disabled kind answers R-130 with `422 EM-9004`, so the Editor's "Coming later" badge always matches the Service); `model` is the tier default (LOCAL_AI_MODELS §5; `frame-composite` = no download), `models` every registry entry for the task (music includes the CC0 loop library). `hashtags` has `llm: true` and no model.
 
 **R-136 `POST /generator-jobs/:jobId/save-output`** — body `{ assetId: Id }` (strict; must be the job's result or one of its `candidates`). Copies the PNG to `<outputFolder | outputs/<projectId>>/<project>-thumbnail-<yyyymmdd-hhmm>.png` and records an Output (`kind: 'still'`, with a synthetic `done` Render Job row so `outputs.render_job_id` stays valid). Response `OutputDto`. Errors: `400 EM-9002` foreign asset, `422 EM-9002` not done, `422 EM-1301` file missing, `422 EM-3206` folder not writable, `404 EM-9003`.
 
@@ -712,7 +714,7 @@ Body additions (FR-101…FR-105): `voice.speed` 0.8–1.2; `music.instrumental?:
 
 ### 6.14 Models (Model Manager)
 
-**R-140 `GET /models`** — response `{ items: ModelStateDto[], tier, totalInstalledBytes, diskFreeBytes }`.
+**R-140 `GET /models`** — response `{ items: ModelStateDto[], tier, totalInstalledBytes, diskFreeBytes }`. Hardware workload `download` items (R-152 / `hardware.tick`) also carry `displayName: { en, id }`.
 
 **R-141 `GET /models/:key`** — `ModelStateDto` (with live `bytesDone`). Errors: `404 EM-9003`.
 

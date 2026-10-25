@@ -7,6 +7,7 @@ import { useStore } from '../state/store.js';
 import type { GeneratorCardDto } from '../api/types.js';
 import { Badge, cx } from '../components/ui.js';
 import { formatBytes } from '../i18n/index.js';
+import { useModelNames } from '../state/use-model-names.js';
 
 export type GeneratorKind = 'voice' | 'captions' | 'music' | 'thumbnail' | 'hashtags';
 /** Fallback model keys when R-135 is unavailable (older service); the service is the source of truth. */
@@ -29,6 +30,7 @@ export function useGeneratorCards(): GeneratorCardDto[] | null {
 
 export function Generators() {
   const { state, actions, t, lang } = useStore();
+  const names = useModelNames();
   const cards = useGeneratorCards();
   useEffect(() => { if (!state.models.length) void actions.loadModels(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
@@ -52,9 +54,9 @@ export function Generators() {
               <span className="font-semibold">{t(`ui.lib.generator.${kind}.title`)}</span>
               <span className="text-em-muted">{t(`ui.lib.generator.${kind}.subtitle`)}</span>
               {card && !card.llm && model && (
-                <span className="text-[12px] text-em-text-2">{t('ui.lib.generator.model', { model: model.label, size: model.bytes ? formatBytes(model.bytes, lang) : t('ui.lib.generator.nodownload') })}</span>
+                <span className="text-[12px] text-em-text-2">{t('ui.lib.generator.model', { model: names.local(model), size: model.bytes ? formatBytes(model.bytes, lang) : t('ui.lib.generator.nodownload') })}</span>
               )}
-              {card?.llm && <span className="text-[12px] text-em-text-2">{t('ui.lib.generator.llm', { model: state.assignments?.brainstorm?.modelId ?? t('ui.agent.footer.nomodel') })}</span>}
+              {card?.llm && <span className="text-[12px] text-em-text-2">{t('ui.lib.generator.llm', { model: names.agent('brainstorm') || t('ui.agent.footer.nomodel') })}</span>}
               <span className="flex flex-wrap gap-1">
                 <Badge>{priority}</Badge>
                 {comingSoon && <Badge>{t('ui.lib.catalogue.comingsoon')}</Badge>}

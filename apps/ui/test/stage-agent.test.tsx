@@ -226,8 +226,11 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     expect(qwen.textContent).toMatch(/32\s768/);                      // context column
     expect(qwen.textContent).toContain('—');                          // no image input
     await act(async () => { fireEvent.click(qwen); });
-    await waitFor(() => { if (!el('agent.editor.footer.model')?.textContent?.includes('qwen/qwen-2.5-7b-instruct')) throw new Error('editor not switched'); });
-    expect(el('agent.brainstorm.footer.model')?.textContent).toContain('openai/gpt-4.1-mini');
+    // tier names, not model ids: Qwen is the Editor's cheapest JSON-capable model (Fast); the raw id stays in the title
+    await waitFor(() => { if (!el('agent.editor.footer.model')?.querySelector('[title="qwen/qwen-2.5-7b-instruct"]')) throw new Error('editor not switched'); });
+    expect(el('agent.editor.footer.model')?.textContent).toBe('Fast ▾');
+    expect(el('agent.brainstorm.footer.model')?.querySelector('[title]')?.getAttribute('title')).toBe('openai/gpt-4.1-mini');
+    expect(el('agent.brainstorm.footer.model')?.textContent).not.toContain('openai/');
     // attach an image from disk: > 10 MB → EM-1002; a small PNG → EM-4307 for the text-only model
     fireEvent.click(el('agent.editor.attach')!);
     const input = el('agent.editor.panel')!.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -251,7 +254,8 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     await act(async () => { fireEvent.keyDown(el('agent.editor.composer')!, { key: 'Enter' }); });
     await waitFor(() => { if (el('agent.editor.plancard')?.getAttribute('data-status') !== 'valid') throw new Error('no plan'); });
     expect(el('agent.editor.plancard.step.ops')?.textContent).toBe('1 op');
-    expect(el('agent.editor.plancard.model')?.textContent).toBe('anthropic/claude-sonnet-4.5');
+    expect(el('agent.editor.plancard.model')?.textContent).toBe('Best');                              // tier name of the model
+    expect(el('agent.editor.plancard.model')?.getAttribute('title')).toBe('anthropic/claude-sonnet-4.5');
     await act(async () => { fireEvent.click(within(el('agent.editor.plancard')!).getByRole('button', { name: /Execute plan/ })); });
     await waitFor(() => { if (!el('agent.editor.plancard.result')) throw new Error(`no result ${el('agent.editor.plancard')?.getAttribute('data-status')} ${el('agent.editor.plancard')?.textContent}`); });
     expect(el('agent.editor.plancard.result')?.textContent).toMatch(/1 added/);

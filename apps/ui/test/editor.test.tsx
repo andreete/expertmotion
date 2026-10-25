@@ -30,6 +30,7 @@ const NOT_IN_MOCK: Record<string, string> = {
   'agent.brainstorm.attach.file': 'attach menu (stage-agent.test.tsx)', 'agent.editor.attach.file': 'attach menu',
   'agent.brainstorm.attach.error': 'attachment notice (stage-agent.test.tsx)', 'agent.editor.attach.error': 'attachment notice',
   'agent.brainstorm.footer.model.option': 'footer model picker (stage-agent.test.tsx)', 'agent.editor.footer.model.option': 'footer model picker',
+  'agent.brainstorm.footer.model.tier': 'footer model picker (stage-agent.test.tsx)', 'agent.editor.footer.model.tier': 'footer model picker',
   'agent.editor.plancard.step.ops': 'needs a plan with steps (stage-agent.test.tsx)', 'agent.editor.plancard.model': 'needs plan usage', 'agent.editor.plancard.result': 'needs an executed plan',
   'agent.output.ratio.help.table': 'help popover (stage-agent.test.tsx)', 'agent.output.ratio.auto.hint': 'Auto on with no clip (stage-agent.test.tsx)',
   'stage.timeline.element.selected': 'state variant: aria-selected on stage.timeline.element',

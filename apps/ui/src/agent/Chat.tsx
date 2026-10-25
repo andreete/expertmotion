@@ -5,6 +5,8 @@ import { errCode, useStore } from '../state/store.js';
 import type { AgentKind, CapabilityRow, MessageDto } from '../api/types.js';
 import { Button, IconButton, Popover, cx } from '../components/ui.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
+import { MODEL_TIERS, resolveModelTiers } from '@expertmotion/shared';
+import { useModelNames } from '../state/use-model-names.js';
 
 /** FR-072: largest image the composer attaches from disk (EM-1002 above it). */
 export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
@@ -75,11 +77,12 @@ export function Thread({ agent, label, children, empty }: { agent: AgentKind; la
 
 export function StreamingBubble({ agent }: { agent: AgentKind }) {
   const { state, actions, t, runtime } = useStore();
+  const names = useModelNames();
   const s = state.streaming[agent];
   if (!s) return null;
   return (
     <div className="flex flex-col items-start gap-1">
-      <div className="text-[12px] text-em-muted">{t('ui.agent.common.asking', { model: s.modelId || t('ui.agent.common.model') })}
+      <div className="text-[12px] text-em-muted">{t('ui.agent.common.asking', { model: names.llm(s.modelId, agent) || t('ui.agent.common.model') })}
         <button type="button" className="ml-2 underline" onClick={() => { void runtime.api.cancelAgentRun(s.runId).catch(() => undefined); if (agent === 'editor') void actions.cancelPlan(); else actions.stopStreaming(agent); }}>{t('ui.common.cancel')}</button>
       </div>
       {s.text && <div aria-hidden className="max-w-[92%] whitespace-pre-wrap rounded-[8px] bg-em-panel-2 px-2.5 py-1.5">{s.text}<span className="em-skeleton ml-0.5 inline-block h-3 w-1.5 align-middle" /></div>}
@@ -200,6 +203,7 @@ export const ctxTone = (pct: number): 'danger' | 'warn' | 'muted' => (pct >= 0.8
 /** FR-073: inline per-agent model picker over every validated connection, Capability Table columns inline. */
 function ModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void }) {
   const { state, runtime, dispatch, actions, t } = useStore();
+  const names = useModelNames();
   const valid = state.connections.filter((c) => c.status === 'valid');
   useEffect(() => {
     for (const c of valid) if (!state.capabilities[c.id]) runtime.api.connectionModels(c.id).then((r) => dispatch({ type: 'capabilities', connectionId: c.id, rows: r.items })).catch(() => undefined);
@@ -209,7 +213,7 @@ function ModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void
     try {
       const a = await runtime.api.putAssignments({ [agent]: { agent, connectionId, modelId, settings: cur?.connectionId === connectionId ? cur.settings : {} } });
       dispatch({ type: 'providers', assignments: a });
-      actions.announce(t('ui.agent.footer.model.changed', { model: modelId }));
+      actions.announce(t('ui.agent.footer.model.changed', { model: names.llm(modelId, agent, connectionId) }));
       onClose();
     } catch (e) { actions.error(e); }
   };
@@ -218,13 +222,31 @@ function ModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void
     <Popover onClose={onClose} width={380} label={t('ui.agent.footer.model.title')}>
       {valid.length === 0 ? <div className="p-2 text-em-muted">{t('ui.agent.composer.noprovider')}</div> : (
         <div className="max-h-72 overflow-y-auto">
-          <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-2 px-2 pb-1 text-[10px] text-em-muted">
-            <span>{t('ui.agent.footer.model.col.model')}</span><span>{t('ui.agent.footer.model.col.ctx')}</span><span>{t('ui.agent.footer.model.col.tools')}</span><span>{t('ui.agent.footer.model.col.image')}</span><span>{t('ui.agent.footer.model.col.price')}</span>
-          </div>
           {valid.map((c) => (
             <div key={c.id}>
               <div className="px-2 pt-1 text-[10px] font-semibold uppercase text-em-muted">{c.label || t(`ui.scr.providers.provider.${c.provider}`)}</div>
               {(state.capabilities[c.id] ?? []).length === 0 && <div className="px-2 text-[11px] text-em-muted">{t('ui.common.loading')}</div>}
+              {(() => {                                                                          // tiers first (FR-115); exact models under Advanced
+                const rows = state.capabilities[c.id] ?? [];
+                const tiers = resolveModelTiers(rows, agent);
+                if (!tiers.balanced) return null;
+                return (
+                  <div className="grid grid-cols-3 gap-1 px-2 py-1">
+                    {MODEL_TIERS.map((tier) => {
+                      const id = tiers[tier]!;
+                      const on = cur?.connectionId === c.id && cur.modelId === id && names.llm(id, agent, c.id) === t(`ui.scr.providers.tier.${tier}`);
+                      return <button key={tier} type="button" data-el={`agent.${agent}.footer.model.tier`} data-tier={tier} aria-pressed={on} onClick={() => void pick(c.id, id)}
+                        className={cx('rounded-[6px] border px-1.5 py-0.5 text-left text-[11px] hover:bg-em-panel', on ? 'border-em-accent text-em-accent' : 'border-em-line')}>{on ? '✓ ' : ''}{t(`ui.scr.providers.tier.${tier}`)}</button>;
+                    })}
+                  </div>
+                );
+              })()}
+              {(state.capabilities[c.id] ?? []).length > 0 && (
+                <details className="px-0">
+                  <summary className="cursor-pointer px-2 text-[10px] text-em-muted">{t('ui.scr.providers.tier.advanced')}</summary>
+                  <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-2 px-2 pb-1 text-[10px] text-em-muted">
+                    <span>{t('ui.agent.footer.model.col.model')}</span><span>{t('ui.agent.footer.model.col.ctx')}</span><span>{t('ui.agent.footer.model.col.tools')}</span><span>{t('ui.agent.footer.model.col.image')}</span><span>{t('ui.agent.footer.model.col.price')}</span>
+                  </div>
               {(state.capabilities[c.id] ?? []).slice(0, 200).map((r) => {
                 const on = cur?.connectionId === c.id && cur.modelId === r.modelId;
                 return (
@@ -236,6 +258,8 @@ function ModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void
                   </button>
                 );
               })}
+                </details>
+              )}
             </div>
           ))}
         </div>
@@ -247,6 +271,7 @@ function ModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void
 
 export function Footer({ agent }: { agent: AgentKind }) {
   const { state, t, lang } = useStore();
+  const names = useModelNames();
   const [picker, setPicker] = useState(false);
   const a = state.assignments?.[agent];
   const ctx = state.contextUsage[agent];
@@ -267,7 +292,7 @@ export function Footer({ agent }: { agent: AgentKind }) {
     <div className="mt-1 flex items-center gap-2 text-[11px]">
       <span className="relative min-w-0">
         <button type="button" data-el={`agent.${agent}.footer.model`} data-popover-trigger="" aria-haspopup="dialog" aria-expanded={picker} className="max-w-full truncate text-em-muted hover:text-em-text" onClick={() => setPicker((p) => !p)}>
-          {a ? `${a.modelId} ▾` : t('ui.agent.footer.nomodel')}
+          {a ? <span title={a.modelId}>{`${names.agent(agent)} ▾`}</span> : t('ui.agent.footer.nomodel')}
         </button>
         {picker && <ModelPicker agent={agent} onClose={() => setPicker(false)} />}
       </span>
