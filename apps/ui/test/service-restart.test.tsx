@@ -111,6 +111,7 @@ describe('FR-157 Private Mode banner copy', () => {
   it('says nothing leaves this computer', async () => {
     const h = harness();
     await boot(h.runtime);
+    if (!el('agent.output.private')) await act(async () => { fireEvent.click(el('agent.output.toggle')!); });   // Output Settings start collapsed
     await act(async () => { fireEvent.click(el('agent.output.private')!); });
     await waitFor(() => { if (!el('sys.privatemode.banner')) throw new Error('no banner'); }, { timeout: 3000 });
     expect(el('sys.privatemode.banner')!.textContent).toContain('Private Mode: nothing leaves this computer');
