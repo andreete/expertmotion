@@ -11,7 +11,9 @@ export function makeTokenMatcher(token: string): (candidate: unknown) => boolean
 }
 
 /**
- * Host / Origin / Sec-Fetch-Site allow-list; OPTIONS refused except for the dev UI origin (no CORS in production).
+ * Host / Origin / Sec-Fetch-Site allow-list. CORS (and preflight) is answered only for the allow-listed Editor origins: the
+ * packaged Editor at `app://expertmotion` (a different origin from `http://127.0.0.1:<port>`, so every call it makes is
+ * cross-origin) and the dev UI origin in development. Any other origin is refused; the bearer token is still required.
  * Exception for `/media/<grant>/…` (R-040/R-041; the grant in the path is the credential, SEC-010): the Player (`app://expertmotion`,
  * dev UI origin) and the Remotion render page during a render job (`mediaOrigins`, added by the renders module for the job's
  * duration) fetch media cross-origin with Range, so those origins get CORS headers on media paths only.
@@ -29,16 +31,23 @@ export function hostOriginGuard(cfg: ServiceConfig, mediaOrigins: ReadonlySet<st
         res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin');
         res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD'); res.setHeader('Access-Control-Allow-Headers', 'Range');
         res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Type');
+        if (req.headers['access-control-request-private-network'] === 'true') res.setHeader('Access-Control-Allow-Private-Network', 'true');
       }
       if (req.method === 'OPTIONS') return res.status(204).end();
       return next();
     }
     if (origin !== undefined && !origins.has(origin)) return err(res, 403, 'EM-8005', 'Request refused.');
     const sfs = req.headers['sec-fetch-site'];
-    const devOrigin = cfg.dev && origin !== undefined && origins.has(origin) && origin !== 'app://expertmotion';
-    if (sfs !== undefined && !['same-origin', 'none'].includes(String(sfs)) && !devOrigin) return err(res, 403, 'EM-8005', 'Request refused.');
-    if (devOrigin) { res.setHeader('Access-Control-Allow-Origin', origin!); res.setHeader('Vary', 'Origin'); res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Expertmotion-Caller, Idempotency-Key, Last-Event-ID'); res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE'); }
-    if (req.method === 'OPTIONS') return devOrigin ? res.status(204).end() : err(res, 403, 'EM-8005', 'Request refused.');
+    const editorOrigin = origin !== undefined && origins.has(origin);   // app://expertmotion, or the dev UI origin in development
+    if (sfs !== undefined && !['same-origin', 'none'].includes(String(sfs)) && !editorOrigin) return err(res, 403, 'EM-8005', 'Request refused.');
+    if (editorOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', origin!); res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Expertmotion-Caller, Idempotency-Key, Last-Event-ID');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE');
+      res.setHeader('Access-Control-Max-Age', '600');
+      if (req.headers['access-control-request-private-network'] === 'true') res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+    if (req.method === 'OPTIONS') return editorOrigin ? res.status(204).end() : err(res, 403, 'EM-8005', 'Request refused.');
     next();
   };
 }

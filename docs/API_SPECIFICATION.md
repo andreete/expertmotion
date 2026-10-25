@@ -65,9 +65,9 @@ URL shape: `http://127.0.0.1:<port>/media/<grant>/<assetId>/<variant>` and `http
 |---|---|---|
 | `Host` | `127.0.0.1:<port>`, `localhost:<port>` | `403` `EM-8005` |
 | `Origin` (on `POST`, `PUT`, `PATCH`, `DELETE`) | absent (same-origin fetch from `app://`, curl), `app://expertmotion`, or `EM_UI_ORIGIN` in development | `403` `EM-8005` |
-| `Sec-Fetch-Site` | if present: `same-origin`, `none`; `cross-site` is refused | `403` `EM-8005` |
+| `Sec-Fetch-Site` | if present: `same-origin`, `none`; `cross-site` is refused unless `Origin` is an allow-listed Editor origin (`app://expertmotion`; the dev UI origin in development) | `403` `EM-8005` |
 | Cookies | none are set or read | — |
-| CORS preflight | answered only for `EM_UI_ORIGIN` in development; production has no cross-origin caller | — |
+| CORS preflight | answered (`204`, `Access-Control-Max-Age: 600`) for `app://expertmotion`, the packaged Editor, whose calls to `http://127.0.0.1:<port>` are cross-origin, and for `EM_UI_ORIGIN` in development; refused (`403`) for every other origin | — |
 
 ### 2.5 Request limits
 

@@ -104,6 +104,21 @@ for (const step of steps) {
         const out = JsObfuscator.obfuscate(readFileSync(file, 'utf8'), cfg).getObfuscatedCode();
         writeFileSync(file, out);
       }
+      // The Service checks the Engine bundle against resources/engine-manifest.json (EM-3003), which stage-desktop wrote
+      // before obfuscation: re-hash every bundle file so the manifest describes what ships.
+      if (target === 'engine') {
+        const mf = join(root, 'resources/engine-manifest.json');
+        const manifest = JSON.parse(readFileSync(mf, 'utf8'));
+        let refreshed = 0;
+        for (const entry of manifest.files) {
+          if (!entry.path.startsWith('engine/bundle/')) continue;
+          const abs = join(root, 'resources', ...entry.path.split('/'));
+          const digest = sha256(abs), size = statSync(abs).size;
+          if (digest !== entry.sha256 || size !== entry.size) { entry.sha256 = digest; entry.size = size; refreshed += 1; }
+        }
+        writeFileSync(mf, JSON.stringify(manifest, null, 2));
+        console.log(`obfuscate: engine-manifest.json re-hashed (${refreshed} bundle file(s) changed)`);
+      }
       console.log(`obfuscate: ${target} bundle processed`);
       break;
     }
@@ -127,6 +142,7 @@ for (const step of steps) {
       add(join(root, 'dist/service/service.cjs'), 'dist/service/service.cjs');
       add(join(root, 'dist/service/assets.enc'), 'dist/service/assets.enc');
       add(join(root, 'resources/engine/bundle/index.html'), 'engine/bundle/index.html');
+      add(join(root, 'resources/engine-manifest.json'), 'engine-manifest.json');   // the Service's per-file Engine check (EM-3003)
       // SEC-061: the Engine executables the Service spawns (Chrome Headless Shell, compositor + its FFmpeg).
       for (const sub of ['chrome', 'compositor']) {
         const base = join(root, 'resources/engine', sub);

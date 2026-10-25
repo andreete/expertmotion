@@ -200,3 +200,31 @@ describe('available memory', () => {
     expect(availableMemBytes(read, 'linux')).toBe(750000 * 1024);
   });
 });
+
+describe('packaged Editor origin (production, app://expertmotion is cross-origin to http://127.0.0.1)', () => {
+  let s: TestService;
+  beforeAll(async () => { s = await startService({ modules: [health], cfg: { dev: false } }); });
+  afterAll(async () => { await s.close(); });
+  const editor = { Origin: 'app://expertmotion', 'Sec-Fetch-Site': 'cross-site' };
+  it('answers the preflight and the call with CORS for app://expertmotion only', async () => {
+    const pre = await fetch(`${s.base}/api/v1/version`, { method: 'OPTIONS', headers: { ...editor, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization', 'Access-Control-Request-Private-Network': 'true' } });
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get('access-control-allow-origin')).toBe('app://expertmotion');
+    expect(pre.headers.get('access-control-allow-headers')).toContain('Authorization');
+    expect(pre.headers.get('access-control-allow-private-network')).toBe('true');
+    const r = await fetch(`${s.base}/api/v1/version`, { headers: { ...editor, Authorization: `Bearer ${s.token}` } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('access-control-allow-origin')).toBe('app://expertmotion');
+    const h = await fetch(`${s.base}/api/v1/health`, { headers: editor });
+    expect(h.headers.get('access-control-allow-origin')).toBe('app://expertmotion');
+  });
+  it('still needs the token and still refuses other origins and cross-site callers', async () => {
+    expect((await fetch(`${s.base}/api/v1/version`, { headers: editor })).status).toBe(401);
+    for (const headers of [{ Origin: 'http://evil.example', 'Sec-Fetch-Site': 'cross-site' }, { 'Sec-Fetch-Site': 'cross-site' }, { Origin: 'http://127.0.0.1:4120' }]) {
+      const r = await fetch(`${s.base}/api/v1/version`, { headers: { ...headers, Authorization: `Bearer ${s.token}` } });
+      expect(r.status, JSON.stringify(headers)).toBe(403);
+      expect(r.headers.get('access-control-allow-origin')).toBeNull();
+    }
+    expect((await fetch(`${s.base}/api/v1/version`, { method: 'OPTIONS', headers: { Origin: 'http://evil.example', 'Access-Control-Request-Method': 'GET' } })).status).toBe(403);
+  });
+});

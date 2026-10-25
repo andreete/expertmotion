@@ -45,6 +45,7 @@ import { evaluateKeyring, quarantineTargets, STORAGE_LOCKED_DIALOG, unwrapDbKey 
 import { DOWNLOAD_RETRY_MS, downloadDecision, installDecision, nextUpdateState, parsePendingUpdate, pendingUpdateOutcome, shouldCheckForUpdates, updaterConfig, UPDATE_TICK_MS, type UpdateEvent, type UpdateState } from './lib/updater-policy.js';
 import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, remainingMs, type ShutdownAnswer } from './lib/close-flow.js';
 import { verifyManifest, type SignedManifest } from './lib/integrity.js';
+import { allowPermission, originOf } from './lib/permissions.js';
 
 /** Build-time constants injected by esbuild `define` (see scripts/build-main.mjs). */
 declare const __EM_FEED_URL__: string;
@@ -380,8 +381,14 @@ function createWindow(): void {
 
 function hardenSession(): void {
   const ses = session.defaultSession;
-  ses.setPermissionRequestHandler((_wc, _permission, cb) => cb(false));
-  ses.setPermissionCheckHandler(() => false);
+  // SEC-029: everything denied except Local Network Access for the Editor's own origin (it calls the Service on 127.0.0.1).
+  const devOrigins = devRules.devOrigins;
+  ses.setPermissionRequestHandler((wc, permission, cb, details) => {
+    const allowed = allowPermission(permission, details.requestingUrl ?? wc.getURL(), { devOrigins });
+    if (!allowed) logLine('info', 'permission denied', { permission, origin: originOf(details.requestingUrl ?? wc.getURL()) });
+    cb(allowed);
+  });
+  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => allowPermission(permission, requestingOrigin, { devOrigins }));
   ses.setDevicePermissionHandler(() => false);
 }
 

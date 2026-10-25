@@ -1679,6 +1679,7 @@
  "ui.sys.live.planready": "Plan ready: {goal}",
  "ui.sys.live.queuedforagent": "{label}: needs the Editor Agent",
  "ui.sys.noservice.body": "The Editor could not reach the local service. Start Expertmotion from its desktop icon, or in development set the service address and token, or run in mock mode:",
+ "ui.sys.noservice.shell": "Expertmotion is still starting or its background service stopped. Wait a moment and choose Retry now. If this keeps happening, close Expertmotion and open it again; your projects are kept.",
  "ui.sys.offline.body": "Reconnecting… {n}/3. Your work is checkpointed.",
  "ui.sys.offline.retry": "Retry now",
  "ui.sys.offline.title": "Expertmotion's local service is not responding",

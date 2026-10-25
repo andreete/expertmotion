@@ -37,6 +37,7 @@ const config = {
 
   files: [
     'dist/**',
+    'build/tray.png', // system tray icon (main.ts createTray)
     'package.json',
     '!**/*.map',
     '!**/*.ts',

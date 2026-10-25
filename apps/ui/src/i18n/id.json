@@ -1679,6 +1679,7 @@
  "ui.sys.live.planready": "Rencana siap: {goal}",
  "ui.sys.live.queuedforagent": "{label}: perlu Editor Agent",
  "ui.sys.noservice.body": "Editor tidak dapat menjangkau layanan lokal. Jalankan Expertmotion dari ikon desktop, atau saat pengembangan isi alamat layanan dan token, atau jalankan mode tiruan:",
+ "ui.sys.noservice.shell": "Expertmotion masih bersiap atau layanan latarnya berhenti. Tunggu sebentar lalu pilih Coba sekarang. Kalau terus terjadi, tutup Expertmotion lalu buka lagi; proyekmu tetap aman.",
  "ui.sys.offline.body": "Menyambung ulang… {n}/3. Pekerjaan kamu sudah di-checkpoint.",
  "ui.sys.offline.retry": "Coba sekarang",
  "ui.sys.offline.title": "Layanan lokal Expertmotion tidak merespons",

@@ -332,14 +332,28 @@ function FatalOverlay() {
   );
 }
 
+/** The first load failed. Inside the Shell: plain copy and Retry (the Shell keeps the Service running and pushes a new
+ *  endpoint after a restart, which reboots the Editor by itself). In a plain browser (development): how to point it at a Service. */
 function NoService() {
   const { t } = useStore();
+  const inShell = typeof window !== 'undefined' && window.expertmotion !== undefined;
   return (
     <div className="flex h-full items-center justify-center p-8">
       <div data-el="sys.offline" className="max-w-[520px] rounded-[12px] border border-em-line bg-em-panel p-6">
         <h1 className="mb-2 text-[20px] font-semibold">{t('ui.sys.offline.title')}</h1>
-        <p className="mb-3 text-em-text-2">{t('ui.sys.noservice.body')}</p>
-        <pre className="t-mono rounded-[6px] bg-em-bg p-2 text-[12px]">VITE_EM_API=http://127.0.0.1:4110 VITE_EM_TOKEN=… npx vite apps/ui{'\n'}VITE_EM_MOCK=1 npx vite apps/ui</pre>
+        {inShell ? (
+          <>
+            <p className="mb-4 text-em-text-2">{t('ui.sys.noservice.shell')}</p>
+            <div className="flex justify-end">
+              <Button variant="primary" onClick={() => window.location.reload()}>{t('ui.sys.offline.retry')}</Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="mb-3 text-em-text-2">{t('ui.sys.noservice.body')}</p>
+            <pre className="t-mono rounded-[6px] bg-em-bg p-2 text-[12px]">VITE_EM_API=http://127.0.0.1:4110 VITE_EM_TOKEN=… npx vite apps/ui{'\n'}VITE_EM_MOCK=1 npx vite apps/ui</pre>
+          </>
+        )}
       </div>
     </div>
   );
