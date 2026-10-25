@@ -69,6 +69,12 @@ describe('providers module', () => {
     expect((await s.api(`/providers/connections/${e.error.details.connectionId}`, { method: 'DELETE' })).status).toBe(204);
   });
 
+  it('OpenRouter, OpenAI, Anthropic and Gemini are enabled; custom stays P2 (PRD-032 pulled forward)', async () => {
+    const r = await s.api('/providers/kinds');
+    const items = (await body<{ items: { provider: string; enabled: boolean }[] }>(r)).items;
+    expect(Object.fromEntries(items.map((i) => [i.provider, i.enabled]))).toEqual({ openrouter: true, openai: true, anthropic: true, google: true, custom: false });
+  });
+
   it('PATCH with a new secret resets status; custom providers are EM-9004', async () => {
     const r = await s.api(`/providers/connections/${connId}`, { method: 'PATCH', json: { label: 'Utama 2', budgetMonthUsd: 5 } });
     expect(await body(r)).toMatchObject({ label: 'Utama 2', budgetMonthUsd: 5, status: 'valid' });

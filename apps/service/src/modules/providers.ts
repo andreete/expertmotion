@@ -38,11 +38,12 @@ export const PROVIDER_INFO: Record<Exclude<ProviderKindT, 'custom'>, { priority:
 };
 export const ALL_PROVIDERS = Object.keys(PROVIDER_INFO) as Array<Exclude<ProviderKindT, 'custom'>>;
 export interface ProvidersOptions {
-  /** Providers enabled in this build; the others answer EM-9004 (FR-111). Default: the P0 build, OpenRouter only. The OpenAI,
-   *  Anthropic and Gemini adapters ship for P1 and are enabled by passing them here. */
+  /** Providers enabled in this build; the others answer EM-9004 (FR-111). Default: OpenRouter, OpenAI, Anthropic and Gemini
+   *  (PRD-032 pulled forward on 2026-10-25 at the Operator's request); `custom` stays P2. */
   enabledProviders?: readonly ProviderKindT[];
 }
 export const P0_PROVIDERS: readonly ProviderKindT[] = ['openrouter'];
+export const DEFAULT_PROVIDERS: readonly ProviderKindT[] = ['openrouter', 'openai', 'anthropic', 'google'];
 function requireEnabled(enabled: readonly ProviderKindT[], p: ProviderKindT): void {
   if (p === 'custom') throw new EmError('EM-9004', '"Custom provider connections" is not available in this version of Expertmotion yet.', { status: 422, details: { feature: 'provider.custom', plannedPriority: 'P2' } });
   if (!enabled.includes(p)) throw new EmError('EM-9004', `"${p} connections" is not available in this version of Expertmotion yet.`, { status: 422, details: { feature: `provider.${p}`, plannedPriority: PROVIDER_INFO[p].priority } });
@@ -225,7 +226,7 @@ const BudgetBody = z.object({ connections: z.array(z.object({ connectionId: Id, 
   projects: z.array(z.object({ projectId: Id, connectionId: Id.nullable().optional(), limitUsd: z.number().min(0).max(10_000).nullable() })).max(500).optional() }).strict();
 
 export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModule {
-  const enabled = opts.enabledProviders ?? P0_PROVIDERS;
+  const enabled = opts.enabledProviders ?? DEFAULT_PROVIDERS;
   return {
     name: 'providers',
     start(ctx) {

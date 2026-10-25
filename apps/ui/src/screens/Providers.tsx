@@ -13,7 +13,7 @@ import type { BudgetFocus } from '../state/reducer.js';
 const PROVIDERS: ProviderKind[] = ['openrouter', 'openai', 'anthropic', 'google', 'custom'];
 const AGENTS: AgentKind[] = ['brainstorm', 'editor'];
 /** Fallback when R-103 is unavailable (older service): OpenRouter only (P0), the rest shown as later (FR-111). */
-const FALLBACK_KINDS: ProviderKindInfo[] = PROVIDERS.map((p) => ({ provider: p, enabled: p === 'openrouter', priority: p === 'openrouter' ? 'P0' : p === 'custom' ? 'P2' : 'P1', termsUrl: null, keyPattern: null, keyExample: null }));
+const FALLBACK_KINDS: ProviderKindInfo[] = PROVIDERS.map((p) => ({ provider: p, enabled: p !== 'custom', priority: p === 'openrouter' ? 'P0' : p === 'custom' ? 'P2' : 'P1', termsUrl: null, keyPattern: null, keyExample: null }));
 type Budget = Awaited<ReturnType<ReturnType<typeof useStore>['runtime']['api']['getBudget']>>;
 const codeOf = (e: unknown) => (e instanceof EmError ? e.code : 'EM-9001');
 const toLimit = (v: string): number | null => { const n = Number(v); return v.trim() && Number.isFinite(n) && n > 0 ? Math.min(n, 10_000) : null; };
