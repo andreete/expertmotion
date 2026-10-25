@@ -59,11 +59,25 @@ if (encrypt) {
   });
 }
 
+
+// Operator public keys (hex, 32-byte Ed25519) injected at build time so a release never needs a source edit:
+// EM_LICENSE_PUBLIC_KEY_A1_HEX (licence keys, LICENSE_OPERATIONS §4) and EM_MANIFEST_PUBLIC_KEY_M1_HEX (models.json, SEC-072).
+// Unset = the source constants (placeholders until the Operator pastes keys). Only PUBLIC keys ever go here.
+const pubKeyFromEnv = (name) => {
+  const v = (process.env[name] ?? '').trim().toLowerCase();
+  if (v && !/^[0-9a-f]{64}$/.test(v)) { console.error(`${name} must be 64 hex characters (an Ed25519 public key)`); process.exit(1); }
+  return v;
+};
+const licenceKeyHex = pubKeyFromEnv('EM_LICENSE_PUBLIC_KEY_A1_HEX');
+const manifestKeyHex = pubKeyFromEnv('EM_MANIFEST_PUBLIC_KEY_M1_HEX');
+if (licenceKeyHex) console.log('licence public key A1 injected from EM_LICENSE_PUBLIC_KEY_A1_HEX');
+if (manifestKeyHex) console.log('manifest public key M1 injected from EM_MANIFEST_PUBLIC_KEY_M1_HEX');
+
 await build({
   entryPoints: ['src/main.ts'], bundle: true, platform: 'node', target: 'node22', format: 'cjs', outfile: 'dist/service.cjs',
   external: ['better-sqlite3-multiple-ciphers', '@remotion/renderer', '@remotion/compositor-*', 'systeminformation', 'electron'],
   conditions: ['source'], sourcemap: false, minify: process.env.EM_MINIFY !== '0', legalComments: 'none',
-  define: { 'import.meta.url': '__em_import_meta_url', EM_BUILD_DATE: JSON.stringify(process.env.EM_BUILD_DATE ?? new Date().toISOString().slice(0, 10)), __EM_PROMPT_HALF_A__: JSON.stringify(halfA), __EM_MODEL_CDN_URL__: JSON.stringify(modelCdnUrl) }, banner: { js: 'const __em_import_meta_url = require("url").pathToFileURL(__filename).href;' },
+  define: { 'import.meta.url': '__em_import_meta_url', EM_BUILD_DATE: JSON.stringify(process.env.EM_BUILD_DATE ?? new Date().toISOString().slice(0, 10)), __EM_PROMPT_HALF_A__: JSON.stringify(halfA), __EM_MODEL_CDN_URL__: JSON.stringify(modelCdnUrl), __EM_LICENSE_PUBLIC_KEY_A1_HEX__: JSON.stringify(licenceKeyHex), __EM_MANIFEST_PUBLIC_KEY_M1_HEX__: JSON.stringify(manifestKeyHex) }, banner: { js: 'const __em_import_meta_url = require("url").pathToFileURL(__filename).href;' },
   loader: { '.sql': 'text' }, logLevel: 'info', plugins,
 });
 

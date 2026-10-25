@@ -166,12 +166,12 @@ function keysScreen(): HTMLElement {
   const s = state!;
   const root = h('div', {}, h('h2', {}, 'Signing key'), h('p', { class: 'lead' }, 'The private key is sealed with your passphrase on disk and held only in memory while unlocked. It locks itself after 15 minutes without activity.'));
   if (s.key.unlocked) {
-    const line = `{ kid: '${s.key.kid}', publicKeyHex: '${s.key.publicKeyHex}', status: 'active', since: '${new Date().toISOString().slice(0, 10)}' },`;
+    const line = `EM_LICENSE_PUBLIC_KEY_${s.key.kid}_HEX=${s.key.publicKeyHex}`;
     root.append(h('div', { class: 'card' },
       h('h3', {}, `Unlocked: key ${s.key.kid}`), h('div', { class: 'path' }, s.key.file ?? ''),
       h('label', {}, 'Public key (hex)'), h('div', { class: 'out' }, s.key.publicKeyHex ?? ''),
       h('div', { class: 'row' }, copyBtn(() => s.key.publicKeyHex ?? '', 'Public key')),
-      h('label', {}, 'Key table entry for apps/service/src/license/keys.ts'), h('div', { class: 'out' }, line),
+      h('label', {}, 'Public key for the release build (EM_LICENSE_PUBLIC_KEY_A1_HEX)'), h('div', { class: 'out' }, line),
       h('div', { class: 'row' }, copyBtn(() => line, 'Entry'), h('button', { class: 'btn', onclick: async () => { await call('key.lock'); await refreshState(); render(); } }, 'Lock now')),
     ));
   }

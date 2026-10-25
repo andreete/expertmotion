@@ -96,7 +96,7 @@ Smoke test on the signing PC (Windows):
 
 1. Unzip anywhere (e.g. the encrypted USB drive) and run `Expertmotion-License-Admin.exe`. The exe is not code-signed: SmartScreen may show "Windows protected your PC" (More info → Run anyway).
 2. With Wi-Fi on, the red banner appears and Keys > Create is refused (strict policy). Turn the network off (or switch Settings > Network policy to "Warn only" on a normal PC).
-3. Keys > Create: kid `A1`, a passphrase of 4+ unrelated words twice, Choose folder (outside any repository). Copy the public key entry into `apps/service/src/license/keys.ts` on the dev machine.
+3. Keys > Create: kid `A1`, a passphrase of 4+ unrelated words twice, Choose folder (outside any repository). Copy the `EM_LICENSE_PUBLIC_KEY_A1_HEX=…` line; set that variable when building the release (`npm run release:win`), no source edit needed.
 4. Issue: paste the Machine Code from Help > Licence of a test install; Generate; activate the key in that install. Copy the email text into a mail draft and check both languages.
 5. Licences: Rebind to a second machine's code, Renew, Revoke (refund), Export revoked.json; Verify the old key against the exported list (EM-5004).
 6. Leave the app idle for 15 minutes: the key locks (the header shows "Key locked"); Issue is refused until the key is opened again.
@@ -107,7 +107,7 @@ Record in `process.md`: zip size, whether SmartScreen appeared, steps 2-6 result
 
 Creators download models only from the Operator's R2 bucket (ADR-026; full runbook `docs/DEPLOYMENT_AND_PACKAGING.md` §16). On the Windows machine (Node 22, rclone installed; a fast disk with ≥ 25 GB free for the full set):
 
-1. Once: `node tools/license-cli/src/cli.mjs keygen --kid M1 --seal --out E:\keys\manifest-M1.key.json` on the offline signing PC; paste the public key into `MANIFEST_PUBLIC_KEY_M1_HEX` (`packages/models/src/signed-registry.ts`); create the bucket, connect the custom domain, create an R2 API token and the `r2` rclone remote (§16.1).
+1. Once: `node tools/license-cli/src/cli.mjs keygen --kid M1 --seal --out E:\keys\manifest-M1.key.json` on the offline signing PC; set the printed public key hex as `EM_MANIFEST_PUBLIC_KEY_M1_HEX` for the release build; create the bucket, connect the custom domain, create an R2 API token and the `r2` rclone remote (§16.1).
 2. `npm run typecheck` (builds `packages/models/dist`, which the tool reads), then `node tools/model-mirror/mirror.mjs prepare --out D:\em-mirror --cdn https://models.<your-domain> --only <keys within 10 GB>` (§16.3). Re-run it after an interruption; it resumes.
 3. `node tools/model-mirror/mirror.mjs sign --out D:\em-mirror --key E:\keys\manifest-M1.key.json`, then `... verify --out D:\em-mirror` → `verify: OK`.
 4. `rclone copy D:\em-mirror\m r2:<bucket>/m --checksum --progress`, then upload `models.json` and `models.json.sig` together (§16.2). Check `https://models.<your-domain>/models.json` opens in a browser.

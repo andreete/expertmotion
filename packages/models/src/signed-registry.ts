@@ -14,7 +14,10 @@ export interface ManifestKeyEntry { readonly kid: string; readonly publicKeyHex:
  * signing key before release. Until then no downloaded manifest can verify: placeholder entries are filtered out, so every
  * `models.json` is refused with reason `no-keys` and the built-in registry is used.
  */
-export const MANIFEST_PUBLIC_KEY_M1_HEX = 'PLACEHOLDER_REPLACE_WITH_OPERATOR_MANIFEST_PUBLIC_KEY_M1_HEX';
+declare const __EM_MANIFEST_PUBLIC_KEY_M1_HEX__: string | undefined;
+/** Build-time key from EM_MANIFEST_PUBLIC_KEY_M1_HEX (the service bundle's define) wins over the source constant. */
+const INJECTED_M1 = typeof __EM_MANIFEST_PUBLIC_KEY_M1_HEX__ === 'string' && /^[0-9a-f]{64}$/.test(__EM_MANIFEST_PUBLIC_KEY_M1_HEX__) ? __EM_MANIFEST_PUBLIC_KEY_M1_HEX__ : null;
+export const MANIFEST_PUBLIC_KEY_M1_HEX = INJECTED_M1 ?? 'PLACEHOLDER_REPLACE_WITH_OPERATOR_MANIFEST_PUBLIC_KEY_M1_HEX';
 const MANIFEST_KEY_TABLE: readonly ManifestKeyEntry[] = [
   { kid: 'M1', publicKeyHex: MANIFEST_PUBLIC_KEY_M1_HEX, status: 'active', since: '2026-10-24' },
 ];

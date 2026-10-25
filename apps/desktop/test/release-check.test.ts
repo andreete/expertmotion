@@ -16,13 +16,14 @@ function fakeRepo(placeholders: boolean): string {
 }
 const run = (root: string, env: Record<string, string>, extra: string[] = []) =>
   spawnSync(process.execPath, [script, `--root=${root}`, ...extra], { env: { PATH: process.env['PATH'] ?? '', ...env }, encoding: 'utf8' });
-const good = { EM_PUBLISHER_NAME: 'PT Contoh Kreatif', EM_FEED_URL: 'https://updates.expertmotion.app/win', EM_RELEASE_PRIVATE_KEY_PEM: 'pem', EM_ENGINE_PUBLIC_KEY_B64: 'b64', EM_MODEL_CDN_URL: 'https://models.expertmotion.app' };
+const good = { EM_PUBLISHER_NAME: 'PT Contoh Kreatif', EM_FEED_URL: 'https://updates.expertmotion.app/win', EM_RELEASE_PRIVATE_KEY_PEM: 'pem', EM_ENGINE_PUBLIC_KEY_B64: 'b64', EM_MODEL_CDN_URL: 'https://models.expertmotion.app',
+  EM_LICENSE_PUBLIC_KEY_A1_HEX: 'ab'.repeat(32), EM_MANIFEST_PUBLIC_KEY_M1_HEX: 'cd'.repeat(32) };
 
 describe('release-check', () => {
   it('fails and lists every placeholder the Operator must supply', () => {
     const r = run(fakeRepo(true), {});
     expect(r.status).toBe(1);
-    for (const s of ['PRODUCTION_PUBLIC_KEY_A1_HEX', 'MANIFEST_PUBLIC_KEY_M1_HEX', 'TO_PIN', 'EM_PUBLISHER_NAME', 'EM_FEED_URL', 'EM_RELEASE_PRIVATE_KEY_PEM', 'EM_ENGINE_PUBLIC_KEY_B64', 'EM_MODEL_CDN_URL']) expect(r.stderr).toContain(s);
+    for (const s of ['EM_LICENSE_PUBLIC_KEY_A1_HEX', 'EM_MANIFEST_PUBLIC_KEY_M1_HEX', 'TO_PIN', 'EM_PUBLISHER_NAME', 'EM_FEED_URL', 'EM_RELEASE_PRIVATE_KEY_PEM', 'EM_ENGINE_PUBLIC_KEY_B64', 'EM_MODEL_CDN_URL']) expect(r.stderr).toContain(s);
   });
   it('rejects the example feed URL and a placeholder publisher', () => {
     const r = run(fakeRepo(false), { ...good, EM_FEED_URL: 'https://updates.expertmotion.example/win', EM_PUBLISHER_NAME: '<exact certificate subject CN>' });
@@ -36,6 +37,10 @@ describe('release-check', () => {
     }
     const pinned = run(fakeRepo(true), { ...good, EM_MODEL_CDN_URL: 'https://models.expertmotion.app/v1' });
     expect(pinned.stderr).not.toContain('TO_PIN'); expect(pinned.stdout).toContain('TO_PIN');
+  });
+  it('rejects public keys that are not 64 hex characters', () => {
+    const r = run(fakeRepo(false), { ...good, EM_LICENSE_PUBLIC_KEY_A1_HEX: 'xyz', EM_MANIFEST_PUBLIC_KEY_M1_HEX: 'ab'.repeat(31) });
+    expect(r.status).toBe(1); expect(r.stderr).toContain('EM_LICENSE_PUBLIC_KEY_A1_HEX'); expect(r.stderr).toContain('EM_MANIFEST_PUBLIC_KEY_M1_HEX');
   });
   it('passes when everything is supplied; --allow-placeholders lets only a test build continue', () => {
     expect(run(fakeRepo(false), good).status).toBe(0);

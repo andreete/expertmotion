@@ -114,7 +114,7 @@ function cmdKeygen(opts) {
   const r = keygen(opts);
   report(opts, r, [
     `Key ${r.kid} written to ${r.path}${r.sealed ? ' (sealed)' : ' (NOT sealed — development only; use --seal for production)'}.`,
-    `Public key hex (add to apps/service/src/license/keys.ts):`,
+    `Public key hex (set EM_LICENSE_PUBLIC_KEY_A1_HEX for kid A1, or EM_MANIFEST_PUBLIC_KEY_M1_HEX for kid M1, when building a release):`,
     r.publicKeyHex,
     `  { kid: '${r.kid}', publicKeyHex: '${r.publicKeyHex}', status: 'active', since: '${isoDate(new Date())}' },`,
   ].join('\n'));

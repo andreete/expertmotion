@@ -30,7 +30,10 @@ export interface PublicKeyEntry {
  * signing machine before Stage 4. Until then no production Licence Key can verify: every key reports
  * EM-5009 (unknown kid) because placeholder entries are filtered out of the table.
  */
-export const PRODUCTION_PUBLIC_KEY_A1_HEX = 'PLACEHOLDER_REPLACE_WITH_OPERATOR_PUBLIC_KEY_A1_HEX';
+declare const __EM_LICENSE_PUBLIC_KEY_A1_HEX__: string | undefined;
+/** Build-time key from EM_LICENSE_PUBLIC_KEY_A1_HEX (apps/service/scripts/build.mjs) wins over the source constant. */
+const INJECTED_A1 = typeof __EM_LICENSE_PUBLIC_KEY_A1_HEX__ === 'string' && /^[0-9a-f]{64}$/.test(__EM_LICENSE_PUBLIC_KEY_A1_HEX__) ? __EM_LICENSE_PUBLIC_KEY_A1_HEX__ : null;
+export const PRODUCTION_PUBLIC_KEY_A1_HEX = INJECTED_A1 ?? 'PLACEHOLDER_REPLACE_WITH_OPERATOR_PUBLIC_KEY_A1_HEX';
 
 const PRODUCTION_KEY_TABLE: readonly PublicKeyEntry[] = [
   { kid: 'A1', publicKeyHex: PRODUCTION_PUBLIC_KEY_A1_HEX, status: 'active', since: '2026-10-24' },

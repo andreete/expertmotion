@@ -68,7 +68,7 @@ async function cmdSign(v) {
   try {
     const { embeddedManifestKeys } = await loadModels();
     const match = embeddedManifestKeys().find((k) => k.kid === r.kid && k.publicKeyHex === r.publicKeyHex);
-    if (!match) console.warn(`warning: kid ${r.kid} / this public key is not in MANIFEST_KEY_TABLE (packages/models/src/signed-registry.ts) of this checkout; apps built from it will refuse the manifest (unknown-kid / bad-signature / no-keys).`);
+    if (!match) console.warn(`warning: kid ${r.kid} / this public key is not the build's manifest key (EM_MANIFEST_PUBLIC_KEY_M1_HEX / signed-registry.ts) of this checkout; apps built from it will refuse the manifest (unknown-kid / bad-signature / no-keys).`);
   } catch { /* registry package not built: skip the cross-check */ }
   return 0;
 }

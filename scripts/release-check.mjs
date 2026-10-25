@@ -16,11 +16,15 @@ const problems = [];
 const read = (rel) => { try { return fs.readFileSync(path.join(root, rel), 'utf8'); } catch { problems.push(`${rel}: file missing`); return ''; } };
 
 // 1. Licence verification public key (LICENSE_OPERATIONS.md; SEC-045)
-if (/PLACEHOLDER_REPLACE/.test(read('apps/service/src/license/keys.ts')))
-  problems.push('apps/service/src/license/keys.ts: PRODUCTION_PUBLIC_KEY_A1_HEX is a placeholder → paste the Operator\'s Ed25519 licence public key (hex).');
-// 2. Model manifest public key (SEC-072)
-if (/PLACEHOLDER_REPLACE/.test(read('packages/models/src/signed-registry.ts')))
-  problems.push('packages/models/src/signed-registry.ts: MANIFEST_PUBLIC_KEY_M1_HEX is a placeholder → paste the Operator\'s offline manifest-signing public key (hex).');
+//    Supplied at build time (EM_LICENSE_PUBLIC_KEY_A1_HEX, injected by apps/service/scripts/build.mjs); the source keeps a placeholder.
+const hex64 = (v) => /^[0-9a-f]{64}$/i.test((v ?? '').trim());
+read('apps/service/src/license/keys.ts');
+if (!hex64(env.EM_LICENSE_PUBLIC_KEY_A1_HEX))
+  problems.push('EM_LICENSE_PUBLIC_KEY_A1_HEX is not set → the public key hex shown by the License Admin app (Keys) or `license-cli keygen --kid A1`.');
+// 2. Model manifest public key (SEC-072), EM_MANIFEST_PUBLIC_KEY_M1_HEX the same way.
+read('packages/models/src/signed-registry.ts');
+if (!hex64(env.EM_MANIFEST_PUBLIC_KEY_M1_HEX))
+  problems.push('EM_MANIFEST_PUBLIC_KEY_M1_HEX is not set → the public key hex of the manifest signing key (`license-cli keygen --kid M1`), used to sign models.json.');
 // 3. Operator model CDN (decision 2026-10-25: Cloudflare R2; DEPLOYMENT_AND_PACKAGING.md §16). Injected by apps/service/scripts/build.mjs.
 const cdn = (env.EM_MODEL_CDN_URL ?? '').trim();
 const cdnOk = /^https:\/\/[a-z0-9.-]+\.[a-z]{2,}(\/[A-Za-z0-9._~/-]*)?$/i.test(cdn) && !/PLACEHOLDER|\.(example|invalid|test|localhost)(\/|$)|example\.(com|org)|\.r2\.dev(\/|$)/i.test(cdn);
