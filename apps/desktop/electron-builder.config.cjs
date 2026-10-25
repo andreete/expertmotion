@@ -66,6 +66,7 @@ const config = {
 
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
+    icon: 'build/icon.ico',
     verifyUpdateCodeSignature: true,
     signtoolOptions: {
       publisherName: process.env.EM_PUBLISHER_NAME || '<exact certificate subject CN>',
