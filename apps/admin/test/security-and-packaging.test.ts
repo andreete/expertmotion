@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CSP, isAllowedUrl, WEB_PREFERENCES } from '../src/core/security.js';
+import { contentTypeOf, CSP, isAllowedUrl, resolveRendererFile, WEB_PREFERENCES } from '../src/core/security.js';
 
 const root = path.resolve(__dirname, '..');
 const read = (p: string) => readFileSync(path.join(root, p), 'utf8');
@@ -36,14 +36,20 @@ describe('window hardening', () => {
     expect(html).not.toMatch(/https?:\/\//);
   });
 
-  it('only files inside the renderer folder may load', () => {
-    const base = pathToFileURL('/opt/admin/dist/renderer').href;
-    expect(isAllowedUrl(`${base}/index.html`, base)).toBe(true);
-    expect(isAllowedUrl(`${base}/app.js?x=1`, base)).toBe(true);
-    expect(isAllowedUrl('https://example.com/', base)).toBe(false);
-    expect(isAllowedUrl(pathToFileURL('/etc/passwd').href, base)).toBe(false);
-    expect(isAllowedUrl(`${base}/../main.cjs`, base)).toBe(false);
-    expect(isAllowedUrl(`${base}-evil/index.html`, base)).toBe(false);
+  it('only the bundled renderer (app://admin/) may load; files resolve inside the renderer folder', () => {
+    expect(isAllowedUrl('app://admin/index.html')).toBe(true);
+    expect(isAllowedUrl('app://admin/app.js?x=1')).toBe(true);
+    expect(isAllowedUrl('https://example.com/')).toBe(false);
+    expect(isAllowedUrl(pathToFileURL('/etc/passwd').href)).toBe(false);
+    expect(isAllowedUrl('app://other/index.html')).toBe(false);
+    const win = 'C:\\Users\\Andre Tuwan\\Downloads\\Admin\\resources\\app.asar\\dist\\renderer';
+    expect(resolveRendererFile(win, 'app://admin/index.html')).toBe(`${win}\\index.html`);
+    expect(resolveRendererFile('/opt/a/dist/renderer', 'app://admin/')).toBe('/opt/a/dist/renderer/index.html');
+    // the URL parser folds ../ and %2e%2e/ before we see the path: they can never leave the renderer folder
+    expect(resolveRendererFile('/opt/a/dist/renderer', 'app://admin/../main.cjs')).toBe('/opt/a/dist/renderer/main.cjs');
+    expect(resolveRendererFile('/opt/a/dist/renderer', 'app://admin/%2e%2e/%2e%2e/x')).toBe('/opt/a/dist/renderer/x');
+    expect(resolveRendererFile('/opt/a/dist/renderer', 'app://admin/a%20b.js')).toBeNull();
+    expect(contentTypeOf('x/app.js')).toMatch(/javascript/);
   });
 
   it('preload exposes only request + onLocked and no Electron/Node objects', () => {

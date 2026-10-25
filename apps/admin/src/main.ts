@@ -7,20 +7,22 @@
  * not a file of the bundled renderer is cancelled; navigation, new windows, webviews and all
  * permission requests are refused; IPC only from our own top frame, arguments validated in core.
  */
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, session, shell } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createAdmin, type Platform } from './core/admin.js';
 import { CHANNEL_NAMES, EVENTS } from './core/channels.js';
-import { CSP, isAllowedUrl, WEB_PREFERENCES } from './core/security.js';
+import { ADMIN_ORIGIN, ADMIN_SCHEME, CSP, contentTypeOf, isAllowedUrl, resolveRendererFile, WEB_PREFERENCES } from './core/security.js';
 
 const rendererDir = path.join(app.getAppPath(), 'dist', 'renderer');
-const rendererDirUrl = pathToFileURL(rendererDir).href;
 let win: BrowserWindow | null = null;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // The page is served from app://admin/ (not file://): Windows paths (drive letter, spaces, app.asar) made the
+  // file:// request filter cancel the page itself, leaving a blank window. Same pattern as the Editor (app://expertmotion).
+  protocol.registerSchemesAsPrivileged([{ scheme: ADMIN_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
   app.enableSandbox();
   app.on('second-instance', () => {
     if (win) {
@@ -32,7 +34,23 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => app.quit());
 }
 
+function log(msg: string, extra: Record<string, unknown> = {}): void {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'admin.log'), `${JSON.stringify({ ts: new Date().toISOString(), msg, ...extra })}\n`);
+  } catch { /* logging must never break the app */ }
+}
+
 function start(): void {
+  protocol.handle(ADMIN_SCHEME, (request) => {
+    const file = resolveRendererFile(rendererDir, request.url);
+    if (!file) { log('blocked request', { url: request.url }); return new Response('Not found', { status: 404 }); }
+    try {
+      return new Response(new Uint8Array(fs.readFileSync(file)), { status: 200, headers: { 'Content-Type': contentTypeOf(file), 'Content-Security-Policy': CSP } });
+    } catch (e) { log('read failed', { url: request.url, error: (e as Error).message }); return new Response('Not found', { status: 404 }); }
+  });
+  process.on('uncaughtException', (e) => log('uncaughtException', { error: e.stack ?? e.message }));
   Menu.setApplicationMenu(null);
   const admin = createAdmin({
     settingsFile: path.join(app.getPath('userData'), 'settings.json'),
@@ -48,7 +66,7 @@ function start(): void {
   const ses = session.defaultSession;
   ses.setPermissionRequestHandler((_wc, _permission, cb) => cb(false));
   ses.setPermissionCheckHandler(() => false);
-  ses.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !isAllowedUrl(details.url, rendererDirUrl) }));
+  ses.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !isAllowedUrl(details.url) }));
   ses.webRequest.onHeadersReceived((details, cb) => cb({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [CSP] } }));
 
   const platform: Platform = {
@@ -74,7 +92,7 @@ function start(): void {
   for (const channel of CHANNEL_NAMES) {
     ipcMain.handle(channel, (event, args: unknown) => {
       const frame = event.senderFrame;
-      if (!win || event.sender !== win.webContents || !frame || frame !== win.webContents.mainFrame || !isAllowedUrl(frame.url, rendererDirUrl)) {
+      if (!win || event.sender !== win.webContents || !frame || frame !== win.webContents.mainFrame || !isAllowedUrl(frame.url)) {
         return { ok: false, error: { code: 'EINVAL', message: 'Request refused.' } };
       }
       return admin.invoke(channel, args, platform);
@@ -100,5 +118,9 @@ function start(): void {
   win.on('closed', () => {
     win = null;
   });
-  void win.loadFile(path.join(rendererDir, 'index.html'));
+  wc.on('did-fail-load', (_e, code, desc, url) => log('page failed to load', { code, desc, url }));
+  wc.on('render-process-gone', (_e, d) => log('renderer gone', { reason: d.reason }));
+  wc.on('console-message', (e) => { const m = e as unknown as { level?: string | number; message?: string }; if (m.level === 'error' || m.level === 3) log('renderer error', { message: m.message }); });
+  log('start', { version: app.getVersion() });
+  void win.loadURL(`${ADMIN_ORIGIN}/index.html`);
 }
