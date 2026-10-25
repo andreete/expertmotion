@@ -223,7 +223,8 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     expect(el('agent.editor.footer.model')?.textContent).toBe('Claude Sonnet 4.5 ▾');                // the model's label, never a tier name
     fireEvent.click(el('agent.editor.footer.model')!);
     await waitFor(() => { if (els('agent.editor.footer.model.picker.row').length < 2) throw new Error('no rows'); });
-    expect(el('agent.editor.footer.model.picker.filter.json')?.getAttribute('aria-pressed')).toBe('true');  // Editor Agent: JSON chip on
+    expect(el('agent.editor.footer.model.picker.filter.json')?.getAttribute('aria-pressed')).toBe('false'); // nothing is refused: JSON chip off
+    expect(el('agent.editor.footer.model.picker.category.all')?.getAttribute('aria-checked')).toBe('true');
     expect(el('agent.editor.footer.model.picker')!.querySelector('[data-model-id="anthropic/claude-sonnet-4.5"]')?.getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(el('agent.editor.footer.model.picker.search'));
     fireEvent.change(el('agent.editor.footer.model.picker.search')!, { target: { value: 'QWEN' } });
@@ -234,7 +235,11 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     expect(rows[0]!.querySelector('[data-cap="image"]')).toBeNull();  // no image input
     await act(async () => { fireEvent.keyDown(el('agent.editor.footer.model.picker.search')!, { key: 'Enter' }); });
     await waitFor(() => { if (!el('agent.editor.footer.model')?.querySelector('[title="qwen/qwen-2.5-7b-instruct"]')) throw new Error('editor not switched'); });
-    expect(el('agent.editor.footer.model.popover')).toBeNull();      // closes after the pick
+    // a 7B model is allowed but warned: the popover stays open with the warning and "Use recommended instead"
+    expect(el('agent.editor.footer.model.picker.warning')?.textContent).toMatch(/May give poor results/);
+    expect(el('agent.editor.footer.model.picker.warning.recommended')).not.toBeNull();
+    fireEvent.keyDown(el('agent.editor.footer.model.picker.search')!, { key: 'Escape' });
+    expect(el('agent.editor.footer.model.popover')).toBeNull();
     expect(el('agent.editor.footer.model')?.textContent).toBe('Qwen 2.5 7B ▾');
     expect(el('agent.brainstorm.footer.model')?.querySelector('[title]')?.getAttribute('title')).toBe('openai/gpt-4.1-mini');
     expect(el('agent.brainstorm.footer.model')?.textContent).toBe('GPT-4.1 mini ▾');

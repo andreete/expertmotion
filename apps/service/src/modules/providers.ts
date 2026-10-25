@@ -113,7 +113,7 @@ function setDefault(ctx: ServiceContext, id: string | null) {
 }
 const assignmentsView = (ctx: ServiceContext) => ({ brainstorm: assignmentOf(ctx, 'brainstorm'), editor: assignmentOf(ctx, 'editor'), defaultConnectionId: defaultConnection(ctx) });
 
-/** Capability gating for an assignment (AGENT_DESIGN §2.3, AGD-004). */
+/** Capability warnings for an assignment (AGENT_DESIGN §2.3, AGD-004): unknown models and custom providers are refused, weak capabilities only warn. */
 function checkAssignment(ctx: ServiceContext, a: AssignmentDtoT): Issue[] {
   const conn = getConn(ctx, a.connectionId);
   if (conn.provider === 'custom') throw new EmError('EM-9004', '"Custom provider connections" is not available in this version of Expertmotion yet.', { status: 422 });
@@ -122,9 +122,12 @@ function checkAssignment(ctx: ServiceContext, a: AssignmentDtoT): Issue[] {
   if (!models) return [{ code: 'EM-4006', path, message: 'The model list has not been loaded yet, so capabilities were not checked.', severity: 'info' }];
   const m = models.find((x) => x.modelId === a.modelId);
   if (!m) throw new EmError('EM-4004', `The model "${a.modelId}" is not offered by ${conn.provider}. Choose another model.`, { status: 422, path });
-  if (m.structuredOutput === false) throw new EmError('EM-9002', `"${a.modelId}" cannot return JSON output, which the ${a.agent === 'editor' ? 'Editor Agent' : 'Brainstorming Agent'} needs.`, { status: 422, path, details: { reason: 'no-json-output' } });
   const w: Issue[] = [];
-  if (m.toolCalling !== true || m.structuredOutput !== true) w.push({ code: 'EM-4005', path, message: m.toolCalling === false ? `"${a.modelId}" does not support tool calling, so Expertmotion asks it for plans in simple mode.`
+  // Operator decision 2026-10-25: a model without JSON output is allowed with a warning (never refused). The agents always ask
+  // for JSON by prompting (ADR-023): the Brainstorming Agent shows a non-JSON reply as plain text, the Editor Agent re-prompts
+  // and ends with EM-4301 ("choose a more capable model") when no valid plan comes back.
+  if (m.structuredOutput === false) w.push({ code: 'EM-4005', path, message: `"${a.modelId}" does not confirm JSON output, so the ${a.agent === 'editor' ? 'Editor Agent' : 'Brainstorming Agent'} may fail or give poor results; a stronger model is recommended.`, severity: 'warn' });
+  else if (m.toolCalling !== true || m.structuredOutput !== true) w.push({ code: 'EM-4005', path, message: m.toolCalling === false ? `"${a.modelId}" does not support tool calling, so Expertmotion asks it for plans in simple mode.`
     : `${conn.provider} does not report whether "${a.modelId}" supports tool calling and structured output, so Expertmotion asks it for plans in simple mode.`, severity: 'info' });
   if (m.contextLength !== null && m.contextLength < 32_000) w.push({ code: 'EM-4306', path, message: `"${a.modelId}" has a small context (${m.contextLength} tokens); 32k or more is recommended.`, severity: 'warn' });
   return w;
@@ -287,7 +290,7 @@ export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModul
 
       route(router, 'delete', '/providers/connections/:connId', { params: ConnParams, query: z.object({ force: z.enum(['true', 'false']).optional() }) }, ({ params, query }) => {
         const r = getConn(ctx, params.connId);
-        const used = (ctx.db.prepare('SELECT agent FROM model_assignments WHERE connection_id = ?').all(r.id) as Array<{ agent: string }>).map((x) => x.agent);
+        const used = (ctx.db.prepare('SELECT agent FROM model_assignments WHERE connection_id = ? ORDER BY agent').all(r.id) as Array<{ agent: string }>).map((x) => x.agent);
         if (used.length && query.force !== 'true') throw new EmError('EM-2309', 'This connection is used by an agent. Change the Model Assignment first, or remove it anyway.', { status: 409, details: { assignments: used } });
         let moved: ReturnType<typeof reassignAway> = { reassigned: [], cleared: [] };
         ctx.db.transaction(() => {

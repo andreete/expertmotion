@@ -8,7 +8,7 @@ import type { AgentKind, AssignmentDto, CapabilityRow, ConnectionDto, ProbeResul
 import { Badge, Button, ErrorBox, Field, IconButton, Modal, cx, inputCls } from '../components/ui.js';
 import { formatMoney, formatNumber, formatTokens } from '../i18n/index.js';
 import { EmError, recommendedFor } from '@expertmotion/shared';
-import { ModelPicker, defaultModelFor } from '../components/ModelPicker.js';
+import { ModelPicker, defaultModelFor, type PickerCategory } from '../components/ModelPicker.js';
 import type { BudgetFocus } from '../state/reducer.js';
 import { llmModelName } from '../state/model-names.js';
 
@@ -109,18 +109,19 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
 
 /** Model choice (FR-114, FR-115; Operator feedback 2026-10-25): one searchable ModelPicker over the Capability Table with a
  *  two-option toggle "Brainstorming Agent | Editor Agent" above it; a row click assigns the model to the agent shown. Defaults
- *  (both agents) = the Balanced resolution of @expertmotion/shared (the free pick while Free is filtered), so Save works without
- *  touching anything; the exact model id is what gets stored. Only `structuredOutput === false` is refused (R-098, AGD-004);
- *  unknown tool calling / structured output shows EM-4005 and stays allowed; a model without image input gets a note. */
+ *  (both agents) = the Balanced resolution of @expertmotion/shared (the free pick while the Free category is shown), so Save
+ *  works without touching anything; the exact model id is what gets stored. Nothing is refused (Operator decision 2026-10-25):
+ *  weak or no-JSON models carry the ModelPicker quality warning; unknown tool calling / structured output shows EM-4005; a
+ *  model without image input gets a note. */
 function ModelAssign({ rows, assign, setAssign, onRefresh, loading }: { rows: CapabilityRow[]; assign: Record<AgentKind, string>; setAssign: (f: (a: Record<AgentKind, string>) => Record<AgentKind, string>) => void; onRefresh?: () => void; loading?: boolean }) {
   const { state, t } = useStore();
   const [agent, setAgent] = useState<AgentKind>('brainstorm');
   const touched = useRef<Record<AgentKind, boolean>>({ brainstorm: false, editor: false });
   const other: AgentKind = agent === 'brainstorm' ? 'editor' : 'brainstorm';
   const pick = (id: string) => { touched.current[agent] = true; setAssign((a) => ({ ...a, [agent]: id })); };
-  const onFreeChange = (on: boolean) => setAssign((a) => {                             // untouched defaults follow the Free chip
+  const onCategoryChange = (c: PickerCategory) => setAssign((a) => {                  // untouched defaults follow the Free category
     const next = { ...a };
-    for (const x of AGENTS) if (!touched.current[x]) next[x] = defaultModelFor(rows, x, on) || next[x];
+    for (const x of AGENTS) if (!touched.current[x]) next[x] = defaultModelFor(rows, x, c === 'free') || next[x];
     return next;
   });
   const cap = rows.find((r) => r.modelId === assign[agent]);
@@ -140,13 +141,13 @@ function ModelAssign({ rows, assign, setAssign, onRefresh, loading }: { rows: Ca
           );
         })}
       </div>
-      <ModelPicker el="scr.providers.models" rows={rows} agent={agent} value={assign[agent]} onSelect={pick} onFreeChange={onFreeChange} loading={loading}
+      <ModelPicker el="scr.providers.models" rows={rows} agent={agent} value={assign[agent]} onSelect={pick} onCategoryChange={onCategoryChange} loading={loading}
         {...(onRefresh ? { onRefresh, refreshDisabledReason: state.settings?.privateMode ? t('err.EM-8202.title') : null } : {})} />
       <div className="flex flex-wrap items-center gap-2">
         {agent === 'editor' && <p className="flex-1 text-[12px] text-em-muted">{t('ui.scr.providers.assign.editor.hint')}</p>}
         {canShare && <Button el="scr.providers.assign.both" size={28} variant="ghost" className="ml-auto" onClick={() => { touched.current[other] = true; setAssign((a) => ({ ...a, [other]: a[agent] })); }}>{t(`ui.scr.providers.assign.both.${other}`)}</Button>}
       </div>
-      {cap && agent === 'editor' && (cap.toolCalling !== true || cap.structuredOutput !== true) && <Note el="scr.providers.assign.note" code="EM-4005" tone="info" vars={{ model: name }} />}
+      {cap && agent === 'editor' && cap.structuredOutput !== false && (cap.toolCalling !== true || cap.structuredOutput !== true) && <Note el="scr.providers.assign.note" code="EM-4005" tone="info" vars={{ model: name }} />}
       {cap && cap.imageInput !== true && <p data-el="scr.providers.assign.note" className="text-[12px] text-em-muted">{t(cap.imageInput === false ? 'ui.scr.providers.assign.noimage' : 'ui.scr.providers.assign.imageunknown')}</p>}
     </div>
   );

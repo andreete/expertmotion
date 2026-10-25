@@ -49,11 +49,13 @@ describe('Providers screen (FR-109…FR-119)', () => {
     fireEvent.change(el('scr.providers.models.search')!, { target: { value: 'llama' } });
     expect(els('scr.providers.models.row')).toHaveLength(1);
     fireEvent.change(el('scr.providers.models.search')!, { target: { value: '' } });
-    // FR-115: unknown capabilities → EM-4005 note, still selectable; no JSON output stays refused (AGD-004)
+    // FR-115: unknown capabilities → EM-4005 note, still selectable; no JSON output is selectable too, with a ⚠ warning (Operator 2026-10-25)
     fireEvent.click(el('scr.providers.assign.agent.editor')!);
-    fireEvent.click(el('scr.providers.models.filter.json')!);                    // on by default for the Editor Agent; off shows unknown rows
+    expect(el('scr.providers.models.filter.json')!.getAttribute('aria-pressed')).toBe('false');   // off for both agents: unknown rows shown
     const llama = el('scr.providers.models.list')!.querySelector('[data-model-id="meta-llama/llama-3.1-8b-instruct"]')!;
-    expect(llama.getAttribute('aria-disabled')).toBe('true');
+    expect(llama.getAttribute('aria-disabled')).toBeNull();
+    expect(llama.getAttribute('data-quality')).toBe('unsupported');
+    expect(llama.querySelector('[data-el="scr.providers.models.row.warn"]')!.getAttribute('title')).toMatch(/the Editor Agent may fail/);
     fireEvent.click(el('scr.providers.models.list')!.querySelector('[data-model-id="mistralai/mistral-small"]')!);
     expect(el('scr.providers.assign.agent.editor')!.getAttribute('data-model-id')).toBe('mistralai/mistral-small');
     await until(() => els('scr.providers.assign.note').some((n) => n.getAttribute('data-code') === 'EM-4005'), 'EM-4005 note');

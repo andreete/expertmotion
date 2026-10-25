@@ -4,7 +4,7 @@ import { Copy, ImagePlus, Paperclip, SendHorizontal, TriangleAlert, X } from 'lu
 import { errCode, useStore } from '../state/store.js';
 import type { AgentKind, CapabilityRow, MessageDto } from '../api/types.js';
 import { Button, IconButton, Popover, cx, inputCls } from '../components/ui.js';
-import { ModelPicker } from '../components/ModelPicker.js';
+import { ModelPicker, qualityOf } from '../components/ModelPicker.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
 import { useModelNames } from '../state/use-model-names.js';
 import { copyText } from '../api/client.js';
@@ -202,7 +202,8 @@ export function useAssignedCapability(agent: AgentKind): CapabilityRow | null {
 export const ctxTone = (pct: number): 'danger' | 'warn' | 'muted' => (pct >= 0.8 ? 'danger' : pct >= 0.6 ? 'warn' : 'muted');
 
 /** FR-073: per-agent model popover with the shared ModelPicker (compact) over one validated connection (a connection select
- *  appears when there are several); a pick switches that agent's model for the next request only. */
+ *  appears when there are several); a pick switches that agent's model for the next request only and closes the popover,
+ *  unless the model carries a quality warning (Operator decision 2026-10-25), which then stays visible in the popover. */
 function FooterModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void }) {
   const { state, runtime, dispatch, actions, t } = useStore();
   const names = useModelNames();
@@ -228,7 +229,8 @@ function FooterModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () =
       const a = await runtime.api.putAssignments({ [agent]: { agent, connectionId: connId, modelId, settings: cur?.connectionId === connId ? cur.settings : {} } });
       dispatch({ type: 'providers', assignments: a });
       actions.announce(t('ui.agent.footer.model.changed', { model: names.llm(modelId, agent, connId) }));
-      onClose();
+      const row = rows.find((r) => r.modelId === modelId);                              // a warned pick keeps the popover open so the
+      if (!row || qualityOf(row, agent).level === 'ok') onClose();                       // warning and "Use recommended instead" show
     } catch (e) { actions.error(e); }
   };
   return (

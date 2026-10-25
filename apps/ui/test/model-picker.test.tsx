@@ -6,7 +6,7 @@ vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { act, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { el, els, renderEditor } from './setup-dom.js';
 import { localModelByRef, localModelName, llmModelName } from '../src/state/model-names.js';
-import { PAGE, defaultModelFor, formatContext, pickerRows, recommendedIds } from '../src/components/ModelPicker.js';
+import { PAGE, betterPick, defaultModelFor, formatContext, pickerRows, qualityOf, recommendedIds } from '../src/components/ModelPicker.js';
 import type { CapabilityRow, ModelStateDto } from '../src/api/types.js';
 
 afterEach(() => cleanup());
@@ -16,14 +16,14 @@ const row = (modelId: string, label: string, p: number | null, o: Partial<Capabi
   ({ modelId, label, contextLength: 128_000, toolCalling: true, structuredOutput: true, streaming: true, imageInput: true, pricePerMInput: p, pricePerMOutput: p, ...o });
 const ROWS: CapabilityRow[] = [
   row('anthropic/claude-sonnet', 'Anthropic: Claude Sonnet', 9, { contextLength: 200_000 }),
-  row('openai/gpt-mini', 'OpenAI: GPT Mini', 1, { contextLength: 1_048_576 }),
+  row('openai/gpt-nano', 'OpenAI: GPT Nano', 1, { contextLength: 1_048_576 }),
   row('google/gemini-flash', 'Google: Gemini Flash', 2, { contextLength: 1_000_000 }),
   row('meta-llama/llama-8b', 'Meta: Llama 8B', null, { structuredOutput: false, toolCalling: false, imageInput: false }),
   row('qwen/qwen-7b', 'Qwen: Qwen 7B', 0.1, { contextLength: 32_768, imageInput: false }),
   row('google/gemma-3:free', 'Google: Gemma 3 (free)', 0, { contextLength: 96_000 }),
   row('mistralai/mistral-small', 'Mistral: Small', 0.2, { structuredOutput: null, toolCalling: null, imageInput: null }),
 ];
-const NO = { query: '', free: false, json: false, images: false };
+const NO = { query: '', category: 'all' as const, json: false, images: false };
 const REC = { sort: 'recommended' as const, dir: 'asc' as const };
 const ids = (r: CapabilityRow[]) => r.map((x) => x.modelId);
 
@@ -40,8 +40,8 @@ describe('model name helpers', () => {
     expect(localModelByRef(list, 'model:nothing')).toBeUndefined();
   });
   it('names an LLM model by its label (never a tier), else by its id', () => {
-    expect([llmModelName(ROWS, 'openai/gpt-mini'), llmModelName(ROWS, 'google/gemini-flash'), llmModelName(ROWS, 'zz'), llmModelName(ROWS, null)])
-      .toEqual(['OpenAI: GPT Mini', 'Google: Gemini Flash', 'zz', '']);
+    expect([llmModelName(ROWS, 'openai/gpt-nano'), llmModelName(ROWS, 'google/gemini-flash'), llmModelName(ROWS, 'zz'), llmModelName(ROWS, null)])
+      .toEqual(['OpenAI: GPT Nano', 'Google: Gemini Flash', 'zz', '']);
   });
 });
 
@@ -51,8 +51,11 @@ describe('ModelPicker rows (pure)', () => {
     expect(ids(pickerRows(ROWS, 'brainstorm', { ...NO, query: 'qwen/' }, REC))).toEqual(['qwen/qwen-7b']);
     expect(ids(pickerRows(ROWS, 'brainstorm', { ...NO, query: 'google' }, REC)).sort()).toEqual(['google/gemini-flash', 'google/gemma-3:free']);
   });
-  it('filters Free (:free or price 0), JSON (known true; not-known-false when nothing is reported) and Images', () => {
-    expect(ids(pickerRows(ROWS, 'brainstorm', { ...NO, free: true }, REC))).toEqual(['google/gemma-3:free']);
+  it('filters All / Free (:free or price 0) / Paid (price > 0 or unknown), JSON (known true; not-known-false when nothing is reported) and Images', () => {
+    expect(ids(pickerRows(ROWS, 'brainstorm', { ...NO, category: 'free' }, REC))).toEqual(['google/gemma-3:free']);
+    const paid = ids(pickerRows(ROWS, 'brainstorm', { ...NO, category: 'paid' }, REC));
+    expect(paid).toHaveLength(6); expect(paid).not.toContain('google/gemma-3:free'); expect(paid).toContain('meta-llama/llama-8b');   // unknown price = Paid
+    expect(ids(pickerRows(ROWS, 'brainstorm', NO, REC))).toHaveLength(7);
     const json = ids(pickerRows(ROWS, 'editor', { ...NO, json: true }, REC));
     expect(json).not.toContain('meta-llama/llama-8b');
     expect(json).not.toContain('mistralai/mistral-small');
@@ -60,20 +63,29 @@ describe('ModelPicker rows (pure)', () => {
     expect(ids(pickerRows(unreported, 'editor', { ...NO, json: true }, REC))).toHaveLength(6);
     expect(ids(pickerRows(ROWS, 'brainstorm', { ...NO, images: true }, REC))).not.toContain('qwen/qwen-7b');
   });
-  it('marks 1–3 recommended rows first (Balanced, Best, Fast), unusable rows last; sorts by name / price / context', () => {
+  it('marks 1–3 recommended rows first (Balanced, Best, Fast, without warned ones), warned rows after the rest (no JSON last); sorts by name / price / context', () => {
     const rec = recommendedIds(ROWS, 'editor');
     expect(rec.length).toBeGreaterThanOrEqual(1); expect(rec.length).toBeLessThanOrEqual(3);
     expect(rec[0]).toBe(defaultModelFor(ROWS, 'editor'));
     const order = ids(pickerRows(ROWS, 'editor', NO, REC));
     expect(order.slice(0, rec.length)).toEqual(rec);
-    expect(order.at(-1)).toBe('meta-llama/llama-8b');
+    expect(order.at(-1)).toBe('meta-llama/llama-8b');                                // no JSON output: last, but listed
+    expect(rec).not.toContain('openai/gpt-nano');                                     // the Fast pick is a "nano": warned, not recommended
+    expect(order.indexOf('openai/gpt-nano')).toBeGreaterThan(order.indexOf('mistralai/mistral-small'));
     expect(ids(pickerRows(ROWS, 'editor', NO, { sort: 'name', dir: 'asc' }))[0]).toBe('anthropic/claude-sonnet');
     const byPrice = ids(pickerRows(ROWS, 'editor', NO, { sort: 'price', dir: 'asc' }));
     expect(byPrice[0]).toBe('google/gemma-3:free'); expect(byPrice.at(-1)).toBe('meta-llama/llama-8b');   // unknown price last
     expect(ids(pickerRows(ROWS, 'editor', NO, { sort: 'price', dir: 'desc' })).at(-1)).toBe('meta-llama/llama-8b');
-    expect(ids(pickerRows(ROWS, 'editor', NO, { sort: 'context', dir: 'desc' }))[0]).toBe('openai/gpt-mini');
+    expect(ids(pickerRows(ROWS, 'editor', NO, { sort: 'context', dir: 'desc' }))[0]).toBe('openai/gpt-nano');
     expect(recommendedIds(ROWS, 'editor', true)).toEqual(['google/gemma-3:free']);
     expect(defaultModelFor(ROWS, 'brainstorm', true)).toBe('google/gemma-3:free');
+  });
+  it('quality warnings: weak / no-JSON rows, and "Use recommended instead" points at a recommended model without a warning', () => {
+    expect(['anthropic/claude-sonnet', 'openai/gpt-nano', 'meta-llama/llama-8b', 'qwen/qwen-7b', 'google/gemma-3:free'].map((id) => qualityOf(ROWS.find((r) => r.modelId === id)!, 'editor').level))
+      .toEqual(['ok', 'weak', 'unsupported', 'weak', 'ok']);
+    expect(betterPick(ROWS, 'editor', 'meta-llama/llama-8b')).toBe(recommendedIds(ROWS, 'editor')[0]);
+    expect(betterPick(ROWS, 'editor', recommendedIds(ROWS, 'editor')[0]!)).toBe(recommendedIds(ROWS, 'editor')[1] ?? null);
+    expect(betterPick([ROWS[3]!], 'editor', 'meta-llama/llama-8b')).toBeNull();
   });
   it('formats context as K / M', () => {
     expect([formatContext(128_000), formatContext(32_768), formatContext(1_048_576), formatContext(1_000_000), formatContext(null)]).toEqual(['128K', '32K', '1M', '1M', '—']);
@@ -98,7 +110,7 @@ const rowOf = (id: string) => el('scr.providers.models.list')!.querySelector<HTM
 const assigned = (agent: string) => el(`scr.providers.assign.agent.${agent}`)!.getAttribute('data-model-id');
 
 describe('Model table in Providers (FR-114, FR-115)', () => {
-  it('Validate → table with one default per agent, no tier labels; toggle agent, search, keyboard, disabled rows, Save stores exact ids; names show the label', { timeout: 20_000 }, async () => {
+  it('Validate → table with one default per agent, no tier labels; toggle agent, search, keyboard, warned rows stay selectable, Save stores exact ids; names show the label', { timeout: 20_000 }, async () => {
     const { runtime } = await renderEditor('sample');
     await act(async () => { fireEvent.click(el('agent.modelbar')!); });
     await until(() => el('scr.providers'), 'providers');
@@ -117,13 +129,24 @@ describe('Model table in Providers (FR-114, FR-115)', () => {
     expect(els('scr.providers.models.row')[0]!.getAttribute('data-model-id')).toBe('google/gemini-2.5-flash');  // recommended first
     expect(rowOf('anthropic/claude-sonnet-4.5')!.textContent).toMatch(/200K/);
     expect(rowOf('anthropic/claude-sonnet-4.5')!.textContent).toMatch(/\$3\.00 · \$15\.00/);
-    // Brainstorming Agent: JSON chip off; a model without JSON output is shown but disabled with a reason
+    // Operator decision 2026-10-25: every row is selectable; a model without JSON output carries a ⚠ badge, and once chosen an
+    // inline warning offers "Use recommended instead"
     expect(el('scr.providers.models.filter.json')!.getAttribute('aria-pressed')).toBe('false');
+    expect(el('scr.providers.models.category.all')!.getAttribute('aria-checked')).toBe('true');
+    expect(el('scr.providers.models.warning')).toBeNull();                             // the default has no warning
     const llama = rowOf('meta-llama/llama-3.1-8b-instruct')!;
-    expect(llama.getAttribute('aria-disabled')).toBe('true');
-    expect(llama.querySelector('[data-el="scr.providers.models.row.reason"]')!.textContent).toMatch(/No JSON output/);
+    expect(llama.getAttribute('aria-disabled')).toBeNull();
+    expect(llama.querySelector('[data-el="scr.providers.models.row.warn"]')!.textContent).toMatch(/No JSON/);
+    expect(llama.querySelector('[data-el="scr.providers.models.row.warn"]')!.getAttribute('title')).toMatch(/Doesn't confirm JSON output; the Brainstorming Agent may fail/);
+    expect(llama.textContent).toMatch(/price n\/a/);
+    expect(rowOf('qwen/qwen-2.5-7b-instruct')!.querySelector('[data-el="scr.providers.models.row.warn"]')!.getAttribute('title')).toMatch(/May give poor results/);
+    expect(rowOf('google/gemini-2.5-flash')!.querySelector('[data-el="scr.providers.models.row.warn"]')).toBeNull();
     fireEvent.click(llama);
+    expect(assigned('brainstorm')).toBe('meta-llama/llama-3.1-8b-instruct');
+    expect(el('scr.providers.models.warning')!.textContent).toMatch(/Doesn't confirm JSON output/);
+    fireEvent.click(el('scr.providers.models.warning.recommended')!);
     expect(assigned('brainstorm')).toBe('google/gemini-2.5-flash');
+    expect(el('scr.providers.models.warning')).toBeNull();
     // search + keyboard: ↓ moves, Enter selects
     const search = el('scr.providers.models.search')!;
     fireEvent.change(search, { target: { value: 'gpt' } });
@@ -131,9 +154,11 @@ describe('Model table in Providers (FR-114, FR-115)', () => {
     fireEvent.keyDown(search, { key: 'Enter' });
     expect(assigned('brainstorm')).toBe('openai/gpt-4.1-mini');
     fireEvent.change(search, { target: { value: '' } });
-    // Editor Agent: JSON chip on by default (structured output required); ↓ ↓ Enter from the selected row
+    // Editor Agent: JSON chip off by default too (nothing is refused); turned on it hides rows without confirmed JSON; ↓ ↓ Enter
     fireEvent.click(el('scr.providers.assign.agent.editor')!);
-    expect(el('scr.providers.models.filter.json')!.getAttribute('aria-pressed')).toBe('true');
+    expect(el('scr.providers.models.filter.json')!.getAttribute('aria-pressed')).toBe('false');
+    expect(rowOf('meta-llama/llama-3.1-8b-instruct')).not.toBeNull();
+    fireEvent.click(el('scr.providers.models.filter.json')!);
     expect(rowOf('meta-llama/llama-3.1-8b-instruct')).toBeNull();
     expect(rowOf('mistralai/mistral-small')).toBeNull();
     const order = els('scr.providers.models.row').map((r) => r.getAttribute('data-model-id'));
@@ -190,7 +215,7 @@ describe('Model table in Providers (FR-114, FR-115)', () => {
     expect([a.brainstorm?.modelId, a.editor?.modelId]).toEqual(['google/gemini-2.5-flash', 'google/gemini-2.5-flash']);
   });
 
-  it('a long list renders at most one page with "Show more"; the Free chip switches untouched defaults to the free pick', { timeout: 20_000 }, async () => {
+  it('a long list renders at most one page with "Show more"; the Free category switches untouched defaults to the free pick', { timeout: 20_000 }, async () => {
     const { runtime } = await renderEditor('sample');
     const many: CapabilityRow[] = Array.from({ length: 450 }, (_, i) => row(`vendor${i % 9}/model-${i}`, `Vendor ${i % 9}: Model ${i}`, 0.5 + i / 100));
     many.push(row('google/gemma-3-27b-it:free', 'Google: Gemma 3 27B (free)', 0), row('openai/gpt-4.1-mini', 'OpenAI: GPT-4.1 mini', 2));
@@ -205,13 +230,18 @@ describe('Model table in Providers (FR-114, FR-115)', () => {
     fireEvent.click(el('scr.providers.models.more')!);
     expect(els('scr.providers.models.row')).toHaveLength(2 * PAGE);
     expect(assigned('brainstorm')).toBe('openai/gpt-4.1-mini');
-    fireEvent.click(el('scr.providers.models.filter.free')!);
+    fireEvent.click(el('scr.providers.models.category.free')!);
+    expect(el('scr.providers.models.category.free')!.getAttribute('aria-checked')).toBe('true');
     expect(els('scr.providers.models.row').map((r) => r.getAttribute('data-model-id'))).toEqual(['google/gemma-3-27b-it:free']);
     expect(assigned('brainstorm')).toBe('google/gemma-3-27b-it:free');
     expect(assigned('editor')).toBe('google/gemma-3-27b-it:free');
     expect(el('scr.providers.models.row')!.textContent).toContain('Free');
-    fireEvent.click(el('scr.providers.models.filter.free')!);
+    fireEvent.click(el('scr.providers.models.category.paid')!);
     expect(assigned('editor')).toBe('openai/gpt-4.1-mini');
+    expect(el('scr.providers.models.count')!.textContent).toBe('451 of 452');
+    expect(els('scr.providers.models.row').map((r) => r.getAttribute('data-model-id'))).not.toContain('google/gemma-3-27b-it:free');
+    fireEvent.click(el('scr.providers.models.category.all')!);
+    expect(el('scr.providers.models.count')!.textContent).toBe('452 of 452');
   });
 
   it('without a fetched model list the table shows "Fetch models", which loads it', async () => {

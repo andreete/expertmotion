@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | AI agent architect |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 003, 009, 015), AI_WORKFLOW.md, DESIGN_CATALOGUE.md, MCP_AND_TOOLING.md, ../SYSTEM_PROMPT.md |
 | Used by | SYSTEM_PROMPT.md, API_SPECIFICATION.md, FRD.md, TEST_PLAN.md, AGENT_SKILLS.md, HOOKS_AND_GUARDRAILS.md |
 | Owner of | agent roles and permissions, runtime sub-agent roster, repo-side (development) subagent roster |
@@ -58,12 +58,12 @@ Output contract: `EditPlan` (AI_WORKFLOW §3) only. Any prose must go in `goal`/
 | Capability (from Capability Table) | Brainstorming Agent | Editor Agent |
 |---|---|---|
 | tool calling | optional (falls back to JSON mode) | preferred; JSON mode fallback with embedded tool list |
-| structured output / JSON mode | required | required |
+| structured output / JSON mode | needed (warned when missing; replies that are not JSON show as plain text) | needed (warned when missing; invalid plans end in EM-4301) |
 | context length | ≥ 32k recommended | ≥ 32k required (envelope ≈ 6–12k tokens) |
 | image input | optional (attachments) | optional |
 | price | shown; budget applies | shown; budget applies |
 
-The Providers screen refuses to assign a model that lacks JSON output capability and warns below 32k context.
+The Providers screen never refuses a model for its capabilities (Operator decision 2026-10-25): a model that lacks JSON output, or looks weak (`assessModelQuality`, FR-115), is assignable with a clear warning and a "Use recommended instead" nudge; below 32k context it warns too.
 
 ### 2.4 Permissions matrix (enforced by the tool registry, not by prompts)
 
@@ -124,6 +124,6 @@ Coordination rules (brief §20): no two subagents edit `docs/GLOSSARY.md` (froze
 | AGD-001 | Brainstorming Agent has no mutation or validation tools (registry-enforced) | registry unit test |
 | AGD-002 | Editor Agent output is always an `EditPlan`; prose-only replies are rejected and re-prompted | fake provider test |
 | AGD-003 | Hand-off requires an explicit Creator action | e2e |
-| AGD-004 | Model assignment refuses models without JSON output capability | unit |
+| AGD-004 | Model assignment accepts models without JSON output capability with an EM-4005 warning, and the ModelPicker warns on weak models (Operator decision 2026-10-25; was: refuses) | unit |
 | AGD-005 | Disclosure text of what is sent to providers exists in Settings (EN/ID) | UI review |
 | AGD-006 | Development subagents never write to the frozen glossary | hook (HOOKS_AND_GUARDRAILS.md) |

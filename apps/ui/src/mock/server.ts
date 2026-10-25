@@ -1097,15 +1097,11 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     for (const agent of ['brainstorm', 'editor'] as const) {
       if (!(agent in body)) continue;
       const a = body[agent] as AssignmentDto | null;
-      if (a) {
-        const cap = CAPABILITIES.find((x) => x.modelId === a.modelId);
-        if (cap && cap.structuredOutput === false) throw new HttpError(422, 'EM-9002', 'This model cannot return structured output.', { reason: 'no-json-output' });
-      }
       assignments[agent] = a ? { ...a, agent } : null;
     }
     if ('defaultConnectionId' in body) assignments.defaultConnectionId = (body['defaultConnectionId'] as string | null) ?? null;
     emit('settings.changed', { scope: 'assignments' });
-    const warnings = (['brainstorm', 'editor'] as const).flatMap((agent) => { const cap = CAPABILITIES.find((x) => x.modelId === assignments[agent]?.modelId); return cap && (cap.toolCalling !== true || cap.structuredOutput !== true) ? [{ code: 'EM-4005', path: `body.${agent}.modelId`, message: 'simple mode', severity: 'info' as const }] : []; });
+    const warnings = (['brainstorm', 'editor'] as const).flatMap((agent) => { const cap = CAPABILITIES.find((x) => x.modelId === assignments[agent]?.modelId); return cap && (cap.toolCalling !== true || cap.structuredOutput !== true) ? [{ code: 'EM-4005', path: `body.${agent}.modelId`, message: cap.structuredOutput === false ? 'no JSON output' : 'simple mode', severity: cap.structuredOutput === false ? 'warn' as const : 'info' as const }] : []; });   // no-JSON models are allowed with a warning (Operator 2026-10-25)
     return { ...assignments, warnings };
   });
   const budget = () => ({ connections: connections.map((c) => ({ connectionId: c.id, budgetMonthUsd: c.budgetMonthUsd, spentMonthUsd: 0.12, approximate: true })), projects: [...projectBudgets.entries()].map(([k, limitUsd]) => { const [projectId, connectionId] = k.split('|') as [string, string]; return { projectId, connectionId: connectionId || null, limitUsd, spentUsd: 0.01 }; }), month: new Date().toISOString().slice(0, 7) });

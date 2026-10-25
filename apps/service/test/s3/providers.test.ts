@@ -84,11 +84,21 @@ describe('providers module', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('assignment validation: JSON output required, unknown model, warnings for no tools and small context', async () => {
+  it('assignment validation: a model without JSON output is stored with a warning, unknown model refused, warnings for no tools and small context', async () => {
     const put = (b: unknown) => s.api('/providers/assignments', { method: 'PUT', json: b });
-    const noJson = await put({ editor: { agent: 'editor', connectionId: connId, modelId: 'nojson/model' } });
-    expect(noJson.status).toBe(422);
-    expect((await body<{ error: { code: string; details: { reason: string } } }>(noJson)).error).toMatchObject({ code: 'EM-9002', details: { reason: 'no-json-output' } });
+    const noJson = await put({ editor: { agent: 'editor', connectionId: connId, modelId: 'nojson/model' } });   // Operator decision 2026-10-25: allowed
+    expect(noJson.status).toBe(200);
+    const nj = await body<{ editor: { modelId: string }; warnings: Array<{ code: string; severity: string; message: string }> }>(noJson);
+    expect(nj.editor.modelId).toBe('nojson/model');
+    expect(nj.warnings).toEqual([expect.objectContaining({ code: 'EM-4005', severity: 'warn', message: expect.stringMatching(/does not confirm JSON output/) })]);
+    expect((await body<{ editor: { modelId: string } }>(await s.api('/providers/assignments'))).editor.modelId).toBe('nojson/model');
+    // the agent runtime still calls such a model (JSON-mode prompting, ADR-023); no extra provider call is added
+    const before = calls.filter((c) => c.url.endsWith('/chat/completions')).length;
+    const viaNoJson = await s.ctx.hooks.providerFor('editor', projectId).complete({ system: 'sys', messages: [{ role: 'user', content: 'hai' }], maxTokens: 50, temperature: 0 });
+    expect(viaNoJson.text).toBe('halo');
+    const chats = calls.filter((c) => c.url.endsWith('/chat/completions'));
+    expect(chats.length).toBe(before + 1);
+    expect((chats.at(-1)!.body as { model: string }).model).toBe('nojson/model');
     const unknown = await put({ editor: { agent: 'editor', connectionId: connId, modelId: 'gone/model' } });
     expect((await body<{ error: { code: string } }>(unknown)).error.code).toBe('EM-4004');
     const mismatch = await put({ editor: { agent: 'brainstorm', connectionId: connId, modelId: 'good/model' } });

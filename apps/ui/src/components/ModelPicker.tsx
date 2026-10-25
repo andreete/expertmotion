@@ -1,11 +1,13 @@
 // ModelPicker (FR-115, FR-073; Operator feedback 2026-10-25): one searchable model table over a connection's Capability
-// Table, shared by the Providers screen and the chat footer popover. Search (name or id, case-insensitive), filter chips
-// Free / JSON / Images, sortable columns (name, context, price), a "Recommended" badge on 1–3 rows (the tier resolution of
-// packages/shared model-tiers is used only to pre-sort and mark them, never shown as a tier name), ↑/↓ + Enter, at most
-// PAGE rows rendered at once with "Show more". Rows the agent cannot use (structured output known false, AGD-004) are disabled.
+// Table, shared by the Providers screen and the chat footer popover. Search (name or id, case-insensitive), a segmented
+// category filter All / Free / Paid, filter chips JSON / Images, sortable columns (name, context, price), a "Recommended" badge
+// on 1–3 rows (the tier resolution of packages/shared model-tiers is used only to pre-sort and mark them, never shown as a
+// tier name), ↑/↓ + Enter, at most PAGE rows rendered at once with "Show more". Operator decision 2026-10-25: every row can be
+// selected; rows that are likely to give poor results (assessModelQuality: weak, or no JSON output) carry a ⚠ badge, and a
+// selected one shows an inline warning with "Use recommended instead".
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { recommendedFor, resolveFreeModel, resolveModelTiers } from '@expertmotion/shared';
+import { assessModelQuality, recommendedFor, resolveFreeModel, resolveModelTiers, type ModelQuality } from '@expertmotion/shared';
 import type { AgentKind, CapabilityRow } from '../api/types.js';
 import { useStore } from '../state/store.js';
 import { formatMoney } from '../i18n/index.js';
@@ -14,7 +16,9 @@ import { Button, IconButton, cx, inputCls } from './ui.js';
 /** Rows rendered at once (OpenRouter lists ~450 models); "Show more" adds another page. */
 export const PAGE = 100;
 export type PickerSort = 'recommended' | 'name' | 'price' | 'context';
-export interface PickerFilters { query: string; free: boolean; json: boolean; images: boolean }
+export type PickerCategory = 'all' | 'free' | 'paid';
+export const CATEGORIES: readonly PickerCategory[] = ['all', 'free', 'paid'];
+export interface PickerFilters { query: string; category: PickerCategory; json: boolean; images: boolean }
 export interface PickerOrder { sort: PickerSort; dir: 'asc' | 'desc' }
 
 export const isFreeModel = (r: CapabilityRow): boolean => r.modelId.endsWith(':free') || (r.pricePerMInput === 0 && r.pricePerMOutput === 0);
@@ -23,14 +27,22 @@ export const jsonCapable = (rows: readonly CapabilityRow[]): ((r: CapabilityRow)
   const known = rows.some((r) => r.structuredOutput === true);
   return known ? (r) => r.structuredOutput === true : (r) => r.structuredOutput !== false;
 };
-/** Why an agent cannot use a row (null = usable). Both agents need JSON output (AGD-004, R-098 `no-json-output`). */
-export const unusableReason = (r: CapabilityRow): 'nojson' | null => (r.structuredOutput === false ? 'nojson' : null);
+/** Quality hint of a row for an agent (packages/shared model-quality); never used to refuse a row. */
+export const qualityOf = (r: CapabilityRow, agent: AgentKind): ModelQuality => assessModelQuality(r, agent);
 
-/** 1–3 model ids marked "Recommended" (Balanced, Best, Fast of resolveModelTiers, distinct); the free pick while Free is on. */
+/** 1–3 model ids marked "Recommended" (Balanced, Best, Fast of resolveModelTiers, distinct); the free pick while Free is on.
+ *  Picks with a quality warning are left out unless every pick has one. */
 export function recommendedIds(rows: readonly CapabilityRow[], agent: AgentKind, freeOn = false): string[] {
   if (freeOn) { const f = resolveFreeModel(rows); return f ? [f] : []; }
   const t = resolveModelTiers(rows, agent);
-  return [...new Set([t.balanced, t.best, t.fast].filter((x): x is string => !!x))];
+  const ids = [...new Set([t.balanced, t.best, t.fast].filter((x): x is string => !!x))];
+  const ok = ids.filter((id) => { const r = rows.find((x) => x.modelId === id); return !r || qualityOf(r, agent).level === 'ok'; });
+  return ok.length ? ok : ids;
+}
+/** "Use recommended instead": the first recommended model without a quality warning other than `current`, or null. */
+export function betterPick(rows: readonly CapabilityRow[], agent: AgentKind, current: string, freeOn = false): string | null {
+  const okRow = (id: string) => { const r = rows.find((x) => x.modelId === id); return !!r && qualityOf(r, agent).level === 'ok'; };
+  return [...recommendedIds(rows, agent, freeOn), ...(freeOn ? recommendedIds(rows, agent) : [])].find((id) => id !== current && okRow(id)) ?? null;
 }
 /** The default model for an agent: Balanced (or the free pick when Free is on), '' when the table has no usable model. */
 export function defaultModelFor(rows: readonly CapabilityRow[], agent: AgentKind, freeOn = false): string {
@@ -44,7 +56,7 @@ export function pickerRows(rows: readonly CapabilityRow[], agent: AgentKind, f: 
   const q = f.query.trim().toLowerCase();
   const json = jsonCapable(rows);
   const list = rows.filter((r) => (!q || r.label.toLowerCase().includes(q) || r.modelId.toLowerCase().includes(q))
-    && (!f.free || isFreeModel(r)) && (!f.json || json(r)) && (!f.images || r.imageInput === true));
+    && (f.category === 'all' || (f.category === 'free') === isFreeModel(r)) && (!f.json || json(r)) && (!f.images || r.imageInput === true));
   const idx = new Map(rows.map((r, i) => [r.modelId, i] as const));
   const sign = o.dir === 'asc' ? 1 : -1;
   const num = (a: number | null, b: number | null) => (a === null && b === null ? 0 : a === null ? 1 : b === null ? -1 : sign * (a - b));
@@ -53,8 +65,10 @@ export function pickerRows(rows: readonly CapabilityRow[], agent: AgentKind, f: 
   else if (o.sort === 'price') cmp = (a, b) => num(priceSum(a), priceSum(b));
   else if (o.sort === 'context') cmp = (a, b) => num(a.contextLength, b.contextLength);
   else {
-    const rec = recommendedIds(rows, agent, f.free);
-    const rank = (r: CapabilityRow) => (unusableReason(r) ? 3 : rec.includes(r.modelId) ? 0 : recommendedFor(r).includes(agent) ? 1 : 2);
+    // Recommended first, then rows that fit the agent, then the rest; rows with a quality warning after those (no JSON last).
+    const rec = recommendedIds(rows, agent, f.category === 'free');
+    const level = new Map(list.map((r) => [r.modelId, qualityOf(r, agent).level] as const));
+    const rank = (r: CapabilityRow) => (rec.includes(r.modelId) ? 0 : level.get(r.modelId) === 'unsupported' ? 4 : level.get(r.modelId) === 'weak' ? 3 : recommendedFor(r).includes(agent) ? 1 : 2);
     cmp = (a, b) => rank(a) - rank(b) || (rank(a) === 0 ? rec.indexOf(a.modelId) - rec.indexOf(b.modelId) : 0);
   }
   return [...list].sort((a, b) => cmp(a, b) || idx.get(a.modelId)! - idx.get(b.modelId)!);
@@ -80,28 +94,30 @@ export interface ModelPickerProps {
   /** Refresh / "Fetch models" (empty table) action; omitted for a draft connection. */
   onRefresh?: (() => void) | undefined;
   refreshDisabledReason?: string | null | undefined;
-  /** Called when the Free chip changes (Providers switches untouched defaults to the free pick). */
-  onFreeChange?: ((on: boolean) => void) | undefined;
+  /** Called when the All / Free / Paid category changes (Providers switches untouched defaults to the free pick on Free). */
+  onCategoryChange?: ((category: PickerCategory) => void) | undefined;
   compact?: boolean | undefined;
   loading?: boolean | undefined;
 }
 
-export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refreshDisabledReason, onFreeChange, compact, loading }: ModelPickerProps) {
+export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refreshDisabledReason, onCategoryChange, compact, loading }: ModelPickerProps) {
   const { t, lang } = useStore();
   const uid = useId().replace(/:/g, '');
   const [query, setQuery] = useState('');
-  const [free, setFree] = useState(false);
-  const [json, setJson] = useState(agent === 'editor');
+  const [category, setCategoryState] = useState<PickerCategory>('all');
+  const [json, setJson] = useState(false);                                            // off for both agents: nothing is refused
   const [images, setImages] = useState(false);
   const [order, setOrder] = useState<PickerOrder>({ sort: 'recommended', dir: 'asc' });
   const [limit, setLimit] = useState(PAGE);
   const [active, setActive] = useState(-1);
-  useEffect(() => { setJson(agent === 'editor'); }, [agent]);                         // the Editor Agent requires structured output
-  const list = useMemo(() => pickerRows(rows, agent, { query, free, json, images }, order), [rows, agent, query, free, json, images, order]);
+  const free = category === 'free';
+  const setCategory = (c: PickerCategory) => { if (c !== category) { setCategoryState(c); onCategoryChange?.(c); } };
+  const list = useMemo(() => pickerRows(rows, agent, { query, category, json, images }, order), [rows, agent, query, category, json, images, order]);
   const rec = useMemo(() => new Set(recommendedIds(rows, agent, free)), [rows, agent, free]);
+  const quality = useMemo(() => new Map(rows.map((r) => [r.modelId, qualityOf(r, agent)] as const)), [rows, agent]);
   // New query / filter / order: back to the first page, active row = the selected one when visible, else the first.
   const selectedIdx = list.findIndex((r) => r.modelId === value);
-  const resetKey = `${query}|${free}|${json}|${images}|${order.sort}|${order.dir}|${agent}|${rows.length}`;
+  const resetKey = `${query}|${category}|${json}|${images}|${order.sort}|${order.dir}|${agent}|${rows.length}`;
   const lastKey = useRef<string | null>(null);
   useEffect(() => {
     if (lastKey.current === resetKey) return;
@@ -112,7 +128,7 @@ export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refre
   const shown = list.slice(0, limit);
   const optId = (i: number) => `${uid}-opt-${i}`;
   useEffect(() => { if (active >= 0) document.getElementById(optId(active))?.scrollIntoView?.({ block: 'nearest' }); }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
-  const choose = (r: CapabilityRow | undefined) => { if (r && !unusableReason(r)) onSelect(r.modelId); };
+  const choose = (r: CapabilityRow | undefined) => { if (r) onSelect(r.modelId); };                // every row can be chosen (Operator 2026-10-25)
   const onKey = (e: KeyboardEvent) => {
     const role = (e.target as HTMLElement).getAttribute?.('role');
     if (role !== 'combobox' && role !== 'listbox') return;                            // chips, sort headers, "Show more" keep their own keys
@@ -128,8 +144,8 @@ export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refre
   const sortBy = (s: Exclude<PickerSort, 'recommended'>) => setOrder((o) => (o.sort !== s ? { sort: s, dir: FIRST_DIR[s] } : o.dir === FIRST_DIR[s] ? { sort: s, dir: FIRST_DIR[s] === 'asc' ? 'desc' : 'asc' } : { sort: 'recommended', dir: 'asc' }));
   const ariaSort = (s: PickerSort) => (order.sort === s ? (order.dir === 'asc' ? 'ascending' : 'descending') : 'none');
   const arrow = (s: PickerSort) => (order.sort === s ? (order.dir === 'asc' ? ' ↑' : ' ↓') : '');
-  const chip = (name: 'free' | 'json' | 'images', on: boolean, set: (v: boolean) => void) => (
-    <button key={name} type="button" data-el={`${el}.filter.${name}`} aria-pressed={on} onClick={() => { set(!on); if (name === 'free') onFreeChange?.(!on); }}
+  const chip = (name: 'json' | 'images', on: boolean, set: (v: boolean) => void) => (
+    <button key={name} type="button" data-el={`${el}.filter.${name}`} aria-pressed={on} onClick={() => set(!on)}
       className={cx('rounded-full border px-2 text-[11px] leading-[20px]', on ? 'border-em-accent bg-em-accent/10 text-em-accent' : 'border-em-line text-em-text-2 hover:bg-em-panel-2')}>
       {t(`ui.modelpicker.filter.${name}`)}
     </button>
@@ -137,8 +153,14 @@ export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refre
   const cols = compact ? 'grid-cols-[minmax(0,1fr)_44px_92px]' : 'grid-cols-[minmax(0,1fr)_56px_120px_118px]';
   const price = (r: CapabilityRow) => (isFreeModel(r)
     ? <span className="rounded-[4px] border border-em-success/60 px-1 text-[10px] text-em-success">{t('ui.modelpicker.free')}</span>
-    : r.pricePerMInput === null ? <span className="text-em-muted" title={t('ui.scr.providers.unknown.tip')}>—</span>
+    : r.pricePerMInput === null || r.pricePerMOutput === null ? <span data-el={`${el}.row.price.unknown`} className="text-em-muted" title={t('ui.scr.providers.unknown.tip')}>{t('ui.modelpicker.price.unknown')}</span>
     : <span>{formatMoney(r.pricePerMInput, false, lang)} · {formatMoney(r.pricePerMOutput, false, lang)}</span>);
+  // Quality warning text (en/id): the no-JSON sentence names the agent; weak models get the general sentence; reasons follow.
+  const warnText = (qa: ModelQuality) => (qa.level === 'unsupported' ? t('ui.modelpicker.warn.nojson', { agent: t(`ui.scr.providers.assign.${agent}`) }) : t('ui.modelpicker.warn.weak'));
+  const whyText = (qa: ModelQuality) => qa.reasons.filter((x) => x !== 'no-json').map((x) => t(`ui.modelpicker.why.${x}`)).join(' · ');
+  const selectedRow = value ? rows.find((r) => r.modelId === value) : undefined;
+  const selectedQ = selectedRow ? quality.get(selectedRow.modelId) : undefined;
+  const better = selectedQ && selectedQ.level !== 'ok' ? betterPick(rows, agent, value, free) : null;
   const badge = (on: boolean | null, key: 'json' | 'tools' | 'image') => (on === false ? null
     : <span key={key} data-cap={key} title={on === null ? t('ui.scr.providers.unknown.tip') : undefined}
       className={cx('rounded-[4px] border px-1 text-[10px] leading-[16px]', on ? 'border-em-line text-em-text-2' : 'border-dashed border-em-line text-em-muted')}>{t(`ui.modelpicker.cap.${key}`)}{on === null ? '?' : ''}</span>);
@@ -152,7 +174,15 @@ export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refre
         {onRefresh && <IconButton el={`${el}.refresh`} label={t('ui.scr.providers.refresh')} icon={<RefreshCw size={14} />} size={28} disabledReason={refreshDisabledReason ?? null} onClick={onRefresh} />}
       </div>
       <div className="flex flex-wrap items-center gap-1">
-        {chip('free', free, setFree)}{chip('json', json, setJson)}{chip('images', images, setImages)}
+        <div role="radiogroup" data-el={`${el}.category`} aria-label={t('ui.modelpicker.category')} className="flex overflow-hidden rounded-full border border-em-line">
+          {CATEGORIES.map((c) => (
+            <button key={c} type="button" role="radio" aria-checked={category === c} data-el={`${el}.category.${c}`} onClick={() => setCategory(c)}
+              className={cx('px-2 text-[11px] leading-[20px]', category === c ? 'bg-em-accent/15 text-em-accent' : 'text-em-text-2 hover:bg-em-panel-2')}>
+              {t(`ui.modelpicker.category.${c}`)}
+            </button>
+          ))}
+        </div>
+        {chip('json', json, setJson)}{chip('images', images, setImages)}
         <span data-el={`${el}.count`} className="ml-auto text-[11px] text-em-muted">{t('ui.modelpicker.count', { shown: list.length, total: rows.length })}</span>
       </div>
       {rows.length === 0 ? (
@@ -174,26 +204,28 @@ export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refre
             {list.length === 0 && (
               <div data-el={`${el}.nomatch`} className="flex items-center gap-2 px-2 py-2 text-[12px] text-em-muted">
                 {t('ui.modelpicker.nomatch')}
-                <button type="button" className="text-em-accent underline" onClick={() => { setQuery(''); setFree(false); setImages(false); setJson(false); if (free) onFreeChange?.(false); }}>{t('ui.modelpicker.clear')}</button>
+                <button type="button" className="text-em-accent underline" onClick={() => { setQuery(''); setCategory('all'); setImages(false); setJson(false); }}>{t('ui.modelpicker.clear')}</button>
               </div>
             )}
             {shown.map((r, i) => {
-              const reason = unusableReason(r);
+              const qa = quality.get(r.modelId)!;
+              const warn = qa.level !== 'ok';
+              const tip = warn ? [warnText(qa), whyText(qa)].filter(Boolean).join(' — ') : '';
               const selected = r.modelId === value;
               return (
-                <div key={r.modelId} id={optId(i)} role="option" data-el={`${el}.row`} data-model-id={r.modelId} aria-selected={selected} aria-disabled={reason ? true : undefined}
-                  title={reason ? t(`ui.modelpicker.reason.${reason}`) : r.modelId}
+                <div key={r.modelId} id={optId(i)} role="option" data-el={`${el}.row`} data-model-id={r.modelId} data-quality={qa.level} aria-selected={selected}
+                  title={warn ? `${r.modelId} — ${tip}` : r.modelId}
                   onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setActive(i)} onClick={() => { setActive(i); choose(r); }}
                   className={cx('grid cursor-pointer items-center gap-x-2 border-t border-em-line px-2 py-1 text-[12px]', cols,
-                    selected ? 'bg-em-accent/15 shadow-[inset_2px_0_0_var(--em-accent,currentColor)]' : i === active ? 'bg-em-panel-2' : 'hover:bg-em-panel-2',
-                    reason && 'cursor-not-allowed opacity-50')}>
+                    selected ? 'bg-em-accent/15 shadow-[inset_2px_0_0_var(--em-accent,currentColor)]' : i === active ? 'bg-em-panel-2' : 'hover:bg-em-panel-2')}>
                   <span className="min-w-0">
                     <span className={cx('flex min-w-0 items-center gap-1', selected && 'text-em-accent')}>
                       <span className="truncate">{selected ? '✓ ' : ''}{r.label || r.modelId}</span>
-                      {rec.has(r.modelId) && !reason && <span data-el={`${el}.row.recommended`} className="shrink-0 rounded-[4px] bg-em-accent/15 px-1 text-[10px] text-em-accent">{t('ui.modelpicker.recommended')}</span>}
+                      {rec.has(r.modelId) && !warn && <span data-el={`${el}.row.recommended`} className="shrink-0 rounded-[4px] bg-em-accent/15 px-1 text-[10px] text-em-accent">{t('ui.modelpicker.recommended')}</span>}
+                      {warn && <span data-el={`${el}.row.warn`} data-reasons={qa.reasons.join(' ')} title={tip} aria-label={tip}
+                        className="shrink-0 rounded-[4px] border border-em-warn/60 px-1 text-[10px] text-em-warn">⚠ {t(qa.level === 'unsupported' ? 'ui.modelpicker.warn.badge.nojson' : 'ui.modelpicker.warn.badge.weak')}</span>}
                     </span>
                     <span className="t-mono block truncate text-[10px] text-em-muted">{r.modelId}</span>
-                    {reason && <span data-el={`${el}.row.reason`} className="block text-[10px] text-em-warn">{t(`ui.modelpicker.reason.${reason}`)}</span>}
                     {compact && <span className="mt-0.5 flex gap-1">{badge(r.structuredOutput, 'json')}{badge(r.toolCalling, 'tools')}{badge(r.imageInput, 'image')}</span>}
                   </span>
                   <span className="t-mono text-right">{formatContext(r.contextLength)}</span>
@@ -208,6 +240,15 @@ export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refre
               </button>
             )}
           </div>
+        </div>
+      )}
+      {selectedRow && selectedQ && selectedQ.level !== 'ok' && (
+        <div data-el={`${el}.warning`} role="status" data-quality={selectedQ.level} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[6px] border border-em-warn/60 bg-em-warn/10 px-2 py-1 text-[12px] text-em-text">
+          <span className="min-w-0 flex-1">
+            <span className="text-em-warn">⚠ </span>{warnText(selectedQ)}
+            {whyText(selectedQ) && <span className="block text-[11px] text-em-muted">{whyText(selectedQ)}</span>}
+          </span>
+          {better && <Button el={`${el}.warning.recommended`} size={28} variant="ghost" title={rows.find((r) => r.modelId === better)?.label || better} onClick={() => onSelect(better)}>{t('ui.modelpicker.warn.userec')}</Button>}
         </div>
       )}
     </div>
