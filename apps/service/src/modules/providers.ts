@@ -98,6 +98,7 @@ async function refreshModels(ctx: ServiceContext, id: string): Promise<{ items: 
   const items = await listModels(r.provider, keyOf(ctx, r), egressFetch(ctx, 'provider-models'));   // SEC-084: model lists ≤ 8 MB
   const at = ctx.now();
   ctx.db.prepare('UPDATE provider_connections SET models_json=?, models_fetched_at=?, updated_at=? WHERE id=?').run(JSON.stringify(items), at, at, id);
+  changed(ctx, 'providers');                      // the Editor reloads the Capability Table (it may have read an empty one)
   return { items, fetchedAt: at };
 }
 
@@ -261,7 +262,8 @@ export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModul
           if (ctx.egress.isPrivate()) notices.push('EM-8202');
           else {
             await validateConn(ctx, id);       // EM-4002 → 422, connection stays stored as invalid
-            void track(ctx, refreshModels(ctx, id).catch((e: unknown) => ctx.log.warn({ connectionId: id, code: (e as EmError).code ?? 'EM-4006' }, 'model refresh after add failed')));
+            // Awaited: the response already carries a filled Capability Table, so the model pickers are never empty after Add.
+            await refreshModels(ctx, id).catch((e: unknown) => ctx.log.warn({ connectionId: id, code: (e as EmError).code ?? 'EM-4006' }, 'model refresh after add failed'));
           }
         }
         changed(ctx, 'providers');

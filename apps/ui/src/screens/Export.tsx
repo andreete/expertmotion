@@ -6,6 +6,7 @@ import { useStore, currentOutputProfile } from '../state/store.js';
 import type { OutputProfile, PreflightCheckName, RenderEstimate } from '../api/types.js';
 import { Button, ErrorBox, Field, Modal, Progress, Segmented, inputCls } from '../components/ui.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
+import { copyText } from '../api/client.js';
 
 type Format = 'mp4' | 'webm' | 'gif' | 'png';
 /** FR-138: WebM with alpha (VP9 + PNG frames) only when the Composition has no background or `preset:background.none`. */
@@ -75,7 +76,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const outPath = async (): Promise<string | null> => { if (!output) return null; try { return (await runtime.api.revealOutput(output.id)).path; } catch (e) { actions.error(e); return null; } };
   const reveal = async () => { const p = await outPath(); if (p) await window.expertmotion?.openFolder?.(p); };
   const play = async () => { const p = await outPath(); if (p) await (window.expertmotion?.openPath ?? window.expertmotion?.openFolder)?.(p); };
-  const copyPath = async () => { const p = output?.path ?? (await outPath()); if (!p) return; void navigator.clipboard?.writeText(p).catch(() => undefined); setCopied(true); };
+  const copyPath = async () => { const p = output?.path ?? (await outPath()); if (!p) return; const ok = await copyText(p); if (ok) setCopied(true); };
   const pickFolder = () => void window.expertmotion?.pickFolder?.({ ...(folder ? { defaultPath: folder } : {}) }).then((f) => { if (f) setFolder(f); });
   const fix = (r: Recovery) => {
     if (r === 'folder') pickFolder();

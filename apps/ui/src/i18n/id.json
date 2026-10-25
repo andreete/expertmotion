@@ -1555,6 +1555,8 @@
  "ui.scr.providers.tier.balanced.hint": "Hasil bagus dengan harga wajar",
  "ui.scr.providers.tier.best": "Terbaik",
  "ui.scr.providers.tier.best.hint": "Paling mampu, biaya lebih tinggi",
+ "ui.scr.providers.tier.free": "Gratis",
+ "ui.scr.providers.tier.free.hint": "Tanpa biaya; lebih lambat, ada batas harian",
  "ui.scr.providers.tier.custom": "Model khusus: {model}",
  "ui.scr.providers.tier.fast": "Cepat",
  "ui.scr.providers.tier.fast.hint": "Paling hemat, jawaban cepat",

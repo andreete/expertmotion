@@ -3,7 +3,7 @@
 // activation the store continues to onboarding / the Editor without a restart. `LicenseScreen` is the "Manage licence" modal.
 // Formal "Anda" register is allowed here (licence text, GLOSSARY "Words to avoid").
 // FR-132 key link (EM-8202 copyable URL in Private Mode), FR-134 status states + clock-changed badge, FR-135 re-bind steps.
-import { DOCS_URL, STORE_URL } from '../api/client.js';
+import { copyText, DOCS_URL, readClipboardText, STORE_URL } from '../api/client.js';
 import { useState, type DragEvent } from 'react';
 import { Copy } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
@@ -108,7 +108,7 @@ export function LicenseForm({ onDone, gate }: { onDone?: () => void; gate?: bool
     onDrop: (e: DragEvent<HTMLElement>) => { void onDrop(e); },
   };
   const showRebind = removed || lic?.status === 'machine-mismatch' || error?.code === 'EM-5003';
-  const copyCode = () => { void navigator.clipboard?.writeText(lic?.machineCode ?? '').catch(() => undefined); setCopied(true); };
+  const copyCode = () => { void copyText(lic?.machineCode ?? '').then(setCopied); };
   return (
     <div className="flex flex-col gap-3">
       {!(gate && v.status === 'unlicensed') && (
@@ -129,7 +129,7 @@ export function LicenseForm({ onDone, gate }: { onDone?: () => void; gate?: bool
         <div className={`flex gap-2 rounded-[6px] ${dragging ? 'outline outline-2 outline-em-accent' : ''}`} data-dropping={dragging || undefined} {...dragProps}>
           <input id="em-license-key" data-el="scr.license.input" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} className={inputCls} placeholder="EM1-…"
             onKeyDown={(e) => { if (e.key === 'Enter' && key.trim().length >= 40 && !busy) void activate(); }} />
-          <Button size={32} onClick={() => void navigator.clipboard?.readText().then(setKey).catch(() => undefined)}>{t('ui.common.paste')}</Button>
+          <Button size={32} onClick={() => void readClipboardText().then((v) => { if (v) setKey(v.trim()); })}>{t('ui.common.paste')}</Button>
         </div>
       </Field>
       {error && <ErrorBox el="scr.license.error" code={error.code} {...(error.vars ? { vars: error.vars } : {})} />}

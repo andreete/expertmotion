@@ -1555,6 +1555,8 @@
  "ui.scr.providers.tier.balanced.hint": "Good results at a fair price",
  "ui.scr.providers.tier.best": "Best",
  "ui.scr.providers.tier.best.hint": "Most capable, costs more",
+ "ui.scr.providers.tier.free": "Free",
+ "ui.scr.providers.tier.free.hint": "No cost; slower, daily limits",
  "ui.scr.providers.tier.custom": "Custom model: {model}",
  "ui.scr.providers.tier.fast": "Fast",
  "ui.scr.providers.tier.fast.hint": "Cheapest, quick answers",

@@ -7,6 +7,7 @@ import { Button, IconButton, Popover, cx } from '../components/ui.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
 import { MODEL_TIERS, resolveModelTiers } from '@expertmotion/shared';
 import { useModelNames } from '../state/use-model-names.js';
+import { copyText } from '../api/client.js';
 
 /** FR-072: largest image the composer attaches from disk (EM-1002 above it). */
 export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
@@ -20,7 +21,7 @@ function CopyButton({ agent, text }: { agent: AgentKind; text: string }) {
   return (
     <button type="button" data-el={`agent.${agent}.message.copy`} aria-label={t('ui.agent.message.copy')} title={t('ui.agent.message.copy')}
       className="text-em-muted opacity-60 hover:text-em-text hover:opacity-100 focus:opacity-100"
-      onClick={() => { void navigator.clipboard?.writeText(text).then(() => actions.announce(t('ui.agent.message.copied'))).catch(() => undefined); }}><Copy size={12} /></button>
+      onClick={() => { void copyText(text).then((ok) => { if (ok) actions.announce(t('ui.agent.message.copied')); }); }}><Copy size={12} /></button>
   );
 }
 
@@ -231,8 +232,8 @@ function ModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void
                 const tiers = resolveModelTiers(rows, agent);
                 if (!tiers.balanced) return null;
                 return (
-                  <div className="grid grid-cols-3 gap-1 px-2 py-1">
-                    {MODEL_TIERS.map((tier) => {
+                  <div className={cx('grid gap-1 px-2 py-1', tiers.free ? 'grid-cols-4' : 'grid-cols-3')}>
+                    {MODEL_TIERS.filter((tier) => tier !== 'free' || tiers.free).map((tier) => {
                       const id = tiers[tier]!;
                       const on = cur?.connectionId === c.id && cur.modelId === id && names.llm(id, agent, c.id) === t(`ui.scr.providers.tier.${tier}`);
                       return <button key={tier} type="button" data-el={`agent.${agent}.footer.model.tier`} data-tier={tier} aria-pressed={on} onClick={() => void pick(c.id, id)}

@@ -18,7 +18,7 @@
  * The decision logic is in ./lib/* (pure, unit-tested on Linux). This file wires Electron to it.
  * Electron cannot run on the Linux dev server, so this file is typecheck-only here; see README.
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, safeStorage, screen, session, shell, Tray, utilityProcess } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, safeStorage, screen, session, shell, Tray, utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { randomBytes, createHash, createPublicKey, verify as nodeVerify } from 'node:crypto';
@@ -454,6 +454,18 @@ function registerIpc(): void {
     if (!senderOk(event) || targetPath === undefined || !isPlayableOutput(targetPath) || !existsSync(targetPath)) return;
     const err = await shell.openPath(targetPath);
     if (err) logLine('warn', 'open path failed', { code: EM.openFolderFailed });
+  });
+
+  // Clipboard (Machine Code, licence key, paths, chat text). Text only, size-capped; reading is limited to licence-key size.
+  ipcMain.handle(IPC.copyText, async (event, raw: unknown) => {
+    if (!senderOk(event) || typeof raw !== 'string' || raw.length > 65_536) return false;
+    await Promise.resolve(clipboard.writeText(raw));                       // Electron 45 clipboard calls may be async
+    return (await Promise.resolve(clipboard.readText())) === raw;
+  });
+  ipcMain.handle(IPC.readClipboardText, async (event) => {
+    if (!senderOk(event)) return '';
+    const text = await Promise.resolve(clipboard.readText());
+    return text.length <= 8_192 ? text : '';
   });
 
   ipcMain.handle(IPC.getUpdateState, (event) => (senderOk(event) ? updateState : null));

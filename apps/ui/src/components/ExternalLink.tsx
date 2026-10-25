@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Copy } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import { Button } from './ui.js';
+import { copyText } from '../api/client.js';
 
 /** True when the link may be opened now; false means "show the copyable URL" (Private Mode). */
 export const canOpenExternal = (privateMode: boolean | undefined): boolean => !privateMode;
@@ -25,7 +26,7 @@ export function ExternalLink({ url, label, el, action }: { url: string; label: s
           <span className="text-em-text-2">{t('err.EM-8202.body', { action })}</span>
           <span className="flex items-center gap-2">
             <code className="t-mono flex-1 select-all break-all">{url}</code>
-            <Button size={28} icon={<Copy size={14} />} onClick={() => { void navigator.clipboard?.writeText(url).catch(() => undefined); setCopied(true); }}>{copied ? t('ui.common.copied') : t('ui.common.copy')}</Button>
+            <Button size={28} icon={<Copy size={14} />} onClick={() => { void copyText(url).then(setCopied); }}>{copied ? t('ui.common.copied') : t('ui.common.copy')}</Button>
           </span>
         </span>
       )}

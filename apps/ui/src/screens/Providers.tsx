@@ -1,7 +1,7 @@
 // Providers screen (scr.providers, FR-109…FR-119): Provider Connections list (status, model count, default, usage/budget,
 // Edit / Test / Set default / Remove), and the Add connection form whose sections unlock in order: provider + key →
 // Validate (R-101 dry run, nothing stored) → Capability Table → assignments → budget → Test (R-102 fixed probe) → Save.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Eye, EyeOff, Minus, RefreshCw, Trash2 } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import type { AgentKind, AssignmentDto, CapabilityRow, ConnectionDto, ProbeResultDto, ProviderKind, ProviderKindInfo } from '../api/types.js';
@@ -166,8 +166,8 @@ function AssignFields({ rows, assign, setAssign }: { rows: CapabilityRow[]; assi
         return (
           <div key={agent} className="mb-3">
             <div className="t-label mb-1" id={`em-assign-${agent}-label`}>{t(`ui.scr.providers.assign.${agent}`)}</div>
-            <div role="radiogroup" aria-labelledby={`em-assign-${agent}-label`} data-el={`scr.providers.assign.${agent}.tier`} className="grid grid-cols-3 gap-1">
-              {MODEL_TIERS.map((tier) => {
+            <div role="radiogroup" aria-labelledby={`em-assign-${agent}-label`} data-el={`scr.providers.assign.${agent}.tier`} className={cx('grid gap-1', tiers.free ? 'grid-cols-4' : 'grid-cols-3')}>
+              {MODEL_TIERS.filter((tier) => tier !== 'free' || tiers.free).map((tier) => {
                 const on = current === tier;
                 return (
                   <button key={tier} type="button" role="radio" aria-checked={on} data-el="scr.providers.assign.tier.option" data-tier={tier} disabled={!tiers[tier]}
@@ -263,10 +263,19 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
     }, 60);
     return () => clearTimeout(h);
   }, [focusField, showBudgets, conn?.id, state.project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Empty table = not loaded: read the cache, and when the cache is empty too ask the provider once (not in Private Mode).
+  const autoFetched = useRef<string | null>(null);
   useEffect(() => {
-    if (!conn || state.capabilities[conn.id]) return;
-    runtime.api.connectionModels(conn.id).then((r) => dispatch({ type: 'capabilities', connectionId: conn.id, rows: r.items })).catch(() => undefined);
-  }, [conn, runtime, dispatch, state.capabilities]);
+    if (!conn || state.capabilities[conn.id]?.length) return;
+    void runtime.api.connectionModels(conn.id).then(async (r) => {
+      let rows = r.items;
+      if (!rows.length && autoFetched.current !== conn.id && !state.settings?.privateMode && conn.status === 'valid') {
+        autoFetched.current = conn.id;
+        rows = (await runtime.api.refreshConnectionModels(conn.id).catch(() => ({ items: [] as typeof rows }))).items;
+      }
+      if (rows.length) dispatch({ type: 'capabilities', connectionId: conn.id, rows });
+    }).catch(() => undefined);
+  }, [conn, runtime, dispatch, state.capabilities, state.settings?.privateMode]);
   useEffect(() => {
     if (!rows.length) return;
     setAssign((a) => ({ brainstorm: a.brainstorm || defaultModel(rows, 'brainstorm'), editor: a.editor || defaultModel(rows, 'editor') }));

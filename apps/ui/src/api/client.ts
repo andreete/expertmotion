@@ -33,6 +33,29 @@ export interface ShellBridge {
   updateAction?: (action: 'download' | 'restart' | 'later' | 'check') => Promise<void> | void;
   /** FR-146 Play: opens a rendered Output with the system player (Output paths only, checked in main). */
   openPath?: (path: string) => Promise<void> | void;
+  /** Clipboard through the Shell (the renderer's own clipboard permission is denied). */
+  copyText?: (text: string) => Promise<boolean>;
+  readClipboardText?: () => Promise<string>;
+}
+
+const shellBridge = (): ShellBridge | undefined => (typeof window !== 'undefined' ? window.expertmotion : undefined);
+/** Copies text; resolves true only when it really reached the clipboard (Shell bridge, else the browser API in development). */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    const b = shellBridge();
+    if (b?.copyText) return await b.copyText(text);
+    if (typeof navigator !== 'undefined' && navigator.clipboard) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* fall through */ }
+  return false;
+}
+/** Reads clipboard text for an explicit Paste click; '' when unavailable. */
+export async function readClipboardText(): Promise<string> {
+  try {
+    const b = shellBridge();
+    if (b?.readClipboardText) return await b.readClipboardText();
+    if (typeof navigator !== 'undefined' && navigator.clipboard) return await navigator.clipboard.readText();
+  } catch { /* fall through */ }
+  return '';
 }
 /** Shell updater state (FR-152, FR-162). */
 export interface UpdateState {

@@ -61,6 +61,9 @@ export const IPC = {
   updateAction: 'em:update-action',
   /** FR-146 Play: open a rendered Output with the system player (media extensions only). */
   openPath: 'em:open-path',
+  /** Clipboard through main (renderer clipboard permissions stay denied, SEC-029): write any short text; read only on a click. */
+  copyText: 'em:copy-text',
+  readClipboardText: 'em:read-clipboard-text',
 } as const;
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
 
@@ -69,7 +72,7 @@ export type IpcChannel = (typeof IPC)[keyof typeof IPC];
  * `pickSavePath` is the save dialog required by the Desktop Shell brief; see README "Bridge surface".
  */
 export const BRIDGE_KEYS = ['getBootstrap', 'pickFiles', 'pickFolder', 'pickSavePath', 'openFolder', 'openExternal', 'getPathsForFiles', 'onServiceState',
-  'onUpdateState', 'getUpdateState', 'updateAction', 'openPath'] as const;
+  'onUpdateState', 'getUpdateState', 'updateAction', 'openPath', 'copyText', 'readClipboardText'] as const;
 /** Update actions the Editor may request (FR-152); anything else is ignored by main. */
 export const UPDATE_ACTIONS = ['download', 'restart', 'later', 'check'] as const;
 export type UpdateAction = (typeof UPDATE_ACTIONS)[number];

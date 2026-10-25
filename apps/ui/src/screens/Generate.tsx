@@ -13,6 +13,7 @@ import type { GeneratorJobDto, GeneratorKind, GeneratorModelDto } from '../api/t
 import { Badge, Button, ErrorBox, Field, Modal, Progress, cx, inputCls } from '../components/ui.js';
 import { GENERATOR_MODEL, useGeneratorCards } from '../library/Generators.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
+import { copyText } from '../api/client.js';
 
 type Page = { text: string; startMs: number; durationMs: number; tokens: Array<{ text: string; fromMs: number; toMs: number }> };
 const WEEK_MS = 7 * 24 * 3_600_000;
@@ -132,7 +133,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
     } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); }
   };
   const remove = async (j: GeneratorJobDto) => { try { await runtime.api.deleteGeneratorJob(j.id); setHistory((h) => h.filter((x) => x.id !== j.id)); if (job?.id === j.id) setJob(null); } catch (e) { actions.error(e); } };
-  const copy = (text: string, what: string) => { void navigator.clipboard?.writeText(text).catch(() => undefined); setCopied(what); };
+  const copy = (text: string, what: string) => { void copyText(text).then((ok) => { if (ok) setCopied(what); }); };
   const saveOutput = async () => {
     if (!job || !candidate) return;
     try { const o = await runtime.api.saveGeneratorOutput(job.id, candidate); setSaved(o.fileName); actions.toast('success', 'ui.scr.generate.saved', { name: o.fileName }); } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); }

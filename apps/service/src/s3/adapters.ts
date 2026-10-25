@@ -76,15 +76,18 @@ export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof 
       const j = await getJson(fetchFn, `${OPENROUTER}/models`, authHeaders(p, key), { timeoutMs: 30_000 }) as { data?: unknown[] };
       if (!Array.isArray(j?.data)) throw new Error('bad shape');
       return j.data.flatMap((m) => {
-        const r = m as { id?: unknown; name?: unknown; context_length?: unknown; pricing?: { prompt?: unknown; completion?: unknown }; supported_parameters?: unknown; architecture?: { input_modalities?: unknown } };
+        const r = m as { id?: unknown; name?: unknown; created?: unknown; context_length?: unknown; pricing?: { prompt?: unknown; completion?: unknown }; supported_parameters?: unknown; architecture?: { input_modalities?: unknown; output_modalities?: unknown } };
         if (typeof r.id !== 'string') return [];
+        // The agents need text answers: image/audio-generating models are not usable as chat models, so they are not listed.
+        const outMods = Array.isArray(r.architecture?.output_modalities) ? r.architecture!.output_modalities.map(String) : null;
+        if (outMods && !(outMods.length === 1 && outMods[0] === 'text')) return [];
         // Unknown stays unknown (FR-114): no `supported_parameters` / `input_modalities` in the response → null, never a guess.
         const sp = Array.isArray(r.supported_parameters) ? r.supported_parameters.map(String) : null;
         const mods = Array.isArray(r.architecture?.input_modalities) ? r.architecture!.input_modalities.map(String) : null;
         const ctxLen = num(r.context_length);
         return [{ modelId: r.id, label: str(r.name, r.id), contextLength: ctxLen === null ? null : Math.trunc(ctxLen), toolCalling: sp ? sp.includes('tools') : null,
           structuredOutput: sp ? sp.includes('response_format') || sp.includes('structured_outputs') : null, streaming: true, imageInput: mods ? mods.includes('image') : null,
-          pricePerMInput: perM(r.pricing?.prompt), pricePerMOutput: perM(r.pricing?.completion) }];
+          pricePerMInput: perM(r.pricing?.prompt), pricePerMOutput: perM(r.pricing?.completion), created: num(r.created) === null ? null : Math.trunc(num(r.created)!) }];
       });
     });
     case 'openai': return wrap(async () => {

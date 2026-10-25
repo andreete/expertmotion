@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nameHint, rankForTiers, recommendedFor, resolveModelTiers, tierCandidates, tierOfModel, type TierCapabilityRow } from '../src/index.js';
+import { nameHint, rankForTiers, resolveFreeModel, recommendedFor, resolveModelTiers, tierCandidates, tierOfModel, type TierCapabilityRow } from '../src/index.js';
 
 const row = (modelId: string, o: Partial<TierCapabilityRow> = {}): TierCapabilityRow => ({
   modelId, label: modelId, contextLength: 128_000, toolCalling: true, structuredOutput: true, imageInput: true, pricePerMInput: 1, pricePerMOutput: 1, ...o,
@@ -9,18 +9,18 @@ describe('LLM model tiers (FR-115)', () => {
   it('Fast = cheapest, Best = most expensive, Balanced = middle of the JSON-capable rows', () => {
     const rows = [row('mid', { pricePerMInput: 0.4, pricePerMOutput: 1.6 }), row('top', { pricePerMInput: 3, pricePerMOutput: 15 }), row('cheap', { pricePerMInput: 0.04, pricePerMOutput: 0.1 }),
       row('nojson', { structuredOutput: false, pricePerMInput: 0, pricePerMOutput: 0 }), row('unknown', { structuredOutput: null, pricePerMInput: 0.01, pricePerMOutput: 0.01 })];
-    expect(resolveModelTiers(rows)).toEqual({ fast: 'cheap', balanced: 'mid', best: 'top' });
+    expect(resolveModelTiers(rows)).toEqual({ free: null, fast: 'cheap', balanced: 'mid', best: 'top' });
   });
   it('is deterministic and independent of input order', () => {
     const rows = [row('a', { pricePerMInput: 1, pricePerMOutput: 2 }), row('b', { pricePerMInput: 2, pricePerMOutput: 2 }), row('c', { pricePerMInput: 5, pricePerMOutput: 5 }), row('d', { pricePerMInput: 9, pricePerMOutput: 9 })];
     const r1 = resolveModelTiers(rows); const r2 = resolveModelTiers([...rows].reverse());
     expect(r1).toEqual(r2);
-    expect(r1).toEqual({ fast: 'a', balanced: 'b', best: 'd' });
+    expect(r1).toEqual({ free: null, fast: 'a', balanced: 'b', best: 'd' });
   });
   it('falls back to rows not known to fail when the provider reports no capability facts, ranked by name', () => {
     const anthropic = ['claude-opus-4-1', 'claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-sonnet-4', 'claude-3-5-haiku'].map((id) =>
       row(id, { structuredOutput: null, toolCalling: null, imageInput: null, contextLength: null, pricePerMInput: null, pricePerMOutput: null }));
-    expect(resolveModelTiers(anthropic)).toEqual({ fast: 'claude-haiku-4-5', balanced: 'claude-sonnet-4-5', best: 'claude-opus-4-1' });
+    expect(resolveModelTiers(anthropic)).toEqual({ free: null, fast: 'claude-haiku-4-5', balanced: 'claude-sonnet-4-5', best: 'claude-opus-4-1' });
     expect(nameHint(row('gemini-2.5-flash-lite'))).toBe(0);
     expect(nameHint(row('gemini-2.5-flash'))).toBe(1);
     expect(nameHint(row('gemini-2.5-pro'))).toBe(3);
@@ -33,9 +33,9 @@ describe('LLM model tiers (FR-115)', () => {
     expect(recommendedFor(rows[1]!)).toEqual(['editor']);
   });
   it('an empty or JSON-incapable table resolves to no model; one row gives every tier that model', () => {
-    expect(resolveModelTiers([])).toEqual({ fast: null, balanced: null, best: null });
-    expect(resolveModelTiers([row('n', { structuredOutput: false })])).toEqual({ fast: null, balanced: null, best: null });
-    expect(resolveModelTiers([row('one')])).toEqual({ fast: 'one', balanced: 'one', best: 'one' });
+    expect(resolveModelTiers([])).toEqual({ free: null, fast: null, balanced: null, best: null });
+    expect(resolveModelTiers([row('n', { structuredOutput: false })])).toEqual({ free: null, fast: null, balanced: null, best: null });
+    expect(resolveModelTiers([row('one')])).toEqual({ free: null, fast: 'one', balanced: 'one', best: 'one' });
   });
   it('tierOfModel maps a stored id back to its tier, or null for an Advanced pick', () => {
     const rows = [row('cheap', { pricePerMInput: 0.1, pricePerMOutput: 0.1 }), row('mid'), row('top', { pricePerMInput: 9, pricePerMOutput: 9 }), row('other', { structuredOutput: false })];
@@ -46,5 +46,17 @@ describe('LLM model tiers (FR-115)', () => {
     expect(tierOfModel(rows, null)).toBeNull();
     expect(tierOfModel([row('one')], 'one')).toBe('balanced');
     expect(rankForTiers(rows.slice(0, 3)).map((r) => r.modelId)).toEqual(['cheap', 'mid', 'top']);
+  });
+});
+
+describe('Free tier (OpenRouter :free models)', () => {
+  const r = (modelId: string, over: Partial<TierCapabilityRow> = {}): TierCapabilityRow => ({ modelId, label: modelId, contextLength: 128_000, toolCalling: true, structuredOutput: true, imageInput: false, pricePerMInput: 0, pricePerMOutput: 0, ...over });
+  it('picks a free JSON-capable model from a known publisher, newest first; none → null', () => {
+    const rows = [r('startup/x:free', { created: 300 }), r('google/gemma-4:free', { created: 100 }), r('nvidia/nemotron-super:free', { created: 200 }),
+      r('nvidia/nemotron-safety:free', { created: 400 }), r('qwen/q:free', { created: 500, structuredOutput: false }), r('openai/gpt-x', { pricePerMInput: 1, pricePerMOutput: 2 })];
+    expect(resolveFreeModel(rows)).toBe('nvidia/nemotron-super:free');
+    expect(resolveModelTiers(rows).free).toBe('nvidia/nemotron-super:free');
+    expect(resolveFreeModel([r('openai/gpt-x', { pricePerMInput: 1, pricePerMOutput: 2 })])).toBeNull();
+    expect(tierOfModel(rows, 'nvidia/nemotron-super:free')).toBe('free');
   });
 });

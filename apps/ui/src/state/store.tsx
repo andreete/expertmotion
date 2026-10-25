@@ -532,8 +532,9 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         try {
           const [c, a] = await Promise.all([api.listConnections(), api.getAssignments()]); dispatch({ type: 'providers', connections: c.items, assignments: a });
           // Tier names ("Balanced") need the assigned connection's cached Capability Table (R-095 reads the cache, no provider call).
-          for (const cid of new Set([a.brainstorm?.connectionId, a.editor?.connectionId].filter((x): x is string => Boolean(x))))
-            if (!stateRef.current.capabilities[cid]) void api.connectionModels(cid).then((r) => dispatch({ type: 'capabilities', connectionId: cid, rows: r.items })).catch(() => undefined);
+          // Assigned connections plus every connection whose cached table is still empty (an Add may have raced the model fetch).
+          for (const cid of new Set([a.brainstorm?.connectionId, a.editor?.connectionId, ...c.items.map((x) => x.id)].filter((x): x is string => Boolean(x))))
+            if (!stateRef.current.capabilities[cid]?.length) void api.connectionModels(cid).then((r) => dispatch({ type: 'capabilities', connectionId: cid, rows: r.items })).catch(() => undefined);
         } catch (e) { error(e); }
       },
       async addConnection(provider, secret, label) {

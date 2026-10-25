@@ -226,9 +226,9 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     expect(qwen.textContent).toMatch(/32\s768/);                      // context column
     expect(qwen.textContent).toContain('—');                          // no image input
     await act(async () => { fireEvent.click(qwen); });
-    // tier names, not model ids: Qwen is the Editor's cheapest JSON-capable model (Fast); the raw id stays in the title
+    // an exact (Advanced) pick outside the tiers shows the model's name: Anthropic/OpenAI/Google models are the tier candidates here
     await waitFor(() => { if (!el('agent.editor.footer.model')?.querySelector('[title="qwen/qwen-2.5-7b-instruct"]')) throw new Error('editor not switched'); });
-    expect(el('agent.editor.footer.model')?.textContent).toBe('Fast ▾');
+    expect(el('agent.editor.footer.model')?.textContent).toBe('Qwen 2.5 7B ▾');
     expect(el('agent.brainstorm.footer.model')?.querySelector('[title]')?.getAttribute('title')).toBe('openai/gpt-4.1-mini');
     expect(el('agent.brainstorm.footer.model')?.textContent).not.toContain('openai/');
     // attach an image from disk: > 10 MB → EM-1002; a small PNG → EM-4307 for the text-only model

@@ -16,6 +16,8 @@
  *   getUpdateState()           → UpdateState
  *   updateAction(action)       → void       (download | restart | later | check; Creator consent, checked in main)
  *   openPath(path)             → void       (play a rendered Output with the system player; media files only)
+ *   copyText(text)             → boolean    (system clipboard via main; true when it holds the text)
+ *   readClipboardText()        → string     (system clipboard text, ≤ 8 KB; used by the licence Paste button)
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from './lib/constants.js';
@@ -74,6 +76,8 @@ const api = {
   getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke(IPC.getUpdateState) as Promise<UpdateState>,
   updateAction: (action: 'download' | 'restart' | 'later' | 'check'): Promise<void> => ipcRenderer.invoke(IPC.updateAction, action) as Promise<void>,
   openPath: (targetPath: string): Promise<void> => ipcRenderer.invoke(IPC.openPath, targetPath) as Promise<void>,
+  copyText: (text: string): Promise<boolean> => ipcRenderer.invoke(IPC.copyText, text) as Promise<boolean>,
+  readClipboardText: (): Promise<string> => ipcRenderer.invoke(IPC.readClipboardText) as Promise<string>,
 } as const;
 
 contextBridge.exposeInMainWorld('expertmotion', Object.freeze(api));

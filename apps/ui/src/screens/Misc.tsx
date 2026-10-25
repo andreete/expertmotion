@@ -1,7 +1,7 @@
 // Diagnostics (scr.diagnostics), About (scr.about), offline Help (scr.help), Backup/Restore (scr.backup), shortcut sheet, confirmation modal.
 import { useEffect, useState } from 'react';
 import { Copy, ShieldCheck } from 'lucide-react';
-import { DOCS_URL } from '../api/client.js';
+import { copyText, DOCS_URL } from '../api/client.js';
 import type { RecentCodeDto } from '../api/types.js';
 import { useStore } from '../state/store.js';
 import { ExternalLink } from '../components/ExternalLink.js';
@@ -24,7 +24,7 @@ export function DiagnosticsScreen({ onClose }: { onClose: () => void }) {
   useEffect(() => { runtime.api.diagnosticsCodes(50).then((r) => setCodes(r.items)).catch(() => setCodes([])); }, [runtime]);
   const h = state.health;
   const lic = licenceView(state.licence);
-  const copyPath = (p: string) => { void navigator.clipboard?.writeText(p).catch(() => undefined); setCopied(true); };
+  const copyPath = (p: string) => { void copyText(p).then(setCopied); };
   const makeBundle = async () => {
     setError(null); setCopied(false);
     try { const b = await runtime.api.diagnosticsBundle(Boolean(state.settings?.diagnosticsIncludeStructure)); setBundle(b); copyPath(b.path); }   // FR-150: writes the zip and copies its path
