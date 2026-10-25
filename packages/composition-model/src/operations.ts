@@ -1,4 +1,4 @@
-// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (41 ops incl. op:audio.setFades, ADR-020).
+// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (47 ops: ADR-020 additions, ADR-027 element timing/layer).
 // test/operations.test.ts fails if this table and the document disagree.
 import { z } from 'zod';
 import { CaptionPage, Hex, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
@@ -19,6 +19,7 @@ export type OperationT = z.infer<typeof Operation>;
 const Params = z.record(z.string(), z.unknown());
 const ms = z.number().int().min(0);
 const dur = z.number().int().min(100);
+const lane = z.number().int().min(0).max(999);                  // ADR-027 layer / audio lane
 const NamedPosition = z.enum(['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 const TextStyle = z.object({
   fontFamily: z.string().min(1).max(100).optional(), fontSize: z.number().min(16).max(200).optional(), weight: z.number().int().min(100).max(900).optional(),
@@ -40,7 +41,7 @@ export const OPERATIONS = {
   'op:clip.setFit': def({ objectFit: z.enum(['cover', 'contain']), crop: z.object({ left: z.number().min(0).max(1), right: z.number().min(0).max(1), top: z.number().min(0).max(1), bottom: z.number().min(0).max(1) }).strict().optional() }, ['clip'], 'scalar'),
   'op:transition.set': def({ presetId: PresetId, durationMs: z.number().int().min(100).max(2000), timing: z.enum(['linear', 'spring']).default('linear'), params: Params.optional() }, ['cut'], 'exclusive-group'),
   'op:transition.clear': def({}, ['cut'], null),
-  'op:text.add': def({ text: z.string().min(1).max(500), variant: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), styleOverrides: TextStyle.optional() }, null, 'list'),
+  'op:text.add': def({ text: z.string().min(1).max(500), variant: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), styleOverrides: TextStyle.optional(), layer: lane.optional() }, null, 'list'),
   'op:text.setContent': def({ text: z.string().min(1).max(500) }, ['text'], 'scalar'),
   // FR-025: `variant` re-applies a text variant to an existing layer (variantId, variant position; size/weight/align follow the variant).
   'op:text.setStyle': def({ ...TextStyle.shape, variant: PresetId.optional() }, ['text'], 'scalar'),
@@ -59,13 +60,18 @@ export const OPERATIONS = {
   'op:effect.add': def({ presetId: PresetId, params: Params.optional() }, ['clip'], 'list'),
   'op:effect.remove': def({ presetId: PresetId }, ['clip'], null),
   'op:effect.setParams': def({ presetId: PresetId, params: Params }, ['clip'], 'scalar'),
-  'op:shape.add': def({ presetId: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), fill: Hex.optional(), stroke: Hex.optional(), strokeWidth: z.number().min(0).max(100).optional(), motionId: PresetId.optional(), params: Params.optional() }, null, 'list'),
+  'op:shape.add': def({ presetId: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), fill: Hex.optional(), stroke: Hex.optional(), strokeWidth: z.number().min(0).max(100).optional(), motionId: PresetId.optional(), params: Params.optional(), layer: lane.optional() }, null, 'list'),
   'op:shape.remove': def({}, ['shape'], null, true),
   // ADR-020 addition (Stage 3): image overlays (FR-029 "Insert Image", logo/product photo). size = width in u; height follows the image aspect.
-  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional() }, null, 'list'),
+  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional(), layer: lane.optional() }, null, 'list'),
   'op:overlay.remove': def({}, ['image'], null, true),
   // FR-028 addition (Stage 3): opacity of an overlay image or a Shape on the overlay Track.
   'op:overlay.setOpacity': def({ opacity: z.number().min(0).max(1) }, ['image', 'shape'], 'scalar'),
+  // ADR-027 (Timeline drag/trim/lanes): start and length of any text, image, shape or audio layer; optionally its lane at once
+  // (one op per Timeline gesture). `trimBeforeMs` (audio only) moves the source offset with a left-edge trim.
+  'op:element.setTiming': def({ atMs: ms, durationMs: dur, trimBeforeMs: ms.optional(), layer: lane.optional() }, ['text', 'image', 'shape', 'audio'], 'scalar'),
+  // ADR-027: stacking order. Exactly one of `layer` (absolute lane) or `move`; audio has lanes but no stacking (`layer` or up/down only).
+  'op:element.setLayer': def({ layer: lane.optional(), move: z.enum(['up', 'down', 'front', 'back']).optional() }, ['text', 'image', 'shape', 'audio'], 'scalar'),
   'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),
   'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, null, 'list'),
   'op:audio.setDucking': def({ presetId: PresetId, params: Params.optional() }, ['audio'], 'exclusive-group'),
@@ -114,6 +120,8 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:audio.setDucking': return [`${el}.ducking`];
     case 'op:audio.setFades': return fields(['fadeInMs', 'fadeOutMs']).map((f) => `${el}.${f}`);
     case 'op:overlay.setOpacity': return [`${el}.opacity`];
+    case 'op:element.setTiming': return [`${el}.timing`, ...(a['layer'] === undefined ? [] : [`${el}.layer`])];
+    case 'op:element.setLayer': return [`${el}.layer`];
     case 'op:theme.set': return fields(['paletteId', 'fontPairId', 'defaultEasingId']).map((f) => `theme.${f}`);
     case 'op:theme.setTextDefaults': return fields(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity']).map((f) => `theme.textDefaults.${f}`);
     case 'op:output.setRatio': return ['project.ratio'];

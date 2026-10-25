@@ -7,6 +7,7 @@ import { CompositionModel, type AssetFacts, type AudioLayerT, type CaptionPageT,
 import { frameInUnits } from './units.js';
 import { detectRatio } from './ratio.js';
 import { diffModels, type ElementDiff } from './diff.js';
+import { freeAudioLane, frontLayerFor, moveVisual, normalizeLanes, placeAudio, placeVisual, visualItems, visualSpan, type VisualItem } from './layers.js';
 
 export interface GeneratedResult { kind: 'voice' | 'music' | 'thumbnail' | 'captions'; assetId?: string; pages?: CaptionPageT[] }
 export interface ApplyContext { assets: readonly AssetFacts[]; tier: Tier; newId: () => string; jobs?: Readonly<Record<string, GeneratedResult>> }
@@ -24,6 +25,7 @@ export function applyOperations(model: CompositionModelT, ops: readonly Operatio
     ops.forEach((op, i) => {
       const firstBefore = m.tracks.video[0]?.assetId;
       applyOne(m, op, ctx, `ops[${i}]`, warnings);
+      normalizeLanes(m);                                                             // ADR-027: lanes stay dense after every op
       if (m.tracks.video[0]?.assetId !== firstBefore) followFirstClip(m, ctx);      // FR-088: Auto re-checks when the first Clip changes
     });
   } catch (e) {
@@ -60,6 +62,23 @@ function asset(ctx: ApplyContext, id: string, kinds: AssetFacts['kind'][], path:
   if (a!.status !== 'ready') stop('EM-1301', `Asset ${id} is not ready yet.`, `${path}.args.assetId`);
   if (!kinds.includes(a!.kind)) stop('EM-2102', `Asset ${id} is a ${a!.kind}; expected ${kinds.join(' or ')}.`, `${path}.args.assetId`);
   return a!;
+}
+/** ADR-027: a new visual item goes in front of everything it overlaps (or on the asked lane, by the lane rule). */
+function addVisual(m: CompositionModelT, item: VisualItem, layer: number | undefined): void {
+  item.layer = frontLayerFor(visualItems(m), visualSpan(item), item);
+  if ('kind' in item) m.tracks.overlay.push(item); else m.tracks.text.push(item);
+  if (layer !== undefined) placeVisual(visualItems(m), item, layer);
+}
+function addAudio(m: CompositionModelT, layer: AudioLayerT): void {
+  m.tracks.audio.push(layer);
+  layer.lane = freeAudioLane(m.tracks.audio, layer);
+}
+/** The text, image or shape a target names (EM-2203 when gone). */
+function visualTarget(m: CompositionModelT, op: OperationT, path: string): VisualItem {
+  const t = needTarget(op, path);
+  const el = t.kind === 'text' ? m.tracks.text.find((x) => x.id === t.id) : m.tracks.overlay.find((o) => o.id === t.id && o.kind === t.kind);
+  if (!el) stop('EM-2203', `The ${t.kind} ${t.id ?? '(none)'} no longer exists.`, `${path}.target`);
+  return el!;
 }
 function needTarget(op: OperationT, path: string) {
   if (!op.target) stop('EM-2102', `${op.op} needs a target.`, `${path}.target`);
@@ -178,8 +197,8 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const position: PositionT = a.position === undefined ? variantPosition(m, a.variant) : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
       const motionId = vp!.data?.['motionId'];
       const motion = typeof motionId === 'string' ? motionFrom(motionId, getPreset(motionId)!.defaults as Record<string, unknown>) : null;
-      const layer: TextLayerT = { id: ctx.newId(), variantId: a.variant, text: a.text, timing: { atMs: a.atMs, durationMs: a.durationMs }, position, style: { ...(a.styleOverrides ?? {}) }, effect: null, motion };
-      m.tracks.text.push(layer);
+      const layer: TextLayerT = { id: ctx.newId(), variantId: a.variant, text: a.text, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position, style: { ...(a.styleOverrides ?? {}) }, effect: null, motion };
+      addVisual(m, layer, a.layer);
       return;
     }
     case 'op:text.setContent': case 'op:text.setStyle': case 'op:text.setEffect': case 'op:text.setTiming': case 'op:text.remove': {
@@ -199,7 +218,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
         t.style = { ...t.style, ...style };
       }
       if (op.op === 'op:text.setEffect') t.effect = { presetId: a.presetId, params: preset(a.presetId, 'texteffect', a.params, ctx, path, warnings) };
-      if (op.op === 'op:text.setTiming') t.timing = { atMs: a.atMs, durationMs: a.durationMs };
+      if (op.op === 'op:text.setTiming') { t.timing = { atMs: a.atMs, durationMs: a.durationMs }; placeVisual(visualItems(m), t, t.layer); }   // ADR-027 lane rule
       if (op.op === 'op:text.remove') m.tracks.text.splice(i, 1);
       return;
     }
@@ -250,7 +269,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const accent = String(getPreset(m.theme.paletteId)?.data?.['accent'] ?? '#E8913A');
       const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
       const motion = typeof motionId === 'string' ? motionFrom(motionId, preset(motionId, 'motion', {}, ctx, path, warnings)) : null;
-      m.tracks.overlay.push({ kind: 'shape', id: ctx.newId(), presetId: a.presetId, timing: { atMs: a.atMs, durationMs: a.durationMs }, position: pos, size: { w: Number(size), h: Number(size) }, fill: typeof fill === 'string' ? fill : accent, ...(typeof stroke === 'string' ? { stroke } : {}), ...(Number(strokeWidth) > 0 ? { strokeWidth: Number(strokeWidth) } : {}), params: rest, motion });
+      addVisual(m, { kind: 'shape', id: ctx.newId(), presetId: a.presetId, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position: pos, size: { w: Number(size), h: Number(size) }, fill: typeof fill === 'string' ? fill : accent, ...(typeof stroke === 'string' ? { stroke } : {}), ...(Number(strokeWidth) > 0 ? { strokeWidth: Number(strokeWidth) } : {}), params: rest, motion }, a.layer);
       return;
     }
     case 'op:shape.remove': m.tracks.overlay.splice(findIndex(m.tracks.overlay, needTarget(op, path).id, 'shape', path), 1); return;
@@ -259,7 +278,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const w = Number(a.size ?? 480);
       const h = as.width && as.height ? Math.round((w * as.height) / as.width) : w;
       const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
-      m.tracks.overlay.push({ kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, motion: null, effects: [] });
+      addVisual(m, { kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, layer: 0, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, motion: null, effects: [] }, a.layer);
       return;
     }
     case 'op:overlay.remove': {
@@ -274,12 +293,47 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       if (!el) stop('EM-2203', `The ${tg.kind} ${tg.id ?? '(none)'} no longer exists.`, `${path}.target`);
       el!.opacity = a.opacity; return;
     }
+    case 'op:element.setTiming': {
+      // ADR-027: a Timeline move / trim. The item keeps its lane when it is free at the new time, else goes to the lane above
+      // (or a new lane there); `layer` asks for a lane at once (drag across lanes) by the same rule.
+      const t = needTarget(op, path);
+      if (t.kind === 'audio') {
+        const l = m.tracks.audio[findIndex(m.tracks.audio, t.id, 'audio', path)]!;
+        const durationMs: number = a.durationMs;
+        l.atMs = a.atMs; l.durationMs = durationMs;
+        if (a.trimBeforeMs !== undefined) l.trimBeforeMs = a.trimBeforeMs;
+        const src = ctx.assets.find((x) => x.id === l.assetId)?.durationMs;
+        if (!l.loop && src !== undefined && l.trimBeforeMs + durationMs > src + 1) stop('EM-2306', `The audio layer needs ${l.trimBeforeMs + durationMs} ms of ${src} ms source audio.`, `${path}.args`);
+        for (const f of ['fadeInMs', 'fadeOutMs'] as const) l[f] = Math.min(l[f], Math.floor(durationMs / 2));   // fades never exceed half the layer
+        placeAudio(m.tracks.audio, l, a.layer ?? l.lane);
+        return;
+      }
+      if (a.trimBeforeMs !== undefined) stop('EM-2102', 'trimBeforeMs applies to audio layers only.', `${path}.args.trimBeforeMs`);
+      const el = visualTarget(m, op, path);
+      el.timing = { atMs: a.atMs, durationMs: a.durationMs };
+      placeVisual(visualItems(m), el, a.layer ?? el.layer);
+      return;
+    }
+    case 'op:element.setLayer': {
+      if ((a.layer === undefined) === (a.move === undefined)) stop('EM-2102', 'op:element.setLayer needs exactly one of layer or move.', `${path}.args`);
+      const t = needTarget(op, path);
+      if (t.kind === 'audio') {
+        // Audio lanes have no stacking order: a lane number, or one row up (towards the video Track) / down.
+        if (a.move === 'front' || a.move === 'back') stop('EM-2102', 'Audio layers have no front or back; use up, down or a lane number.', `${path}.args.move`);
+        const l = m.tracks.audio[findIndex(m.tracks.audio, t.id, 'audio', path)]!;
+        placeAudio(m.tracks.audio, l, a.layer ?? (a.move === 'up' ? Math.max(0, l.lane - 1) : l.lane + 1));
+        return;
+      }
+      const el = visualTarget(m, op, path);
+      if (a.layer !== undefined) placeVisual(visualItems(m), el, a.layer); else moveVisual(visualItems(m), el, a.move);
+      return;
+    }
     case 'op:audio.addBed': case 'op:audio.addLayer': {
       const as = asset(ctx, a.assetId, ['audio'], path);
       const layer: AudioLayerT = op.op === 'op:audio.addBed'
-        ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, trimBeforeMs: 0, volume: a.volume, loop: a.loop, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: a.duckingPresetId ? { presetId: a.duckingPresetId, params: preset(a.duckingPresetId, 'audio', {}, ctx, path, warnings) } : null }
-        : { id: ctx.newId(), assetId: as.id, role: a.role, atMs: a.atMs, ...(as.durationMs ? { durationMs: as.durationMs } : {}), trimBeforeMs: 0, volume: a.volume, loop: false, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: null };
-      m.tracks.audio.push(layer);
+        ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, lane: 0, trimBeforeMs: 0, volume: a.volume, loop: a.loop, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: a.duckingPresetId ? { presetId: a.duckingPresetId, params: preset(a.duckingPresetId, 'audio', {}, ctx, path, warnings) } : null }
+        : { id: ctx.newId(), assetId: as.id, role: a.role, atMs: a.atMs, ...(as.durationMs ? { durationMs: as.durationMs } : {}), lane: 0, trimBeforeMs: 0, volume: a.volume, loop: false, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: null };
+      addAudio(m, layer);
       return;
     }
     case 'op:audio.setDucking': case 'op:audio.setFades': case 'op:audio.remove': {
@@ -329,13 +383,13 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
         // FR-103: Insert as overlay — the chosen candidate becomes an image overlay at atMs (same defaults as op:overlay.addImage).
         const img = asset(ctx, job!.assetId ?? '', ['image'], path);
         const w = 480, h = img.width && img.height ? Math.round((w * img.height) / img.width) : w;
-        m.tracks.overlay.push({ kind: 'image', id: ctx.newId(), assetId: img.id, timing: { atMs: a.atMs ?? 0, durationMs: IMAGE_DEFAULT_MS }, position: { x: 0, y: 0 }, size: { w, h }, objectFit: 'contain', opacity: 1, motion: null, effects: [] });
+        addVisual(m, { kind: 'image', id: ctx.newId(), assetId: img.id, timing: { atMs: a.atMs ?? 0, durationMs: IMAGE_DEFAULT_MS }, layer: 0, position: { x: 0, y: 0 }, size: { w, h }, objectFit: 'contain', opacity: 1, motion: null, effects: [] }, undefined);
         return;
       }
       const as = asset(ctx, job!.assetId ?? '', ['audio'], path);
-      m.tracks.audio.push(a.kind === 'music'
-        ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, trimBeforeMs: 0, volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000, ducking: null }
-        : { id: ctx.newId(), assetId: as.id, role: 'voice', atMs: a.atMs ?? 0, ...(as.durationMs ? { durationMs: as.durationMs } : {}), trimBeforeMs: 0, volume: 1, loop: false, fadeInMs: 0, fadeOutMs: 0, ducking: null });
+      addAudio(m, a.kind === 'music'
+        ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, lane: 0, trimBeforeMs: 0, volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000, ducking: null }
+        : { id: ctx.newId(), assetId: as.id, role: 'voice', atMs: a.atMs ?? 0, ...(as.durationMs ? { durationMs: as.durationMs } : {}), lane: 0, trimBeforeMs: 0, volume: 1, loop: false, fadeInMs: 0, fadeOutMs: 0, ducking: null });
       return;
     }
   }

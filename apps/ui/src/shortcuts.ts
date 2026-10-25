@@ -51,6 +51,8 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
         document.querySelector<HTMLElement>(`[data-region="${region}"] button, [data-region="${region}"] input`)?.focus();
         return;
       }
+      // ADR-027: a focused editable Timeline bar owns ←/→ (nudge) and Alt+↑/↓ (lane); see Timeline.tsx onElementKey.
+      if ((k === 'ArrowLeft' || k === 'ArrowRight' || (e.altKey && (k === 'ArrowUp' || k === 'ArrowDown'))) && (e.target as HTMLElement).closest?.('[data-el="stage.timeline.element"][data-editable]')) return;
       switch (k) {
         case ' ': e.preventDefault(); player?.toggle(); break;
         case 'ArrowLeft': if ((e.target as HTMLElement).getAttribute?.('role') === 'radio' || (e.target as HTMLElement).getAttribute?.('role') === 'tab') return; e.preventDefault(); if (e.shiftKey) player?.seekMs(player.currentMs() - 1000); else player?.stepFrames(-1); break;

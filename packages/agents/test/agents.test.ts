@@ -20,6 +20,39 @@ function base(): CompositionModelT {
 const pick = (p: Partial<DesignPick>): DesignPick => ({ projectId: 'p1', source: 'ui', ...p });
 const intents = (m: CompositionModelT, p: Partial<DesignPick>) => { const r = createIntents(pick(p), { model: m, baseVersion: hashModel(m), newId }); if (!r.ok) throw new Error(JSON.stringify(r.issues)); return r.value; };
 
+describe('ADR-027 element edits (Timeline drag / trim / lanes) and the top-most text', () => {
+  const withLayers = () => { const r = applyOperations(base(), [
+    { op: 'op:overlay.addImage', args: { assetId: 'img', atMs: 0, durationMs: 4000 } }, { op: 'op:text.add', args: { text: 'Judul', variant: 'preset:text.title', atMs: 0, durationMs: 3000 } },
+    { op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId: 'mus' } }], { assets: [...ASSETS, { id: 'img', kind: 'image', status: 'ready', width: 10, height: 10 }], tier: 'T1', newId });
+    if (!r.ok) throw new Error(JSON.stringify(r.issues)); return r.value.model; };
+  it('a drag (time + lane) is one compiled op:element.setTiming intent with the timing and layer keys', () => {
+    const m = withLayers(); const img = m.tracks.overlay[0]!.id;
+    const [i] = intents(m, { elementEdit: { kind: 'image', id: img, atMs: 1000, durationMs: 4000, layer: 1 } });
+    expect(i).toMatchObject({ category: 'asset', needsInterpretation: false, propertyKey: `image:${img}.timing|image:${img}.layer`, resolvedTargets: [{ kind: 'image', id: img }], params: { targetLabel: 'image timing and layer' } });
+    const ops = compileIntents(JSON.parse(JSON.stringify([i])) as EditIntentT[], (x) => pickFromIntent(x), m);
+    expect(ops.ok && ops.value.map((o) => [o.op, o.target, o.args])).toEqual([['op:element.setTiming', { kind: 'image', id: img }, { atMs: 1000, durationMs: 4000, layer: 1 }]]);
+  });
+  it('a trim keeps the untouched side from the model; audio left-edge trims carry trimBeforeMs; a layer key is op:element.setLayer', () => {
+    const m = withLayers(); const t = m.tracks.text[0]!.id, bed = m.tracks.audio[0]!.id;
+    const c = compileIntents([...intents(m, { elementEdit: { kind: 'text', id: t, durationMs: 2000 } }), ...intents(m, { elementEdit: { kind: 'audio', id: bed, atMs: 1000, durationMs: 18_000, trimBeforeMs: 1000 } }),
+      ...intents(m, { elementEdit: { kind: 'text', id: t, move: 'down' } }), ...intents(m, { elementEdit: { kind: 'text', id: t, layer: 0 } })], (x) => pickFromIntent(x), m);
+    expect(c.ok && c.value.map((o) => [o.op, o.args])).toEqual([['op:element.setTiming', { atMs: 0, durationMs: 2000 }], ['op:element.setTiming', { atMs: 1000, durationMs: 18_000, trimBeforeMs: 1000 }],
+      ['op:element.setLayer', { move: 'down' }], ['op:element.setLayer', { layer: 0 }]]);
+    expect(intents(m, { elementEdit: { kind: 'text', id: t, move: 'down' } })[0]).toMatchObject({ category: 'text', propertyKey: `text:${t}.layer`, params: { targetLabel: 'text layer down' } });
+  });
+  it('gone elements and empty edits are refused', () => {
+    const m = withLayers();
+    expect(createIntents(pick({ elementEdit: { kind: 'shape', id: 'gone', move: 'up' } }), { model: m, baseVersion: 'h', newId })).toMatchObject({ ok: false, issues: [{ code: 'EM-2203' }] });
+    expect(createIntents(pick({ elementEdit: { kind: 'text', id: m.tracks.text[0]!.id } }), { model: m, baseVersion: 'h', newId })).toMatchObject({ ok: false, issues: [{ code: 'EM-2102' }] });
+  });
+  it('a motion pick with no clip under the playhead targets the front-most text there', () => {
+    const r = applyOperations(base(), [19_000, 19_000].map((atMs, k) => ({ op: 'op:text.add', args: { text: `T${k}`, variant: 'preset:text.title', atMs, durationMs: 1000 } })), { assets: ASSETS, tier: 'T1', newId });
+    if (!r.ok) throw new Error('fixture');
+    const m = r.value.model; const top = m.tracks.text.find((x) => x.layer === 1)!;
+    expect(resolveTargets(pick({ presetId: 'preset:motion.fade-in', playheadMs: 19_500 }), m)).toMatchObject({ ok: true, value: { targets: [{ kind: 'text', id: top.id }] } });
+  });
+});
+
 describe('Target Resolution (AI_WORKFLOW §4)', () => {
   it('transition with nothing selected → all cuts; selected clip → its following cut; < 2 clips → EM-2202', () => {
     const m = base();

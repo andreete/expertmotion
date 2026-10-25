@@ -4,6 +4,7 @@ import { fitText, issue, type Issue } from '@expertmotion/shared';
 import type { AssetFacts, CompositionModelT, Tier } from './schema.js';
 import { deriveTiming, MAX_DURATION_MS, MIN_DURATION_MS } from './timing.js';
 import { frameInUnits, SAFE_MARGIN_U } from './units.js';
+import { laneConflicts } from './layers.js';
 
 export interface ValidateContext { assets: readonly AssetFacts[]; tier: Tier }
 const MIN_TEXT_U = 34;                                              // book §4.5 "small ≥ 34"
@@ -106,6 +107,9 @@ export function validate(model: CompositionModelT, ctx: ValidateContext): Issue[
   // CM-010 resolution vs tier
   if (ctx.tier === 'T0' && (model.settings.resolution === '2k' || model.settings.resolution === '2160p'))
     out.push(issue('CM-010', `${model.settings.resolution} is not available on this computer; export will offer 1080p (EM-3105).`, 'warn', 'settings.resolution'));
+
+  // CM-012 (ADR-027) items on one lane do not overlap in time; apply never produces this, hand-made JSON can (render order stays defined)
+  for (const c of laneConflicts(model)) out.push(issue('CM-012', `${c.a} and ${c.b} overlap in time on ${c.track === 'audio' ? 'audio lane' : 'layer'} ${c.lane}.`, 'warn', c.track === 'audio' ? 'tracks.audio' : 'tracks'));
 
   // CM-011 unique ids
   const ids = [...v.map((c) => c.id), ...model.tracks.text.map((t) => t.id), ...model.tracks.overlay.map((o) => o.id), ...model.tracks.audio.map((a) => a.id)];

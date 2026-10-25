@@ -4,7 +4,7 @@
 |---|---|
 | Status | Baseline (new elements may be added; existing IDs never change meaning) |
 | Owner | UI/UX lead |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md, docs/assets/expertmotion-editor-mockup.png |
 | Used by | FRD.md, UI_UX_SPECIFICATION.md, EDITOR_INTERACTION_MODEL.md, TEST_PLAN.md, ONBOARDING_TOUR.md, ERROR_CATALOGUE.md |
 
@@ -40,13 +40,13 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 │   .thumb .label    │                                             │  .footer.model .footer.ctx│
 │   .badge.model     │ stage.timeline                              │  .handoff (→ Editor)      │
 │   .badge.gpu       │  stage.timeline.ruler  stage.timeline.head  │ agent.editor.panel        │
-│  (Home mode)       │  stage.timeline.track.video                 │  .thread .message         │
-│ lib.text.*         │  stage.timeline.track.overlay               │  .intentqueue             │
-│  (Tools mode)      │  stage.timeline.track.text                  │   .item .item.superseded  │
-│ lib.generator.card │  stage.timeline.track.caption               │   .item.restore .clear    │
-│                    │  stage.timeline.track.audio                 │  .plancard                │
+│  (Home mode)       │  stage.timeline.track.caption               │  .thread .message         │
+│ lib.text.*         │  stage.timeline.lane.new / .lane.layer (×n) │  .intentqueue             │
+│  (Tools mode)      │   (top row = front-most layer)              │   .item .item.superseded  │
+│ lib.generator.card │  stage.timeline.track.video                 │   .item.restore .clear    │
+│                    │  stage.timeline.lane.audio (×n) / .lane.new │  .plancard                │
 │ lib.assets.panel   │  stage.timeline.element                     │   .goal .step .risk .notes│
-│  lib.assets.drop   │   .clip .text .caption .audio .transition   │   .baseversion.stale      │
+│  lib.assets.drop   │   .clip .text .image .caption .audio .trans.│   .baseversion.stale      │
 │  lib.assets.card   │   .effect .background .shape .generated     │  .execute  .cancel        │
 │   .thumb .meta     │  stage.timeline.inspector                   │  .composer .send .attach  │
 │   .badge.sequence  │  stage.timeline.empty                       │  .footer.model .footer.ctx│
@@ -148,8 +148,14 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `stage.player.state.loading` / `.error` | (states) | Loading spinner / error card with recovery action. |
 | `stage.timeline` | rows under player | Timeline View container. |
 | `stage.timeline.ruler` / `.head` | (added) | Time ruler and playhead line. |
-| `stage.timeline.track.video` / `.overlay` / `.text` / `.caption` / `.audio` | three rows in mockup | One lane per Track. |
-| `stage.timeline.element` | (bars) | One Timeline Element; variants `.clip`, `.text`, `.caption`, `.audio`, `.transition`, `.effect`, `.background`, `.shape`, `.generated`. Click → selection + inspector. |
+| `stage.timeline.track.video` / `.caption` | rows in mockup | The video Track row and the caption row (captions render above every layer, so their row is the top row). |
+| `stage.timeline.lane.layer` | (added 2026-10-26, ADR-027) | One row per visual layer (texts, images, shapes), `data-layer="<n>"`, ordered front-most on top (CapCut order); between the caption row and the video Track. |
+| `stage.timeline.lane.audio` | (added 2026-10-26, ADR-027) | One row per audio lane, `data-lane="<n>"`, under the video Track (lane 0 nearest). |
+| `stage.timeline.lane.new` | (added 2026-10-26, ADR-027) | The empty lane above the top layer (`data-layer`) and below the last audio lane (`data-lane`): dropping a bar there opens a new lane; shows "Drop here for a new layer in front" while dragging. |
+| `stage.timeline.element.handle` | (added 2026-10-26, ADR-027) | Left / right trim handle inside a draggable bar (`data-edge="start|end"`): video Clips, texts, images, shapes, audio layers. |
+| `stage.timeline.ghost` | (added 2026-10-26, ADR-027) | Live drag ghost on the target row (`data-row`, `data-from-ms`, `data-to-ms`); the dragged bar is dimmed meanwhile. |
+| `stage.timeline.snap` | (added 2026-10-26, ADR-027) | Vertical snap guide at the playhead or edge the drag snapped to (`data-ms`); hidden while Alt is held. |
+| `stage.timeline.element` | (bars) | One Timeline Element; variants `.clip`, `.text`, `.image`, `.caption`, `.audio`, `.transition`, `.effect`, `.background`, `.shape`, `.generated`. Click → selection + inspector. Texts, images, shapes and audio carry `data-editable` and `data-lane` (drag, trim, ←/→ nudge, Alt+↑/↓ lane; IX-26). |
 | `stage.timeline.element.selected` | (state) | Selected element; Design Picks target it. |
 | `stage.timeline.inspector` | (added) | Read-only property sheet for the selected element, with "Ask Editor Agent to change" shortcut. |
 | `stage.timeline.quickparams` / `stage.timeline.quickparams.field` / `stage.timeline.quickparams.apply` | (added, P1) | FR-098 quick params under the inspector: transition duration, motion duration/delay, effect values; validated against the preset params schema (EM-2102 inline) before a Compile pick. |
@@ -419,10 +425,12 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 2. The cloud icons are repurposed to local Backup/Restore because Expertmotion has no cloud.
 3. The avatar is licence status because Expertmotion has no user accounts.
 4. "480p" in the mockup is treated as the draft preview quality, not an export preset (Master Project Prompt §13 lists 720p as the smallest export preset).
-5. The three timeline rows in the mockup become five Tracks (video, overlay, text, caption, audio).
+5. The three timeline rows in the mockup become five Tracks (video, overlay, text, caption, audio); since 2026-10-26 (ADR-027) the Timeline View draws them as lanes: captions, one row per layer (front-most on top), the video Track, audio lanes.
 6. Chat footers show the per-agent model and context usage; the top Model Bar shows the default Provider Connection.
 
 ## Retired ids
+
+Removed on 2026-10-26 with the layered lanes (Operator decision: CapCut-style timeline, ADR-027); the names are not reused: `stage.timeline.track.overlay`, `stage.timeline.track.text` (now one `stage.timeline.lane.layer` per layer, texts and overlays mixed by stacking order), `stage.timeline.track.audio` (now `stage.timeline.lane.audio` per lane).
 
 Removed on 2026-10-25 with the LLM tier pickers (Operator feedback: one searchable model table instead of Fast / Balanced / Best; FR-115); the names are not reused: `scr.providers.assign.brainstorm` / `scr.providers.assign.editor` (exact model selects), `scr.providers.assign.brainstorm.tier` / `scr.providers.assign.editor.tier` (tier radiogroups), `scr.providers.assign.tier.option`, `scr.providers.assign.tier.empty`, `scr.providers.assign.custom`, `scr.providers.assign.brainstorm.advanced` / `scr.providers.assign.editor.advanced` (Advanced disclosures), `agent.brainstorm.footer.model.tier` / `agent.editor.footer.model.tier` (footer tier buttons), `agent.brainstorm.footer.model.option` / `agent.editor.footer.model.option` (footer Advanced rows; now `….footer.model.picker.row`). Also removed on 2026-10-25 (Operator decision: every model selectable, Free / Paid category), not reused: `scr.providers.models.filter.free` and `agent.<agent>.footer.model.picker.filter.free` (now `….category.free`), `scr.providers.models.row.reason` and `agent.<agent>.footer.model.picker.row.reason` (disabled-row reason; now `….row.warn`).
 

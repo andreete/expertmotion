@@ -56,6 +56,11 @@ export function intentTitle(i: Pick<EditIntent, 'category' | 'presetId' | 'instr
     const v = out.kind === 'ratio' && out.value === 'custom' && out.customRatio ? `${out.customRatio.w}:${out.customRatio.h}` : String(out.value);
     return t(`ui.agent.intent.output.${out.kind}`, { value: v });
   }
+  const el = i.params['__elementEdit'] as { atMs?: number; layer?: number; move?: string } | undefined;
+  if (el) {                                                                     // ADR-027 Timeline drag / trim / lane / layer key
+    if (el.atMs !== undefined) return el.layer !== undefined ? t('ui.agent.intent.element.timinglayer', { n: el.layer + 1 }) : t('ui.agent.intent.element.timing');
+    return el.move ? t(`ui.agent.intent.element.move.${el.move}`) : t('ui.agent.intent.element.layer', { n: (el.layer ?? 0) + 1 });
+  }
   const ins = i.params['__insert'] as { count?: number } | undefined;
   if (ins && typeof ins.count === 'number') return t('ui.agent.intent.insert', { count: ins.count });   // FR-049 "Insert 3 clips"
   if (i.presetId) return `${cat} · ${getPreset(i.presetId)?.label[lang] ?? i.presetId}`;

@@ -3,7 +3,7 @@
 // (Design Picks really change the model); Compile uses packages/catalogue compileDefaults. Agent runs are scripted (no LLM).
 // This is a development and test harness, not a specification: the Local Service (apps/service) is the source of truth.
 import {
-  applyOperations, createEmptyModel, deriveTiming, hashModel, DEFAULT_SETTINGS,
+  applyOperations, createEmptyModel, deriveTiming, hashModel, topmostAt, DEFAULT_SETTINGS,
   type AssetFacts, type CompositionModelT, type ElementRefT, type OperationT, type ProjectSettingsT,
 } from '@expertmotion/composition-model';
 import { compileDefaults, getPreset, listPresets, type Category } from '@expertmotion/catalogue';
@@ -225,7 +225,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   function elementAt(model: CompositionModelT, kind: 'clip' | 'text', ms: number): string | undefined {
     const t = deriveTiming(model);
     if (kind === 'clip') return model.tracks.video.find((c) => { const w = t.elementWindows[c.id]; return w !== undefined && ms >= w.fromMs && ms < w.toMs; })?.id;
-    return model.tracks.text.find((x) => ms >= x.timing.atMs && ms < x.timing.atMs + x.timing.durationMs)?.id;
+    return topmostAt(model, ms, ['text'])?.id;                                           // ADR-027: the front-most text
   }
 
   function resolve(p: ProjectState, body: DesignPickInput): Resolution {
@@ -252,6 +252,18 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       if (!c) return { leaves: [], parentKey: '?', needsInterpretation: false, notices, reject: { code: 'EM-2203', message: 'That clip no longer exists.' } };
       if (e.toIndex !== undefined) return one(clip, `clip:${e.clipId}.order`, { op: 'op:clip.move', target: clip, args: { toIndex: e.toIndex } });
       return one(clip, `clip:${e.clipId}.trim`, { op: 'op:clip.setTrim', target: clip, args: { trimBeforeMs: e.trimBeforeMs ?? c.trimBeforeMs, durationMs: e.durationMs ?? c.durationMs } });
+    }
+    if (body.elementEdit) {                                                               // ADR-027 Timeline drag / trim / lane / layer key, as the Local Service
+      const e = body.elementEdit; const el: ElementRefT = { kind: e.kind, id: e.id };
+      const cur = e.kind === 'audio' ? model.tracks.audio.find((x) => x.id === e.id) : e.kind === 'text' ? model.tracks.text.find((x) => x.id === e.id) : model.tracks.overlay.find((x) => x.id === e.id && x.kind === e.kind);
+      if (!cur) return { leaves: [], parentKey: '?', needsInterpretation: false, notices, reject: { code: 'EM-2203', message: `That ${e.kind} no longer exists.` } };
+      const key = `${e.kind}:${e.id}`;
+      if (e.atMs !== undefined || e.durationMs !== undefined) {
+        const t = 'timing' in cur ? cur.timing : { atMs: cur.atMs, durationMs: cur.durationMs ?? Math.max(100, deriveTiming(model).durationMs - cur.atMs) };
+        const args = { atMs: e.atMs ?? t.atMs, durationMs: e.durationMs ?? t.durationMs, ...(e.trimBeforeMs !== undefined ? { trimBeforeMs: e.trimBeforeMs } : {}), ...(e.layer !== undefined ? { layer: e.layer } : {}) };
+        return one(el, e.layer !== undefined ? `${key}.timing|${key}.layer` : `${key}.timing`, { op: 'op:element.setTiming', target: el, args });
+      }
+      return one(el, `${key}.layer`, { op: 'op:element.setLayer', target: el, args: e.move ? { move: e.move } : { layer: e.layer ?? 0 } });
     }
     if (body.output) {                                                                    // Output Settings picks (FR-087…FR-097), as the Local Service
       const o = body.output;
@@ -429,7 +441,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const preset = body.presetId ? getPreset(body.presetId) : undefined;
     const propertyClass = (preset?.propertyClass ?? (body.category === 'shape' ? 'list' : body.category === 'text' && body.presetId ? 'list' : 'scalar')) as EditIntent['propertyClass'];
     const base = {
-      projectId: p.dto.id, source, createdAt: nowIso(), category: body.category, params: { ...(body.params ?? {}), ...(body.output ? { __output: body.output } : {}) }, target: body.target, propertyClass,
+      projectId: p.dto.id, source, createdAt: nowIso(), category: body.category, params: { ...(body.params ?? {}), ...(body.output ? { __output: body.output } : {}), ...(body.elementEdit ? { __elementEdit: body.elementEdit } : {}) }, target: body.target, propertyClass,
       baseVersion: body.baseVersion, supersedes: [] as string[], ...(body.presetId ? { presetId: body.presetId } : {}), ...(body.instruction ? { instruction: body.instruction } : {}),
     };
     if (res.reject) {

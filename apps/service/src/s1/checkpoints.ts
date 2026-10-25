@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { deriveTiming, hashModel, migrateModel, type CompositionModelT } from '@expertmotion/composition-model';
-import { EmError } from '@expertmotion/shared';
+import { EmError, sha256Canonical } from '@expertmotion/shared';
 import type { ServiceContext } from '../context.js';
 import { checkpointDto, type CheckpointRow, type VersionRow } from './dto.js';
 import type { CompositionStore } from './store.js';
@@ -134,12 +134,12 @@ export class Checkpoints {
     return r;
   }
 
-  /** Reads and verifies a checkpoint file (integrity hash = model hash); EM-6201 when damaged. */
+  /** Reads and verifies a checkpoint file (integrity hash = model hash, of the stored JSON for a checkpoint of an older schema version); EM-6201 when damaged. */
   readFile(file: string, expectProject?: string): CheckpointFile {
     let body: CheckpointFile;
     try { body = JSON.parse(fs.readFileSync(file, 'utf8')) as CheckpointFile; } catch (e) { throw new EmError('EM-6201', 'This checkpoint is damaged. Choose an earlier one.', { status: 422, cause: e }); }
     const m = body && body.format === 'expertmotion-checkpoint' ? migrateModel(body.model) : undefined;
-    if (!m || !m.ok || hashModel(m.value) !== body.hash || (expectProject && (body.projectId !== expectProject || m.value.projectId !== expectProject)))
+    if (!m || !m.ok || (hashModel(m.value) !== body.hash && sha256Canonical(body.model) !== body.hash) || (expectProject && (body.projectId !== expectProject || m.value.projectId !== expectProject)))
       throw new EmError('EM-6201', 'This checkpoint is damaged. Choose an earlier one.', { status: 422, details: { file: path.basename(file) } });
     return { ...body, model: m.value };
   }

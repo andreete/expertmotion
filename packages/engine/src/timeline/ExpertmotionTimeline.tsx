@@ -3,7 +3,7 @@ import React, { useMemo } from 'react';
 import { AbsoluteFill, Img, Sequence, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Audio, Video } from '@remotion/media';
 import { TransitionSeries, linearTiming, springTiming } from '@remotion/transitions';
-import { deriveFrameTiming, framesOf, type AudioLayerT, type ClipT, type CompositionModelT } from '@expertmotion/composition-model';
+import { deriveFrameTiming, framesOf, visualStack, type AudioLayerT, type ClipT, type CompositionModelT } from '@expertmotion/composition-model';
 import type { EngineInputProps, AssetUrls } from '../inputs.js';
 import { ThemeProvider, useTheme } from '../theme.js';
 import { useLayout, type Layout } from '../layout.js';
@@ -29,6 +29,7 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
   const { fps, durationInFrames } = useVideoConfig();
   const ft = useMemo(() => deriveFrameTiming(model), [model]);
   const duckWindows = useMemo(() => voiceWindows(model, assets, fps), [model, assets, fps]);
+  const stack = useMemo(() => visualStack(model), [model]);       // ADR-027: texts, images and shapes back → front by layer
   const premountFor = 2 * fps;                                 // Player default is 0; render default 2 s (REMOTION_CAPABILITY_MAP §A)
   const t = useTheme();
   return (
@@ -55,14 +56,14 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
         </TransitionSeries>
       )}
       <VideoDim background={model.background} />
-      {model.tracks.overlay.map((o) => (
-        <Sequence key={o.id} from={framesOf(o.timing.atMs, fps)} durationInFrames={Math.max(1, framesOf(o.timing.durationMs, fps))} premountFor={premountFor}>
-          <OverlayView element={o} urls={o.kind === 'image' ? assets[o.assetId] : undefined} layout={layout} quality={quality} durationInFrames={Math.max(1, framesOf(o.timing.durationMs, fps))} />
+      {/* DOM order is the stacking order (no z-index): later siblings paint in front; captions stay on top. */}
+      {stack.map((x) => 'kind' in x ? (
+        <Sequence key={x.id} name={`layer-${x.layer}`} from={framesOf(x.timing.atMs, fps)} durationInFrames={Math.max(1, framesOf(x.timing.durationMs, fps))} premountFor={premountFor}>
+          <OverlayView element={x} urls={x.kind === 'image' ? assets[x.assetId] : undefined} layout={layout} quality={quality} durationInFrames={Math.max(1, framesOf(x.timing.durationMs, fps))} />
         </Sequence>
-      ))}
-      {model.tracks.text.map((l) => (
-        <Sequence key={l.id} from={framesOf(l.timing.atMs, fps)} durationInFrames={Math.max(1, framesOf(l.timing.durationMs, fps))} layout="none">
-          <TextElement layer={l} layout={layout} durationInFrames={Math.max(1, framesOf(l.timing.durationMs, fps))} />
+      ) : (
+        <Sequence key={x.id} name={`layer-${x.layer}`} from={framesOf(x.timing.atMs, fps)} durationInFrames={Math.max(1, framesOf(x.timing.durationMs, fps))} layout="none">
+          <TextElement layer={x} layout={layout} durationInFrames={Math.max(1, framesOf(x.timing.durationMs, fps))} />
         </Sequence>
       ))}
       {model.tracks.caption.styleId && model.tracks.caption.pages.map((p, i) => (
@@ -73,7 +74,7 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
       {model.tracks.audio.map((a) => {
         const urls = assets[a.assetId]; if (!urls) return null;
         const from = framesOf(a.atMs, fps);
-        const dur = a.loop || a.durationMs === undefined ? Math.max(1, durationInFrames - from) : Math.max(1, framesOf(a.durationMs, fps));
+        const dur = a.durationMs === undefined ? Math.max(1, durationInFrames - from) : Math.max(1, framesOf(a.durationMs, fps));   // v2: a looping layer with a length stops there
         return <Sequence key={a.id} from={from} durationInFrames={dur} premountFor={premountFor}><AudioLayerView layer={a} src={urls.playable} startFrame={from} durationInFrames={dur} duck={a.ducking ? duckWindows : []} /></Sequence>;
       })}
     </AbsoluteFill>

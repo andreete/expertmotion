@@ -36,7 +36,7 @@ export function deriveTiming(model: CompositionModelT): DerivedTiming {
   };
   for (const t of model.tracks.text) add(t.id, t.timing.atMs, t.timing.atMs + t.timing.durationMs, 'text');
   for (const o of model.tracks.overlay) add(o.id, o.timing.atMs, o.timing.atMs + o.timing.durationMs, 'overlay');
-  for (const a of model.tracks.audio) add(a.id, a.atMs, a.loop || a.durationMs === undefined ? durationMs : a.atMs + a.durationMs, 'audio');
+  for (const a of model.tracks.audio) add(a.id, a.atMs, a.durationMs === undefined ? durationMs : a.atMs + a.durationMs, 'audio');   // v2: a looping layer with a length stops there (ADR-027)
   return { durationMs, cutStartMs, clipStartMs, elementWindows: windows, warnings };
 }
 

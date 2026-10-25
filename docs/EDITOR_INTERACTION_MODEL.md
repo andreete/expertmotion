@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | UI/UX lead + AI agent architect |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | MASTER_PROJECT_PROMPT.md §16, GLOSSARY.md, ELEMENT_IDS.md, UXRD.md, USER_FLOWS.md, AI_WORKFLOW.md (§3–§7, §12), DESIGN_CATALOGUE.md, PERFORMANCE.md, ARCHITECTURE.md §5 |
 | Used by | UI_UX_SPECIFICATION.md, FRD.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md, ERROR_CATALOGUE.md |
 | Owner of | the ten-point interaction spec per UI action, selection model, keyboard shortcuts, drag-and-drop rules, panel resize/collapse rules, responsive rules, focus management |
@@ -93,7 +93,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 4 | Compile when text is present. Empty text → `needsInterpretation: true` → Editor Agent proposes copy (F6.E1); disabled with hint when no provider is configured. |
 | 5 | New Text Layer id; selection = new layer; version. |
 | 6 | Player seeks to `atMs` and shows the text with the variant's default motion. |
-| 7 | `stage.timeline.element.text` added at the playhead on `stage.timeline.track.text`. |
+| 7 | `stage.timeline.element.text` added at the playhead on a `stage.timeline.lane.layer` row: the layer just in front of everything it overlaps (ADR-027 lane rule). |
 | 8 | As IX-02. |
 | 9 | Beyond total duration → trimmed + `warn` "Shortened to end of video" / "Dipersingkat sampai akhir video"; text > 200 chars → field error "Keep it under 200 characters" / "Maksimal 200 karakter". |
 | 10 | Ctrl+Z removes the layer (previous version); `op:text.remove` via inspector asks confirmation (UX-015). |
@@ -200,6 +200,21 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 8 | Player menu toggles only. |
 | 9 | Media error → `stage.player.state.error` `EM-1xxx` with "Rebuild preview" / "Bangun ulang pratinjau". |
 | 10 | Not applicable. |
+
+### IX-26 Timeline drag, trim and lane change (texts, images, shapes, audio; ADR-027, FR-068)
+
+| # | Spec |
+|---|---|
+| 1 | Pointer: drag a `stage.timeline.element` with `data-editable` (text, image, shape, audio) to move it in time and up/down across lanes (one `ROW` = 36 px per lane); drag a `stage.timeline.element.handle` (left / right 6 px) to trim. Drop on `stage.timeline.lane.new` to open a new lane (in front of all layers, or a new audio lane). Snapping: to the playhead and to other items' edges within 8 px (`stage.timeline.snap` guide), otherwise to the frame grid; hold **Alt/Option** to disable snapping. Esc cancels the drag. Keyboard (bar focused): ←/→ one frame, Shift+←/→ one second, Alt+↑ / Alt+↓ one lane up / down. Video Clips keep FR-068 reorder/trim (no lane change). |
+| 2 | While dragging: the bar dims, `stage.timeline.ghost` shows the target row, start time and length; the target row gets the 2 px accent inset outline; the drag threshold is 4 px. On drop the bar moves at once (optimistic queue receipt). |
+| 3 | category text, shape, audio or asset (image) / `<kind>:<id>.timing` (joined with `<kind>:<id>.layer` when the lane changes) or `<kind>:<id>.layer` (lane / layer key only) / scalar, `source: ui`, pick field `elementEdit`. |
+| 4 | Compile (no LLM): `op:element.setTiming {atMs, durationMs, trimBeforeMs? (audio left edge), layer?}` or `op:element.setLayer {layer}` / `{move}`. The model applies the lane rule: a busy lane sends the item to the lane above (or a new lane inserted there); lanes stay dense. |
+| 5 | One Intent Queue item ("Move or trim", "Move to layer 3", "One layer up" / "Pindah atau pangkas", "Pindah ke lapisan 3", "Naik satu lapisan"), executed; one Composition Version per gesture or key press; the Creator's own later drags supersede it. |
+| 6 | Player shows the new timing and stacking at the current frame (same `ExpertmotionTimeline` as export). |
+| 7 | Rows are rebuilt from layers: top row = front-most layer; the element stays selected and keeps keyboard focus after a lane change. |
+| 8 | As IX-02 (version row, autosave checkpoint). |
+| 9 | Audio past its source (not looping) → `EM-2306` toast and nothing applied (the drag already clamps to the source); an element removed meanwhile → `EM-2203`; a no-op drag sends nothing. |
+| 10 | Ctrl+Z restores the previous version (timing and layers together). |
 
 ## 3. Agent Panel actions
 
@@ -412,7 +427,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | Rule | Detail |
 |---|---|
 | Single selection | Click selects one Timeline Element; the inspector shows it; Design Picks target it (AI_WORKFLOW.md §4 "Creator selected" column). |
-| Multi selection | Shift+click range within one Track; Ctrl+click toggles across Tracks; inspector shows "3 elements" with common fields; picks apply to "each selected" per Target Resolution. Cuts are selectable as thin handles between Clips (single only). |
+| Multi selection | Shift+click range within one Track or lane; Ctrl+click toggles across Tracks; inspector shows "3 elements" with common fields; picks apply to "each selected" per Target Resolution. Cuts are selectable as thin handles between Clips (single only). |
 | Playhead as implicit target | With nothing selected, motion/effect picks target the Clip under the playhead; text picks target a Text Layer under the playhead if one exists ("apply to this text" / "terapkan ke teks ini" offered). |
 | Selection vs. playhead independence | Selecting does not move the playhead unless "Seek on select" is on in `stage.player.menu` (default on). |
 | Clearing | Esc, click on empty lane, or a Composition Version that removes the element. |
@@ -427,8 +442,10 @@ Windows keys; `Ctrl` = `Ctrl` (macOS build P2 maps to `Cmd`). Shortcuts are list
 | Shortcut | Action | Scope | Element |
 |---|---|---|---|
 | Space | Play / pause | Editor (not in text fields) | `stage.player.controls.play` |
-| ← / → | Previous / next frame | Editor | `stage.player.controls.scrubber` |
-| Shift+← / → | −1 s / +1 s | Editor | same |
+| ← / → | Previous / next frame; with an editable Timeline bar focused: move it one frame earlier / later (IX-26) | Editor | `stage.player.controls.scrubber`, `stage.timeline.element` |
+| Shift+← / → | −1 s / +1 s (Player, or the focused Timeline bar) | Editor | same |
+| Alt+↑ / Alt+↓ | Focused Timeline bar one lane up / down (layer forward / back; IX-26) | Stage | `stage.timeline.element` |
+| Alt (held while dragging) | Disable snapping to the playhead and edges (IX-26) | Stage | `stage.timeline.snap` |
 | Home / End | Start / end | Editor | same |
 | J / K / L | Reverse-scrub step / pause / play (K pauses; J steps back 1 s because reverse playback is out of scope) | Editor | same |
 | Ctrl+S | Save | Global | `hdr.action.save` |
@@ -460,11 +477,11 @@ Shortcuts never fire while a text input, textarea or contenteditable has focus, 
 | OS files → Agent composer `.attach` | images only | Attach to the message (vision models) | "Only images can be attached here" / "Hanya gambar yang bisa dilampirkan di sini" |
 | Asset card → Asset card | yes | Reorder Sequence Badges (IX-06) | — |
 | Asset card → `stage.timeline.track.video` | yes (P0 end-append; P1 at drop index) | Insert that Asset | Still ingesting → not-allowed cursor |
-| Asset card → `stage.timeline.track.audio` | audio assets | `op:audio.addLayer` at drop time | Non-audio → not-allowed |
+| Asset card → `stage.timeline.lane.audio` | audio assets | `op:audio.addLayer` at drop time | Non-audio → not-allowed |
 | Catalogue Card → Timeline Element | yes | Same as click with explicit target (IX-02) | Category/target mismatch → not-allowed cursor + tooltip "Transitions go on cuts" / "Transisi ditempatkan di potongan" |
 | Catalogue Card → Player | yes | Same as click with playhead target | — |
-| Timeline Element → another position | P1 (PRD-036) | `op:clip.move` / `op:text.setTiming` | MVP: not-allowed cursor + tooltip "Reordering arrives in a later update; ask the Editor Agent" / "Pengurutan ulang hadir di pembaruan berikutnya; minta Editor Agent" |
-| Element edge → trim | P1 | `op:clip.setTrim` | MVP: as above |
+| Timeline Element → another position | yes (FR-068; ADR-027 Operator decision 2026-10-25) | video Clip: `op:clip.move`; text / image / shape / audio: `op:element.setTiming` (time and, when dropped on another lane, `layer`) or `op:element.setLayer` (lane only) — IX-26 | dropping a visual item on the video or audio rows (or audio on layer rows) clamps to the nearest lane of its kind |
+| Element edge → trim | yes | video Clip: `op:clip.setTrim`; others: `op:element.setTiming` (audio left edge with `trimBeforeMs`) | trims stop at 100 ms and at the source end of non-looping audio |
 | Panel divider | yes | Resize (§9) | — |
 
 General: drag threshold 4 px; drop targets show a 2 px accent inset outline during drag-over; Esc cancels; keyboard alternative exists for every drop (import button, badge click, Insert).

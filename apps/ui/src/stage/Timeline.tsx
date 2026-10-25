@@ -1,48 +1,73 @@
-// Timeline View (stage.timeline.*): read-only Tracks, ruler, playhead, selection and inspector (IX-09, IX-10).
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+// Timeline View (stage.timeline.*): ruler, playhead, selection and inspector (IX-09, IX-10) and CapCut-style editing (ADR-027,
+// FR-068, IX-26): one lane per layer with the front-most layer on top, then captions above them all, the video Track, and audio
+// lanes at the bottom. Every text, image, shape and audio bar can be dragged in time and across lanes and trimmed at its edges;
+// video Clips reorder and trim as before. Snapping to the playhead and other edges (Alt disables), a live ghost, keyboard
+// alternatives, and one undoable Compile pick per gesture (op:element.setTiming / op:element.setLayer; no LLM).
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { Bot, Minus, Plus, Sparkles } from 'lucide-react';
 import { deriveTiming, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
 import { getPreset } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
 import type { AppState } from '../state/reducer.js';
-import type { PlanDto } from '../api/types.js';
+import type { ElementEdit, PlanDto } from '../api/types.js';
 import { Button, IconButton, cx } from '../components/ui.js';
 import { playerBus } from './playerBus.js';
 import { QuickParams } from './QuickParams.js';
 import { formatTimecode } from '../i18n/index.js';
 
 type Track = 'video' | 'overlay' | 'text' | 'caption' | 'audio';
-interface Bar { id: string; ref: ElementRefT; kind: string; label: string; fromMs: number; toMs: number; track: Track; diffId: string; assetId?: string; generated?: boolean }
+/** One Timeline row, top to bottom. `layer` rows hold texts/images/shapes of that layer; the extra empty lane above the top layer (and below the last audio lane) is where a drop opens a new lane. */
+export interface LaneRow { key: string; kind: 'caption' | 'layer' | 'video' | 'audio'; lane: number; isNew: boolean }
+interface Bar { id: string; ref: ElementRefT; kind: string; label: string; fromMs: number; toMs: number; track: Track; row: string; lane?: number; diffId: string; assetId?: string; generated?: boolean }
+type EditableKind = ElementEdit['kind'];
+const EDITABLE = new Set(['text', 'image', 'shape', 'audio']);
+const isEditable = (b: Pick<Bar, 'kind'>) => EDITABLE.has(b.kind);
 
 /** FR-064: every Timeline Element as a bar; backgrounds span the whole duration; `generated` marks Assets made by a generator. */
 export function buildBars(model: CompositionModelT, assetName: (id: string) => string, lang: 'en' | 'id', generatedAssets: ReadonlySet<string> = new Set()): Bar[] {
   const t = deriveTiming(model);
   const bars: Bar[] = [];
   const label = (id: string) => getPreset(id)?.label[lang] ?? id;
-  if (model.background) bars.push({ id: 'background', ref: { kind: 'background' }, kind: 'background', label: label(model.background.presetId), fromMs: 0, toMs: Math.max(1, t.durationMs), track: 'video', diffId: 'background' });
+  if (model.background) bars.push({ id: 'background', ref: { kind: 'background' }, kind: 'background', label: label(model.background.presetId), fromMs: 0, toMs: Math.max(1, t.durationMs), track: 'video', row: 'video', diffId: 'background' });
   model.tracks.video.forEach((c, i) => {
     const w = t.elementWindows[c.id]!;
-    bars.push({ id: c.id, ref: { kind: 'clip', id: c.id }, kind: 'clip', label: `${i + 1} · ${assetName(c.assetId)}`, fromMs: w.fromMs, toMs: w.toMs, track: 'video', diffId: c.id, assetId: c.assetId, generated: generatedAssets.has(c.assetId) });
-    c.effects.forEach((e) => bars.push({ id: `effect:${c.id}:${e.presetId}`, ref: { kind: 'effect', id: `${c.id}|${e.presetId}` }, kind: 'effect', label: label(e.presetId), fromMs: w.fromMs, toMs: w.toMs, track: 'video', diffId: c.id }));
+    bars.push({ id: c.id, ref: { kind: 'clip', id: c.id }, kind: 'clip', label: `${i + 1} · ${assetName(c.assetId)}`, fromMs: w.fromMs, toMs: w.toMs, track: 'video', row: 'video', diffId: c.id, assetId: c.assetId, generated: generatedAssets.has(c.assetId) });
+    c.effects.forEach((e) => bars.push({ id: `effect:${c.id}:${e.presetId}`, ref: { kind: 'effect', id: `${c.id}|${e.presetId}` }, kind: 'effect', label: label(e.presetId), fromMs: w.fromMs, toMs: w.toMs, track: 'video', row: 'video', diffId: c.id }));
   });
   for (const tr of model.transitions) {
     const at = t.cutStartMs[tr.cutIndex];
     if (at === undefined) continue;
-    bars.push({ id: `cut:${tr.cutIndex}`, ref: { kind: 'cut', index: tr.cutIndex }, kind: 'transition', label: getPreset(tr.presetId)?.label[lang] ?? tr.presetId, fromMs: at, toMs: at + tr.durationMs, track: 'video', diffId: `cut:${tr.cutIndex}` });
+    bars.push({ id: `cut:${tr.cutIndex}`, ref: { kind: 'cut', index: tr.cutIndex }, kind: 'transition', label: getPreset(tr.presetId)?.label[lang] ?? tr.presetId, fromMs: at, toMs: at + tr.durationMs, track: 'video', row: 'video', diffId: `cut:${tr.cutIndex}` });
   }
-  for (const o of model.tracks.overlay) bars.push({ id: o.id, ref: { kind: o.kind === 'shape' ? 'shape' : 'image', id: o.id }, kind: o.kind === 'shape' ? 'shape' : 'clip', label: o.kind === 'shape' ? label(o.presetId) : assetName(o.assetId), fromMs: o.timing.atMs, toMs: o.timing.atMs + o.timing.durationMs, track: 'overlay', diffId: o.id,
+  for (const o of model.tracks.overlay) bars.push({ id: o.id, ref: { kind: o.kind, id: o.id }, kind: o.kind, label: o.kind === 'shape' ? label(o.presetId) : assetName(o.assetId), fromMs: o.timing.atMs, toMs: o.timing.atMs + o.timing.durationMs, track: 'overlay', row: `layer:${o.layer}`, lane: o.layer, diffId: o.id,
     ...(o.kind === 'image' ? { assetId: o.assetId, generated: generatedAssets.has(o.assetId) } : {}) });
-  for (const x of model.tracks.text) bars.push({ id: x.id, ref: { kind: 'text', id: x.id }, kind: 'text', label: x.text, fromMs: x.timing.atMs, toMs: x.timing.atMs + x.timing.durationMs, track: 'text', diffId: x.id });
-  model.tracks.caption.pages.forEach((p, i) => bars.push({ id: `caption:${i}`, ref: { kind: 'caption', index: i }, kind: 'caption', label: p.text, fromMs: p.startMs, toMs: p.startMs + p.durationMs, track: 'caption', diffId: `caption:${i}` }));
-  for (const a of model.tracks.audio) { const w = t.elementWindows[a.id]; bars.push({ id: a.id, ref: { kind: 'audio', id: a.id }, kind: 'audio', label: assetName(a.assetId), fromMs: w?.fromMs ?? a.atMs, toMs: w?.toMs ?? a.atMs + (a.durationMs ?? 1000), track: 'audio', diffId: a.id, assetId: a.assetId, generated: generatedAssets.has(a.assetId) }); }
+  for (const x of model.tracks.text) bars.push({ id: x.id, ref: { kind: 'text', id: x.id }, kind: 'text', label: x.text, fromMs: x.timing.atMs, toMs: x.timing.atMs + x.timing.durationMs, track: 'text', row: `layer:${x.layer}`, lane: x.layer, diffId: x.id });
+  model.tracks.caption.pages.forEach((p, i) => bars.push({ id: `caption:${i}`, ref: { kind: 'caption', index: i }, kind: 'caption', label: p.text, fromMs: p.startMs, toMs: p.startMs + p.durationMs, track: 'caption', row: 'caption', diffId: `caption:${i}` }));
+  for (const a of model.tracks.audio) { const w = t.elementWindows[a.id]; bars.push({ id: a.id, ref: { kind: 'audio', id: a.id }, kind: 'audio', label: assetName(a.assetId), fromMs: w?.fromMs ?? a.atMs, toMs: w?.toMs ?? a.atMs + (a.durationMs ?? 1000), track: 'audio', row: `audio:${a.lane}`, lane: a.lane, diffId: a.id, assetId: a.assetId, generated: generatedAssets.has(a.assetId) }); }
   return bars;
 }
 
-const KIND_COLOUR: Record<string, string> = { clip: 'var(--em-accent)', shape: 'var(--em-accent-2)', text: '#F4F5F7', caption: 'var(--em-info)', audio: '#8FB3FF', transition: 'var(--em-warn)', effect: 'var(--em-accent-2)', background: 'var(--em-muted)' };
+/** Rows top → bottom (CapCut order): captions, a new-layer lane, layers front → back, the video Track, audio lanes, a new audio lane. */
+export function laneRows(model: CompositionModelT): LaneRow[] {
+  const top = Math.max(-1, ...model.tracks.overlay.map((o) => o.layer), ...model.tracks.text.map((x) => x.layer));
+  const lastAudio = Math.max(-1, ...model.tracks.audio.map((a) => a.lane));
+  return [
+    { key: 'caption', kind: 'caption', lane: 0, isNew: false },
+    ...Array.from({ length: top + 2 }, (_, i): LaneRow => { const lane = top + 1 - i; return { key: `layer:${lane}`, kind: 'layer', lane, isNew: lane === top + 1 }; }),
+    { key: 'video', kind: 'video', lane: 0, isNew: false },
+    ...Array.from({ length: lastAudio + 2 }, (_, lane): LaneRow => ({ key: `audio:${lane}`, kind: 'audio', lane, isNew: lane === lastAudio + 1 })),
+  ];
+}
+
+const KIND_COLOUR: Record<string, string> = { clip: 'var(--em-accent)', image: 'var(--em-accent)', shape: 'var(--em-accent-2)', text: '#F4F5F7', caption: 'var(--em-info)', audio: '#8FB3FF', transition: 'var(--em-warn)', effect: 'var(--em-accent-2)', background: 'var(--em-muted)' };
 /** Thin strips inside the video lane: background on top (whole duration), effects under their clip. */
 const STRIP: Record<string, string> = { background: 'top-0 h-[5px] z-0', effect: 'top-[29px] h-[6px] z-10' };
 const ZOOM_MIN = 10, ZOOM_MAX = 1000;
 const EDGE_PX = 6;
+/** Row height in px (h-9); a vertical drag of one row height changes the lane by one. */
+export const ROW_PX = 36;
+/** Snap distance in screen pixels (FR-068: playhead and other items' edges). */
+export const SNAP_PX = 8;
 export type ClipDragMode = 'move' | 'start' | 'end';
 
 /**
@@ -73,7 +98,72 @@ export function clipDragEdit(model: CompositionModelT, clipId: string, mode: Cli
   const trimBeforeMs = Math.max(0, Math.round(c.trimBeforeMs + d * c.playbackRate)), durationMs = Math.max(100, Math.round(c.durationMs - d));
   return trimBeforeMs === c.trimBeforeMs ? null : { clipId, trimBeforeMs, durationMs };
 }
-const TRACKS: Track[] = ['video', 'overlay', 'text', 'caption', 'audio'];
+
+export interface ElementDragOptions {
+  /** Pixels per millisecond at the current zoom. */
+  pxPerMs: number; playheadMs: number;
+  /** False while Alt/Option is held: no snapping to the playhead or edges (frame grid only). */
+  snap: boolean;
+  /** Edges to snap to (other bars' starts/ends, 0, the end of the video). */
+  edges: readonly number[];
+  assetOf: (id: string) => { durationMs: number | null } | null;
+}
+export interface ElementDragResult { edit: ElementEdit | null; fromMs: number; toMs: number; row: string; snapMs: number | null }
+/**
+ * ADR-027 / FR-068: what a drag of a text, image, shape or audio bar stands for. `mode` move shifts it in time and by
+ * `rowDelta` rows (lanes; the new lane above the top layer / below the last audio lane opens a lane); start/end trim an edge
+ * (audio left-edge trims move the source offset and stay inside the source unless looping). Times snap to the frame grid and,
+ * unless `snap` is false, to the playhead and other edges within SNAP_PX. `edit` is null when nothing changes.
+ */
+export function elementDragEdit(model: CompositionModelT, bar: Pick<Bar, 'id' | 'kind' | 'fromMs' | 'toMs' | 'row'>, mode: ClipDragMode, dxPx: number, rowDelta: number, o: ElementDragOptions): ElementDragResult | null {
+  if (!isEditable(bar)) return null;
+  const kind = bar.kind as EditableKind;
+  const audio = kind === 'audio' ? model.tracks.audio.find((a) => a.id === bar.id) : undefined;
+  if (kind === 'audio' && !audio) return null;
+  const frame = 1000 / model.settings.fps;
+  const grid = (ms: number) => Math.round(Math.round(ms / frame) * frame);
+  const threshold = SNAP_PX / Math.max(1e-6, o.pxPerMs);
+  const edges = o.snap ? [...o.edges, o.playheadMs] : [];
+  const nearest = (ms: number): number | null => { let best: number | null = null; for (const e of edges) if (Math.abs(e - ms) <= threshold && (best === null || Math.abs(e - ms) < Math.abs(best - ms))) best = e; return best; };
+  const from0 = bar.fromMs, len0 = bar.toMs - bar.fromMs, d = dxPx / Math.max(1e-6, o.pxPerMs);
+  const src = audio ? o.assetOf(audio.assetId)?.durationMs ?? null : null;
+  const tb0 = audio?.trimBeforeMs ?? 0;
+  let from = from0, len = len0, snapMs: number | null = null;
+  if (mode === 'move') {
+    const raw = from0 + d, s = nearest(raw), e = nearest(raw + len0);
+    if (s !== null && (e === null || Math.abs(s - raw) <= Math.abs(e - raw - len0))) { from = s; snapMs = s; }
+    else if (e !== null) { from = e - len0; snapMs = e; }
+    else from = grid(raw);
+    from = Math.max(0, Math.round(from));
+    if (snapMs !== null && from !== snapMs && from + len0 !== snapMs) snapMs = null;
+  } else if (mode === 'end') {
+    const raw = from0 + len0 + d, s = nearest(raw);
+    let end = s ?? grid(raw); snapMs = s;
+    const max = audio && !audio.loop && src !== null ? from0 + (src - tb0) : Infinity;
+    end = Math.min(max, Math.max(from0 + 100, end));
+    if (end !== snapMs) snapMs = null;
+    len = Math.round(end - from0);
+  } else {
+    const raw = from0 + d, s = nearest(raw);
+    let start = s ?? grid(raw); snapMs = s;
+    const min = Math.max(0, audio ? from0 - tb0 : 0);
+    start = Math.max(min, Math.min(from0 + len0 - 100, start));
+    if (start !== snapMs) snapMs = null;
+    from = Math.round(start); len = Math.round(from0 + len0 - start);
+  }
+  // Lanes (move only): rows of the same family, clamped to it.
+  const rows = laneRows(model).filter((r) => (kind === 'audio' ? r.kind === 'audio' : r.kind === 'layer'));
+  const at = rows.findIndex((r) => r.key === bar.row);
+  const target = mode === 'move' && at >= 0 ? rows[Math.max(0, Math.min(rows.length - 1, at + rowDelta))]! : rows[at];
+  const curLane = audio ? audio.lane : Number(bar.row.split(':')[1] ?? 0);
+  const lane = target?.lane ?? curLane;
+  const timeChanged = from !== from0 || len !== len0;
+  let edit: ElementEdit | null = null;
+  if (timeChanged) edit = { kind, id: bar.id, atMs: from, durationMs: Math.max(100, len), ...(audio && mode === 'start' ? { trimBeforeMs: Math.max(0, Math.round(tb0 + (from - from0))) } : {}), ...(lane !== curLane ? { layer: lane } : {}) };
+  else if (lane !== curLane) edit = { kind, id: bar.id, layer: lane };
+  return { edit, fromMs: from, toMs: from + len, row: target?.key ?? bar.row, snapMs };
+}
+const TRACK_CHIP: Partial<Record<LaneRow['kind'], 'caption' | 'video'>> = { caption: 'caption', video: 'video' };
 
 export function TimelineView({ height = 240 }: { height?: number } = {}) {
   const { state, actions, t, lang, prefs, dispatch, runtime } = useStore();
@@ -101,6 +191,7 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
     return () => { live = false; };
   }, [projectId, state.assets.length, runtime]);
   const bars = useMemo(() => (model ? buildBars(model, assetName, lang, generated) : []), [model, state.assets, lang, generated]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rows = useMemo(() => (model ? laneRows(model) : []), [model]);
   const durationMs = model ? deriveTiming(model).durationMs : 1000;
   const pxPerMs = (zoom ?? (width - 8) / (durationMs / 1000)) / 1000;
   const pxRef = useRef(pxPerMs);
@@ -126,25 +217,70 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
   const showLanes = hasClip || bars.length > 0;                         // FR-069: a project with nothing on it shows only the empty state
   const pulseIds = state.pulse && Date.now() - state.pulse.at < 5000 ? new Set(state.pulse.diff.map((d) => d.elementId)) : new Set<string>();
   const isSelected = (b: Bar) => state.selection.some((s) => s.kind === b.ref.kind && (s.id !== undefined ? s.id === b.ref.id : s.index === b.ref.index));
-  // FR-068 (P1): drag a video Clip to reorder it, or drag its edges to trim (frame-snapped); both go through the Intent Queue.
-  const [drag, setDrag] = useState<{ id: string; mode: ClipDragMode; dx: number } | null>(null);
+  const assetOf = (id: string) => state.assets.find((a) => a.id === id) ?? null;
+  // FR-068: drag a video Clip to reorder it or its edges to trim; ADR-027: drag any text, image, shape or audio bar in time and
+  // across lanes, or its edges to trim. One gesture = one Compile pick through the Intent Queue (undoable).
+  const [drag, setDrag] = useState<{ id: string; mode: ClipDragMode; dx: number; dy: number; alt: boolean } | null>(null);
   const suppressClick = useRef(false);
+  const refocus = useRef<{ id: string; sig: string } | null>(null);
+  const edgesFor = (id: string) => [0, durationMs, ...bars.filter((x) => x.id !== id && x.kind !== 'effect' && x.kind !== 'background').flatMap((x) => [x.fromMs, x.toMs])];
+  const dragOpts = (id: string, alt: boolean): ElementDragOptions => ({ pxPerMs: pxRef.current, playheadMs: liveMs, snap: !alt, edges: edgesFor(id), assetOf: (a) => { const x = assetOf(a); return x ? { durationMs: x.durationMs ?? null } : null; } });
+  const laneName = (r: LaneRow) => r.kind === 'layer' ? (r.isNew ? t('ui.stage.timeline.lane.new') : t('ui.stage.timeline.lane.layer', { n: r.lane + 1 })) : r.kind === 'audio' ? (r.isNew ? t('ui.stage.timeline.lane.newaudio') : t('ui.stage.timeline.lane.audio', { n: r.lane + 1 })) : t(`ui.stage.timeline.track.${r.kind}`);
+  const editLabel = (b: Bar, e: ElementEdit, mode: ClipDragMode) => {
+    if (e.atMs === undefined) return e.move ? t(`ui.stage.timeline.drag.move.${e.move}`, { label: b.label }) : t('ui.stage.timeline.drag.layer', { label: b.label, n: (e.layer ?? 0) + 1 });
+    if (mode !== 'move') return t('ui.stage.timeline.drag.trimmed', { label: b.label });
+    return e.layer !== undefined ? t('ui.stage.timeline.drag.retimedlayer', { label: b.label, time: formatTimecode(e.atMs, fps), n: e.layer + 1 }) : t('ui.stage.timeline.drag.retimed', { label: b.label, time: formatTimecode(e.atMs, fps) });
+  };
   const startDrag = (b: Bar, e: ReactPointerEvent<HTMLButtonElement>) => {
-    if (!model || b.kind !== 'clip' || b.track !== 'video' || e.button !== 0) return;
+    const clip = b.kind === 'clip' && b.track === 'video';
+    if (!model || (!clip && !isEditable(b)) || e.button !== 0) return;
     const r = e.currentTarget.getBoundingClientRect();
     const mode: ClipDragMode = e.clientX - r.left < EDGE_PX ? 'start' : r.right - e.clientX < EDGE_PX ? 'end' : 'move';
-    const x0 = e.clientX; let dx = 0;
-    const move = (ev: PointerEvent) => { dx = ev.clientX - x0; if (Math.abs(dx) >= 4) setDrag({ id: b.id, mode, dx }); };
-    const up = () => {
-      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
-      setDrag(null);
-      if (Math.abs(dx) < 4) return;
-      suppressClick.current = true;
-      const edit = clipDragEdit(model, b.id, mode, dx / pxRef.current, (id) => state.assets.find((a) => a.id === id) ?? null);
-      if (edit) void actions.clipEdit(edit, edit.toIndex !== undefined ? t('ui.stage.timeline.drag.moved', { label: b.label, n: edit.toIndex + 1 }) : t('ui.stage.timeline.drag.trimmed', { label: b.label }));
+    const x0 = e.clientX, y0 = e.clientY; let dx = 0, dy = 0, alt = e.altKey, started = false;
+    const move = (ev: PointerEvent) => {
+      dx = ev.clientX - x0; dy = clip || mode !== 'move' ? 0 : (ev.clientY ?? y0) - y0; alt = ev.altKey;
+      if (started || Math.abs(dx) >= 4 || Math.abs(dy) >= 4) { started = true; setDrag({ id: b.id, mode, dx, dy, alt }); }
     };
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('keydown', esc);
+      setDrag(null);
+      if (!started) return;
+      suppressClick.current = true;
+      alt = ev.altKey ?? alt;
+      if (clip) {
+        const edit = clipDragEdit(model, b.id, mode, dx / pxRef.current, (id) => assetOf(id));
+        if (edit) void actions.clipEdit(edit, edit.toIndex !== undefined ? t('ui.stage.timeline.drag.moved', { label: b.label, n: edit.toIndex + 1 }) : t('ui.stage.timeline.drag.trimmed', { label: b.label }));
+        return;
+      }
+      const res = elementDragEdit(model, b, mode, dx, Math.round(dy / ROW_PX), dragOpts(b.id, alt));
+      if (res?.edit) void actions.elementEdit(res.edit, editLabel(b, res.edit, mode));
+    };
+    const esc = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { started = false; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('keydown', esc); setDrag(null); } };   // Esc cancels the drag
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('keydown', esc);
   };
+  // Keyboard alternatives (IX-26): ←/→ one frame, Shift+←/→ one second, Alt+↑/↓ one lane up / down.
+  const onElementKey = (b: Bar, e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!model || !isEditable(b) || e.ctrlKey || e.metaKey) return;
+    let edit: ElementEdit | null;
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.altKey) {
+      const step = (e.shiftKey ? 1000 : 1000 / fps) * (e.key === 'ArrowLeft' ? -1 : 1);
+      const atMs = Math.max(0, Math.round(b.fromMs + step));
+      edit = atMs === b.fromMs ? null : { kind: b.kind as EditableKind, id: b.id, atMs, durationMs: Math.max(100, Math.round(b.toMs - b.fromMs)) };
+    } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) edit = { kind: b.kind as EditableKind, id: b.id, move: e.key === 'ArrowUp' ? 'up' : 'down' };
+    else return;
+    e.preventDefault(); e.stopPropagation();                          // the Player's frame-step shortcut stays for everything else
+    if (!edit) return;
+    refocus.current = { id: b.id, sig: `${b.row}|${b.fromMs}|${b.toMs}` };
+    void actions.elementEdit(edit, edit.move ? t(`ui.stage.timeline.drag.move.${edit.move}`, { label: b.label }) : t('ui.stage.timeline.drag.retimed', { label: b.label, time: formatTimecode(edit.atMs ?? 0, fps) }));
+  };
+  useEffect(() => {                                                   // keep keyboard focus on the element once its edit landed (a lane change remounts it)
+    const r = refocus.current; if (!r) return;
+    const b = bars.find((x) => x.id === r.id);
+    if (b && `${b.row}|${b.fromMs}|${b.toMs}` === r.sig) return;      // not applied yet
+    refocus.current = null;
+    const n = [...(lanes.current?.querySelectorAll<HTMLElement>('[data-el="stage.timeline.element"]') ?? [])].find((x) => x.getAttribute('data-element-id') === r.id);
+    if (n && document.activeElement !== n) n.focus();
+  }, [bars]);
   const select = (b: Bar, e: ReactMouseEvent) => {
     if (suppressClick.current) { suppressClick.current = false; return; }
     let next: ElementRefT[];
@@ -168,10 +304,14 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
   const tickEvery = pxPerMs * 1000 > 80 ? 1000 : pxPerMs * 1000 > 30 ? 2000 : pxPerMs * 1000 > 12 ? 5000 : 10000;
   const ticks = Array.from({ length: Math.floor(durationMs / tickEvery) + 1 }, (_, i) => i * tickEvery);
   const selectedBars = bars.filter(isSelected);
-  const projectChips: Partial<Record<Track, string>> = {
+  const projectChips: Partial<Record<'caption' | 'video', string>> = {
     caption: model?.tracks.caption.styleId ? getPreset(model.tracks.caption.styleId)?.label[lang] ?? '' : '',
     video: model?.background ? getPreset(model.background.presetId)?.label[lang] ?? '' : '',
   };
+  const dragBar = drag ? bars.find((b) => b.id === drag.id) : undefined;
+  const ghost = drag && dragBar && model && isEditable(dragBar) ? elementDragEdit(model, dragBar, drag.mode, drag.dx, Math.round(drag.dy / ROW_PX), dragOpts(dragBar.id, drag.alt)) : null;
+  const rowA11y = (r: LaneRow, count: number) => r.kind === 'layer' ? (r.isNew ? t('a11y.stage.timeline.lane.new') : t('a11y.stage.timeline.lane.layer', { n: r.lane + 1, count })) : r.kind === 'audio' ? (r.isNew ? t('a11y.stage.timeline.lane.newaudio') : t('a11y.stage.timeline.lane.audio', { n: r.lane + 1, count })) : t(`a11y.stage.timeline.track.${r.kind}`, { n: count });
+  const rowEl = (r: LaneRow) => r.kind === 'caption' || r.kind === 'video' ? `stage.timeline.track.${r.kind}` : r.isNew ? 'stage.timeline.lane.new' : `stage.timeline.lane.${r.kind}`;
 
   return (
     <section data-el="stage.timeline" role="region" aria-label={t('a11y.stage.timeline')} className="flex min-h-[220px] shrink-0 flex-col rounded-[12px] border border-em-line bg-em-panel" style={{ height }}>
@@ -183,54 +323,72 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
         <span className="t-mono text-em-muted">{formatTimecode(durationMs, fps)}</span>
       </div>
       <div className="flex min-h-0 flex-1">
-        {showLanes && <div className="flex w-24 shrink-0 flex-col border-r border-em-line">
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-y-auto">
+        {showLanes && <div className="flex w-24 shrink-0 flex-col self-start border-r border-em-line">
           <div className="h-6 border-b border-em-line" />
-          {TRACKS.map((tr) => (
-            <div key={tr} className="flex h-9 items-center gap-1 border-b border-em-line px-2 text-[12px] text-em-text-2">
-              <span className="flex-1 truncate">{t(`ui.stage.timeline.track.${tr}`)}</span>
-              {projectChips[tr] && <span className="truncate rounded-full border border-em-line px-1 text-[10px]" title={projectChips[tr]}>{projectChips[tr]}</span>}
+          {rows.map((r) => (
+            <div key={r.key} className={cx('flex h-9 items-center gap-1 border-b border-em-line px-2 text-[12px]', r.isNew ? 'text-em-muted' : 'text-em-text-2')}>
+              <span className="flex-1 truncate">{laneName(r)}</span>
+              {TRACK_CHIP[r.kind] && projectChips[TRACK_CHIP[r.kind]!] && <span className="truncate rounded-full border border-em-line px-1 text-[10px]" title={projectChips[TRACK_CHIP[r.kind]!]}>{projectChips[TRACK_CHIP[r.kind]!]}</span>}
             </div>
           ))}
         </div>}
-        <div ref={lanes} role="grid" aria-label={t('a11y.stage.timeline')} className="relative min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
+        <div ref={lanes} role="grid" aria-label={t('a11y.stage.timeline')} className="relative min-w-0 flex-1 self-start overflow-x-auto overflow-y-hidden"
           onClick={(e) => { if (e.target === e.currentTarget) actions.select([]); }}>
           <div className="relative" style={{ width: Math.max(width, durationMs * pxPerMs + 8) }}>
             {showLanes && <>
             <div data-el="stage.timeline.ruler" className="relative h-6 cursor-pointer touch-none select-none border-b border-em-line" onPointerDown={seekFromRuler}>
               {ticks.map((ms) => <span key={ms} className="t-mono absolute top-1 border-l border-em-line pl-1 text-[10px] text-em-muted" style={{ left: ms * pxPerMs }}>{Math.round(ms / 1000)}s</span>)}
             </div>
-            {TRACKS.map((tr) => {
-              const own = bars.filter((b) => b.track === tr && b.kind !== 'transition' && b.kind !== 'effect' && b.kind !== 'background');
-              const count = own.length;
+            {rows.map((r) => {
+              const own = bars.filter((b) => b.row === r.key);
+              const count = own.filter((b) => b.kind !== 'transition' && b.kind !== 'effect' && b.kind !== 'background').length;
+              const dropTarget = ghost && ghost.row === r.key && drag?.mode === 'move' && ghost.row !== dragBar?.row;
               return (
-                <div key={tr} data-el={`stage.timeline.track.${tr}`} role="row" aria-label={t(`a11y.stage.timeline.track.${tr}`, { n: count })} className="relative h-9 border-b border-em-line"
+                <div key={r.key} data-el={rowEl(r)} data-row={r.key} {...(r.kind === 'layer' ? { 'data-layer': r.lane } : r.kind === 'audio' ? { 'data-lane': r.lane } : {})} role="row" aria-label={rowA11y(r, count)}
+                  className={cx('relative h-9 border-b border-em-line', r.isNew && 'border-dashed', dropTarget && 'shadow-[inset_0_0_0_2px_var(--em-accent)]')}
                   onClick={(e) => { if (e.target === e.currentTarget) actions.select([]); }}>
-                  {bars.filter((b) => b.track === tr).map((b) => {
+                  {r.isNew && drag?.mode === 'move' && <span aria-hidden className="pointer-events-none absolute inset-0 flex items-center px-2 text-[10px] text-em-muted">{r.kind === 'audio' ? t('ui.stage.timeline.lane.newaudio.hint') : t('ui.stage.timeline.lane.new.hint')}</span>}
+                  {own.map((b) => {
                     const sel = isSelected(b);
                     let left = b.fromMs * pxPerMs, w = Math.max(b.kind === 'transition' ? 12 : 6, (b.toMs - b.fromMs) * pxPerMs);
                     const dragging = drag?.id === b.id;
-                    if (dragging && drag) { if (drag.mode === 'move') left += drag.dx; else if (drag.mode === 'end') w = Math.max(6, w + drag.dx); else { left += drag.dx; w = Math.max(6, w - drag.dx); } }
-                    const draggable = b.kind === 'clip' && b.track === 'video';
+                    const clipDrag = b.kind === 'clip' && b.track === 'video';
+                    if (dragging && drag && clipDrag) { if (drag.mode === 'move') left += drag.dx; else if (drag.mode === 'end') w = Math.max(6, w + drag.dx); else { left += drag.dx; w = Math.max(6, w - drag.dx); } }
+                    const draggable = clipDrag || isEditable(b);
                     const pulse = pulseIds.has(b.diffId);
                     const missing = Boolean(b.assetId && state.assets.find((a) => a.id === b.assetId)?.missing);   // FR-048
                     return (
                       <button key={b.id} type="button" role="gridcell" data-el="stage.timeline.element" data-kind={b.kind} data-element-id={b.id} data-generated={b.generated ? 'true' : undefined} data-missing={missing || undefined} aria-selected={sel}
+                        data-editable={isEditable(b) || undefined} {...(b.lane !== undefined ? { 'data-lane': b.lane } : {})}
+                        aria-keyshortcuts={isEditable(b) ? 'ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Alt+ArrowUp Alt+ArrowDown' : undefined}
                         aria-label={t('a11y.stage.timeline.element', { kind: t(`ui.stage.timeline.kind.${b.kind}`), label: b.label, start: formatTimecode(b.fromMs, fps), end: formatTimecode(b.toMs, fps) })}
-                        title={`${b.label} · ${formatTimecode(b.fromMs, fps)}–${formatTimecode(b.toMs, fps)}`}
-                        onClick={(e) => { e.stopPropagation(); select(b, e); }} onPointerDown={draggable ? (e) => startDrag(b, e) : undefined} data-dragging={dragging ? drag?.mode : undefined}
+                        title={`${b.label} · ${formatTimecode(b.fromMs, fps)}–${formatTimecode(b.toMs, fps)}${isEditable(b) ? ` · ${t('ui.stage.timeline.element.keys')}` : ''}`}
+                        onClick={(e) => { e.stopPropagation(); select(b, e); }} onPointerDown={draggable ? (e) => startDrag(b, e) : undefined} onKeyDown={isEditable(b) ? (e) => onElementKey(b, e) : undefined} data-dragging={dragging ? drag?.mode : undefined}
                         className={cx('absolute truncate rounded-[4px] border px-1 text-left text-[11px] em-trans', STRIP[b.kind] ? `${STRIP[b.kind]} rounded-[2px] px-0 text-[0px]` : b.kind === 'transition' ? 'top-1 h-7 z-10 bg-em-panel-2' : 'top-1 h-7 bg-em-panel-2',
+                          draggable && 'touch-none', dragging && !clipDrag && 'opacity-40',
                           sel ? 'border-em-accent shadow-[0_0_0_2px_var(--em-accent)]' : missing ? 'border-dashed border-em-danger' : 'border-em-line hover:border-em-line-strong', pulse && 'em-pulse')}
                         style={{ left: b.kind === 'transition' ? left - 6 : left, width: b.kind === 'transition' ? 12 : w, ...(STRIP[b.kind] ? { background: KIND_COLOUR[b.kind] } : { borderTop: `3px solid ${KIND_COLOUR[b.kind] ?? 'var(--em-line)'}` }) }}>
                         {b.kind === 'transition' ? <span aria-hidden>◆</span> : STRIP[b.kind] ? null : <>{b.kind === 'clip' && model?.tracks.video.find((c) => c.id === b.id)?.effects.length ? <Sparkles size={10} className="mr-0.5 inline" aria-hidden /> : null}
-                          {draggable && <><span aria-hidden className="absolute bottom-0 left-0 top-0 w-1.5 cursor-ew-resize" /><span aria-hidden className="absolute bottom-0 right-0 top-0 w-1.5 cursor-ew-resize" /></>}
+                          {draggable && <><span aria-hidden data-el="stage.timeline.element.handle" data-edge="start" className="absolute bottom-0 left-0 top-0 w-1.5 cursor-ew-resize" /><span aria-hidden data-el="stage.timeline.element.handle" data-edge="end" className="absolute bottom-0 right-0 top-0 w-1.5 cursor-ew-resize" /></>}
                           {b.generated && <span data-el="stage.timeline.element.generated" className="mr-1 rounded-[3px] bg-em-accent-2/30 px-0.5 text-[9px] uppercase">{t('ui.stage.timeline.generated')}</span>}
                           {missing && <span data-el="stage.timeline.element.missing" className="mr-1 rounded-[3px] bg-em-danger/30 px-0.5 text-[9px] uppercase">{t('ui.stage.timeline.missing')}</span>}{b.label}</>}
                       </button>
                     );
                   })}
+                  {ghost && dragBar && ghost.row === r.key && (
+                    <div data-el="stage.timeline.ghost" data-row={ghost.row} data-from-ms={ghost.fromMs} data-to-ms={ghost.toMs} aria-hidden
+                      className="pointer-events-none absolute top-1 z-20 h-7 truncate rounded-[4px] border-2 border-dashed border-em-accent bg-em-accent/15 px-1 text-[11px]"
+                      style={{ left: ghost.fromMs * pxPerMs, width: Math.max(6, (ghost.toMs - ghost.fromMs) * pxPerMs) }}>
+                      {formatTimecode(ghost.fromMs, fps)} · {dragBar.label}
+                    </div>
+                  )}
                 </div>
               );
             })}
+            {ghost?.snapMs !== null && ghost?.snapMs !== undefined && (
+              <div data-el="stage.timeline.snap" data-ms={ghost.snapMs} aria-hidden className="pointer-events-none absolute bottom-0 top-6 z-20 w-px bg-em-warn" style={{ left: ghost.snapMs * pxPerMs }} />
+            )}
             <div data-el="stage.timeline.head" aria-hidden className="pointer-events-none absolute bottom-0 top-0 z-20 w-0.5 bg-em-accent" style={{ left: liveMs * pxPerMs }}>
               <span className="absolute -left-1 top-0 h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-[var(--em-accent)]" />
             </div>
@@ -241,6 +399,7 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
               </div>
             )}
           </div>
+        </div>
         </div>
         {selectedBars.length > 0 && model && <Inspector bars={selectedBars} model={model} onAsk={(b) => {
           dispatch({ type: 'editorDraft', draft: { text: t('ui.stage.timeline.inspector.stem', { target: b.label }), target: b.ref, nonce: Date.now() } });
@@ -275,6 +434,7 @@ function Inspector({ bars, model, onAsk }: { bars: Bar[]; model: CompositionMode
   const rows: Array<[string, string]> = [];
   if (bars.length > 1) rows.push([L('multiple'), String(bars.length)]);
   if (b.kind !== 'background') rows.push([L('start'), ms(b.fromMs)], [L('duration'), ms(b.toMs - b.fromMs)]);
+  if (b.lane !== undefined) rows.push([b.kind === 'audio' ? L('lane') : L('layer'), String(b.lane + 1)]);   // ADR-027
   if (b.kind === 'clip' && b.track === 'video') {
     const c = model.tracks.video.find((x) => x.id === b.id);
     const i = model.tracks.video.findIndex((x) => x.id === b.id);
@@ -287,7 +447,7 @@ function Inspector({ bars, model, onAsk }: { bars: Bar[]; model: CompositionMode
         [L('transitionin'), tin ? label(tin.presetId) : '—'], [L('transitionout'), tout ? label(tout.presetId) : '—']);
     }
   }
-  if (b.kind === 'clip' && b.track === 'overlay') {
+  if (b.kind === 'image') {
     const o = model.tracks.overlay.find((x) => x.id === b.id);
     if (o?.kind === 'image') rows.push([L('asset'), asset(o.assetId)], [L('position'), `${o.position.x}, ${o.position.y} u`], [L('size'), JSON.stringify(o.size)], [L('fit'), o.objectFit], [L('opacity'), pct(o.opacity)],
       [L('motion'), o.motion ? label(o.motion.presetId) : '—'], [L('effects'), o.effects.map((e) => label(e.presetId)).join(', ') || '—']);

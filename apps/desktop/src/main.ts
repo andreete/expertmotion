@@ -497,6 +497,9 @@ function setUpdate(e: UpdateEvent): void {
 }
 
 function configureUpdater(): void {
+  // electron-updater reads resources/app-update.yml, which only an electron-builder NSIS publish writes. Test builds and
+  // builds without a release feed have none: skip update checks quietly instead of logging EM-8101 every time.
+  if (app.isPackaged && !existsSync(join(process.resourcesPath, 'app-update.yml'))) { logLine('info', 'updates disabled: no update feed in this build'); return; }
   const cfg = updaterConfig(FEED_URL);
   autoUpdater.autoDownload = cfg.autoDownload;           // FR-152: the Shell starts the background download itself (downloadDecision)
   autoUpdater.allowDowngrade = cfg.allowDowngrade;

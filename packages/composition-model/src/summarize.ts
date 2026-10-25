@@ -8,10 +8,11 @@ export interface CompactComposition {
   durationMs: number;
   video: Array<{ id: string; asset: string; durationMs: number; trimBeforeMs: number; effects: string[]; motion: string | null }>;
   cuts: Array<{ index: number; transition: string | null; durationMs: number | null }>;
-  text: Array<{ id: string; variant: string; text: string; atMs: number; durationMs: number }>;
-  overlay: Array<{ id: string; kind: string; preset: string | null; atMs: number }>;
+  /** `layer`: stacking order shared by texts and overlays, higher = in front (ADR-027). */
+  text: Array<{ id: string; variant: string; text: string; atMs: number; durationMs: number; layer: number }>;
+  overlay: Array<{ id: string; kind: string; preset: string | null; asset: string | null; atMs: number; durationMs: number; layer: number }>;
   captions: { style: string | null; pages: number };
-  audio: Array<{ id: string; role: string; asset: string; atMs: number }>;
+  audio: Array<{ id: string; role: string; asset: string; atMs: number; durationMs: number | null; lane: number }>;
   background: string | null;
   theme: { palette: string; fontPair: string; easing: string };
   truncated: boolean;
@@ -25,10 +26,10 @@ export function summarizeForAgent(model: CompositionModelT, assets: readonly Ass
     durationMs: t.durationMs,
     video: model.tracks.video.map((c) => ({ id: c.id, asset: names.get(c.assetId) ?? c.assetId, durationMs: c.durationMs, trimBeforeMs: c.trimBeforeMs, effects: c.effects.map((e) => e.presetId), motion: c.motion?.presetId ?? null })),
     cuts: model.tracks.video.slice(1).map((_, i) => { const tr = model.transitions.find((x) => x.cutIndex === i); return { index: i, transition: tr?.presetId ?? null, durationMs: tr?.durationMs ?? null }; }),
-    text: model.tracks.text.map((x) => ({ id: x.id, variant: x.variantId, text: x.text.length > 120 ? `${x.text.slice(0, 117)}…` : x.text, atMs: x.timing.atMs, durationMs: x.timing.durationMs })),
-    overlay: model.tracks.overlay.map((o) => ({ id: o.id, kind: o.kind, preset: o.kind === 'shape' ? o.presetId : null, atMs: o.timing.atMs })),
+    text: model.tracks.text.map((x) => ({ id: x.id, variant: x.variantId, text: x.text.length > 120 ? `${x.text.slice(0, 117)}…` : x.text, atMs: x.timing.atMs, durationMs: x.timing.durationMs, layer: x.layer })),
+    overlay: model.tracks.overlay.map((o) => ({ id: o.id, kind: o.kind, preset: o.kind === 'shape' ? o.presetId : null, asset: o.kind === 'image' ? names.get(o.assetId) ?? o.assetId : null, atMs: o.timing.atMs, durationMs: o.timing.durationMs, layer: o.layer })),
     captions: { style: model.tracks.caption.styleId, pages: model.tracks.caption.pages.length },
-    audio: model.tracks.audio.map((a) => ({ id: a.id, role: a.role, asset: names.get(a.assetId) ?? a.assetId, atMs: a.atMs })),
+    audio: model.tracks.audio.map((a) => ({ id: a.id, role: a.role, asset: names.get(a.assetId) ?? a.assetId, atMs: a.atMs, durationMs: a.durationMs ?? null, lane: a.lane })),
     background: model.background?.presetId ?? null,
     theme: { palette: model.theme.paletteId, fontPair: model.theme.fontPairId, easing: model.theme.defaultEasingId },
     truncated: false,

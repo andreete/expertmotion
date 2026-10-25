@@ -221,7 +221,7 @@ describe('Asset Panel', () => {
     await act(async () => { fireEvent.change(input, { target: { files: [new File(['x'], 'logo.png', { type: 'image/png' })] } }); });
     await waitFor(() => { if (!ins.mock.calls.length) throw new Error(`not inserted ${els('lib.assets.card').map((c) => c.getAttribute('aria-label')).join(' | ')}`); });
     expect(ins.mock.calls[0]![1]).toMatchObject({ asOverlay: true, atMs: 0 });
-    await waitFor(() => { if (!document.querySelector('[data-el="stage.timeline.track.overlay"] [data-el="stage.timeline.element"]')) throw new Error('no overlay element'); });
+    await waitFor(() => { if (!document.querySelector('[data-el="stage.timeline.lane.layer"] [data-el="stage.timeline.element"][data-kind="image"]')) throw new Error('no overlay element'); });
     // FR-049: with clip 1 selected, Insert places the new Clip after it (atIndex 1)
     await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-el="stage.timeline.track.video"] [data-el="stage.timeline.element"]')!); });
     await act(async () => { fireEvent.click((els('lib.assets.card.select') as HTMLInputElement[])[1]!); });

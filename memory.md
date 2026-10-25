@@ -30,6 +30,7 @@ Read this before any work. Update it after architecture decisions, milestones, f
 | 016 | Priorities per brief §17: Tools in P1 (voice, captions) and P2 (music, thumbnails) | provisional (reconciliation flagged) |
 | 017 | Remotion licence confirmation is a launch blocker | accepted |
 | 026 | Model files served only from the Operator's Cloudflare R2 CDN (`EM_MODEL_CDN_URL`, signed `models.json`, `tools/model-mirror`) | accepted (Operator 2026-10-25) |
+| 027 | Layered lanes (Operator 2026-10-25): Composition Model schema v2 (`layer` on texts/images/shapes, higher = front; `lane` on audio), lane rule in `applyOps` (no overlap on a lane, busy → lane above / new lane, dense), `op:element.setTiming` / `op:element.setLayer` (47 ops), CapCut-style Timeline drag/trim/lane with snapping, one Compile pick per gesture | accepted |
 
 Operator decisions given in chat on 2026-10-24: Windows first; local open-source models for generative Tools; new repo; offline signed licence key. The Operator intends to hand execution of later stages to other models (e.g. Opus); documents must be self-sufficient.
 
@@ -74,6 +75,7 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 ## 6. Known limitations and open questions
 
 - Stage 3 (2026-10-24, Linux): every P0 module coded and integrated; 580+ tests green; end-to-end Editor ↔ service 18/18 incl. a real 720p render. Not verifiable here: Electron runtime, installer, DPAPI, bytenode, NVENC, Windows fingerprint (Operator's Windows run). Nothing installable from the model registry until the Operator pins hashes; licences report EM-5009 until the production public key is pasted into `apps/service/src/license/keys.ts`.
+- Test gotcha (found 2026-10-26): Vitest node-environment tests resolve `@expertmotion/*` workspace packages to their `dist/` builds (Vite's `resolve.conditions: ['source']` applies to jsdom/web tests only), so after changing a package run `tsc -b packages/…` (part of `npm run typecheck`, first step of `scripts/verify.sh`) before running node tests that import it, or they test the stale build.
 - Linux gotchas found in Stage 3: `os.freemem()` is MemFree (use `services/memory.ts`); Remotion's render page fetches media cross-origin from its own port (pin the port, CORS for `/media` on that origin); the slim compositor FFmpeg lacks `fps`/`tile` filters and `s16le`/`ipod` muxers.
 - Stage 2 results so far (2026-10-24, Linux): POC-010 curl matrix 44/44; POC-005 DB half 69/69 over 3 runs; POC-004 offline half 19/19 (live half needs a key). Windows proofs not run. SEC-011 and NFR-020 were amended from these results.
 

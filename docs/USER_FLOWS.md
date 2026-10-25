@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | UI/UX lead |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md, ELEMENT_IDS.md, UXRD.md, PRD.md, AI_WORKFLOW.md, ARCHITECTURE.md (§5, §6), PERFORMANCE.md, DECISIONS.md (ADR-002, 008, 011, 014) |
 | Used by | EDITOR_INTERACTION_MODEL.md, UI_UX_SPECIFICATION.md, ONBOARDING_TOUR.md, FRD.md, GOLDEN_SCENARIOS.md, TEST_PLAN.md |
 | Owner of | flow numbering F1 … F15 and their step numbering |
@@ -234,7 +234,7 @@ Preconditions: ≥ 1 Clip. Verifies AI-003 (font size is deterministic), Target 
 |---|---|---|---|---|
 | F6.1 | Clicks `hdr.menu.home` | Library Panel → Home mode | `lib.mode.header` "Text"; Text Panel controls | — |
 | F6.2 | Picks `lib.text.font` Plus Jakarta Sans, `lib.text.size` 96, `lib.text.colour` accent, `lib.text.align` centre, with **no Text Layer selected** | Each pick → scalar intent, target → Theme default for new text (Target Resolution); Compile → `op:theme.setTextDefaults` (propertyKey `theme.textDefaults.<field>`); version per pick (coalesced if < 2 s apart into one version with several ops) | Intent Queue items "Font size 96 · applies to new text" / "Ukuran font 96 · berlaku untuk teks baru"; Player unchanged (no text yet) | `intent.updated`, `composition.updated` |
-| F6.3 | Types "Diskon 50%" into the Add Text field and clicks `lib.text.add` | Intent `{category: text, presetId: preset:text.title (current variant), params: {text}, target: playhead, needsInterpretation: false}` → Compile → `op:text.add` at playhead, default 3 000 ms | Text Layer appears on `stage.timeline.track.text` at the playhead and is selected; Player shows it; inspector opens | `composition.updated` |
+| F6.3 | Types "Diskon 50%" into the Add Text field and clicks `lib.text.add` | Intent `{category: text, presetId: preset:text.title (current variant), params: {text}, target: playhead, needsInterpretation: false}` → Compile → `op:text.add` at playhead, default 3 000 ms | Text Layer appears on `stage.timeline.lane.layer` at the playhead and is selected; Player shows it; inspector opens | `composition.updated` |
 | F6.4 | With the Text Layer selected, picks size 72 | Target → selected Text Layer; `op:text.setStyle {fontSize}`; scalar supersedes within the same key | Item "Font size 72 (replaced 96) → Title 'Diskon 50%'"; Player updates | as above |
 | F6.5 | Picks `lib.text.effect` Highlight | exclusive-group per Text Layer → `op:text.setEffect` | Highlight animates under the text in the Player | as above |
 
@@ -386,7 +386,7 @@ Generate Voice:
 | Step | Creator action | System response | Creator sees |
 |---|---|---|---|
 | F12.4 | `lib.generator.card.voice` → types script, picks voice (id/en Piper voices), speed | `tts.generate` job (sherpa-onnx) | Progress; preview play button on the result |
-| F12.5 | Clicks `.insert` | Plan: `op:generated.insert {kind: voice}` → audio layer at playhead; offers `preset:audio.duck-voice` for the bed | Audio Layer on `stage.timeline.track.audio`; Plan Card shows both steps; Execute |
+| F12.5 | Clicks `.insert` | Plan: `op:generated.insert {kind: voice}` → audio layer at playhead; offers `preset:audio.duck-voice` for the bed | Audio Layer on `stage.timeline.lane.audio`; Plan Card shows both steps; Execute |
 
 Failure branches:
 

@@ -1,7 +1,7 @@
 // Edit-intent pipeline steps 2–7 (docs/AI_WORKFLOW.md §2, §4, §6, §7): typed intents from Design Picks, Target Resolution,
 // multi-target expansion, the Intent Queue reducer (supersede / restore / remove) and the deterministic Compile path.
 import { compileDefaults, getPreset, type Category } from '@expertmotion/catalogue';
-import { deriveTiming, propertyKeysOf, type CompositionModelT, type ElementRefT, type OperationT } from '@expertmotion/composition-model';
+import { deriveTiming, propertyKeysOf, topmostAt, type CompositionModelT, type ElementRefT, type LayerMove, type OperationT } from '@expertmotion/composition-model';
 import { fail, issue, ok, type Result } from '@expertmotion/shared';
 import type { EditIntentT, IntentCategory } from './schemas.js';
 
@@ -23,7 +23,14 @@ export interface DesignPick {
   text?: string;                             // content for a text variant
   /** FR-068 (P1): Timeline drag on the video Track — reorder (toIndex) or trim (trimBeforeMs + durationMs, frame-snapped by the Editor). */
   clipEdit?: { clipId: string; toIndex?: number; trimBeforeMs?: number; durationMs?: number };
+  /**
+   * ADR-027 / FR-068: Timeline drag, trim, lane change or layer key on a text, image, shape or audio layer. Timing (atMs + durationMs,
+   * audio `trimBeforeMs` for a left-edge trim) and an optional `layer` → op:element.setTiming; `move` alone (or `layer` alone) →
+   * op:element.setLayer. One gesture = one pick = one op.
+   */
+  elementEdit?: ElementEdit;
 }
+export interface ElementEdit { kind: 'text' | 'image' | 'shape' | 'audio'; id: string; atMs?: number; durationMs?: number; trimBeforeMs?: number; layer?: number; move?: LayerMove }
 /**
  * FR-090 / FR-097: Output Settings that live outside the Composition Model (Project Settings, not an op). They are recorded in the
  * Intent Queue like any Output pick (visible, supersedable, restorable) but compile to zero operations: the Local Service applies
@@ -49,12 +56,21 @@ const CATEGORY_OF: Record<Category, IntentCategory> = {
 function elementsAt(model: CompositionModelT, ms: number) {
   const t = deriveTiming(model);
   const clipIdx = model.tracks.video.findIndex((c) => { const w = t.elementWindows[c.id]!; return ms >= w.fromMs && ms < w.toMs; });
-  const text = model.tracks.text.find((x) => ms >= x.timing.atMs && ms < x.timing.atMs + x.timing.durationMs);
+  const text = topmostAt(model, ms, ['text']);                       // ADR-027: the front-most text when several play at once
   return { clip: clipIdx >= 0 ? model.tracks.video[clipIdx] : undefined, text };
 }
 
 /** Builds the operation an intent stands for on one resolved target (used both for Compile and for the property key). */
 function opFor(pick: DesignPick, target: ElementRefT | undefined, model: CompositionModelT): { op: OperationT; complete: boolean } | null {
+  if (pick.elementEdit) {
+    const e = pick.elementEdit, el: ElementRefT = { kind: e.kind, id: e.id };
+    if (e.atMs !== undefined || e.durationMs !== undefined) {
+      const cur = elementTiming(model, e);
+      return { op: { op: 'op:element.setTiming', target: el, args: { atMs: e.atMs ?? cur?.atMs ?? 0, durationMs: e.durationMs ?? cur?.durationMs ?? 100,
+        ...(e.trimBeforeMs !== undefined ? { trimBeforeMs: e.trimBeforeMs } : {}), ...(e.layer !== undefined ? { layer: e.layer } : {}) } }, complete: true };
+    }
+    return { op: { op: 'op:element.setLayer', target: el, args: e.move !== undefined ? { move: e.move } : { layer: e.layer ?? 0 } }, complete: true };
+  }
   if (pick.clipEdit) {
     const e = pick.clipEdit, clip = { kind: 'clip' as const, id: e.clipId };
     if (e.toIndex !== undefined) return { op: { op: 'op:clip.move', target: clip, args: { toIndex: e.toIndex } }, complete: true };
@@ -109,11 +125,18 @@ function opFor(pick: DesignPick, target: ElementRefT | undefined, model: Composi
   return { op, complete: missing.length === 0 };
 }
 
+/** Current start/length of an element edit's target (audio without a length runs to the end of the video). */
+function elementTiming(model: CompositionModelT, e: ElementEdit): { atMs: number; durationMs: number } | undefined {
+  if (e.kind === 'audio') { const a = model.tracks.audio.find((x) => x.id === e.id); return a ? { atMs: a.atMs, durationMs: a.durationMs ?? Math.max(100, deriveTiming(model).durationMs - a.atMs) } : undefined; }
+  const x = e.kind === 'text' ? model.tracks.text.find((y) => y.id === e.id) : model.tracks.overlay.find((o) => o.id === e.id && o.kind === e.kind);
+  return x?.timing;
+}
+
 /** Target Resolution table (AI_WORKFLOW §4). Returns the concrete targets, or an EM issue when the pick cannot be placed. */
 export function resolveTargets(pick: DesignPick, model: CompositionModelT): Result<{ targets: Array<ElementRefT | undefined>; label: string }> {
   const sel = pick.selection ?? [];
   const p = pick.presetId ? getPreset(pick.presetId) : undefined;
-  const cat: Category | 'field' | 'output' | 'clip' | 'instruction' = pick.clipEdit ? 'clip' : pick.output ? 'output' : pick.field ? 'field' : p ? p.category : 'instruction';
+  const cat: Category | 'field' | 'output' | 'clip' | 'element' | 'instruction' = pick.elementEdit ? 'element' : pick.clipEdit ? 'clip' : pick.output ? 'output' : pick.field ? 'field' : p ? p.category : 'instruction';
   const v = model.tracks.video;
   const at = elementsAt(model, pick.playheadMs ?? 0);
   switch (cat) {
@@ -122,6 +145,13 @@ export function resolveTargets(pick: DesignPick, model: CompositionModelT): Resu
       const i = v.findIndex((c) => c.id === id);
       if (i < 0) return fail([issue('EM-2203', 'That clip no longer exists.', 'block', 'clipEdit.clipId')]);
       return ok({ targets: [{ kind: 'clip' as const, id }], label: `clip ${i + 1}` });
+    }
+    case 'element': {
+      const e = pick.elementEdit!;
+      if (!elementTiming(model, e)) return fail([issue('EM-2203', `That ${e.kind} no longer exists.`, 'block', 'elementEdit.id')]);
+      if (e.atMs === undefined && e.durationMs === undefined && e.layer === undefined && e.move === undefined) return fail([issue('EM-2102', 'Nothing to change.', 'block', 'elementEdit')]);
+      const what = e.atMs !== undefined || e.durationMs !== undefined ? (e.layer !== undefined ? 'timing and layer' : 'timing') : e.move ? `layer ${e.move}` : `layer ${(e.layer ?? 0) + 1}`;
+      return ok({ targets: [{ kind: e.kind, id: e.id }], label: `${e.kind} ${what}` });
     }
     case 'transition': {
       if (v.length < 2) return fail([issue('EM-2202', 'Add at least two clips before choosing a transition.', 'block', 'target')]);
@@ -172,11 +202,11 @@ export function createIntents(pick: DesignPick, ctx: IntentContext): Result<Edit
   const now = ctx.now ?? (() => new Date().toISOString());
   const p = pick.presetId ? getPreset(pick.presetId) : undefined;
   if (pick.presetId && !p) return fail([issue('EM-2101', `Unknown design preset ${pick.presetId}.`, 'block', 'presetId')]);
-  const category: IntentCategory = pick.clipEdit ? 'asset' : pick.output ? 'layout' : pick.field ? 'text' : p ? CATEGORY_OF[p.category] : (pick.category ?? 'layout');
-  const instructionOnly = !p && !pick.field && !pick.output && !pick.clipEdit;
+  const category: IntentCategory = pick.elementEdit ? (pick.elementEdit.kind === 'audio' ? 'audio' : pick.elementEdit.kind === 'text' ? 'text' : pick.elementEdit.kind === 'shape' ? 'shape' : 'asset') : pick.clipEdit ? 'asset' : pick.output ? 'layout' : pick.field ? 'text' : p ? CATEGORY_OF[p.category] : (pick.category ?? 'layout');
+  const instructionOnly = !p && !pick.field && !pick.output && !pick.clipEdit && !pick.elementEdit;
   // Persisted intents must be recompilable without the original pick: stash its deterministic inputs under `__` keys.
   const stash: Record<string, unknown> = { ...(pick.params ?? {}),
-    ...(pick.field ? { __field: pick.field, __value: pick.value } : {}), ...(pick.output ? { __output: pick.output } : {}), ...(pick.clipEdit ? { __clipEdit: pick.clipEdit } : {}),
+    ...(pick.field ? { __field: pick.field, __value: pick.value } : {}), ...(pick.output ? { __output: pick.output } : {}), ...(pick.clipEdit ? { __clipEdit: pick.clipEdit } : {}), ...(pick.elementEdit ? { __elementEdit: pick.elementEdit } : {}),
     ...(pick.text !== undefined ? { __text: pick.text } : {}), ...(pick.assetId ? { __assetId: pick.assetId } : {}), ...(pick.playheadMs !== undefined ? { __playheadMs: pick.playheadMs } : {}) };
   const base = (over: Partial<EditIntentT>): EditIntentT => ({
     id: ctx.newId(), projectId: pick.projectId, source: pick.source, createdAt: now(), category,
@@ -282,9 +312,10 @@ export function pickFromIntent(i: EditIntentT, extra: Partial<DesignPick> = {}):
   const field = p['__field'] as TextField | undefined; const value = p['__value'];
   const output = p['__output'] as DesignPick['output'] | undefined;
   const clipEdit = p['__clipEdit'] as DesignPick['clipEdit'] | undefined;
+  const elementEdit = p['__elementEdit'] as DesignPick['elementEdit'] | undefined;
   const text = p['__text'] as string | undefined; const assetId = p['__assetId'] as string | undefined; const playheadMs = p['__playheadMs'] as number | undefined;
   for (const k of Object.keys(p)) if (k.startsWith('__')) delete p[k];
-  return { projectId: i.projectId, source: i.source, ...(i.presetId ? { presetId: i.presetId } : {}), ...(field ? { field, value } : {}), ...(output ? { output } : {}), ...(clipEdit ? { clipEdit } : {}),
+  return { projectId: i.projectId, source: i.source, ...(i.presetId ? { presetId: i.presetId } : {}), ...(field ? { field, value } : {}), ...(output ? { output } : {}), ...(clipEdit ? { clipEdit } : {}), ...(elementEdit ? { elementEdit } : {}),
     ...(Object.keys(p).length ? { params: p } : {}), ...(text !== undefined ? { text } : {}), ...(assetId ? { assetId } : {}), ...(playheadMs !== undefined ? { playheadMs } : {}), ...extra };
 }
 

@@ -169,7 +169,11 @@ async function runProbe(ctx: ServiceContext, agent: AgentT, t: ProbeTarget): Pro
     const latencyMs = Date.now() - t0;
     if (ac.signal.aborted) return { ...base, ok: false, latencyMs, code: 'EM-8202' };
     const em = e instanceof EmError ? e : mapProviderError(e);
-    return { ...base, ok: false, latencyMs, code: em.code === 'EM-4003' && isOffline(e instanceof EmError ? e.cause ?? e : e) ? 'EM-8201' : em.code };
+    // The provider's own reason (EM-4105 refused requests: e.g. "credit balance is too low") is shown next to the code.
+    const rawReason = (em.details as Record<string, unknown> | undefined)?.['reason'];
+    const reason = typeof rawReason === 'string' ? rawReason.slice(0, 300) : undefined;
+    ctx.log.warn({ agent: base.agent, provider: t.provider, model: t.modelId, code: em.code, ...(reason ? { reason } : {}) }, 'provider test failed');
+    return { ...base, ok: false, latencyMs, code: em.code === 'EM-4003' && isOffline(e instanceof EmError ? e.cause ?? e : e) ? 'EM-8201' : em.code, ...(reason ? { reason } : {}) };
   } finally { st.providerCalls.delete(ac); }
 }
 

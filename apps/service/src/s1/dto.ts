@@ -64,6 +64,9 @@ export const DesignPickInput = z.object({
   text: z.string().min(1).max(500).optional(),
   /** FR-068 (P1): Timeline drag on the video Track (op:clip.move / op:clip.setTrim). */
   clipEdit: z.object({ clipId: z.string().min(1).max(64), toIndex: z.number().int().min(0).optional(), trimBeforeMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(100).optional() }).strict().optional(),
+  /** ADR-027 / FR-068: Timeline drag / trim / lane change / layer key on a text, image, shape or audio layer (op:element.setTiming / op:element.setLayer). */
+  elementEdit: z.object({ kind: z.enum(['text', 'image', 'shape', 'audio']), id: z.string().min(1).max(64), atMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(100).optional(),
+    trimBeforeMs: z.number().int().min(0).optional(), layer: z.number().int().min(0).max(999).optional(), move: z.enum(['up', 'down', 'front', 'back']).optional() }).strict().optional(),
 }).strict();
 export type DesignPickInputT = z.infer<typeof DesignPickInput>;
 /** R-065 (FR-095 / FR-097): fully specified picks applied as one unit (one Composition Version); each pick's own baseVersion is ignored. */

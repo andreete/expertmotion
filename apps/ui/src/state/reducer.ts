@@ -340,7 +340,7 @@ function pruneSelection(sel: ElementRefT[], head: VersionDto): ElementRefT[] {
     if (s.kind === 'clip') return m.tracks.video.some((c) => c.id === s.id);
     if (s.kind === 'text') return m.tracks.text.some((c) => c.id === s.id);
     if (s.kind === 'audio') return m.tracks.audio.some((c) => c.id === s.id);
-    if (s.kind === 'shape') return m.tracks.overlay.some((c) => c.id === s.id);
+    if (s.kind === 'shape' || s.kind === 'image') return m.tracks.overlay.some((c) => c.id === s.id);
     if (s.kind === 'cut') return (s.index ?? 0) < Math.max(0, m.tracks.video.length - 1);
     return true;
   });

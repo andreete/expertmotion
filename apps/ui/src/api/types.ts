@@ -120,7 +120,7 @@ export interface CapabilityRow {
 /** R-103 provider facts for the Add form (FR-111, FR-112). */
 export interface ProviderKindInfo { provider: ProviderKind; enabled: boolean; priority: 'P0' | 'P1' | 'P2'; termsUrl: string | null; keyPattern: string | null; keyExample: string | null }
 /** R-102 one row per agent (FR-116). */
-export interface ProbeResultDto { agent: AgentKind; modelId: string; ok: boolean; latencyMs: number; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; code?: string }
+export interface ProbeResultDto { agent: AgentKind; modelId: string; ok: boolean; latencyMs: number; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; code?: string; reason?: string }
 /** FR-130 workload row (inside HardwareTickDto.workload.items). */
 export interface WorkloadItemDto { kind: 'render' | 'download' | 'ingest' | 'generator' | 'agent'; id: string; label: string; displayName?: DisplayNameDto; status: string; progress: number | null; cancellable: boolean; pausedReason: 'render' | null }
 export interface AssignmentDto { agent: AgentKind; connectionId: Id; modelId: string; settings: { temperature?: number; maxTokens?: number; effort?: 'low' | 'medium' | 'high' } }
@@ -201,6 +201,7 @@ export interface HealthDto {
 }
 
 // ── request bodies ──
+export interface ElementEdit { kind: 'text' | 'image' | 'shape' | 'audio'; id: Id; atMs?: number; durationMs?: number; trimBeforeMs?: number; layer?: number; move?: 'up' | 'down' | 'front' | 'back' }
 export interface DesignPickInput {
   source: 'ui' | 'chat'; category: IntentCategory; presetId?: string; params?: Record<string, unknown>; target: ElementRefT; selection?: ElementRefT[]; playheadMs?: number;
   instruction?: string; baseVersion: string; plan?: 'auto' | 'none';
@@ -208,6 +209,8 @@ export interface DesignPickInput {
   output?: { kind: 'ratio' | 'resolution' | 'fps' | 'autoRatio' | 'performanceProfile'; value: unknown; customRatio?: { w: number; h: number } };
   /** FR-068 (P1): Timeline drag on the video Track. */
   clipEdit?: { clipId: Id; toIndex?: number; trimBeforeMs?: number; durationMs?: number };
+  /** ADR-027 / FR-068: Timeline drag / trim / lane change / layer key on a text, image, shape or audio layer. */
+  elementEdit?: ElementEdit;
   /** Deterministic Text Panel field pick (FR-020…FR-028; `content` edits the selected text, FR-027). */
   field?: string; value?: unknown;
   /** FR-027 Add Text content (with a `preset:text.*` variant). */

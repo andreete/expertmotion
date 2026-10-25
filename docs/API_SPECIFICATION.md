@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Local Service lead |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 005, 006, 010, 013, 014, 015), ARCHITECTURE.md §4–§7, BLUEPRINT.md §3–§4, SECURITY.md (SEC-002, SEC-008, SEC-010), DATABASE_SCHEMA.md (tables, Composition Model), AI_WORKFLOW.md §3, §5, §6, §8, §12, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md §2, §3, §7, ERROR_CATALOGUE.md, SECURITY.md (SEC-), TRD.md §3.2 |
 | Used by | apps/ui (client), apps/service (routes), apps/desktop (lifecycle calls), TEST_PLAN.md (contract tests), FRD.md (FR- acceptance), MCP_AND_TOOLING.md |
 | Owner of | route table, request/response DTOs named here, HTTP status ↔ `EM-` mapping, pagination, idempotency, media grant lifecycle (API side; control in SEC-010), SSE event names and payloads, reconnection semantics |
@@ -508,6 +508,8 @@ export const DesignPickInput = z.object({
   output: z.object({ kind: z.enum(['ratio','resolution','fps','autoRatio','performanceProfile']), value: z.unknown(), customRatio: z.object({ w, h }).optional() }).optional(),   // performanceProfile: value ∈ PerformanceProfile, zero-op settings intent (FR-090)
   assetId: z.string().optional(),                                  // music bed / sfx asset
   text: z.string().min(1).max(500).optional(),                     // FR-027 Add Text content with a `preset:text.*` variant; without it a variant pick re-styles the selected Text Layer (FR-025)
+  clipEdit: z.object({ clipId, toIndex?, trimBeforeMs?, durationMs? }).optional(),   // FR-068 video Clip drag → op:clip.move / op:clip.setTrim
+  elementEdit: z.object({ kind: z.enum(['text','image','shape','audio']), id, atMs?, durationMs?, trimBeforeMs?, layer?: 0..999, move?: z.enum(['up','down','front','back']) }).optional(),   // ADR-027 Timeline drag / trim / lane / layer key → op:element.setTiming (timing ± layer) or op:element.setLayer; EM-2203 when gone
 });
 ```
 

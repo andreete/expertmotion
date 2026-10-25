@@ -1,6 +1,7 @@
 import { getPreset } from '@expertmotion/catalogue';
 import { fail, issue, ok, sha256Canonical, type Result } from '@expertmotion/shared';
 import { CompositionModel, type CompositionModelT, type ProjectSettingsT, type ThemeT } from './schema.js';
+import { assignLanesV1 } from './layers.js';
 
 export const DEFAULT_SETTINGS: ProjectSettingsT = Object.freeze({ fps: 30, ratio: '9:16', resolution: '1080p', autoRatio: true, language: 'id' }) as ProjectSettingsT;
 
@@ -12,7 +13,7 @@ export function defaultTheme(paletteId = 'preset:palette.editorial-dark'): Theme
 
 export function createEmptyModel(projectId: string, settings: Partial<ProjectSettingsT> = {}, theme?: ThemeT): CompositionModelT {
   return CompositionModel.parse({
-    schemaVersion: 1, projectId, settings: { ...DEFAULT_SETTINGS, ...settings }, theme: theme ?? defaultTheme(),
+    schemaVersion: 2, projectId, settings: { ...DEFAULT_SETTINGS, ...settings }, theme: theme ?? defaultTheme(),
     tracks: { video: [], overlay: [], text: [], caption: { styleId: null, params: {}, pages: [] }, audio: [] },
     transitions: [], background: null, durationPolicy: 'fit-content',
   });
@@ -21,9 +22,12 @@ export function createEmptyModel(projectId: string, settings: Partial<ProjectSet
 /** composition_versions.hash and plan baseVersion (DATABASE_SCHEMA.md §4.5). */
 export const hashModel = (model: CompositionModelT): string => sha256Canonical(model);
 
-export const CURRENT_SCHEMA_VERSION = 1;
-/** Lazy migration of stored JSON to the current schema (DATABASE_SCHEMA.md §5). v1 is current; future steps go in MIGRATIONS. */
-const MIGRATIONS: Record<number, (json: Record<string, unknown>) => Record<string, unknown>> = {};
+export const CURRENT_SCHEMA_VERSION = 2;
+/** Lazy migration of stored JSON to the current schema (DATABASE_SCHEMA.md §5). MIGRATIONS[v] turns schema v into v + 1. */
+const MIGRATIONS: Record<number, (json: Record<string, unknown>) => Record<string, unknown>> = {
+  // ADR-027: v1 → v2 adds `layer` to texts/images/shapes and `lane` to audio layers, keeping the v1 picture (overlays under texts).
+  1: (json) => ({ ...assignLanesV1(json), schemaVersion: 2 }),
+};
 export function migrateModel(json: unknown): Result<CompositionModelT> {
   if (!json || typeof json !== 'object') return fail([issue('EM-2001', 'Stored composition is not an object.', 'block', '')]);
   let cur = json as Record<string, unknown>;

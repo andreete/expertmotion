@@ -1,4 +1,4 @@
-// Composition Model v1: verbatim transcription of docs/DATABASE_SCHEMA.md §4 (the owner). Zod 4 requires a key schema
+// Composition Model v2 (v1 + `layer` on visual items and `lane` on audio layers, ADR-027): verbatim transcription of docs/DATABASE_SCHEMA.md §4 (the owner). Zod 4 requires a key schema
 // for records, so `z.record(z.unknown())` in the doc is written `z.record(z.string(), z.unknown())` here.
 import { z } from 'zod';
 
@@ -32,6 +32,8 @@ export const Theme = z.object({
 export const Position = z.object({ x: z.number(), y: z.number() });   // u, origin = frame centre
 export const Size = z.object({ w: z.number(), h: z.number() });       // u
 export const Timing = z.object({ atMs: z.number().int().min(0), durationMs: z.number().int().min(100) });
+/** ADR-027: one Timeline lane per value; higher = more in front (texts, images, shapes); for audio the row under the video Track (0 = nearest). */
+export const Lane = z.number().int().min(0);
 
 export const Motion = z.object({
   presetId: PresetId, durationMs: z.number().int(), delayMs: z.number().int().default(0),
@@ -59,7 +61,7 @@ export const Transition = z.object({
 export const TextLayer = z.object({
   id: z.string(), variantId: PresetId,
   text: z.string().min(1).max(500),
-  timing: Timing, position: Position, maxWidth: z.number().optional(),
+  timing: Timing, layer: Lane, position: Position, maxWidth: z.number().optional(),
   style: z.object({
     fontFamily: z.string().optional(), fontSize: z.number().optional(), weight: z.number().optional(), colour: Hex.optional(),
     align: z.enum(['left', 'center', 'right']).optional(), opacity: z.number().optional(), italic: z.boolean().optional(),
@@ -69,11 +71,11 @@ export const TextLayer = z.object({
 });
 
 export const OverlayImage = z.object({
-  kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, position: Position, size: Size,
+  kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size,
   objectFit: z.enum(['cover', 'contain']), opacity: z.number(), motion: Motion.nullable(), effects: z.array(EffectInstance).max(3),
 });
 export const OverlayShape = z.object({
-  kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, position: Position, size: Size,
+  kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, layer: Lane, position: Position, size: Size,
   fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional(), params: Params.default({}), motion: Motion.nullable(),
 });
 export const OverlayElement = z.discriminatedUnion('kind', [OverlayImage, OverlayShape]);
@@ -87,7 +89,7 @@ export const CaptionTrack = z.object({
 
 export const AudioLayer = z.object({
   id: z.string(), assetId: z.string(), role: z.enum(['bed', 'voice', 'sfx']),
-  atMs: z.number().int().min(0), durationMs: z.number().int().min(100).optional(),
+  atMs: z.number().int().min(0), durationMs: z.number().int().min(100).optional(), lane: Lane,
   trimBeforeMs: z.number().int().min(0).default(0), volume: z.number().min(0).max(1), loop: z.boolean().default(false),
   fadeInMs: z.number().int().default(0), fadeOutMs: z.number().int().default(0),
   ducking: z.object({ presetId: PresetId, params: Params.default({}) }).nullable(),
@@ -96,7 +98,7 @@ export const AudioLayer = z.object({
 export const Background = z.object({ presetId: PresetId, params: Params.default({}) });
 
 export const CompositionModel = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   projectId: z.string(),
   settings: ProjectSettings,
   theme: Theme,
@@ -120,6 +122,8 @@ export type ClipT = z.infer<typeof Clip>;
 export type TransitionT = z.infer<typeof Transition>;
 export type TextLayerT = z.infer<typeof TextLayer>;
 export type OverlayElementT = z.infer<typeof OverlayElement>;
+export type OverlayImageT = z.infer<typeof OverlayImage>;
+export type OverlayShapeT = z.infer<typeof OverlayShape>;
 export type CaptionPageT = z.infer<typeof CaptionPage>;
 export type AudioLayerT = z.infer<typeof AudioLayer>;
 export type MotionT = z.infer<typeof Motion>;

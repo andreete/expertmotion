@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Database and security engineer |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 002, 006), ARCHITECTURE.md, AI_WORKFLOW.md, DESIGN_CATALOGUE.md, PERFORMANCE.md |
 | Used by | API_SPECIFICATION.md, BLUEPRINT.md, SECURITY.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md |
 | Owner of | SQLite DDL, migrations policy, encryption/key wrapping, the Composition Model JSON Schema, checkpoint/backup formats |
@@ -294,14 +294,14 @@ CREATE TABLE audit_log (                      -- security-relevant events, no se
 
 ```ts
 export const CompositionModel = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),              // v2 (ADR-027): `layer` on texts/images/shapes, `lane` on audio layers (§5.2)
   projectId: z.string(),
   settings: ProjectSettings,
   theme: Theme,
   tracks: z.object({
     video:   z.array(Clip),                 // ordered; adjacent clips define Cuts
-    overlay: z.array(OverlayElement),       // images, shapes, generated stills
-    text:    z.array(TextLayer),
+    overlay: z.array(OverlayElement),       // images, shapes, generated stills (stacking by `layer`, not by array order)
+    text:    z.array(TextLayer),            // shares the `layer` stacking order with overlay
     caption: CaptionTrack,                  // style + pages
     audio:   z.array(AudioLayer),
   }),
@@ -334,6 +334,7 @@ export const Theme = z.object({
 const Position = z.object({ x: z.number(), y: z.number() });      // in u (layout units), origin centre of frame
 const Size = z.object({ w: z.number(), h: z.number() });          // in u
 const Timing = z.object({ atMs: z.number().int().min(0), durationMs: z.number().int().min(100) });
+const Lane = z.number().int().min(0);        // ADR-027: one Timeline lane per value; texts/images/shapes: higher = more in front
 
 export const Clip = z.object({
   id: z.string(), assetId: z.string(),
@@ -355,15 +356,15 @@ export const EffectInstance = z.object({ presetId: PresetId, params: z.record(z.
 export const TextLayer = z.object({
   id: z.string(), variantId: PresetId,          // preset:text.*
   text: z.string().min(1).max(500),
-  timing: Timing, position: Position, maxWidth: z.number().optional(),
+  timing: Timing, layer: Lane, position: Position, maxWidth: z.number().optional(),
   style: z.object({ fontFamily: z.string().optional(), fontSize: z.number().optional(), weight: z.number().optional(), colour: Hex.optional(), align: z.enum(['left','center','right']).optional(), opacity: z.number().optional(), italic: z.boolean().optional() }),
   effect: z.object({ presetId: PresetId, params: z.record(z.unknown()).default({}) }).nullable(),
   motion: Motion.nullable(),
 });
 
 export const OverlayElement = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, position: Position, size: Size, objectFit: z.enum(['cover','contain']), opacity: z.number(), motion: Motion.nullable(), effects: z.array(EffectInstance).max(3) }),
-  z.object({ kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, position: Position, size: Size, fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional() /* op:overlay.setOpacity */, params: z.record(z.unknown()).default({}), motion: Motion.nullable() }),
+  z.object({ kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size, objectFit: z.enum(['cover','contain']), opacity: z.number(), motion: Motion.nullable(), effects: z.array(EffectInstance).max(3) }),
+  z.object({ kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, layer: Lane, position: Position, size: Size, fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional() /* op:overlay.setOpacity */, params: z.record(z.unknown()).default({}), motion: Motion.nullable() }),
 ]);
 
 export const CaptionPage = z.object({ text: z.string(), startMs: z.number().int(), durationMs: z.number().int(), tokens: z.array(z.object({ text: z.string(), fromMs: z.number().int(), toMs: z.number().int() })) });
@@ -371,7 +372,8 @@ export const CaptionTrack = z.object({ styleId: PresetId.nullable(), params: z.r
 
 export const AudioLayer = z.object({
   id: z.string(), assetId: z.string(), role: z.enum(['bed','voice','sfx']),
-  atMs: z.number().int().min(0), durationMs: z.number().int().min(100).optional(), // bed: loop to project end
+  atMs: z.number().int().min(0), durationMs: z.number().int().min(100).optional(), // absent: runs (or loops) to the project end; v2: a looping layer with durationMs stops there
+  lane: Lane,                                                                      // ADR-027: audio row under the video Track (0 = nearest); no stacking meaning
   trimBeforeMs: z.number().int().min(0).default(0), volume: z.number().min(0).max(1), loop: z.boolean().default(false),
   fadeInMs: z.number().int().default(0), fadeOutMs: z.number().int().default(0),
   ducking: z.object({ presetId: PresetId, params: z.record(z.unknown()).default({}) }).nullable(),
@@ -385,6 +387,8 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 - `durationMs = durationPolicy === 'fixed' ? fixedDurationMs : Σ video[i].durationMs − Σ transitions[j].durationMs` (clamped ≥ 1000). Overlay/text/audio elements beyond the end are clipped at render; the validator warns.
 - Frames: `frames(ms) = Math.round(ms / 1000 * fps)`; width/height from the PERFORMANCE.md table.
 - Cut positions: `cutStartMs[k] = Σ_{i≤k} video[i].durationMs − Σ_{j≤k} transitions[j].durationMs`.
+- Render order (ADR-027): background, video Track, video dim, then texts / images / shapes sorted by `layer` ascending (stable: overlays before texts on equal layers, which never overlap), then captions on top. `visualStack(model)` in `packages/composition-model/src/layers.ts` is the one implementation (Engine and Timeline View).
+- Lanes (ADR-027): items on one lane (`layer` for texts/images/shapes, `lane` for audio) never overlap in time; `applyOps` keeps both numberings dense (0 … n−1). Lane rule: a new item gets the layer just above every item it overlaps (0 when none; audio: first free lane); a move, trim or explicit lane that would overlap goes to the lane above, or to a new lane inserted there.
 
 ### 4.4 Invariants checked by `validate(model)`
 
@@ -401,6 +405,7 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 | CM-009 | caption pages ordered, non-overlapping, within duration | warn → trim |
 | CM-010 | `settings.resolution` allowed for the current Hardware Tier | warn (UI disables higher presets; Export preflight reports EM-3105 and offers the highest allowed preset) |
 | CM-011 | ids unique across all elements | block |
+| CM-012 | no two items on one lane (same `layer`, or same audio `lane`) overlap in time (ADR-027; `applyOps` never produces it, hand-made JSON can; the render order stays defined) | warn |
 
 ### 4.5 Versioning and hashing
 
@@ -430,6 +435,13 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 
 Later migrations append rows here (ADR-024).
 
+### 5.2 Composition Model schema versions (`migrateModel`, `packages/composition-model/src/model.ts`)
+
+| schemaVersion | Change | Migration from the previous version |
+|---|---|---|
+| 1 | initial (§4 as baselined 2026-10-24) | — |
+| 2 | ADR-027 (2026-10-26): `layer` on TextLayer / OverlayImage / OverlayShape, `lane` on AudioLayer; looping audio honours `durationMs` | `MIGRATIONS[1]` = `assignLanesV1`: visual items are taken in the v1 render order (overlays in array order, then texts in array order) and each gets the lowest layer above every earlier item it overlaps in time, so every overlapping pair keeps its v1 front/back order and lanes are dense; audio layers get the first free lane in array order; `durationMs` is removed from v1 looping layers (v1 looped them to the end regardless). Golden fixture: `test/fixtures/model-v1.json` → `model-v2.expected.json`. Stored versions migrate lazily on load; opening a project commits the migrated head as a `cause = 'system'` version (R-016); checkpoints written before the migration still verify against the hash of their stored JSON |
+
 ## 6. Backup, restore, portability
 
 - **Backup** (`hdr.action.backup`): zip containing `project.json` (project row + settings), `versions/*.json` (last 50 versions), `intents.json`, `plans.json`, `media/` (originals only; proxies regenerated), `outputs/` optional, `manifest.json` with hashes. Encrypted with Argon2id-derived key from a passphrase (default) or plain with warning. Provider keys and licence are never included.
@@ -457,7 +469,7 @@ Later migrations append rows here (ADR-024).
 
 ```json
 {
-  "schemaVersion": 1, "projectId": "01JAZ…",
+  "schemaVersion": 2, "projectId": "01JAZ…",
   "settings": { "fps": 30, "ratio": "9:16", "resolution": "1080p", "autoRatio": false, "language": "id" },
   "theme": { "paletteId": "preset:palette.editorial-dark", "fontPairId": "preset:fontpair.jakarta-inter", "defaultEasingId": "preset:easing.out-cubic", "textDefaults": { "fontSize": 64, "weight": 700, "colour": "#F4EFE6", "align": "center", "opacity": 1 } },
   "tracks": {
@@ -466,9 +478,9 @@ Later migrations append rows here (ADR-024).
       { "id": "clip2", "assetId": "ast2", "trimBeforeMs": 2000, "durationMs": 6000, "playbackRate": 1, "volume": 1, "muted": false, "fadeInMs": 0, "fadeOutMs": 0, "objectFit": "cover", "motion": null, "effects": [{ "presetId": "preset:effect.vignette", "params": { "intensity": 0.4 }, "motion": "static" }] }
     ],
     "overlay": [],
-    "text": [{ "id": "t1", "variantId": "preset:text.title", "text": "Harga cabai naik lagi", "timing": { "atMs": 300, "durationMs": 3000 }, "position": { "x": 0, "y": -200 }, "style": {}, "effect": { "presetId": "preset:texteffect.highlight", "params": {} }, "motion": { "presetId": "preset:motion.rise", "durationMs": 600, "delayMs": 0, "exit": true, "params": {} } }],
+    "text": [{ "id": "t1", "variantId": "preset:text.title", "text": "Harga cabai naik lagi", "timing": { "atMs": 300, "durationMs": 3000 }, "layer": 0, "position": { "x": 0, "y": -200 }, "style": {}, "effect": { "presetId": "preset:texteffect.highlight", "params": {} }, "motion": { "presetId": "preset:motion.rise", "durationMs": 600, "delayMs": 0, "exit": true, "params": {} } }],
     "caption": { "styleId": "preset:caption.karaoke", "params": {}, "pages": [], "language": "id" },
-    "audio": [{ "id": "a1", "assetId": "ast3", "role": "bed", "atMs": 0, "trimBeforeMs": 0, "volume": 0.2, "loop": true, "fadeInMs": 1000, "fadeOutMs": 1000, "ducking": { "presetId": "preset:audio.duck-voice", "params": {} } }]
+    "audio": [{ "id": "a1", "assetId": "ast3", "role": "bed", "atMs": 0, "lane": 0, "trimBeforeMs": 0, "volume": 0.2, "loop": true, "fadeInMs": 1000, "fadeOutMs": 1000, "ducking": { "presetId": "preset:audio.duck-voice", "params": {} } }]
   },
   "transitions": [{ "cutIndex": 0, "presetId": "preset:transition.fade", "durationMs": 500, "timing": "linear", "params": {} }],
   "background": { "presetId": "preset:background.video-dim", "params": {} },

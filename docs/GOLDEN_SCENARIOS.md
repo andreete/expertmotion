@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (expected values are the contract; fixtures marked **[TO SELECT]** are chosen in Stage 2) |
 | Owner | AI agent architect + QA lead |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md, AI_WORKFLOW.md (§3 schemas, §4 Target Resolution, §5 ops, §6 Property Classes, §7 Compile vs Rewrite, §8 tools, §9 hand-off, §12 failures, §13 evaluation), DESIGN_CATALOGUE.md, PERFORMANCE.md, ELEMENT_IDS.md, DATABASE_SCHEMA.md (§4 Composition Model), ERROR_CATALOGUE.md, MCP_AND_TOOLING.md, PRD.md, UXRD.md §4 |
 | Used by | TEST_PLAN.md, QA_PROCESS.md, AGENT_DESIGN.md, SYSTEM_PROMPT.md, POC_PLAN.md, DEFINITION_OF_DONE.md, ROADMAP.md |
 | Owner of | the 20 Golden Scenarios, the fixture set, the base states B0–B3, the scenario execution harness contract (`test/fixtures/plans/GS-xx.json`) |
@@ -100,8 +100,9 @@ Masih layak di 2026? Kita lihat.
 | GS-18 | Budget exceeded → EM-4201 | P0 | Editor Agent | ID |
 | GS-19 | Superseded intent restored | P0 | Compile | — |
 | GS-20 | English: "make the captions pop and add soft music bed, duck under my voice" | P0 (with P1/P2 markers) | Editor Agent | EN |
+| GS-21 | "taruh judul di atas logo": stacking order by the Editor Agent, then a Timeline drag across lanes and Alt+↓ (ADR-027) | P1 (FR-068) | Editor Agent + Compile | ID |
 
-Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS-12, GS-16, GS-17, GS-18 (10 scenarios); English in GS-20; the rest are UI-only.
+Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS-12, GS-16, GS-17, GS-18, GS-21 (11 scenarios); English in GS-20; the rest are UI-only.
 
 ## 3. Scenarios
 
@@ -317,7 +318,7 @@ The op is `op:theme.setTextDefaults {fontFamily?, fontSize?, weight?, colour?, a
 
 **Edge handling**: `fitText` (DESIGN_CATALOGUE §10, CM-008): at u = 1 the 38-character title at 110u does not fit the safe width (≈ 972u) on one line; the renderer wraps to two lines and scales to ≈ 95u (≥ 34u minimum → **no** CM-008 warning). A 120-character text would trigger CM-008 `warn` "Long text was shrunk to fit" / "Teks panjang diperkecil agar pas" and still render inside the safe area.
 
-**Pass criteria**: golden still at 2 000 ms (9:16) shows the full title on two lines inside the safe area with no clipped glyphs; the same model rendered at 16:9 and 1:1 (`op:output.setRatio` in a test loop) also shows the whole text; the Timeline View shows `stage.timeline.element.text` on `stage.timeline.track.text`; no provider call.
+**Pass criteria**: golden still at 2 000 ms (9:16) shows the full title on two lines inside the safe area with no clipped glyphs; the same model rendered at 16:9 and 1:1 (`op:output.setRatio` in a test loop) also shows the whole text; the Timeline View shows `stage.timeline.element.text` on `stage.timeline.lane.layer`; no provider call.
 
 ### GS-06 Effects: Vignette then Film grain (list, dedupe), third effect on T0
 
@@ -928,6 +929,49 @@ The agent is expected to call `catalogue.search {query: "pop", category: "captio
 
 **Pass criteria**: run 1 is valid on the first attempt and contains **no** audio op; the warn risk is shown; run 2 adds exactly one audio layer with ducking; replies are in English; at a still at 9 000 ms the Box caption is visible; an audio-level check on the export shows the bed at −14 dB ± 2 dB relative to its unducked level during `c2`'s speech (duck to 0.15 of 0.2 → ≈ −16.5 dB; tolerance for ramps).
 
+### GS-21 "taruh judul di atas logo": stacking order, then a Timeline drag across lanes
+
+| Field | Value |
+|---|---|
+| Priority | P1 (FR-068, ADR-027; AI-004 for the agent half) |
+| Preconditions | B1 plus, in this order, the title `t1` "Promo Kopi Senja" (`preset:text.title`, 0–3 000 ms) and the logo `o1` (FX-I1, `op:overlay.addImage`, 0–5 000 ms). Lane rule: `t1.layer = 0`, `o1.layer = 1` (the logo went in front of the title it overlaps). Timeline rows: Captions · New layer · Layer 2 (`o1`) · Layer 1 (`t1`) · Video · New audio lane. Duration 19 000 ms. |
+
+**Creator actions**
+
+1. Type in `agent.editor.composer`: "taruh judul di atas logo" → `agent.editor.send`; `agent.editor.execute`.
+2. Drag `t1` on the Timeline right by about 2 s and one row up (end edge near 5 000 ms), release.
+3. With `t1` focused, press Alt+↓.
+4. Ctrl+Z.
+
+**Expected Intent Queue**
+
+| # | category | presetId / params | target (as given) | resolvedTargets | propertyKey | propertyClass | needsInterpretation | status |
+|---|---|---|---|---|---|---|---|---|
+| 1 | layout | — (`instruction: "taruh judul di atas logo"`) | `{kind: 'project'}` | `[]` | `chat:<message>` | scalar | true | queued → planned → executed |
+| 2 | text | `__elementEdit {kind: text, id: t1, atMs: 2000, durationMs: 3000, layer: 0}` | `{kind: 'text', id: t1}` | `[text t1]` | `text:t1.timing\|text:t1.layer` | scalar | false | compiled → executed |
+| 3 | text | `__elementEdit {kind: text, id: t1, move: down}` | `{kind: 'text', id: t1}` | `[text t1]` | `text:t1.layer` | scalar | false | compiled → executed |
+
+Rewrite envelope (step 1): `composition.text[0] = {id: t1, …, layer: 0}`, `composition.overlay[0] = {id: o1, kind: image, asset: logo.png, atMs: 0, durationMs: 5000, layer: 1}`; `capabilities.ops` contains `op:element.setLayer` and `op:element.setTiming`.
+
+**Expected path**: step 1 Editor Agent; steps 2–3 Compile (zero provider calls).
+
+**Expected Edit Plan (step 1)**
+
+```json
+{ "origin": "editor-agent", "goal": "Judul di depan logo",
+  "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "Judul sekarang di depan logo (0–3 detik).",
+    "ops": [ { "op": "op:element.setLayer", "target": { "kind": "text", "id": "t1" }, "args": { "move": "front" } } ] } ],
+  "risks": [], "status": "valid" }
+```
+
+**Expected Composition diff**: step 1 `t1.layer` 0 → 1, `o1.layer` 1 → 0 (dense renumbering; render order logo, title). Step 2 `op:element.setTiming {atMs 2000, durationMs 3000, layer 0}` (the drag's end snapped to the logo end, 5 000 ms): lane 0 holds the logo until 5 000 ms, so the lane rule puts `t1` on the lane above (`t1.layer` 1, still in front). Step 3 `op:element.setLayer {move: down}`: lane 0 is busy at 2–5 s, so `t1` passes below the logo (`t1.layer` 0, `o1.layer` 1). Step 4 restores step 2's version. Duration 19 000 ms throughout.
+
+**Expected render settings**: standard; a still at 2 500 ms after step 3 shows the logo over the title.
+
+**Edge handling**: Alt held during the drag disables snapping (start lands on the frame grid near 1 900–2 000 ms); dropping on the New layer row gives `layer = top + 1`; a removed `t1` rejects the pick with EM-2203.
+
+**Pass criteria**: one op in the agent plan; Timeline rows after step 2 read … Layer 2 (`t1`) · Layer 1 (`o1`) …; zero provider calls for steps 2–3; Undo returns to the step-2 state; reply language Indonesian. Automated: `packages/agents/test/golden/replay.test.ts` (GS-21), `apps/ui/test/timeline-lanes.test.tsx`.
+
 ## 4. How the scenarios are executed
 
 Three harnesses share the same scenario files and the same assertions (AI_WORKFLOW §13).
@@ -950,7 +994,7 @@ Three harnesses share the same scenario files and the same assertions (AI_WORKFL
 | Harness | `FakeProviderAdapter` (MCP_AND_TOOLING §5.1) implements `run()` by matching the incoming request to `turns[i].match` (agent, turn index, and a sha256 of the Rewrite envelope's `intents` + `lockedKeys` + `creatorMessage`) and streaming `turns[i].response`; a mismatch fails the test with a diff of the envelope (this is how envelope regressions are caught) |
 | Scope | the whole Local Service in-process (Express app with supertest, real SQLite in a temp file, real `applyOps`), no Desktop Shell, no Chrome; render steps use the `RenderAdapter` fake except in GS-14/15, which run the real Engine on Windows CI only |
 | Assertions | plan validation results (`status`, `touchesLockedKeys`, `risks`), provider call counts, `agent_runs`/`usage_records` rows, Composition diff, duration, SSE event sequence |
-| Scenarios | GS-08, 09, 10, 11, 12, 17, 18, 20 (plus GS-14, 15 for the render queue with the fake Engine) |
+| Scenarios | GS-08, 09, 10, 11, 12, 17, 18, 20, 21 (plus GS-14, 15 for the render queue with the fake Engine) |
 
 Fixture format:
 
@@ -1064,4 +1108,5 @@ All codes are owned by ERROR_CATALOGUE.md (159 codes, final); every row below ex
 | AI-017 | GS-16 |
 | AI-018 | GS-19 |
 | AI-019 | GS-08 |
+| FR-068 (ADR-027 lanes, drag, trim) | GS-21 |
 | UX-013, UX-033, UX-042, UX-053 | GS-04, GS-12, GS-08/09, GS-05 |

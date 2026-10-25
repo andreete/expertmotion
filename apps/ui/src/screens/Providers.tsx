@@ -182,7 +182,7 @@ function TestResults({ items }: { items: ProbeResultDto[] }) {
         <li key={r.agent} data-agent={r.agent} data-code={r.code} className={r.ok ? 'text-em-success' : 'text-em-warn'}>
           {t(`ui.scr.providers.assign.${r.agent}`)}: {r.ok
             ? t('ui.scr.providers.test.row', { seconds: formatNumber(r.latencyMs / 1000, lang, 1), tokens: formatTokens(r.inputTokens + r.outputTokens, lang), cost: r.costUsd === null ? t('ui.scr.providers.test.nocost') : formatMoney(r.costUsd, r.approximate, lang) })
-            : <>{t(`err.${r.code ?? 'EM-9001'}.title`)} <span className="t-mono text-em-muted">{r.code}</span></>}
+            : <>{t(`err.${r.code ?? 'EM-9001'}.title`)} <span className="t-mono text-em-muted">{r.code}</span>{r.reason ? <span data-el="scr.providers.test.reason" className="block text-[12px] text-em-text-2">{r.reason}</span> : null}</>}
         </li>
       ))}
     </ul>

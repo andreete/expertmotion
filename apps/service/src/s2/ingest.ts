@@ -15,6 +15,7 @@ import { WorkQueue, clamp01, emit, freeBytes, throttle } from './common.js';
 import { getAsset, toAssetDto, type AssetRow } from './assets-repo.js';
 import { SIZE_LIMIT, WaveformReducer, checkLimits, decidePlayable, ffprobe, isFastStart, kindFromExt, normalizeProbe, readHead, sniffMatches, type AssetKind, type MediaFacts } from './probe.js';
 import { ToolError, runTool } from './proc.js';
+import { detectH264, h264Args, type H264Encoder } from './h264.js';
 import { s2 } from './state.js';
 
 export const MAX_ASSETS_PER_PROJECT = 200;
@@ -243,6 +244,7 @@ export class IngestService {
     if (limit) { ctx.log.info({ assetId, reason: limit.reason }, 'asset rejected'); return fail(limit.code, true); }
     if (signal.aborted) return cancelled();
 
+    const h264 = await h264For(ctx);                                      // libopenh264 in the shipped LGPL FFmpeg (no libx264)
     const ff = async (args: string[], stage: IngestStage, timeoutMs: number, durMs?: number | null) => {
       if (await this.yieldToRender(projectId, assetId, signal)) report(stage, 0, true);
       return heavy.run(() => runTool({
@@ -275,7 +277,7 @@ export class IngestService {
         ? ['-v', 'error', '-nostdin', '-y', '-i', original, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy', '-map_metadata', '-1', '-movflags', '+faststart', out]
         : row.kind === 'audio'
           ? ['-v', 'error', '-nostdin', '-y', '-progress', 'pipe:1', '-i', original, '-vn', '-map', '0:a:0', '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-ar', '48000', '-map_metadata', '-1', '-movflags', '+faststart', '-f', 'mp4', out]
-          : transcodeArgs(original, facts, out);
+          : transcodeArgs(original, facts, out, h264);
       try { await ff(args, 'transcode', longTimeout, durMs); } catch (e) {
         if (signal.aborted) return cancelled();
         const enospc = e instanceof ToolError && e.stderrTail.some((l) => /No space left/i.test(l));
@@ -290,7 +292,7 @@ export class IngestService {
       const short = Math.min(facts.width ?? 0, facts.height ?? 0);
       if (short <= 720) cols.proxy_path = cols.playable_path!;
       else if (await optional('proxy', () => ff(['-v', 'error', '-nostdin', '-y', '-progress', 'pipe:1', '-i', playable, '-map', '0:v:0', '-map', '0:a:0?',
-        '-vf', "scale='if(gte(iw,ih),-2,720)':'if(gte(iw,ih),720,-2)':flags=bicubic", '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-pix_fmt', 'yuv420p', '-g', '30', '-keyint_min', '30',
+        '-vf', "scale='if(gte(iw,ih),-2,720)':'if(gte(iw,ih),720,-2)':flags=bicubic", ...h264Args(h264, 'proxy', { width: 1280, height: 720 }), '-pix_fmt', 'yuv420p', '-g', '30', '-keyint_min', '30',
         '-c:a', 'aac', '-b:a', '96k', '-ac', '2', '-ar', '48000', '-map_metadata', '-1', '-movflags', '+faststart', 'proxy.mp4'], 'proxy', longTimeout, durMs))) cols.proxy_path = rel(projectId, assetId, 'proxy.mp4');
     } else if (row.kind === 'image' && !facts.animated) {
       if (await optional('proxy', () => ff(['-v', 'error', '-nostdin', '-y', '-i', original, '-frames:v', '1', '-vf', "scale='min(1920,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease",
@@ -330,12 +332,15 @@ export class IngestService {
 }
 
 /** §3.4 playable H.264/AAC transcode; HDR sources get the tone-map chain (§6). */
-function transcodeArgs(input: string, f: MediaFacts, out: string): string[] {
+/** The H.264 encoder of the ingestion FFmpeg (libx264 in development, libopenh264 in the shipped LGPL build). */
+const h264For = async (ctx: ServiceContext): Promise<H264Encoder> => (await detectH264(ctx.resources.ffmpeg)) ?? 'libopenh264';
+
+export function transcodeArgs(input: string, f: MediaFacts, out: string, enc: H264Encoder = 'libx264'): string[] {
   const filters = ['scale=trunc(iw/2)*2:trunc(ih/2)*2'];
   if (f.hdr) filters.push('zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p');
   const big = Math.max(f.width ?? 0, f.height ?? 0) > 1920 || (f.fps ?? 30) > 60;
-  return ['-v', 'error', '-nostdin', '-y', '-progress', 'pipe:1', '-i', input, '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
-    '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-level', big ? '5.1' : '4.2', '-vf', filters.join(','), '-fps_mode', 'cfr', '-r', String(f.fps ?? 30),
+  return ['-v', 'error', '-nostdin', '-y', '-progress', 'pipe:1', '-i', input, '-map', '0:v:0', '-map', '0:a:0?', ...h264Args(enc, 'playable', { width: f.width ?? null, height: f.height ?? null }, big),
+    '-pix_fmt', 'yuv420p', '-vf', filters.join(','), '-fps_mode', 'cfr', '-r', String(f.fps ?? 30),
     '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-ar', '48000', '-map_metadata', '-1', '-movflags', '+faststart', out];
 }
 

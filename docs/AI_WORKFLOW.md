@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | AI agent architect |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 003, 015), ARCHITECTURE.md, DESIGN_CATALOGUE.md, PERFORMANCE.md |
 | Used by | AGENT_DESIGN.md, SYSTEM_PROMPT.md, API_SPECIFICATION.md, DATABASE_SCHEMA.md, GOLDEN_SCENARIOS.md, TEST_PLAN.md, FRD.md |
 | Owner of | Edit Intent, Edit Plan, Operation, Result, Error, Rollback schemas; the operation vocabulary; Target Resolution; Property Classes; Locked Keys; tool contracts; AI-xxx requirements |
@@ -137,6 +137,8 @@ Applied when `target.kind` is `selection` or `playhead`, or when a category need
 | layout (ratio, resolution, palette, font pair) | — | **project** Output Profile or Theme (`op:output.*`, `op:theme.set`); palette and font-pair Design Picks use category `layout` because they change the whole project look | — |
 | output (profile) | — | project: a **zero-op settings intent** (FR-090/FR-097): `propertyKey` `project.performanceProfile`, scalar, never interpreted; Compile emits no operation; the Local Service applies it to Settings (`defaultPerformanceProfile`), marks it `executed` (no Composition Version, no plan) and keeps the replaced value in `params.__previous`; Restore of the superseded predecessor applies that profile again (Undo) | — |
 | asset (insert, trim) | the Asset/Clip given explicitly | reject | explicit list |
+| element edit (ADR-027 Timeline drag / trim / lane change / layer key on a text, image, shape or audio layer; pick field `elementEdit {kind, id, atMs?, durationMs?, trimBeforeMs?, layer?, move?}`) | the element given explicitly; EM-2203 when it no longer exists, EM-2102 when the edit changes nothing | reject | — (one element per gesture) |
+| *Compile of an element edit* | timing given (± `layer`) → `op:element.setTiming` (the untouched side of a trim comes from the model); only `move` or `layer` → `op:element.setLayer`; category text / shape / audio / asset (image) by kind; `needsInterpretation: false`; propertyKey = the op's keys joined (`text:<id>.timing\|text:<id>.layer`); never sent to the Editor Agent | — | — |
 | generate (voice, music, thumbnail, captions, hashtags) | — | project; result inserted at playhead or as new layer | — |
 
 The resolved target is written to `resolvedTargets` and displayed on the Intent Queue item ("Transition · Fade → all 3 cuts").
@@ -154,11 +156,11 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:clip.setFit` | clip | `{objectFit: 'cover'|'contain', crop?}` | scalar | |
 | `op:transition.set` | cut | `{presetId, durationMs, timing: 'linear'|'spring', params?}` | exclusive-group | validator recomputes total duration |
 | `op:transition.clear` | cut | `{}` | — | |
-| `op:text.add` | playhead/absolute | `{text, variant, atMs, durationMs, position, styleOverrides?}` | list | uses Theme defaults |
+| `op:text.add` | playhead/absolute | `{text, variant, atMs, durationMs, position, styleOverrides?, layer?}` | list | uses Theme defaults; layer by the ADR-027 lane rule (front of everything it overlaps unless `layer` is given) |
 | `op:text.setContent` | text | `{text}` | scalar | |
 | `op:text.setStyle` | text | `{fontFamily?, fontSize? (16..200 u), weight?, italic?, colour?, align?, opacity?, variant?}` | scalar per field | each field its own Locked Key; `variant` (FR-025) sets `variantId`, moves the layer to the variant position and drops its size/weight/align overrides |
 | `op:text.setEffect` | text | `{presetId, params?}` | exclusive-group | text effects |
-| `op:text.setTiming` | text | `{atMs, durationMs}` | scalar | |
+| `op:text.setTiming` | text | `{atMs, durationMs}` | scalar | kept for compatibility; same key and lane rule as `op:element.setTiming` |
 | `op:text.remove` | text | `{}` | — | |
 | `op:caption.importSrt` | project | `{assetId}` | — | P0 caption display path |
 | `op:caption.setStyle` | project | `{presetId, params?}` | exclusive-group | |
@@ -172,11 +174,13 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:effect.add` | clip/text/background | `{presetId, params?}` | list (dedupe by presetId) | max 3 per element (T0: 2) |
 | `op:effect.remove` | clip/text/background | `{presetId}` | — | |
 | `op:effect.setParams` | element+preset | `{params}` | scalar | |
-| `op:shape.add` | absolute | `{presetId, atMs, durationMs, position, size, fill, stroke?}` | list | |
+| `op:shape.add` | absolute | `{presetId, atMs, durationMs, position, size, fill, stroke?, layer?}` | list | layer as `op:text.add` |
 | `op:shape.remove` | shape | `{}` | — | |
-| `op:overlay.addImage` | absolute | `{assetId, atMs, durationMs?=5000, position?, size? (width in u; height from the image aspect), objectFit?='contain', opacity?=1}` | list | ADR-020 addition (FR-029 Insert Image) |
+| `op:overlay.addImage` | absolute | `{assetId, atMs, durationMs?=5000, position?, size? (width in u; height from the image aspect), objectFit?='contain', opacity?=1, layer?}` | list | ADR-020 addition (FR-029 Insert Image); layer as `op:text.add` |
 | `op:overlay.remove` | image | `{}` | — | ADR-020 addition |
 | `op:overlay.setOpacity` | image/shape | `{opacity: 0..1}` | scalar | ADR-020 addition (FR-028 opacity of an overlay image or Shape); key `<kind>:<id>.opacity` |
+| `op:element.setTiming` | text/image/shape/audio | `{atMs, durationMs, trimBeforeMs? (audio only: source offset of a left-edge trim), layer? (0..999)}` | scalar | ADR-027 (FR-068 Timeline drag/trim): start and length of any text, image, shape or audio layer; the item keeps its lane when it is free at the new time, else goes to the lane above (or a new lane inserted there); with `layer` it asks for that lane by the same rule (one op per drag gesture); audio: within the source unless looping (EM-2306), fades clamped to half the length; keys `<kind>:<id>.timing` (+ `<kind>:<id>.layer` with `layer`) |
+| `op:element.setLayer` | text/image/shape/audio | exactly one of `{layer: 0..999}` or `{move: 'up'\|'down'\|'front'\|'back'}` | scalar | ADR-027 stacking order ("put the title above the image" = `move: 'front'` on the title): `up`/`down` one lane (passing the item there when that lane is busy at this time), `front`/`back` in front of / behind every item it overlaps; audio has lanes but no stacking (`layer` or `up` = towards the video Track / `down`; `front`/`back` → EM-2102); key `<kind>:<id>.layer` |
 | `op:audio.addBed` | project | `{assetId, volume, loop, duckingPresetId?}` | list | background music |
 | `op:audio.addLayer` | absolute | `{assetId, atMs, volume, fadeInMs?, fadeOutMs?}` | list | voice, sfx |
 | `op:audio.setDucking` | audio | `{presetId, params?}` | exclusive-group | |
@@ -216,6 +220,7 @@ Conflict matrix for the brief's example "two operations modify the same clip bou
 | Compiled (locked) key appears in an agent op | plan `invalid` with `touchesLockedKeys`; Editor Agent is re-prompted once with the list; if it persists, the op is dropped and the Creator told |
 | Total duration < 1 s or > 30 min after ops | `block` |
 | Caption pages extend past the end | pages trimmed; `warn` |
+| A move, trim or add puts a text/image/shape/audio layer over another item on the same lane | ADR-027 lane rule in `applyOps`: the item goes to the lane above (a new lane is inserted there when that one is busy too); lanes never hold overlapping items (CM-012) and stay dense |
 
 Idempotency: every plan execution is keyed by `planId`; re-sending the same `Execute` is a no-op returning the first result. Retries of provider calls never re-execute ops.
 

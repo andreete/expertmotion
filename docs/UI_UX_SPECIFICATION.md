@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | UI/UX lead |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | MASTER_PROJECT_PROMPT.md §7, §13, §16, GLOSSARY.md, ELEMENT_IDS.md, UXRD.md, USER_FLOWS.md, EDITOR_INTERACTION_MODEL.md, DESIGN_CATALOGUE.md (palettes, labels), PERFORMANCE.md (profiles tooltip, pixel table), AI_WORKFLOW.md (Plan Card, Intent Queue), DECISIONS.md (ADR-010, 011, 012), docs/assets/expertmotion-editor-mockup.png |
 | Used by | FRD.md, TEST_PLAN.md, ACCESSIBILITY_AND_I18N.md, ONBOARDING_TOUR.md, ERROR_CATALOGUE.md, BLUEPRINT.md (apps/ui) |
 | Owner of | design tokens, layout grid, component library, screen specifications, copy deck (UI strings), notification rules, Catalogue Card / Plan Card / Intent Queue item anatomy |
@@ -115,7 +115,7 @@ Icons never appear without a text label or tooltip (UX-043).
 | Columns | 300 / flex / 420 px at 1280–1599 (Agent 360 below 1280, 480 from 1600; resizable 320–900 px, Stage ≥ 640 px); ranges and collapse in EDITOR_INTERACTION_MODEL.md §9–10 |
 | Agent Panel inside | Model Bar, then the two chats sharing the remaining height through `agent.chat.divider` (default 40 % / 60 %, minimums 140 / 200 px, threads scroll internally, composers always visible), each header with `agent.<agent>.maximize` (maximized chat fills the area; the other shows only its header bar, which restores the split), then Output Settings collapsed to its header by default; split ratio, maximized chat and collapsed state persist (FR-099) |
 | Gutters | 16 px panel padding; 8 px between cards; 12 px between sections |
-| Timeline View | 220 px minimum: ruler 24 + 5 Track lanes 36 each + 16 padding; inspector docks to the right of the lanes (260 px) when an element is selected, else hidden |
+| Timeline View | 220 px minimum: ruler 24 + lanes 36 each (at least captions, one layer lane, video, one audio lane; more lanes scroll vertically, ADR-027) + 16 padding; inspector docks to the right of the lanes (260 px) when an element is selected, else hidden |
 | Player frame | letterboxed inside the Stage with 16 px padding; aspect from the current ratio; frame border 1 px `--em-line`, radius `--r-4` |
 | Baseline | 4 px; text sizes from §1.4 |
 
@@ -245,9 +245,9 @@ Implements PRD-007, PRD-009.
 | `stage.player.state.error` | error card inside canvas | "Preview could not load clip 2 · EM-1xxx" / "Pratinjau tidak dapat memuat klip 2 · EM-1xxx" · Rebuild preview / Bangun ulang pratinjau · Details / Rincian | |
 | `stage.timeline` | panel under Player | header row: `t-label` "TIMELINE" / "LINI MASA", zoom −/+ (fit, 1 s/100 px … 10 s/100 px), total duration | |
 | `stage.timeline.ruler` / `.head` | 24 px ruler `t-mono` ticks; playhead 2 px accent line with triangle head | click/drag seeks | |
-| `stage.timeline.track.video/.overlay/.text/.caption/.audio` | CMP-16 lanes; names Video / Video · Overlay / Lapisan · Text / Teks · Captions / Caption · Audio / Audio | project-wide items (caption style, background) show as a chip in the lane header: "Karaoke" / "Spotlight" | drop-target |
-| `stage.timeline.element.*` | CMP-17 | label = asset name / text content / preset label; times on hover | selected, pulses |
-| `stage.timeline.inspector` | CMP-18 docked right 260 px | header "Clip 2 · beach.mp4" / "Klip 2 · beach.mp4"; rows: Start, Duration, Trim, Playback rate, Volume, Fit, Motion, Effects (chips), Transition in/out; button "Ask Editor Agent to change" / "Minta Editor Agent mengubah" (A); P1 adds editable trim | empty "Select an element to inspect it" / "Pilih elemen untuk melihat rinciannya" |
+| `stage.timeline.track.caption`, `stage.timeline.lane.new`, `stage.timeline.lane.layer` (× layers, front-most on top), `stage.timeline.track.video`, `stage.timeline.lane.audio` (× lanes), `stage.timeline.lane.new` | CMP-16 lanes, top to bottom (CapCut order, ADR-027); names Captions / Caption · New layer / Lapisan baru · Layer n / Lapisan n · Video / Video · Audio n / Audio n · New audio lane / Jalur audio baru; new lanes have a dashed bottom border and, while dragging, the hint "Drop here for a new layer in front" / "Lepas di sini untuk lapisan baru paling depan" | project-wide items (caption style, background) show as a chip in the lane header: "Karaoke" / "Spotlight" | drop-target (2 px accent inset while a drag targets it) |
+| `stage.timeline.element.*` | CMP-17 | label = asset name / text content / preset label; times on hover, plus for editable bars "drag to move, edges to trim · ←/→ one frame, Shift one second · Alt+↑/↓ layer" / "seret untuk memindah, tepi untuk memangkas · ←/→ satu frame, Shift satu detik · Alt+↑/↓ lapisan"; 6 px `stage.timeline.element.handle` at both edges (ew-resize cursor) | selected, pulses, dragging (40 % opacity; `stage.timeline.ghost` dashed accent box on the target lane with start time; `stage.timeline.snap` 1 px warn-colour guide at the snapped ms) |
+| `stage.timeline.inspector` | CMP-18 docked right 260 px | header "Clip 2 · beach.mp4" / "Klip 2 · beach.mp4"; rows: Start, Duration, Layer / Lapisan (texts, images, shapes) or Audio lane / Jalur audio, Trim, Playback rate, Volume, Fit, Motion, Effects (chips), Transition in/out; button "Ask Editor Agent to change" / "Minta Editor Agent mengubah" (A); P1 adds editable trim | empty "Select an element to inspect it" / "Pilih elemen untuk melihat rinciannya" |
 | `stage.timeline.empty` | empty pattern over lanes | "Insert assets, then your picks and the Editor Agent fill this timeline." / "Sisipkan aset, lalu pilihan kamu dan Editor Agent mengisi lini masa ini." | hidden once a Clip exists |
 
 ## 7. Agent Panel (`agent.*`)

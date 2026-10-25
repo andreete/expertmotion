@@ -4,6 +4,7 @@ export * from './ratio.js';
 export * from './operations.js';
 export * from './apply.js';
 export * from './timing.js';
+export * from './layers.js';
 export * from './diff.js';
 export * from './validate.js';
 export * from './model.js';

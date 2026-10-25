@@ -8,6 +8,8 @@
 import { APP_ORIGIN } from './constants.js';
 
 export const LOOPBACK_PERMISSIONS: ReadonlySet<string> = new Set(['local-network-access', 'local-network', 'loopback-network']);
+/** Other permissions the Editor itself needs: the Player's fullscreen button. */
+export const EDITOR_PERMISSIONS: ReadonlySet<string> = new Set(['fullscreen']);
 
 /** `origin` may be a full URL (webContents URL) or an origin string; anything unparseable is refused. */
 export function originOf(urlOrOrigin: string | undefined | null): string | null {
@@ -19,7 +21,7 @@ export function originOf(urlOrOrigin: string | undefined | null): string | null 
 }
 
 export function allowPermission(permission: string, requestingOrigin: string | undefined | null, opts: { devOrigins?: readonly string[] } = {}): boolean {
-  if (!LOOPBACK_PERMISSIONS.has(permission)) return false;
+  if (!LOOPBACK_PERMISSIONS.has(permission) && !EDITOR_PERMISSIONS.has(permission)) return false;
   const origin = originOf(requestingOrigin);
   return origin === APP_ORIGIN || (origin !== null && (opts.devOrigins ?? []).includes(origin));
 }

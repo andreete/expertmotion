@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 2,
+  "projectId": "p-layers",
+  "settings": {
+    "fps": 30,
+    "ratio": "9:16",
+    "resolution": "1080p",
+    "autoRatio": false,
+    "language": "id"
+  },
+  "theme": {
+    "paletteId": "preset:palette.editorial-dark",
+    "fontPairId": "preset:fontpair.jakarta-inter",
+    "defaultEasingId": "preset:easing.out-cubic",
+    "textDefaults": {
+      "fontSize": 64,
+      "weight": 700,
+      "colour": "#F4EFE6",
+      "align": "center",
+      "opacity": 1
+    }
+  },
+  "tracks": {
+    "video": [
+      {
+        "id": "c1",
+        "assetId": "v1",
+        "trimBeforeMs": 0,
+        "durationMs": 8000,
+        "playbackRate": 1,
+        "volume": 1,
+        "muted": false,
+        "fadeInMs": 0,
+        "fadeOutMs": 0,
+        "objectFit": "cover",
+        "motion": null,
+        "effects": []
+      }
+    ],
+    "overlay": [
+      {
+        "kind": "image",
+        "id": "o1",
+        "assetId": "img",
+        "timing": {
+          "atMs": 0,
+          "durationMs": 5000
+        },
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "w": 480,
+          "h": 480
+        },
+        "objectFit": "contain",
+        "opacity": 1,
+        "motion": null,
+        "effects": [],
+        "layer": 0
+      },
+      {
+        "kind": "shape",
+        "id": "o2",
+        "presetId": "preset:shape.circle",
+        "timing": {
+          "atMs": 1000,
+          "durationMs": 2000
+        },
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "w": 200,
+          "h": 200
+        },
+        "fill": "#E8913A",
+        "params": {},
+        "motion": null,
+        "layer": 1
+      },
+      {
+        "kind": "shape",
+        "id": "o3",
+        "presetId": "preset:shape.circle",
+        "timing": {
+          "atMs": 6000,
+          "durationMs": 1000
+        },
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "size": {
+          "w": 200,
+          "h": 200
+        },
+        "fill": "#E8913A",
+        "params": {},
+        "motion": null,
+        "layer": 0
+      }
+    ],
+    "text": [
+      {
+        "id": "t1",
+        "variantId": "preset:text.title",
+        "text": "Judul di atas logo",
+        "timing": {
+          "atMs": 500,
+          "durationMs": 2000
+        },
+        "position": {
+          "x": 0,
+          "y": -240
+        },
+        "style": {},
+        "effect": null,
+        "motion": null,
+        "layer": 2
+      },
+      {
+        "id": "t2",
+        "variantId": "preset:text.title",
+        "text": "Promo kopi",
+        "timing": {
+          "atMs": 4000,
+          "durationMs": 2000
+        },
+        "position": {
+          "x": 0,
+          "y": -240
+        },
+        "style": {},
+        "effect": null,
+        "motion": null,
+        "layer": 1
+      },
+      {
+        "id": "t3",
+        "variantId": "preset:text.title",
+        "text": "Sampai jumpa",
+        "timing": {
+          "atMs": 7000,
+          "durationMs": 1000
+        },
+        "position": {
+          "x": 0,
+          "y": -240
+        },
+        "style": {},
+        "effect": null,
+        "motion": null,
+        "layer": 0
+      }
+    ],
+    "caption": {
+      "styleId": null,
+      "params": {},
+      "pages": []
+    },
+    "audio": [
+      {
+        "id": "a1",
+        "assetId": "mus",
+        "role": "bed",
+        "atMs": 0,
+        "trimBeforeMs": 0,
+        "volume": 0.8,
+        "loop": true,
+        "fadeInMs": 0,
+        "fadeOutMs": 0,
+        "ducking": null,
+        "lane": 0
+      },
+      {
+        "id": "a2",
+        "assetId": "vo",
+        "role": "voice",
+        "atMs": 1000,
+        "trimBeforeMs": 0,
+        "volume": 0.8,
+        "loop": false,
+        "fadeInMs": 0,
+        "fadeOutMs": 0,
+        "ducking": null,
+        "durationMs": 4000,
+        "lane": 1
+      },
+      {
+        "id": "a3",
+        "assetId": "vo",
+        "role": "sfx",
+        "atMs": 6000,
+        "trimBeforeMs": 0,
+        "volume": 0.8,
+        "loop": false,
+        "fadeInMs": 0,
+        "fadeOutMs": 0,
+        "ducking": null,
+        "durationMs": 500,
+        "lane": 1
+      }
+    ]
+  },
+  "transitions": [],
+  "background": null,
+  "durationPolicy": "fit-content"
+}

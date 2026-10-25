@@ -118,9 +118,10 @@ describe('diff, hash, migration, agent summary', () => {
     b.tracks.video[0]!.volume = 0.9;
     expect(hashModel(a)).not.toBe(hashModel(b));
   });
-  it('migrateModel accepts v1, refuses newer, unknown and broken documents', () => {
+  it('migrateModel accepts v2 (current) and v1, refuses newer, unknown and broken documents', () => {
     expect(migrateModel(JSON.parse(JSON.stringify(withFades()))).ok).toBe(true);
-    expect(migrateModel({ ...withFades(), schemaVersion: 2 })).toMatchObject({ ok: false, issues: [{ code: 'EM-2001' }] });
+    expect(migrateModel({ ...withFades(), schemaVersion: 1 }).ok).toBe(true);
+    expect(migrateModel({ ...withFades(), schemaVersion: 3 })).toMatchObject({ ok: false, issues: [{ code: 'EM-2001' }] });
     expect(migrateModel({ schemaVersion: 0 }).ok).toBe(false);
     expect(migrateModel('x').ok).toBe(false);
     expect(migrateModel({ ...withFades(), tracks: null }).ok).toBe(false);

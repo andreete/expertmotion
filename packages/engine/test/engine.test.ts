@@ -78,7 +78,7 @@ describe('every Design Pick compiles to op args the operation schema accepts', (
 });
 
 describe('textLayerFit (renderer + FR-021 Editor warning share it)', () => {
-  const layer = (text: string, fontSize: number): TextLayerT => ({ id: 't1', variantId: 'preset:text.title', text, timing: { atMs: 0, durationMs: 3000 }, position: { x: 0, y: 0 }, style: { fontSize }, effect: null, motion: null });
+  const layer = (text: string, fontSize: number): TextLayerT => ({ id: 't1', variantId: 'preset:text.title', text, timing: { atMs: 0, durationMs: 3000 }, layer: 0, position: { x: 0, y: 0 }, style: { fontSize }, effect: null, motion: null });
   const defaults = createEmptyModel('p').theme.textDefaults;
   const vertical = layoutFor('9:16', 1080, 1920);
   it('keeps the asked size when the text fits', () => {

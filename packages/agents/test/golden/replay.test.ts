@@ -1,9 +1,9 @@
-// GOLDEN_SCENARIOS §4.2 harness (b) at package level: the agent half of GS-08, 09, 10, 17, 18, 20 with the fake provider.
+// GOLDEN_SCENARIOS §4.2 harness (b) at package level: the agent half of GS-08, 09, 10, 17, 18, 20, 21 with the fake provider.
 // The service-level half (DB rows, SSE, HTTP) lives in apps/service/test/s1.
 import { describe, expect, it } from 'vitest';
-import { applyOperations, hashModel, type OperationT } from '@expertmotion/composition-model';
+import { applyOperations, hashModel, visualStack, type OperationT } from '@expertmotion/composition-model';
 import { buildRewriteEnvelope, createIntents, enqueue, fakeProvider, mapProviderError, runBrainstorm, runEditorAgent, validatePlan, planOps } from '../../src/index.js';
-import { Scenario, expectOk } from './harness.js';
+import { FIXTURES, Scenario, expectOk } from './harness.js';
 
 function b1() {
   const s = new Scenario();
@@ -119,5 +119,41 @@ describe('GS-20 English request: captions pop + soft bed ducked under voice', ()
     expect(s.model.tracks.audio.some((a) => a.role === 'bed')).toBe(true);
     const duck = expectOk(s.pick({ presetId: 'preset:audio.duck-voice' }));
     expect(duck.ops).toHaveLength(1);
+  });
+});
+
+describe('GS-21 "taruh judul di atas logo": layers, then a Timeline drag and a layer key', () => {
+  it('the Editor Agent brings the title in front with op:element.setLayer; Timeline edits compile without it', async () => {
+    const s = new Scenario({ assets: [...FIXTURES, { id: 'FX-I1', kind: 'image', status: 'ready', width: 512, height: 512, name: 'logo.png' }] });
+    const ins = applyOperations(s.model, [...['FX-V3', 'FX-V1', 'FX-V2'].map((assetId, atIndex): OperationT => ({ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId, atIndex } })),
+      { op: 'op:text.add', args: { text: 'Promo Kopi Senja', variant: 'preset:text.title', atMs: 0, durationMs: 3000 } },
+      { op: 'op:overlay.addImage', args: { assetId: 'FX-I1', atMs: 0, durationMs: 5000 } }], { assets: s.assets, tier: s.tier, newId: s.newId });
+    if (!ins.ok) throw new Error('fixture');
+    s.model = ins.value.model; s.versions.push(hashModel(s.model));
+    const t1 = s.model.tracks.text[0]!, o1 = s.model.tracks.overlay[0]!;
+    expect([t1.layer, o1.layer]).toEqual([0, 1]);                                       // the logo went in front of the title
+    const env = envFor(s, 'taruh judul di atas logo');
+    expect(env.composition.text[0]).toMatchObject({ id: t1.id, layer: 0 });
+    expect(env.composition.overlay[0]).toMatchObject({ id: o1.id, kind: 'image', durationMs: 5000, layer: 1 });
+    expect(env.capabilities.ops).toEqual(expect.arrayContaining(['op:element.setLayer', 'op:element.setTiming']));
+    const prov = fakeProvider([reply(s.head, [{ op: 'op:element.setLayer', target: { kind: 'text', id: t1.id }, args: { move: 'front' } }])]);
+    const r = await runEditorAgent(env, prov, ctxFor(s));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.plan.status).toBe('valid');
+    const a = applyOperations(s.model, planOps(r.plan), { assets: s.assets, tier: s.tier, newId: s.newId });
+    if (!a.ok) throw new Error('apply');
+    s.model = a.value.model; s.versions.push(hashModel(s.model));
+    expect(visualStack(s.model).map((x) => x.id)).toEqual([o1.id, t1.id]);           // title now in front
+    expect(a.value.diff.map((d) => d.elementId).sort()).toEqual([o1.id, t1.id].sort()); // both renumbered (dense lanes), order changed
+    // The Creator drags the title to 4 s on the logo's lane: the logo is there until 5 s, so the lane rule puts it on the lane above.
+    const drag = expectOk(s.pick({ elementEdit: { kind: 'text', id: t1.id, atMs: 4000, durationMs: 3000, layer: 0 } }));
+    expect(drag.ops).toEqual([expect.objectContaining({ op: 'op:element.setTiming', target: { kind: 'text', id: t1.id }, args: { atMs: 4000, durationMs: 3000, layer: 0 } })]);
+    expect(s.model.tracks.text[0]).toMatchObject({ timing: { atMs: 4000, durationMs: 3000 }, layer: 1 });
+    // Alt+Down on the title: one lane down passes below the logo while they overlap (4–5 s).
+    expectOk(s.pick({ elementEdit: { kind: 'text', id: t1.id, move: 'down' } }));
+    expect(visualStack(s.model).map((x) => x.id)).toEqual([t1.id, o1.id]);
+    expect(s.providerCalls).toBe(0);
+    expect(s.lockedKeys).toEqual(expect.arrayContaining([`text:${t1.id}.timing`, `text:${t1.id}.layer`]));
   });
 });
