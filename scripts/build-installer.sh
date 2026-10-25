@@ -4,10 +4,17 @@
 # Usage: bash scripts/build-installer.sh   (after scripts/cross-build-win.sh or the electron-builder step of release:win)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="$(node -p "require('$ROOT/apps/desktop/package.json').version")"
-SRC="$ROOT/release/$VERSION/win-unpacked"
-OUT="$ROOT/release/$VERSION/Expertmotion-Setup-$VERSION.exe"
-[ -f "$SRC/Expertmotion.exe" ] || { echo "build-installer: $SRC/Expertmotion.exe missing (build the app first)" >&2; exit 1; }
+# `bash scripts/build-installer.sh admin` builds the License Admin installer (Operator tool) instead of the Creator app's.
+if [ "${1:-}" = "admin" ]; then
+  VERSION="$(node -p "require('$ROOT/apps/admin/package.json').version")"
+  SRC="$ROOT/release/admin/$VERSION/win-unpacked"; EXE="Expertmotion-License-Admin.exe"
+  OUT="$ROOT/release/admin/$VERSION/Expertmotion-License-Admin-Setup-$VERSION.exe"; NSI="$ROOT/apps/admin/installer/admin.nsi"
+else
+  VERSION="$(node -p "require('$ROOT/apps/desktop/package.json').version")"
+  SRC="$ROOT/release/$VERSION/win-unpacked"; EXE="Expertmotion.exe"
+  OUT="$ROOT/release/$VERSION/Expertmotion-Setup-$VERSION.exe"; NSI="$ROOT/apps/desktop/installer/expertmotion.nsi"
+fi
+[ -f "$SRC/$EXE" ] || { echo "build-installer: $SRC/$EXE missing (build the app first)" >&2; exit 1; }
 if [ -z "${MAKENSIS:-}" ]; then
   NSIS_HOME="$(ls -d "$HOME"/.cache/electron-builder/nsis-3*/nsis-3* 2>/dev/null | head -1 || true)"
   if [ -n "$NSIS_HOME" ] && [ -x "$NSIS_HOME/linux/makensis" ]; then MAKENSIS="$NSIS_HOME/linux/makensis"; export NSISDIR="$NSIS_HOME";
@@ -16,5 +23,5 @@ fi
 # makensis paths: Windows-style separators work on both hosts.
 "$MAKENSIS" -V2 -INPUTCHARSET UTF8 \
   -DVERSION="$VERSION" -DSRC_DIR="$SRC" -DOUT_FILE="$OUT" -DICON="$ROOT/apps/desktop/build/icon.ico" \
-  "$ROOT/apps/desktop/installer/expertmotion.nsi"
+  "$NSI"
 ls -la "$OUT"
