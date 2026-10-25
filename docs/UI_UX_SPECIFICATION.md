@@ -97,13 +97,14 @@ Icons never appear without a text label or tooltip (UX-043).
 
 ```
 ┌ Header 48 px ──────────────────────────────────────────────────────────────┐
-├ Library 300 ─┬ Stage flex (min 560) ───────────────────┬ Agent 360 ────────┤
+├ Library 300 ─┬ Stage flex (min 640) ───────────────────┬ Agent 420 ────────┤
 │ search 36    │ Player frame (aspect-fit, padding 16)   │ Model Bar 44      │
-│ mode hdr 32  │                                          │ Brainstorming ~40%│
-│ catalogue /  │                                          │ Editor Chat ~60%  │
+│ mode hdr 32  │                                          │ Brainstorming 40% │
+│ catalogue /  │                                          │ ═ chat divider ═  │
+│              │                                          │ Editor Chat 60%   │
 │ text / tools │                                          │  (incl. Intent    │
 │ (scroll)     ├ Timeline View 220 min (resizable) ───────┤   Queue, Plan Card)│
-│ Assets (≥160)│ ruler 24 · 5 tracks × 36 · inspector     │ Output Settings   │
+│ Assets (≥160)│ ruler 24 · 5 tracks × 36 · inspector     │ ▸ Output (header) │
 └──────────────┴──────────────────────────────────────────┴───────────────────┘
  toasts bottom-right · banners under Header · render chip in Header
 ```
@@ -111,7 +112,8 @@ Icons never appear without a text label or tooltip (UX-043).
 | Rule | Value |
 |---|---|
 | Header | 48 px, `--em-panel`, bottom border `--em-line`; left: logo + menu tabs; centre: title; right: actions + window controls |
-| Columns | 300 / flex / 360 px at ≥ 1280; ranges and collapse in EDITOR_INTERACTION_MODEL.md §9–10 |
+| Columns | 300 / flex / 420 px at 1280–1599 (Agent 360 below 1280, 480 from 1600; resizable 320–900 px, Stage ≥ 640 px); ranges and collapse in EDITOR_INTERACTION_MODEL.md §9–10 |
+| Agent Panel inside | Model Bar, then the two chats sharing the remaining height through `agent.chat.divider` (default 40 % / 60 %, minimums 140 / 200 px, threads scroll internally, composers always visible), each header with `agent.<agent>.maximize` (maximized chat fills the area; the other shows only its header bar, which restores the split), then Output Settings collapsed to its header by default; split ratio, maximized chat and collapsed state persist (FR-099) |
 | Gutters | 16 px panel padding; 8 px between cards; 12 px between sections |
 | Timeline View | 220 px minimum: ruler 24 + 5 Track lanes 36 each + 16 padding; inspector docks to the right of the lanes (260 px) when an element is selected, else hidden |
 | Player frame | letterboxed inside the Stage with 16 px padding; aspect from the current ratio; frame border 1 px `--em-line`, radius `--r-4` |
@@ -263,7 +265,7 @@ Implements PRD-010, PRD-011, PRD-012, PRD-008, PRD-020.
 
 | Element | Component | Content EN / ID | States |
 |---|---|---|---|
-| `agent.brainstorm.panel` | section header `t-label` "BRAINSTORMING AGENT" + help icon (tooltip "Ideas and planning. Never changes your video directly." / "Ide dan perencanaan. Tidak pernah mengubah video kamu secara langsung.") | — | collapsible |
+| `agent.brainstorm.panel` | section header `agent.brainstorm.header`: `t-label` "BRAINSTORMING AGENT" + help icon (tooltip "Ideas and planning. Never changes your video directly." / "Ide dan perencanaan. Tidak pernah mengubah video kamu secara langsung.") + `agent.brainstorm.maximize` IconButton `maximize-2` / `minimize-2` ("Maximize Brainstorming Agent" / "Perbesar Brainstorming Agent"; "Restore the split view" / "Kembalikan tampilan terbagi") | — | split · maximized · reduced to the header bar (title button "Show … again" / "Tampilkan lagi …" restores) |
 | `agent.brainstorm.thread` | scroll area; CMP-13 bubbles | first-run system bubble: "Tell me what the video is for and who will watch it." / "Ceritakan video ini untuk apa dan siapa penontonnya." | empty, streaming, error |
 | `agent.brainstorm.handoff` | Card accent-dashed border inside the thread | title "Proposed changes" / "Usulan perubahan"; rows with checkbox + category icon + "Caption style · Editorial → project"; buttons "Send to Editor Agent" / "Kirim ke Editor Agent" (primary) · "Dismiss" / "Abaikan" (ghost) | collapsed receipt after action |
 | `agent.brainstorm.composer` | textarea auto-grow 1–6 lines, `.attach` IconButton `paperclip`, `.send` IconButton `send-horizontal` | placeholder "Describe your idea…" / "Jelaskan ide kamu…"; disabled note in Private Mode (UX-024) or when not configured "Connect a provider to chat" / "Hubungkan penyedia untuk mengobrol" | status line above: "Asking <model>…" + Cancel |
@@ -274,7 +276,7 @@ Implements PRD-010, PRD-011, PRD-012, PRD-008, PRD-020.
 
 | Element | Component | Content EN / ID | States |
 |---|---|---|---|
-| `agent.editor.panel` | header `t-label` "EDITOR AGENT" + help ("Turns your picks and instructions into a plan. Nothing changes until you press Execute." / "Mengubah pilihan dan instruksi kamu menjadi rencana. Tidak ada yang berubah sampai kamu menekan Execute.") | — | |
+| `agent.editor.panel` | header `agent.editor.header`: `t-label` "EDITOR AGENT" + help ("Turns your picks and instructions into a plan. Nothing changes until you press Execute." / "Mengubah pilihan dan instruksi kamu menjadi rencana. Tidak ada yang berubah sampai kamu menekan Execute.") + `agent.editor.maximize` (as brainstorm) | — | split · maximized · reduced to the header bar |
 | `agent.editor.intentqueue` | list pinned at the top of the thread area; header "Your picks (3)" / "Pilihan kamu (3)" + `agent.editor.plan` Button secondary "Plan" / "Susun rencana" (enabled when a queued intent needs interpretation) + `.clear` ghost "Clear" / "Bersihkan" | CMP-15 items, newest first | empty: "Your picks and requests appear here." / "Pilihan dan permintaan kamu muncul di sini." |
 | `agent.editor.thread` | CMP-13 bubbles between queue and composer | system bubbles for handoffs and results | |
 | `agent.editor.plancard` | CMP-14 (§11.2) | — | — |
@@ -287,7 +289,7 @@ Implements PRD-010, PRD-011, PRD-012, PRD-008, PRD-020.
 
 | Element | Component | Content EN / ID | States |
 |---|---|---|---|
-| `agent.output` | section header `t-label` "OUTPUT" / "KELUARAN" + summary when collapsed "9:16 · 1080p · Standard" | — | collapsible |
+| `agent.output` | header button `agent.output.toggle` (`aria-expanded`): `t-label` "OUTPUT" / "KELUARAN" + `agent.output.summary` when collapsed "9:16 · 1080p · 30 fps · Standard" | — | collapsible; collapsed by default (FR-099), state persisted |
 | Performance Profile row | label "Performance profile" / "Profil performa" + `agent.output.profile.help` ⓘ (PERFORMANCE.md §2 tooltip verbatim) | `agent.output.profile.standard/.accelerated/.turbo` Segmented 3: Standard / Standard · Accelerated / Accelerated · Turbo / Turbo; sublabels "1 frame at a time · Draft preview" / "Accelerated: 2 in parallel" / "Turbo: up to 4 · Full preview" (short EN: "1× · Draft", "2× parallel", "4× · Full") | disabled with reason "Needs a GPU with 4 GB" / "Perlu GPU 4 GB"; Turbo on T1 warn dot "May use a lot of memory" / "Bisa memakai banyak memori" |
 | Aspect Ratio row | label "Aspect ratio (width:height)" / "Rasio aspek (lebar:tinggi)" + ⓘ (`agent.output.ratio.help`: "Width first, then height. The preview frame changes shape; your clips are fitted inside." / "Lebar dulu, lalu tinggi. Bingkai pratinjau berubah bentuk; klip kamu disesuaikan di dalamnya.") + `agent.output.ratio.auto` sticky Toggle "Auto" / "Otomatis" (tooltip "Use the first clip's shape" / "Pakai bentuk klip pertama"; a manual ratio pick turns it off) | `agent.output.ratio.16x9/.9x16/.1x1/.4x5/.5x4/.4x3/.3x4/.custom` Segmented 4×2, each with orientation glyph (rectangle outline in true proportion) + label + `t-mono` pixel sublabel from PERFORMANCE.md §3 for the current Resolution, e.g. "9:16 · 1080×1920" | active; Custom opens `scr.ratio.custom` (`.width`, `.height`, `.preview`, `.apply`; clamped 1:3…3:1, ≥ 240 px) |
 | Resolution row | label "Resolution" / "Resolusi" | `agent.output.resolution.720p/.1080p/.2k/.2160p` Segmented 4: "720p" · "1080p" · "2K" · "2160p (4K)" with pixel sublabels for the current ratio | `.disabled` sublabel "Needs a GPU tier" / "Perlu GPU"; 2160p on T1 warn dot (no licence-based lock: single edition) |

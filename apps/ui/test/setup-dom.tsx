@@ -23,9 +23,10 @@ import type { Prefs } from '../src/prefs.js';
 export async function renderEditor(seed: 'sample' | 'empty' = 'sample', opts: { prefs?: Partial<Prefs>; keepStorage?: boolean } = {}): Promise<RenderResult & { runtime: Runtime }> {
   if (!opts.keepStorage) { try { localStorage.clear(); sessionStorage.clear(); } catch { /* ignore */ } }
   const runtime = createMockRuntime({ seed, delays: false });
-  const r = render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, ...(opts.prefs ?? {}) }}><App /></StoreProvider>);
+  const r = render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, outputCollapsed: false, ...(opts.prefs ?? {}) }}><App /></StoreProvider>);
   await waitFor(() => { if (!document.querySelector('[data-el="stage.timeline"]') || !document.querySelector('[data-el="hdr.title"]')?.textContent?.trim()) throw new Error('not booted'); });
-  await waitFor(() => { if (!document.querySelector('[data-el="agent.output.ratio.9x16"][aria-checked]')) throw new Error('no project'); });
+  // Output Settings is collapsed by default in the product (FR-099); these tests open it (prefs.outputCollapsed false) unless they ask otherwise.
+  await waitFor(() => { if (!document.querySelector('[data-el="agent.output.ratio.9x16"][aria-checked]') && !document.querySelector('[data-el="agent.output.summary"]')) throw new Error('no project'); });
   return { ...r, runtime };
 }
 

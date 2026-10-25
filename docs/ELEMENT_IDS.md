@@ -161,14 +161,14 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 |---|---|---|
 | `agent.modelbar` | "Model: MiniMax H3" | Default Provider Connection + model; click → Providers screen. |
 | `agent.modelbar.status` | (dot) | Connection validated / error / Private Mode. |
-| `agent.brainstorm.panel` | "Brainstorming Agent" | Brainstorming Chat container. |
+| `agent.brainstorm.panel` | "Brainstorming Agent" | Brainstorming Chat container; `data-view` = `split` / `max` / `min` (FR-099). |
 | `agent.brainstorm.thread` / `.message` | messages | Thread and message bubbles (`.user`, `.assistant`, `.system`). |
 | `agent.brainstorm.composer` / `.send` / `.attach` | input, send, attach icon | Composer; attach = reference an Asset or image into the chat. |
 | `agent.brainstorm.footer.model` | "Claude 3.5 Sonnet ▾" | Per-agent Model Assignment override. |
 | `agent.brainstorm.footer.ctx` | "0 / 200000" | Context usage: tokens used / model context length. |
 | `agent.brainstorm.handoff` | (added) | Card shown when the Brainstorming Agent proposes Edit Intents: "Send to Editor Agent" / "Dismiss". |
 | `agent.brainstorm.handoff.item` / `agent.brainstorm.handoff.item.reason` | (added) | One proposed change in plain words (category, value → target); an invalid one is greyed (`data-invalid`) with its reason and EM code and cannot be sent (FR-076). |
-| `agent.editor.panel` | "Editor Agent" | Editor Chat container. |
+| `agent.editor.panel` | "Editor Agent" | Editor Chat container; `data-view` = `split` / `max` / `min` (FR-099). |
 | `agent.editor.thread` / `.message` | messages | As above. |
 | `agent.editor.intentqueue` | (added) | Intent Queue list; `.item`, `.item.superseded`, `.item.restore`, `.item.remove`, `.clear`. |
 | `agent.editor.plancard` | (added) | Plan Card; `.goal`, `.step`, `.step.tool`, `.step.diff`, `.risk`, `.notes`, `.baseversion`, `.baseversion.stale`. |
@@ -257,7 +257,13 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `scr.project.settings.language` | Project Settings language toggle | Project language id/en (stored in project settings). |
 | `hdr.title.sample` | "Sample ·" / "Contoh ·" marker in the Project Title | Shown only on the R-025 sample project (`isSample: true`); the marker uses the project's language. |
 | `lib.divider` | Library Panel / Stage divider | `role="separator"`; drag or ←/→ (16 px) resizes the Library Panel 240–420 px, dragging below 200 px collapses it to the rail; double-click or Enter resets (EDITOR_INTERACTION_MODEL.md §9). |
-| `agent.divider` | Stage / Agent Panel divider | As `lib.divider` for the Agent Panel, 320–520 px; the Stage never shrinks below 560 px. |
+| `agent.divider` | Stage / Agent Panel divider | As `lib.divider` for the Agent Panel, 320–900 px (default 360 / 420 / 480 px for the narrow / standard / wide window bucket); the maximum is further capped so the Stage never shrinks below 640 px (FR-099, operator feedback 2026-10-25). |
+| `agent.chats` | chat area of the Agent Panel | FR-099: holds the Brainstorming Chat, `agent.chat.divider` and the Editor Chat, sharing the panel height (no outer scroll); `data-maximized` = `brainstorm` / `editor` while one chat is maximized. |
+| `agent.chat.divider` | Brainstorming / Editor Chat divider | FR-099: `role="separator"` (horizontal); drag or ↑/↓ (16 px) moves the split, Home/End to the ends, double-click or Enter resets to 40 % / 60 %; keeps Brainstorming ≥ 140 px and Editor ≥ 200 px (it also holds the Intent Queue); ratio persisted in prefs and Settings `layout.chatSplit`; hidden while a chat is maximized. |
+| `agent.brainstorm.header` / `agent.editor.header` | chat header bar | FR-099: title, help ⓘ and `….maximize`; `data-view` = `split` / `max` / `min`. Reduced (`min`, the other chat maximized) only this bar shows and its title is a button that restores the split view. |
+| `agent.brainstorm.maximize` / `agent.editor.maximize` | maximize / restore toggle in a chat header | FR-099: `aria-pressed`; maximizing gives that chat the whole chat area (the other keeps its header bar); pressed again, or pressed on the reduced chat, restores the split; persisted (`layout.chatMaximized`). |
+| `agent.output.toggle` | Output Settings header button | FR-099: `aria-expanded`; expands/collapses Output Settings (collapsed by default; persisted as `layout.outputCollapsed`). |
+| `agent.output.summary` | summary in the collapsed Output Settings header | FR-099: "16:9 · 1080p · 30 fps · Standard" (ratio · resolution · frame rate · Performance Profile), shown only while collapsed. |
 | `stage.divider` | Player / Timeline View divider | ↑/↓ resizes the Timeline View height (220 px to 50 % of the Stage). |
 | `lib.catalogue.card.details` | ⓘ on a Catalogue Card | Opens `lib.catalogue.params` (also Space on the focused card). |
 | `lib.catalogue.params` | Preset "Details" popover | Parameter fields with defaults from the catalogue; focus trapped, Esc closes and returns focus to ⓘ. |

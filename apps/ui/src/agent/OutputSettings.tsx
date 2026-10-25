@@ -80,7 +80,8 @@ export function OutputSettings() {
   const dims = (r: Ratio, rs: Resolution) => { if (r === 'custom' && !s?.customRatio) return '—'; const d = resolveDimensions(r, rs, s?.customRatio); return `${d.width}×${d.height}`; };
   const profileReason = (p: PerformanceProfile) => (p === 'accelerated' && tier === 'T0') || (p === 'turbo' && tier === 'T0') ? t('ui.agent.output.profile.needsgpu') : null;
   const resReason = (r: Resolution) => (tier === 'T0' && (r === '2k' || r === '2160p') ? t('ui.agent.output.resolution.needsgpu') : null);
-  const summary = `${ratio} · ${res} · ${t(`ui.agent.output.profile.${profile}`)}`;
+  // FR-099: the key output facts stay readable while the section is collapsed (collapsed by default, so the chats get the room).
+  const summary = `${ratio === 'custom' && s?.customRatio ? `${s.customRatio.w}:${s.customRatio.h}` : ratio} · ${RES_LABEL[res]} · ${s?.fps ?? 30} fps · ${t(`ui.agent.output.profile.${profile}`)}`;
   const auto = Boolean(s?.autoRatio);
   const hasClip = (state.head?.model?.tracks.video.length ?? 0) > 0;
   const defaults = outputDefaults(state);
@@ -92,12 +93,13 @@ export function OutputSettings() {
   };
   return (
     <section data-el="agent.output" aria-label={t('ui.agent.output.title')} className="shrink-0 border-t border-em-line">
-      <button type="button" className="flex w-full items-center gap-1.5 px-3 py-2" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<span className="t-label flex-1 text-left">{t('ui.agent.output.title')}</span>
-        {!open && <span className="t-mono text-em-muted">{summary}</span>}
+      <button type="button" data-el="agent.output.toggle" className="flex w-full items-center gap-1.5 px-3 py-2" aria-expanded={open} aria-controls="agent-output-body" onClick={() => setOpen((o) => !o)}>
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<span className="t-label shrink-0 text-left">{t('ui.agent.output.title')}</span>
+        <span className="flex-1" />
+        {!open && <span data-el="agent.output.summary" className="t-mono min-w-0 truncate text-[11px] text-em-muted" title={summary}>{summary}</span>}
       </button>
       {open && (
-        <div className="flex flex-col gap-3 px-3 pb-3">
+        <div id="agent-output-body" className="flex max-h-[55vh] flex-col gap-3 overflow-y-auto px-3 pb-3">
           <Row label={t('ui.agent.output.profile')} help={<ProfileHelp />}>
             <Segmented<PerformanceProfile> label={t('ui.agent.output.profile')} value={profile} onChange={(p) => void actions.setProfile(p)}
               options={(['standard', 'accelerated', 'turbo'] as const).map((p) => ({ value: p, el: `agent.output.profile.${p}`, label: t(`ui.agent.output.profile.${p}`), sub: t(`ui.agent.output.profile.${p}.sub`), disabledReason: profileReason(p), warn: p === 'turbo' && tier === 'T1' ? t('ui.agent.output.profile.turbowarn') : null }))} />

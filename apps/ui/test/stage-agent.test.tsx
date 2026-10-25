@@ -80,7 +80,7 @@ describe('Output Settings (FR-087…FR-097)', () => {
 
   it('FR-094: turning Private Mode on while an agent streams asks first, then cancels', async () => {
     const runtime = createMockRuntime({ seed: 'sample', delays: true });
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, outputCollapsed: false }}><App /></StoreProvider>);
     await waitFor(() => { if (!document.querySelector('[data-el="agent.output.ratio.9x16"][aria-checked]')) throw new Error('no project'); }, { timeout: 8000 });
     await connect(runtime);
     fireEvent.change(el('agent.brainstorm.composer')!, { target: { value: 'ide intro energik untuk video kopi' } });
@@ -281,7 +281,7 @@ describe('FR-090 / FR-097 Performance Profile through the Intent Queue', () => {
     const runtime = createMockRuntime({ seed: 'sample', delays: false });
     const hw = runtime.api.hardwareProfile.bind(runtime.api);
     vi.spyOn(runtime.api, 'hardwareProfile').mockImplementation(async () => ({ ...(await hw()), tier }));
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, outputCollapsed: false }}><App /></StoreProvider>);
     await waitFor(() => { if (!el('agent.output.ratio.9x16')?.hasAttribute('aria-checked') || el('agent.output.profile.turbo')?.getAttribute('aria-disabled') === 'true') throw new Error('not booted'); });
     return runtime;
   };
@@ -324,7 +324,7 @@ describe('FR-090 / FR-097 Performance Profile through the Intent Queue', () => {
     const hw = runtime.api.hardwareProfile.bind(runtime.api);
     vi.spyOn(runtime.api, 'hardwareProfile').mockImplementation(async () => ({ ...(await hw()), tier: 'T2' }));
     const spy = vi.spyOn(runtime.api, 'createIntent');
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, outputCollapsed: false }}><App /></StoreProvider>);
     await waitFor(() => { if (!el('agent.output.ratio.9x16')?.hasAttribute('aria-checked') || el('agent.output.profile.turbo')?.getAttribute('aria-disabled') === 'true') throw new Error('not booted on T2'); });
     const queue = () => [...els('agent.editor.intentqueue.item'), ...els('agent.editor.intentqueue.item.superseded')];
     await act(async () => { fireEvent.click(el('agent.output.profile.turbo')!); });

@@ -100,6 +100,11 @@ describe('hardware, settings and events over HTTP', () => {
     expect(await body(await s.api('/settings', { method: 'PUT', json: { layout } }))).toMatchObject({ layout });
     expect((await body<{ layout: unknown }>(await s.api('/settings'))).layout).toEqual(layout);
     expect((await s.api('/settings', { method: 'PUT', json: { layout: { panelSizes: { huge: {} } } } })).status).toBe(400);
+    // FR-099 (2026-10-25): chat split ratio and maximized chat are kept too; out-of-range values are rejected.
+    const chats = { ...layout, chatSplit: 0.55, chatMaximized: 'editor' };
+    expect((await body<{ layout: unknown }>(await s.api('/settings', { method: 'PUT', json: { layout: chats } }))).layout).toEqual(chats);
+    expect((await s.api('/settings', { method: 'PUT', json: { layout: { ...layout, chatSplit: 2 } } })).status).toBe(400);
+    expect((await s.api('/settings', { method: 'PUT', json: { layout: { ...layout, chatMaximized: 'output' } } })).status).toBe(400);
   });
 
   it('cache clear removes regenerable variants inside the data folders only', async () => {

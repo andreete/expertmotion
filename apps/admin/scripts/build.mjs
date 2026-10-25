@@ -29,7 +29,11 @@ const node = {
 };
 
 await build({ ...node, entryPoints: [join(root, 'src/main.ts')], outfile: join(dist, 'main.cjs') });
-await build({ ...node, entryPoints: [join(root, 'src/preload.ts')], outfile: join(dist, 'preload.cjs') });
+// The preload runs in the sandboxed renderer, where only `electron` can be required: no banner, no node: built-ins.
+const { banner: _mainOnly, define: { 'import.meta.url': _metaUrl, ...preloadDefine }, ...preloadOpts } = node;
+await build({ ...preloadOpts, define: preloadDefine, entryPoints: [join(root, 'src/preload.ts')], outfile: join(dist, 'preload.cjs') });
+const preloadRequires = [...readFileSync(join(dist, 'preload.cjs'), 'utf8').matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1]);
+if (preloadRequires.some((r) => r !== 'electron')) throw new Error(`preload.cjs requires ${preloadRequires.join(', ')}; a sandboxed preload may only require electron`);
 await build({
   bundle: true, platform: 'browser', target: 'chrome140', format: 'iife', minify: true, sourcemap: false, logLevel: 'info',
   entryPoints: [join(root, 'src/renderer/app.ts')], outfile: join(dist, 'renderer', 'app.js'),

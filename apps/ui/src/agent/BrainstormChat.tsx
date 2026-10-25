@@ -1,16 +1,17 @@
 // Brainstorming Chat (agent.brainstorm.*): ideas only, never mutates (IX-12); hand-off card (IX-13).
 import { useState } from 'react';
-import { CircleHelp, SendHorizontal } from 'lucide-react';
+import { SendHorizontal } from 'lucide-react';
 import { getPreset, validateParams } from '@expertmotion/catalogue';
 import type { CompositionModelT } from '@expertmotion/composition-model';
 import { useStore } from '../state/store.js';
 import type { EditIntent, MessageDto } from '../api/types.js';
 import { Button } from '../components/ui.js';
-import { AgentErrorBubble, Bubble, Composer, StreamingBubble, Thread } from './Chat.js';
+import { AgentErrorBubble, Bubble, ChatHeader, Composer, StreamingBubble, Thread, chatSectionCls, type ChatLayoutProps } from './Chat.js';
+import { cx } from '../components/ui.js';
 import { categoryIcon } from '../library/presetVisual.js';
 import { targetText } from './IntentQueue.js';
 
-export function BrainstormChat() {
+export function BrainstormChat(layout: ChatLayoutProps) {
   const { state, actions, t } = useStore();
   const [value, setValue] = useState('');
   const [lastSent, setLastSent] = useState<{ text: string; att: string[] } | null>(null);
@@ -22,11 +23,9 @@ export function BrainstormChat() {
     if (!ok) setValue(text);                            // composer restored on failure (IX-12 point 9)
   };
   return (
-    <section data-el="agent.brainstorm.panel" aria-label={t('ui.agent.brainstorm.title')} className="flex min-h-[11rem] flex-1 flex-col border-b border-em-line">
-      <div className="flex items-center gap-1 px-3 pt-2">
-        <span className="t-label flex-1">{t('ui.agent.brainstorm.title')}</span>
-        <span title={t('ui.agent.brainstorm.help')} aria-label={t('ui.agent.brainstorm.help')} className="text-em-muted"><CircleHelp size={14} /></span>
-      </div>
+    <section data-el="agent.brainstorm.panel" data-view={layout.view} aria-label={t('ui.agent.brainstorm.title')} className={cx(chatSectionCls('brainstorm', layout.view), layout.view === 'min' && 'border-b border-em-line')} style={layout.style}>
+      <ChatHeader agent="brainstorm" title={t('ui.agent.brainstorm.title')} help={t('ui.agent.brainstorm.help')} layout={layout} />
+      <div className={cx('flex min-h-0 flex-1 flex-col', layout.view === 'min' && 'hidden')}>
       <Thread agent="brainstorm" label={t('a11y.agent.brainstorm.thread')}
         empty={state.messages.brainstorm.length === 0 ? <div className="mx-auto max-w-[90%] text-center text-[12px] text-em-muted">{t('ui.agent.brainstorm.first')}</div> : null}>
         {state.messages.brainstorm.map((m, idx) => (
@@ -43,6 +42,7 @@ export function BrainstormChat() {
         <AgentErrorBubble agent="brainstorm" onRetry={() => { if (lastSent) { setValue(lastSent.text); } }} />
       </Thread>
       <Composer agent="brainstorm" placeholder={t('ui.agent.brainstorm.placeholder')} value={value} setValue={setValue} onSend={(a) => void send(a)} />
+      </div>
     </section>
   );
 }

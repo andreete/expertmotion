@@ -162,7 +162,7 @@ export interface SettingsDto {
   /** FR-004 onboarding record (server-side); absent on older services / the mock. */
   onboardingDone?: boolean; onboardingSkippedSteps?: OnboardingStep[];
   /** FR-099 / FR-155: Editor layout (panel sizes per window-width bucket, collapsed panels); absent until first saved. */
-  layout?: { panelSizes: Partial<Record<'narrow' | 'standard' | 'wide', { lib?: number; agent?: number; timeline?: number }>>; libCollapsed: boolean; agentCollapsed: boolean; outputCollapsed: boolean };
+  layout?: { panelSizes: Partial<Record<'narrow' | 'standard' | 'wide', { lib?: number; agent?: number; timeline?: number }>>; libCollapsed: boolean; agentCollapsed: boolean; outputCollapsed: boolean; chatSplit?: number; chatMaximized?: 'brainstorm' | 'editor' | null };
 }
 /** 'license' is no longer a step (licence screen before onboarding); old records may still contain it and are ignored. */
 export type OnboardingStep = 'provider' | 'models' | 'hardware' | 'tour';

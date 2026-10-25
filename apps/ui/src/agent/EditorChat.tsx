@@ -1,11 +1,11 @@
 // Editor Chat (agent.editor.*): Intent Queue, thread, Plan Card + Execute, composer with target chip (IX-10, IX-14…IX-17).
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Check, CircleHelp } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import { visibleQueue } from '../state/reducer.js';
 import type { EditIntent, MessageDto, PlanDto } from '../api/types.js';
-import { Button } from '../components/ui.js';
-import { AgentErrorBubble, Bubble, Composer, StreamingBubble, Thread } from './Chat.js';
+import { Button, cx } from '../components/ui.js';
+import { AgentErrorBubble, Bubble, ChatHeader, Composer, StreamingBubble, Thread, chatSectionCls, type ChatLayoutProps } from './Chat.js';
 import { IntentQueue, targetText } from './IntentQueue.js';
 import { PlanCard, PlanSummary, executeDisabledReason } from './PlanCard.js';
 import { intentTitle } from './BrainstormChat.js';
@@ -19,7 +19,7 @@ const planIdOf = (m: MessageDto): string | null => {
   return null;
 };
 
-export function EditorChat() {
+export function EditorChat(layout: ChatLayoutProps) {
   const { state, actions, dispatch, t, lang, runtime } = useStore();
   const [value, setValue] = useState('');
   const [chip, setChip] = useState<string | null>(null);
@@ -80,12 +80,10 @@ export function EditorChat() {
     return { rows, current };
   }, [state.messages.editor, state.queue, state.pending, state.previousPlans, state.head?.model, plan, plans, t, lang]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <section data-el="agent.editor.panel" aria-label={t('ui.agent.editor.title')} className="flex min-h-[17rem] flex-[1.5] flex-col"
+    <section data-el="agent.editor.panel" data-view={layout.view} aria-label={t('ui.agent.editor.title')} className={chatSectionCls('editor', layout.view)} style={layout.style}
       onKeyDown={(e) => { if (e.key === 'Escape' && (state.streaming.editor || plan?.status === 'draft')) { e.stopPropagation(); void actions.cancelPlan(); } }}>
-      <div className="flex items-center gap-1 px-3 pt-2">
-        <span className="t-label flex-1">{t('ui.agent.editor.title')}</span>
-        <span title={t('ui.agent.editor.help')} aria-label={t('ui.agent.editor.help')} className="text-em-muted"><CircleHelp size={14} /></span>
-      </div>
+      <ChatHeader agent="editor" title={t('ui.agent.editor.title')} help={t('ui.agent.editor.help')} layout={layout} />
+      <div className={cx('flex min-h-0 flex-1 flex-col', layout.view === 'min' && 'hidden')}>
       <IntentQueue />
       <Thread agent="editor" label={t('a11y.agent.editor.thread')}>
         {thread.rows.map((r) => r.node)}
@@ -98,6 +96,7 @@ export function EditorChat() {
         extra={!plan || plan.status === 'executed' || plan.status === 'cancelled' || plan.status === 'stale' ? (
           <Button el="agent.editor.execute" variant="primary" size={28} disabledReason={executeDisabledReason(plan, state.head?.hash, t, { hasClip: (state.head?.model?.tracks.video.length ?? 1) > 0, running: Boolean(state.streaming.editor) })} aria-label={t('a11y.agent.editor.execute')}>{t('ui.agent.editor.execute')}</Button>
         ) : null} />
+      </div>
     </section>
   );
 }

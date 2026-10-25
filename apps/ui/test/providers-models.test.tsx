@@ -102,7 +102,7 @@ describe('Budget used up (FR-117, AI-016)', () => {
     try { localStorage.clear(); } catch { /* ignore */ }
     const bus = new MockBus();
     const runtime = createMockRuntime({ seed: 'sample', delays: false, bus });
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: [] }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: [], outputCollapsed: false }}><App /></StoreProvider>);
     await until(() => el('stage.timeline') && el('agent.output.ratio.9x16'), 'boot');
     const c = await runtime.api.addConnection({ provider: 'openrouter', label: 'Utama', secret: KEY, validateNow: true });
     await runtime.api.putAssignments({ editor: { agent: 'editor', connectionId: c.id, modelId: 'anthropic/claude-sonnet-4.5', settings: {} }, defaultConnectionId: c.id });
@@ -188,7 +188,7 @@ describe('Hardware Monitor (FR-127…FR-130)', () => {
     try { localStorage.clear(); } catch { /* ignore */ }
     const bus = new MockBus();
     const runtime = createMockRuntime({ seed: 'sample', delays: false, bus });
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, outputCollapsed: false }}><App /></StoreProvider>);
     await until(() => el('stage.timeline') && el('agent.output.ratio.9x16'), 'boot');
     const refresh = vi.spyOn(runtime.api, 'refreshHardware');
     await act(async () => { bus.emit('service.notice', { kind: 'low-disk', code: 'EM-6402', freeBytes: 1.5 * 1024 ** 3, have: 1.5 }); });

@@ -473,13 +473,13 @@ General: drag threshold 4 px; drop targets show a 2 px accent inset outline duri
 
 | Rule | Value |
 |---|---|
-| Default widths (UI_UX_SPECIFICATION.md §3) | Library Panel 300 px · Stage flex · Agent Panel 360 px |
+| Default widths (UI_UX_SPECIFICATION.md §3) | Library Panel 300 px · Stage flex · Agent Panel 420 px (360 px below 1280, 480 px from 1600; operator feedback 2026-10-25) |
 | Library Panel range | 240–420 px; collapses to a 48 px icon rail (mode icons + assets icon) below 240 or via Ctrl+B |
-| Agent Panel range | 320–520 px; collapses to a 48 px rail (brainstorm, editor, output icons with badges for pending plan / unread) via Ctrl+Shift+B |
-| Stage minimum | 560 px wide; Player keeps aspect inside; Timeline View height 220 px min, resizable up to 50 % of the Stage height |
-| Agent Panel internal split | Brainstorming Chat / Editor Chat divider draggable 30–70 %; Output Settings fixed height, collapsible header |
+| Agent Panel range | 320–900 px, the maximum capped so the Stage keeps its minimum width; collapses to a 48 px rail (brainstorm, editor, output icons with badges for pending plan / unread) via Ctrl+Shift+B |
+| Stage minimum | 640 px wide (FR-099); Player keeps aspect inside; Timeline View height 220 px min, resizable up to 50 % of the Stage height |
+| Agent Panel internal split | The two chats share the panel height (no outer scroll; threads scroll inside, composers stay visible). `agent.chat.divider` is draggable (↑/↓ 16 px, Home/End, double-click or Enter resets to 40 % / 60 %) with minimums Brainstorming 140 px, Editor 200 px (it also holds the Intent Queue). `agent.<agent>.maximize` gives one chat the whole chat area; the other keeps only its header bar, whose title restores the split. Output Settings is a collapsible section below the chats, collapsed by default with "16:9 · 1080p · 30 fps · Standard" in its header (`agent.output.toggle`); when open its body scrolls inside at most 55 % of the window height (FR-099) |
 | Dividers | 6 px hit area, 1 px line; double-click resets to default; keyboard: focus divider, ←/→ by 16 px |
-| Persistence | Widths and collapsed states in settings.json per window size bucket (≤ 1279, 1280–1599, ≥ 1600) |
+| Persistence | Widths per window size bucket (≤ 1279, 1280–1599, ≥ 1600), collapsed states, the chat split ratio, the maximized chat and the Output Settings collapsed state in settings.json (`layout`, FR-155) and the local prefs |
 | Collapsed rail behaviour | Clicking a rail icon opens that panel as an overlay (not pushing the Stage) until focus leaves; pinning re-expands |
 
 ## 10. Minimum window and responsive rules
@@ -487,8 +487,8 @@ General: drag threshold 4 px; drop targets show a 2 px accent inset outline duri
 | Width | Behaviour |
 |---|---|
 | ≥ 1600 | Defaults; Library Panel may show 3 catalogue columns |
-| 1280–1599 | Defaults (300 / flex / 360); 2 catalogue columns; minimum supported window **1280×720** (Electron `minWidth: 1280, minHeight: 720` for the main window; the Shell enforces it) |
-| 1024–1279 | Library Panel collapses to the icon rail automatically; opening it overlays the Stage; Agent Panel narrows to 320; Output Settings collapses to a header row showing "9:16 · 1080p · Standard" with expand |
+| 1280–1599 | Defaults (300 / flex / 420); 2 catalogue columns; minimum supported window **1280×720** (Electron `minWidth: 1280, minHeight: 720` for the main window; the Shell enforces it) |
+| 1024–1279 | Library Panel collapses to the icon rail automatically; opening it overlays the Stage; Agent Panel defaults to 360 and shrinks toward 320 before the Stage would drop below 640; Output Settings keeps its header row "9:16 · 1080p · 30 fps · Standard" with expand |
 | < 1024 | Not supported: a non-blocking `sys.toast` "Expertmotion works best at 1280×720 or wider" / "Expertmotion bekerja paling baik pada 1280×720 atau lebih lebar"; both side panels collapse; nothing overlaps; the Shell prevents resizing below 1024×600 |
 | Height < 720 | Timeline View shrinks to 160 px and gains vertical scroll; Output Settings collapses |
 | Fullscreen Player | All panels hidden; Esc or F restores |

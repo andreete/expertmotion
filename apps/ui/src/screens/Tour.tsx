@@ -18,6 +18,8 @@ export interface TourStep {
   signal?: Signal;
   /** Panel the target lives in: expanded when collapsed (§3 "Interruptions"). */
   panel?: 'lib' | 'agent';
+  /** FR-099: the step points into Output Settings, which is collapsed by default. */
+  output?: true;
   libMode?: LibMode;
   /** i18n key suffix of the "Try it" hint (tour.<n>.try). */
   tryIt?: boolean;
@@ -32,7 +34,7 @@ export const TOUR_STEPS: TourStep[] = [
   { targets: ['stage.timeline'], tryIt: true, signal: (s) => s.selection.map((x) => `${x.kind}:${x.id ?? x.index ?? ''}`).join(',') || null },  // TOUR-4 Stage
   { targets: ['agent.brainstorm.composer'], panel: 'agent', tryIt: true, signal: (s) => s.messages.brainstorm.length },                       // TOUR-5 Agent Panel
   { targets: ['agent.editor.plancard', 'agent.editor.panel'], panel: 'agent', tryIt: true, signal: (s) => (s.plan?.status === 'executed' ? s.plan.id : null) }, // TOUR-6
-  { targets: ['agent.output', 'agent.output.ratio.9x16'], panel: 'agent', tryIt: true,                                                         // TOUR-7 Output Settings + Private Mode
+  { targets: ['agent.output', 'agent.output.ratio.9x16'], panel: 'agent', output: true, tryIt: true,                                                         // TOUR-7 Output Settings + Private Mode
     signal: (s) => { const st = s.head?.model?.settings; return st ? `${st.ratio}|${st.resolution}` : null; } },
   { targets: ['hdr.action.export'], tryIt: true, signal: (s) => (s.screen?.kind === 'export' ? 'export' : null) },                           // TOUR-8
 ];
@@ -113,6 +115,8 @@ export function Tour() {
     if (!step) return;
     if (step.panel === 'lib' && prefs.libCollapsed) setPrefs({ libCollapsed: false });
     if (step.panel === 'agent' && prefs.agentCollapsed) setPrefs({ agentCollapsed: false });
+    if (step.panel === 'agent' && prefs.chatMaximized) setPrefs({ chatMaximized: null });          // both chats visible (FR-099)
+    if (step.output && prefs.outputCollapsed) setPrefs({ outputCollapsed: false });
     if (step.libMode && stateRef.current.libMode !== step.libMode) actions.setLibMode(step.libMode);
     base.current = step.signal ? step.signal(stateRef.current) : null;
     const el = document.querySelector(step.targets.map((t) => `[data-el="${t}"]`).join(', '));

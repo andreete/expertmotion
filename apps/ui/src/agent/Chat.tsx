@@ -1,6 +1,6 @@
 // Shared chat pieces (CMP-13 bubbles, composer, footer) for the Brainstorming Chat and the Editor Chat.
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Copy, ImagePlus, Paperclip, SendHorizontal, TriangleAlert, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { CircleHelp, Copy, ImagePlus, Maximize2, Minimize2, Paperclip, SendHorizontal, TriangleAlert, X } from 'lucide-react';
 import { errCode, useStore } from '../state/store.js';
 import type { AgentKind, CapabilityRow, MessageDto } from '../api/types.js';
 import { Button, IconButton, Popover, cx, inputCls } from '../components/ui.js';
@@ -14,6 +14,30 @@ export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
 /** FR-077: a persisted system line "EM-4101: …" → its code (so a restored failure keeps its inline recovery). */
 export const systemCode = (text: string): string | null => /^(EM-\d{4})\b/.exec(text.trim())?.[1] ?? null;
 const RETRYABLE = new Set(['EM-4101', 'EM-4102', 'EM-4103', 'EM-4003', 'EM-4301', 'EM-4303', 'EM-4304']);
+
+/** FR-099: how a chat sits in the Agent Panel: sharing the height, filling it (maximized), or reduced to its header bar. */
+export type ChatView = 'split' | 'max' | 'min';
+export interface ChatLayoutProps { view: ChatView; style?: CSSProperties; onToggleMax: () => void; onRestore: () => void }
+const CHAT_MIN_CLS = { brainstorm: 'min-h-[140px]', editor: 'min-h-[200px]' } as const;   // LAYOUT.chat.min / .editorMin
+/** Section classes per view: minimum height only in the split view; a reduced chat is just its header bar. */
+export const chatSectionCls = (agent: AgentKind, view: ChatView) => cx('flex flex-col overflow-hidden', view === 'split' ? CHAT_MIN_CLS[agent] : view === 'max' ? 'min-h-0' : 'shrink-0');
+
+/** Chat header (FR-099): title, help, maximize/restore toggle. Reduced (`min`), the title is a button that restores the split. */
+export function ChatHeader({ agent, title, help, layout }: { agent: AgentKind; title: string; help: string; layout: ChatLayoutProps }) {
+  const { t } = useStore();
+  const min = layout.view === 'min', max = layout.view === 'max';
+  return (
+    <div data-el={`agent.${agent}.header`} data-view={layout.view} className={cx('flex shrink-0 items-center gap-1 px-3', min ? 'py-1' : 'pt-1.5')}>
+      {min
+        ? <button type="button" className="t-label flex-1 text-left hover:text-em-text" aria-label={t('ui.agent.chat.show', { name: title })} title={t('ui.agent.chat.show', { name: title })} onClick={layout.onRestore}>{title}</button>
+        : <span className="t-label flex-1">{title}</span>}
+      <span title={help} aria-label={help} className="text-em-muted"><CircleHelp size={14} /></span>
+      <IconButton el={`agent.${agent}.maximize`} size={28} aria-pressed={max}
+        label={max || min ? t('ui.agent.chat.restore') : t('ui.agent.chat.maximize', { name: title })}
+        icon={max || min ? <Minimize2 size={14} /> : <Maximize2 size={14} />} onClick={max || min ? layout.onRestore : layout.onToggleMax} />
+    </div>
+  );
+}
 
 function CopyButton({ agent, text }: { agent: AgentKind; text: string }) {
   const { t, actions } = useStore();
@@ -143,14 +167,18 @@ export function Composer({ agent, placeholder, chip, onClearChip, value, setValu
     el.style.height = `${Math.min(6 * 20 + 12, el.scrollHeight)}px`;
   }, [value]);
   useEffect(() => {
-    const focus = (e: Event) => { if ((e as CustomEvent<{ agent: AgentKind }>).detail?.agent === agent) ref.current?.focus(); };
+    const focus = (e: Event) => {
+      if ((e as CustomEvent<{ agent: AgentKind }>).detail?.agent !== agent) return;
+      ref.current?.focus();
+      setTimeout(() => { if (ref.current && document.activeElement !== ref.current) ref.current.focus(); }, 0);   // FR-099: after a reduced chat is restored
+    };
     window.addEventListener('em:focus-composer', focus);
     return () => window.removeEventListener('em:focus-composer', focus);
   }, [agent]);
   const send = () => { const v = value.trim(); if (!v || reason || busy || imageBlocked) return; onSend(attachments); setAttachments([]); setAttachError(null); };
   const images = state.assets.filter((a) => a.kind === 'image' && a.status === 'ready');
   return (
-    <div className="border-t border-em-line p-2">
+    <div className="shrink-0 border-t border-em-line p-2">
       {chip && <span className="mb-1 inline-flex items-center gap-1 rounded-full border border-em-accent/60 px-2 text-[11px] text-em-accent">{chip}{onClearChip && <button type="button" aria-label={t('ui.common.remove')} onClick={onClearChip}><X size={12} /></button>}</span>}
       {attachments.length > 0 && <div className="mb-1 flex flex-wrap gap-1">{attachments.map((id) => (
         <span key={id} className="inline-flex items-center gap-1 rounded-[4px] border border-em-line px-1 text-[11px]">📎 {state.assets.find((a) => a.id === id)?.name}

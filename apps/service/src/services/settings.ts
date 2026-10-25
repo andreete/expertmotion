@@ -28,7 +28,9 @@ export const SettingsSchema = z.object({
   // FR-099 / FR-155: Editor layout (panel widths per window-width bucket, collapsed panels). Non-secret UI state only.
   layout: z.object({
     panelSizes: z.partialRecord(z.enum(['narrow', 'standard', 'wide']), z.object({ lib: z.number().int().min(0).max(4000).optional(), agent: z.number().int().min(0).max(4000).optional(), timeline: z.number().int().min(0).max(4000).optional() }).strict()).default({}),
-    libCollapsed: z.boolean().default(false), agentCollapsed: z.boolean().default(false), outputCollapsed: z.boolean().default(false),
+    libCollapsed: z.boolean().default(false), agentCollapsed: z.boolean().default(false), outputCollapsed: z.boolean().default(true),
+    // FR-099 (2026-10-25): Brainstorming Chat share of the chat area and the maximized chat (null = split view).
+    chatSplit: z.number().min(0).max(1).optional(), chatMaximized: z.enum(['brainstorm', 'editor']).nullable().optional(),
   }).strict().optional(),
 }).strict();
 export type Settings = z.infer<typeof SettingsSchema>;

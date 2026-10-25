@@ -194,7 +194,7 @@ describe('Editor screens (mock mode)', () => {
     const real = runtime.api.createRender.bind(runtime.api);
     let jobId = '';
     vi.spyOn(runtime.api, 'createRender').mockImplementation(async (b) => { const j = await real(b); jobId = j.id; await runtime.api.cancelRender(j.id); bus.emit('render.failed', { projectId: j.projectId, jobId: j.id, code: 'EM-3201', percent: 40, frame: 120 }); return { ...j, status: 'failed', errorCode: 'EM-3201', progress: 0.4, failedFrame: 120 }; });
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, outputCollapsed: false }}><App /></StoreProvider>);
     await waitFor(() => { if (!el('agent.output.ratio.9x16')?.hasAttribute('aria-checked')) throw new Error('boot'); });
     await act(async () => { fireEvent.click(el('hdr.action.export')!); });
     await waitFor(() => { if (!el('scr.export.start') || el('scr.export.start')!.hasAttribute('disabled')) throw new Error('start disabled'); });

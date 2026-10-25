@@ -66,6 +66,9 @@ describe('main editor element ids', () => {
     const seen = new Set<string>();
     const sweep = () => { for (const id of ids) if (present(id)) seen.add(id); };
     sweep();
+    // Output Settings collapsed (FR-099): header summary
+    fireEvent.click(el('agent.output.toggle')!); sweep();
+    fireEvent.click(el('agent.output.toggle')!);
     // File menu
     fireEvent.click(el('hdr.menu.file')!); sweep();
     if (el('hdr.menu.file.recent')) { fireEvent.click(el('hdr.menu.file.recent')!); await waitFor(() => { if (!el('hdr.menu.file.recent.item')) throw new Error('no recent'); }); sweep(); }
