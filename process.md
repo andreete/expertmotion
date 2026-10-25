@@ -4,11 +4,24 @@ Append an entry after every meaningful work unit. Newest entry first. Each entry
 
 ## Current state (keep this block up to date)
 
-- **Current stage**: Stage 3 (P0 code). All 178 FRs were re-audited by independent read-only agents after the gap work (Entry 8): every row is implemented; what remains is Operator input, Windows-only verification and the items listed in Entry 8.
-- **Verified here (2026-10-24)**: `bash scripts/verify.sh` → typecheck clean, **873 tests passed** (1 opt-in render smoke skipped), docs-check green; `poc/e2e/run.mjs` → **19/19** in 3 of 5 runs; the other runs stall on clip B decoding in headless Chrome on this loaded 2-CPU server (media served 206, buffering overlay shown), recheck playback on Windows.
-- **Blockers (all need the Operator)**: `node scripts/release-check.mjs` lists them: licence public key (`apps/service/src/license/keys.ts`), model-manifest public key (`packages/models/src/signed-registry.ts`), model CDN URL (`EM_MODEL_CDN_URL`, R2 bucket + signed `models.json`, ADR-026), model hashes `TO_PIN` (`packages/models/src/registry.ts`), publisher name and update feed URL (`apps/desktop/electron-builder.config.cjs`, `main.ts`), release key pair; plus storefront URL (`VITE_EM_STORE_URL`), docs URL, provider key for live agent runs, Remotion licence answer (BRD-010), FFmpeg legal review (RISK-030), OV code-signing certificate, and confirmation of provisional ADR-025 (preset descriptors not encrypted).
-- **Windows test build**: portable ZIP cross-built on this server (`scripts/cross-build-win.sh`, runbook §7); not yet run on Windows.
-- **Next actionable tasks**: Entry 8.
+- **Current stage**: Stage 3 (P0 code) complete on this server; Stage 4 (Windows verification, Operator release inputs) next. Product is licence-only (no Trial Mode), four providers enabled, models download from Hugging Face at pinned commits, License Admin app exists (Entries 9–11).
+- **Verified here (2026-10-25)**: `bash scripts/verify.sh` → typecheck clean, **924 tests passed** (1 opt-in render smoke skipped), docs-check green. Packaged service bundle: licence gate end to end (unlicensed → EM-5010; garbage key EM-5006; key issued for the Machine Code → licensed). Real model install `piper-id-news-medium` from Hugging Face, hash-verified. `poc/e2e/run.mjs` last 19/19 in 3 of 5 runs (Entry 8; headless decode stall).
+- **Downloads for the Operator**: `~/expertmotion-downloads/` (NSIS `Expertmotion-Setup-0.0.0.exe` built with makensis on Linux, `Expertmotion-License-Admin-0.1.0-win-x64.zip`, `kunci-tes/` TEST licence key outside git). Neither app has been launched on Windows yet.
+- **Blockers (Operator)**: `node scripts/release-check.mjs`: `EM_LICENSE_PUBLIC_KEY_A1_HEX`, `EM_MANIFEST_PUBLIC_KEY_M1_HEX` (only needed with the optional CDN), `EM_PUBLISHER_NAME` + OV certificate, `EM_FEED_URL`, release key pair; Remotion licence answer; FFmpeg legal review; confirm ADR-025 and the EM-5005 updates-date policy (Entry 9).
+- **Next actionable tasks**: Entry 11 "Open".
+
+---
+
+## 2026-10-25 — Entry 11: Windows feedback fixes, installer, HF downloads, build-time keys
+
+- **First Windows run (Operator logs)**: the packaged Editor (`app://expertmotion`) could not call the service (cross-origin: no CORS in production, Sec-Fetch-Site cross-site refused) and the Shell denied Chromium's Local Network Access permission → EM-8001 screen. Fixed: CORS/preflight/Private-Network for `app://expertmotion` only (token still required), `lib/permissions.ts` grants loopback permissions to the Editor origin only; engine-manifest re-hashed after obfuscation (EM-3003); tray icon; Shell-friendly no-service screen. SECURITY SEC-006/012/029 corrected.
+- **Providers**: OpenAI, Anthropic, Gemini enabled by default (PRD-032 pulled forward); custom stays P2. Adapters only tested against fakes.
+- **Installer**: `apps/desktop/installer/expertmotion.nsi` + `scripts/build-installer.sh` (electron-builder's cached Linux makensis, no wine): per-user, shortcuts, uninstaller asks about `%APPDATA%\Expertmotion`; `build/icon.ico`.
+- **Ports/helper**: 42300–42399; utility process "Expertmotion Helper".
+- **Keys at build time**: `EM_LICENSE_PUBLIC_KEY_A1_HEX`, `EM_MANIFEST_PUBLIC_KEY_M1_HEX` (service build defines); release-check requires them; no source edit.
+- **Models**: Operator decision — download from Hugging Face, source hidden from the Creator. `packages/models/src/pins.ts` (14 files: commit, sha256, bytes from the HF API); FLUX VAE from ungated byte-identical `second-state/FLUX.1-schnell-GGUF`; `*.hf.co` allowed (HF redirects to `us.aws.cdn.hf.co`; downloads would otherwise all fail); Model Manager shows no source URL, licence links → SPDX. R2 CDN optional (ADR-026 amendment).
+- **Build server note**: `scripts/run-capped.sh` now prints "no systemd user scope; running uncapped" (Node heap cap only); harden hashing streamed (OOM killer hit at integrity step); obfuscation needs `EM_NODE_HEAP=900`.
+- **Open**: Windows run of installer + admin app (runbook §6 step 9, §8); live provider keys; Kokoro voices / ACE-Step / loop library have no file list (not downloadable); Model Manager has no Refresh button for R-147 (only matters with the CDN); masking engine/model names in the UI was requested but not implemented; LLM model picker still shows provider model ids.
 
 ---
 
