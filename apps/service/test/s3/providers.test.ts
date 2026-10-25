@@ -231,6 +231,14 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
     const last = seen.at(-1)!; const b = JSON.parse(String(last.init.body)) as { system: string; temperature: number; max_tokens: number };
     expect(b).toMatchObject({ system: 'sys', temperature: 1, max_tokens: 50 });
     expect((last.init.headers as Record<string, string>)['x-api-key']).toBe('sk-ant-test-key-1234567890');
+    // the connection Test sends no temperature: it must be omitted, never "temperature": null (Anthropic → HTTP 400)
+    const { temperature: _t, ...noTemp } = req;
+    await chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-x', f).complete(noTemp as typeof req);
+    expect(JSON.parse(String(seen.at(-1)!.init.body))).not.toHaveProperty('temperature');
+    // a refused request (HTTP 400) is EM-4105 with the provider's own reason, not "cannot be reached"
+    const bad = mk(() => json(400, { type: 'error', error: { type: 'invalid_request_error', message: 'temperature: Input should be a valid number' } }));
+    await expect(chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-x', bad.f).complete(req))
+      .rejects.toMatchObject({ code: 'EM-4105', details: { status: 400, reason: 'temperature: Input should be a valid number' } });
   });
   it('Gemini: generateContent with roles user/model, key in header (never the URL)', async () => {
     const { f, seen } = mk((c) => (c.url.includes(':generateContent') ? json(200, { candidates: [{ content: { parts: [{ text: 'hai' }] } }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1 } })

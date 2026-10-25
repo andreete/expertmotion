@@ -33,6 +33,14 @@ export function mapProviderError(e: unknown): EmError {
     case 401: case 403: return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e });
     case 402: return new EmError('EM-4201', 'The provider account has no credit left.', { cause: e });
     case 404: return new EmError('EM-4004', 'This model is not available from the provider.', { cause: e });
+    case 400: case 413: case 422: {
+      // The provider understood the call and refused it: show its own reason (from the error body) instead of "cannot be reached".
+      const body = /provider HTTP \d+: ([\s\S]*)$/.exec(msg)?.[1] ?? '';
+      let reason = '';
+      try { const j = JSON.parse(body) as { error?: { message?: unknown } | string; message?: unknown }; reason = String((typeof j.error === 'object' ? j.error?.message : j.error) ?? j.message ?? ''); } catch { reason = body; }
+      reason = reason.replace(/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/g, '$1…').slice(0, 300);
+      return new EmError('EM-4105', `The AI provider refused the request${reason ? `: ${reason}` : '.'}`, { cause: e, details: { status: err.statusCode, ...(reason ? { reason } : {}) } });
+    }
     case 429: return new EmError('EM-4102', 'The AI provider is rate limiting requests.', { cause: e });
     default: break;
   }

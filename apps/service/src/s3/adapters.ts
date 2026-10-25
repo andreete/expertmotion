@@ -127,16 +127,19 @@ export function chatProviderFor(p: ProviderKindT, key: string, model: string, fe
   const call = async (req: ChatRequest, url: string, body: unknown): Promise<unknown> =>
     getJson(fetchFn, url, authHeaders(p, key), { method: 'POST', body, timeoutMs: req.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS, ...(req.signal ? { signal: req.signal } : {}) });
   const msgs = (m: ChatMessage[]) => m.map((x) => ({ role: x.role, content: x.content }));
+  // Sampling temperature only when the caller set a real number: `Math.min(1, undefined)` is NaN and was sent as
+  // "temperature": null, which Anthropic rejects with HTTP 400 (shown as EM-4003 before). Omitted = provider default.
+  const temp = (t: number | undefined, max: number): { temperature?: number } => (typeof t === 'number' && Number.isFinite(t) ? { temperature: Math.min(max, Math.max(0, t)) } : {});
   switch (p) {
     case 'openai': return { id: 'openai', model, async complete(req) {
-      const j = await call(req, `${OPENAI}/chat/completions`, { model, messages: [{ role: 'system', content: req.system }, ...msgs(req.messages)], max_completion_tokens: req.maxTokens, temperature: req.temperature }) as
+      const j = await call(req, `${OPENAI}/chat/completions`, { model, messages: [{ role: 'system', content: req.system }, ...msgs(req.messages)], max_completion_tokens: req.maxTokens, ...temp(req.temperature, 2) }) as
         { choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } };
       const c = j.choices?.[0];
       if (c?.finish_reason === 'content_filter') throw new EmError('EM-4104', 'The provider declined to answer this request.');
       return { text: str(c?.message?.content), usage: usageOf(model, j.usage?.prompt_tokens, j.usage?.completion_tokens) };
     } };
     case 'anthropic': return { id: 'anthropic', model, async complete(req) {
-      const j = await call(req, `${ANTHROPIC}/messages`, { model, system: req.system, messages: msgs(req.messages), max_tokens: req.maxTokens, temperature: Math.min(1, req.temperature) }) as
+      const j = await call(req, `${ANTHROPIC}/messages`, { model, system: req.system, messages: msgs(req.messages), max_tokens: req.maxTokens, ...temp(req.temperature, 1) }) as
         { content?: Array<{ type?: unknown; text?: unknown }>; stop_reason?: unknown; usage?: { input_tokens?: unknown; output_tokens?: unknown } };
       if (j.stop_reason === 'refusal') throw new EmError('EM-4104', 'The provider declined to answer this request.');
       const text = (j.content ?? []).filter((b) => b.type === 'text').map((b) => str(b.text)).join('');
@@ -147,7 +150,7 @@ export function chatProviderFor(p: ProviderKindT, key: string, model: string, fe
       if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new EmError('EM-4004', 'This model is not available from the provider.');
       const j = await call(req, `${GEMINI}/models/${id}:generateContent`, { systemInstruction: { parts: [{ text: req.system }] },
         contents: req.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-        generationConfig: { maxOutputTokens: req.maxTokens, temperature: req.temperature } }) as
+        generationConfig: { maxOutputTokens: req.maxTokens, ...temp(req.temperature, 2) } }) as
         { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> }; finishReason?: unknown }>; promptFeedback?: { blockReason?: unknown }; usageMetadata?: { promptTokenCount?: unknown; candidatesTokenCount?: unknown } };
       if (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason === 'SAFETY') throw new EmError('EM-4104', 'The provider declined to answer this request.');
       const text = (j.candidates?.[0]?.content?.parts ?? []).map((x) => str(x.text)).join('');
