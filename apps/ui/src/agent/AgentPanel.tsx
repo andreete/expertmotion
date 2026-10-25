@@ -11,7 +11,7 @@ export function ModelBar() {
   const { state, actions, t } = useStore();
   const names = useModelNames();
   const def = state.connections.find((c) => c.id === state.assignments?.defaultConnectionId) ?? state.connections[0];
-  // Tier name ("Balanced") of the Editor Agent's model, else the Brainstorming Agent's; the raw model id stays internal.
+  // Label of the Editor Agent's model (e.g. "Anthropic: Claude Haiku 5.5"), else the Brainstorming Agent's.
   const model = state.assignments?.editor ? names.agent('editor') : state.assignments?.brainstorm ? names.agent('brainstorm') : undefined;
   const priv = Boolean(state.settings?.privateMode);
   // FR-071: the last provider failure of either agent (agent.run.failed) wins over a stale "valid"; its code is shown as is.

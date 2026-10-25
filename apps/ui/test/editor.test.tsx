@@ -29,8 +29,6 @@ const NOT_IN_MOCK: Record<string, string> = {
   'lib.text.size.overflow': 'needs a selected Text Layer that does not keep its size (library.test.tsx, FR-021)',
   'agent.brainstorm.attach.file': 'attach menu (stage-agent.test.tsx)', 'agent.editor.attach.file': 'attach menu',
   'agent.brainstorm.attach.error': 'attachment notice (stage-agent.test.tsx)', 'agent.editor.attach.error': 'attachment notice',
-  'agent.brainstorm.footer.model.option': 'footer model picker (stage-agent.test.tsx)', 'agent.editor.footer.model.option': 'footer model picker',
-  'agent.brainstorm.footer.model.tier': 'footer model picker (stage-agent.test.tsx)', 'agent.editor.footer.model.tier': 'footer model picker',
   'agent.editor.plancard.step.ops': 'needs a plan with steps (stage-agent.test.tsx)', 'agent.editor.plancard.model': 'needs plan usage', 'agent.editor.plancard.result': 'needs an executed plan',
   'agent.output.ratio.help.table': 'help popover (stage-agent.test.tsx)', 'agent.output.ratio.auto.hint': 'Auto on with no clip (stage-agent.test.tsx)',
   'stage.timeline.element.selected': 'state variant: aria-selected on stage.timeline.element',
@@ -58,11 +56,13 @@ const NOT_IN_MOCK: Record<string, string> = {
   'lib.assets.empty': 'empty project only (asserted in the next test)', 'stage.timeline.empty': 'empty project only (asserted in the next test)',
 };
 const MAIN = /^(hdr|lib|stage|agent|sys)\./;
+/** The footer model popover (`agent.*.footer.model.popover` / `.connection` / `.picker.*`) opens only on click (stage-agent.test.tsx). */
+const IN_FOOTER_POPOVER = /^agent\.(brainstorm|editor)\.footer\.model\.(popover|connection|picker)/;
 
 describe('main editor element ids', () => {
   it('renders every main-region id from ELEMENT_IDS.md', async () => {
     const { runtime } = await renderEditor('sample');
-    const ids = parseElementIds().filter((id) => MAIN.test(id) && !(id in NOT_IN_MOCK));
+    const ids = parseElementIds().filter((id) => MAIN.test(id) && !(id in NOT_IN_MOCK) && !IN_FOOTER_POPOVER.test(id));
     const seen = new Set<string>();
     const sweep = () => { for (const id of ids) if (present(id)) seen.add(id); };
     sweep();

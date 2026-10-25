@@ -1,13 +1,14 @@
 // Providers screen (scr.providers, FR-109…FR-119): Provider Connections list (status, model count, default, usage/budget,
 // Edit / Test / Set default / Remove), and the Add connection form whose sections unlock in order: provider + key →
-// Validate (R-101 dry run, nothing stored) → Capability Table → assignments → budget → Test (R-102 fixed probe) → Save.
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Eye, EyeOff, Minus, RefreshCw, Trash2 } from 'lucide-react';
+// Validate (R-101 dry run, nothing stored) → model table (ModelPicker, one pick per agent) → budget → Test (R-102 fixed probe) → Save.
+import { useEffect, useRef, useState } from 'react';
+import { Check, Eye, EyeOff, Trash2 } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import type { AgentKind, AssignmentDto, CapabilityRow, ConnectionDto, ProbeResultDto, ProviderKind, ProviderKindInfo } from '../api/types.js';
 import { Badge, Button, ErrorBox, Field, IconButton, Modal, cx, inputCls } from '../components/ui.js';
 import { formatMoney, formatNumber, formatTokens } from '../i18n/index.js';
-import { EmError, MODEL_TIERS, recommendedFor, resolveModelTiers, tierOfModel, type ModelTier } from '@expertmotion/shared';
+import { EmError, recommendedFor } from '@expertmotion/shared';
+import { ModelPicker, defaultModelFor } from '../components/ModelPicker.js';
 import type { BudgetFocus } from '../state/reducer.js';
 import { llmModelName } from '../state/model-names.js';
 
@@ -21,8 +22,8 @@ const toLimit = (v: string): number | null => { const n = Number(v); return v.tr
 
 /** Deterministic "recommended for" hint from the Capability Table (unknown facts never qualify); lives in @expertmotion/shared. */
 export { recommendedFor };
-/** The Balanced tier's model for an agent (the default when nothing is assigned yet), or '' when the table has no JSON-capable model. */
-const defaultModel = (rows: readonly CapabilityRow[], agent: AgentKind): string => resolveModelTiers(rows, agent).balanced ?? '';
+/** The default model for an agent when nothing is assigned yet (Balanced resolution), or '' when the table has no JSON-capable model. */
+const defaultModel = (rows: readonly CapabilityRow[], agent: AgentKind): string => defaultModelFor(rows, agent);
 
 function useKinds(): ProviderKindInfo[] {
   const { runtime } = useStore();
@@ -106,100 +107,48 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
   );
 }
 
-/** Capability Table (FR-114): id, name, context, tools, structured, streaming, image input, price, recommended for; searchable, refreshable. */
-function CapabilityTable({ rows, onRefresh }: { rows: CapabilityRow[]; onRefresh?: () => void }) {
-  const { t, lang, state } = useStore();
-  const [q, setQ] = useState('');
-  const shown = useMemo(() => { const n = q.trim().toLowerCase(); return n ? rows.filter((r) => r.modelId.toLowerCase().includes(n) || r.label.toLowerCase().includes(n)) : rows; }, [rows, q]);
-  const tri = (b: boolean | null) => (b === true ? <Check size={14} className="text-em-success" aria-label={t('ui.common.yes')} />
-    : b === false ? <Minus size={14} className="text-em-muted" aria-label={t('ui.common.no')} />
-    : <span className="t-mono text-em-muted" title={t('ui.scr.providers.unknown.tip')} aria-label={t('ui.scr.providers.unknown')}>?</span>);
+/** Model choice (FR-114, FR-115; Operator feedback 2026-10-25): one searchable ModelPicker over the Capability Table with a
+ *  two-option toggle "Brainstorming Agent | Editor Agent" above it; a row click assigns the model to the agent shown. Defaults
+ *  (both agents) = the Balanced resolution of @expertmotion/shared (the free pick while Free is filtered), so Save works without
+ *  touching anything; the exact model id is what gets stored. Only `structuredOutput === false` is refused (R-098, AGD-004);
+ *  unknown tool calling / structured output shows EM-4005 and stays allowed; a model without image input gets a note. */
+function ModelAssign({ rows, assign, setAssign, onRefresh, loading }: { rows: CapabilityRow[]; assign: Record<AgentKind, string>; setAssign: (f: (a: Record<AgentKind, string>) => Record<AgentKind, string>) => void; onRefresh?: () => void; loading?: boolean }) {
+  const { state, t } = useStore();
+  const [agent, setAgent] = useState<AgentKind>('brainstorm');
+  const touched = useRef<Record<AgentKind, boolean>>({ brainstorm: false, editor: false });
+  const other: AgentKind = agent === 'brainstorm' ? 'editor' : 'brainstorm';
+  const pick = (id: string) => { touched.current[agent] = true; setAssign((a) => ({ ...a, [agent]: id })); };
+  const onFreeChange = (on: boolean) => setAssign((a) => {                             // untouched defaults follow the Free chip
+    const next = { ...a };
+    for (const x of AGENTS) if (!touched.current[x]) next[x] = defaultModelFor(rows, x, on) || next[x];
+    return next;
+  });
+  const cap = rows.find((r) => r.modelId === assign[agent]);
+  const name = llmModelName(rows, assign[agent]);
+  const canShare = !!assign[agent] && assign[other] !== assign[agent];
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
-        <span className="t-label flex-1">{t('ui.scr.providers.models')} <span className="text-em-muted">({rows.length})</span></span>
-        <input data-el="scr.providers.models.search" type="search" aria-label={t('ui.scr.providers.search')} placeholder={t('ui.scr.providers.search')} value={q} onChange={(e) => setQ(e.target.value)} className={cx(inputCls, '!h-7 !w-44')} />
-        {onRefresh && <IconButton el="scr.providers.models.refresh" label={t('ui.scr.providers.refresh')} icon={<RefreshCw size={14} />} size={28} disabledReason={state.settings?.privateMode ? t('err.EM-8202.title') : null} onClick={onRefresh} />}
+    <div className="flex flex-col gap-2">
+      <div role="radiogroup" aria-label={t('ui.scr.providers.assign.for')} data-el="scr.providers.assign.agent" className="grid grid-cols-2 gap-1">
+        {AGENTS.map((a) => {
+          const on = a === agent;
+          return (
+            <button key={a} type="button" role="radio" aria-checked={on} data-el={`scr.providers.assign.agent.${a}`} data-model-id={assign[a] || undefined} onClick={() => setAgent(a)}
+              className={cx('flex min-w-0 flex-col items-start rounded-[6px] border px-2 py-1 text-left', on ? 'border-em-accent bg-em-accent/10' : 'border-em-line hover:bg-em-panel-2')}>
+              <span className={cx('text-[12px] font-medium', on && 'text-em-accent')}>{t(`ui.scr.providers.assign.${a}`)}</span>
+              <span className="w-full truncate text-[11px] text-em-text-2" title={assign[a] || undefined}>{assign[a] ? llmModelName(rows, assign[a]) : t('ui.scr.providers.assign.none')}</span>
+            </button>
+          );
+        })}
       </div>
-      <div className="max-h-56 overflow-auto rounded-[6px] border border-em-line">
-        <table data-el="scr.providers.models.list" className="w-full text-[12px]">
-          <thead className="sticky top-0 bg-em-panel-2 text-em-muted"><tr>
-            <th className="px-2 py-1 text-left">{t('ui.scr.providers.col.model')}</th><th className="px-1">{t('ui.scr.providers.col.context')}</th><th className="px-1">{t('ui.scr.providers.col.tools')}</th>
-            <th className="px-1">{t('ui.scr.providers.col.structured')}</th><th className="px-1">{t('ui.scr.providers.col.streaming')}</th><th className="px-1">{t('ui.scr.providers.col.image')}</th>
-            <th className="px-2 text-right">{t('ui.scr.providers.col.price')}</th><th className="px-2 text-left">{t('ui.scr.providers.col.recommended')}</th>
-          </tr></thead>
-          <tbody>
-            {rows.length === 0 && <tr><td colSpan={8} className="px-2 py-2 text-em-muted">{t('err.EM-4006.title')}</td></tr>}
-            {shown.map((r) => (
-              <tr key={r.modelId} data-model-id={r.modelId} className="border-t border-em-line">
-                <td className="px-2 py-1">{r.label}<div className="t-mono text-[10px] text-em-muted">{r.modelId}</div></td>
-                <td className="t-mono px-1 text-center">{r.contextLength ? `${Math.round(r.contextLength / 1000)}k` : 'n/a'}</td>
-                {[r.toolCalling, r.structuredOutput, r.streaming, r.imageInput].map((b, i) => <td key={i} className="px-1"><span className="flex justify-center">{tri(b)}</span></td>)}
-                <td className="t-mono px-2 text-right">{r.pricePerMInput === null ? 'n/a' : `${formatMoney(r.pricePerMInput, true, lang)} · ${formatMoney(r.pricePerMOutput, false, lang)}`}</td>
-                <td className="px-2">{recommendedFor(r).map((a) => t(`ui.scr.providers.rec.${a}`)).join(', ')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <ModelPicker el="scr.providers.models" rows={rows} agent={agent} value={assign[agent]} onSelect={pick} onFreeChange={onFreeChange} loading={loading}
+        {...(onRefresh ? { onRefresh, refreshDisabledReason: state.settings?.privateMode ? t('err.EM-8202.title') : null } : {})} />
+      <div className="flex flex-wrap items-center gap-2">
+        {agent === 'editor' && <p className="flex-1 text-[12px] text-em-muted">{t('ui.scr.providers.assign.editor.hint')}</p>}
+        {canShare && <Button el="scr.providers.assign.both" size={28} variant="ghost" className="ml-auto" onClick={() => { touched.current[other] = true; setAssign((a) => ({ ...a, [other]: a[agent] })); }}>{t(`ui.scr.providers.assign.both.${other}`)}</Button>}
       </div>
+      {cap && agent === 'editor' && (cap.toolCalling !== true || cap.structuredOutput !== true) && <Note el="scr.providers.assign.note" code="EM-4005" tone="info" vars={{ model: name }} />}
+      {cap && cap.imageInput !== true && <p data-el="scr.providers.assign.note" className="text-[12px] text-em-muted">{t(cap.imageInput === false ? 'ui.scr.providers.assign.noimage' : 'ui.scr.providers.assign.imageunknown')}</p>}
     </div>
-  );
-}
-
-/** Two independent pickers (FR-115). Default: three tiers per agent (Fast / Balanced / Best, resolved from the Capability
- *  Table by @expertmotion/shared `resolveModelTiers`; the resolved model id is what gets stored). "Advanced" (collapsed)
- *  keeps the exact model list. Only `structuredOutput === false` is refused (R-098, AGD-004); missing or unknown tool calling /
- *  structured output shows EM-4005 and stays allowed; a model without image input gets a note. */
-function AssignFields({ rows, assign, setAssign }: { rows: CapabilityRow[]; assign: Record<AgentKind, string>; setAssign: (f: (a: Record<AgentKind, string>) => Record<AgentKind, string>) => void }) {
-  const { t } = useStore();
-  const [picked, setPicked] = useState<Record<AgentKind, ModelTier | null>>({ brainstorm: null, editor: null });
-  return (
-    <>
-      {AGENTS.map((agent) => {
-        const cap = rows.find((r) => r.modelId === assign[agent]);
-        const tiers = resolveModelTiers(rows, agent);
-        const derived = tierOfModel(rows, assign[agent], agent);
-        const p = picked[agent];
-        const current = p && tiers[p] === assign[agent] ? p : derived;
-        const noTiers = !tiers.balanced;
-        const name = llmModelName(t, rows, assign[agent], agent);
-        return (
-          <div key={agent} className="mb-3">
-            <div className="t-label mb-1" id={`em-assign-${agent}-label`}>{t(`ui.scr.providers.assign.${agent}`)}</div>
-            <div role="radiogroup" aria-labelledby={`em-assign-${agent}-label`} data-el={`scr.providers.assign.${agent}.tier`} className={cx('grid gap-1', tiers.free ? 'grid-cols-4' : 'grid-cols-3')}>
-              {MODEL_TIERS.filter((tier) => tier !== 'free' || tiers.free).map((tier) => {
-                const on = current === tier;
-                return (
-                  <button key={tier} type="button" role="radio" aria-checked={on} data-el="scr.providers.assign.tier.option" data-tier={tier} disabled={!tiers[tier]}
-                    title={!tiers[tier] ? t('ui.scr.providers.tier.fetch') : undefined}
-                    onClick={() => { const id = tiers[tier]; if (!id) return; setPicked((x) => ({ ...x, [agent]: tier })); setAssign((a) => ({ ...a, [agent]: id })); }}
-                    className={cx('flex flex-col items-start rounded-[6px] border px-2 py-1 text-left', on ? 'border-em-accent text-em-accent' : 'border-em-line', !tiers[tier] && 'cursor-not-allowed opacity-50')}>
-                    <span className="font-medium">{t(`ui.scr.providers.tier.${tier}`)}</span>
-                    <span className="text-[11px] text-em-muted">{t(`ui.scr.providers.tier.${tier}.hint`)}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {noTiers && <p data-el="scr.providers.assign.tier.empty" className="mt-1 text-[12px] text-em-muted">{t('ui.scr.providers.tier.fetch')}</p>}
-            {agent === 'editor' && <p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.providers.assign.editor.hint')}</p>}
-            {assign[agent] && !current && <p data-el="scr.providers.assign.custom" className="mt-1 text-[12px] text-em-text-2">{t('ui.scr.providers.tier.custom', { model: name })}</p>}
-            <details data-el={`scr.providers.assign.${agent}.advanced`} className="mt-1 text-[12px]">
-              <summary className="cursor-pointer text-em-muted">{t('ui.scr.providers.tier.advanced')}</summary>
-              <div className="mt-1">
-                <Field label={t('ui.scr.providers.tier.advanced.model')} htmlFor={`em-assign-${agent}`}>
-                  <select id={`em-assign-${agent}`} data-el={`scr.providers.assign.${agent}`} className={inputCls} value={assign[agent]} onChange={(e) => { setPicked((x) => ({ ...x, [agent]: null })); setAssign((a) => ({ ...a, [agent]: e.target.value })); }}>
-                    <option value="">{t('ui.scr.providers.assign.none')}</option>
-                    {rows.map((r) => <option key={r.modelId} value={r.modelId} disabled={r.structuredOutput === false}>{r.label}{r.structuredOutput === false ? ` — ${t('ui.scr.providers.assign.nojson')}` : ''}</option>)}
-                  </select>
-                </Field>
-              </div>
-            </details>
-            {cap && agent === 'editor' && (cap.toolCalling !== true || cap.structuredOutput !== true) && <div className="mt-1"><Note el="scr.providers.assign.note" code="EM-4005" tone="info" vars={{ model: name }} /></div>}
-            {cap && cap.imageInput !== true && <p data-el="scr.providers.assign.note" className="mt-1 text-[12px] text-em-muted">{t(cap.imageInput === false ? 'ui.scr.providers.assign.noimage' : 'ui.scr.providers.assign.imageunknown')}</p>}
-          </div>
-        );
-      })}
-    </>
   );
 }
 
@@ -251,6 +200,7 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [tested, setTested] = useState<ProbeResultDto[] | string | null>(null);
+  const [fetching, setFetching] = useState(false);
   useEffect(() => {                                                                                     // FR-117: prefill the project cap
     const p = state.project ? budget?.projects.find((x) => x.projectId === state.project!.id && x.connectionId === conn?.id) : undefined;
     if (p?.limitUsd != null) setProjectBudget((v) => v || String(p.limitUsd));
@@ -271,7 +221,9 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
       let rows = r.items;
       if (!rows.length && autoFetched.current !== conn.id && !state.settings?.privateMode && conn.status === 'valid') {
         autoFetched.current = conn.id;
+        setFetching(true);
         rows = (await runtime.api.refreshConnectionModels(conn.id).catch(() => ({ items: [] as typeof rows }))).items;
+        setFetching(false);
       }
       if (rows.length) dispatch({ type: 'capabilities', connectionId: conn.id, rows });
     }).catch(() => undefined);
@@ -301,11 +253,14 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
     catch (e) { setTested(codeOf(e)); }
     setTesting(false);
   };
-  const refresh = async () => { try { const r = await runtime.api.refreshConnectionModels(conn.id); dispatch({ type: 'capabilities', connectionId: conn.id, rows: r.items }); } catch (e) { actions.error(e); } };
+  const refresh = async () => {
+    setFetching(true);
+    try { const r = await runtime.api.refreshConnectionModels(conn.id); dispatch({ type: 'capabilities', connectionId: conn.id, rows: r.items }); } catch (e) { actions.error(e); }
+    setFetching(false);
+  };
   return (
     <div className="flex flex-col gap-3">
-      <CapabilityTable rows={rows} onRefresh={() => void refresh()} />
-      <AssignFields rows={rows} assign={assign} setAssign={setAssign} />
+      <section aria-label={t('ui.scr.providers.section.assign')}><ModelAssign rows={rows} assign={assign} setAssign={setAssign} onRefresh={() => void refresh()} loading={fetching} /></section>
       {showBudgets && <BudgetFields connectionId={conn.id} month={month} setMonth={setMonth} project={projectBudget} setProject={setProjectBudget} budget={budget} />}
       {error && <ErrorBox code={error} />}
       {typeof tested === 'string' && <ErrorBox code={tested} />}
@@ -382,8 +337,7 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
       </section>
       {validated ? (
         <>
-          <section aria-label={t('ui.scr.providers.models')}>{modelsCode && <Note code={modelsCode} vars={{ provider: t(`ui.scr.providers.provider.${provider}`) }} />}<CapabilityTable rows={rows} /></section>
-          <section aria-label={t('ui.scr.providers.section.assign')}><AssignFields rows={rows} assign={assign} setAssign={setAssign} /></section>
+          <section aria-label={t('ui.scr.providers.section.assign')}>{modelsCode && <Note code={modelsCode} vars={{ provider: t(`ui.scr.providers.provider.${provider}`) }} />}<ModelAssign rows={rows} assign={assign} setAssign={setAssign} /></section>
           <section aria-label={t('ui.scr.providers.section.budget')}><BudgetFields connectionId={null} month={month} setMonth={setMonth} project={project} setProject={setProject} budget={null} /></section>
           {tested && <TestResults items={tested} />}
         </>

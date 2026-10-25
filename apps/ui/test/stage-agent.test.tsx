@@ -220,17 +220,25 @@ describe('Agent Panel (FR-071…FR-086)', () => {
   it('FR-073: the footer picker switches only the Editor model; FR-072 image attach is refused for a text-only model', async () => {
     const { runtime } = await renderEditor('sample');
     await connect(runtime);
+    expect(el('agent.editor.footer.model')?.textContent).toBe('Claude Sonnet 4.5 ▾');                // the model's label, never a tier name
     fireEvent.click(el('agent.editor.footer.model')!);
-    await waitFor(() => { if (els('agent.editor.footer.model.option').length < 2) throw new Error('no options'); });
-    const qwen = els('agent.editor.footer.model.option').find((n) => n.textContent?.includes('Qwen 2.5 7B'))!;
-    expect(qwen.textContent).toMatch(/32\s768/);                      // context column
-    expect(qwen.textContent).toContain('—');                          // no image input
-    await act(async () => { fireEvent.click(qwen); });
-    // an exact (Advanced) pick outside the tiers shows the model's name: Anthropic/OpenAI/Google models are the tier candidates here
+    await waitFor(() => { if (els('agent.editor.footer.model.picker.row').length < 2) throw new Error('no rows'); });
+    expect(el('agent.editor.footer.model.picker.filter.json')?.getAttribute('aria-pressed')).toBe('true');  // Editor Agent: JSON chip on
+    expect(el('agent.editor.footer.model.picker')!.querySelector('[data-model-id="anthropic/claude-sonnet-4.5"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(el('agent.editor.footer.model.picker.search'));
+    fireEvent.change(el('agent.editor.footer.model.picker.search')!, { target: { value: 'QWEN' } });
+    const rows = els('agent.editor.footer.model.picker.row');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain('Qwen 2.5 7B');
+    expect(rows[0]!.textContent).toContain('32K');                    // context column
+    expect(rows[0]!.querySelector('[data-cap="image"]')).toBeNull();  // no image input
+    await act(async () => { fireEvent.keyDown(el('agent.editor.footer.model.picker.search')!, { key: 'Enter' }); });
     await waitFor(() => { if (!el('agent.editor.footer.model')?.querySelector('[title="qwen/qwen-2.5-7b-instruct"]')) throw new Error('editor not switched'); });
+    expect(el('agent.editor.footer.model.popover')).toBeNull();      // closes after the pick
     expect(el('agent.editor.footer.model')?.textContent).toBe('Qwen 2.5 7B ▾');
     expect(el('agent.brainstorm.footer.model')?.querySelector('[title]')?.getAttribute('title')).toBe('openai/gpt-4.1-mini');
-    expect(el('agent.brainstorm.footer.model')?.textContent).not.toContain('openai/');
+    expect(el('agent.brainstorm.footer.model')?.textContent).toBe('GPT-4.1 mini ▾');
+    expect((await runtime.api.getAssignments()).brainstorm?.modelId).toBe('openai/gpt-4.1-mini');
     // attach an image from disk: > 10 MB → EM-1002; a small PNG → EM-4307 for the text-only model
     fireEvent.click(el('agent.editor.attach')!);
     const input = el('agent.editor.panel')!.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -254,7 +262,7 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     await act(async () => { fireEvent.keyDown(el('agent.editor.composer')!, { key: 'Enter' }); });
     await waitFor(() => { if (el('agent.editor.plancard')?.getAttribute('data-status') !== 'valid') throw new Error('no plan'); });
     expect(el('agent.editor.plancard.step.ops')?.textContent).toBe('1 op');
-    expect(el('agent.editor.plancard.model')?.textContent).toBe('Best');                              // tier name of the model
+    expect(el('agent.editor.plancard.model')?.textContent).toBe('Claude Sonnet 4.5');                 // the model's label
     expect(el('agent.editor.plancard.model')?.getAttribute('title')).toBe('anthropic/claude-sonnet-4.5');
     await act(async () => { fireEvent.click(within(el('agent.editor.plancard')!).getByRole('button', { name: /Execute plan/ })); });
     await waitFor(() => { if (!el('agent.editor.plancard.result')) throw new Error(`no result ${el('agent.editor.plancard')?.getAttribute('data-status')} ${el('agent.editor.plancard')?.textContent}`); });

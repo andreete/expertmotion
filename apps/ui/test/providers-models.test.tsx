@@ -44,14 +44,18 @@ describe('Providers screen (FR-109…FR-119)', () => {
     expect(add).not.toHaveBeenCalled();
     expect((await runtime.api.listConnections()).items).toHaveLength(0);
     // FR-114: unknown capability shown as "?", searchable
-    const mistral = el('scr.providers.models.list')!.querySelector('tr[data-model-id="mistralai/mistral-small"]')!;
+    const mistral = el('scr.providers.models.list')!.querySelector('[data-model-id="mistralai/mistral-small"]')!;
     expect(mistral.textContent).toContain('?');
     fireEvent.change(el('scr.providers.models.search')!, { target: { value: 'llama' } });
-    expect(el('scr.providers.models.list')!.querySelectorAll('tbody tr')).toHaveLength(1);
+    expect(els('scr.providers.models.row')).toHaveLength(1);
+    fireEvent.change(el('scr.providers.models.search')!, { target: { value: '' } });
     // FR-115: unknown capabilities → EM-4005 note, still selectable; no JSON output stays refused (AGD-004)
-    const editor = el('scr.providers.assign.editor') as HTMLSelectElement;
-    expect(editor.querySelector('option[value="meta-llama/llama-3.1-8b-instruct"]')!.hasAttribute('disabled')).toBe(true);
-    fireEvent.change(editor, { target: { value: 'mistralai/mistral-small' } });
+    fireEvent.click(el('scr.providers.assign.agent.editor')!);
+    fireEvent.click(el('scr.providers.models.filter.json')!);                    // on by default for the Editor Agent; off shows unknown rows
+    const llama = el('scr.providers.models.list')!.querySelector('[data-model-id="meta-llama/llama-3.1-8b-instruct"]')!;
+    expect(llama.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(el('scr.providers.models.list')!.querySelector('[data-model-id="mistralai/mistral-small"]')!);
+    expect(el('scr.providers.assign.agent.editor')!.getAttribute('data-model-id')).toBe('mistralai/mistral-small');
     await until(() => els('scr.providers.assign.note').some((n) => n.getAttribute('data-code') === 'EM-4005'), 'EM-4005 note');
     // FR-116: real probe through R-102 with the draft
     await act(async () => { fireEvent.click(el('scr.providers.test')!); });

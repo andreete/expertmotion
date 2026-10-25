@@ -1,8 +1,7 @@
-// Creator-facing names for models (Operator decision 2026-10-25): Local Models show their product name (`displayName`, en/id)
-// instead of the upstream name; LLM assignments show the tier ("Fast" / "Balanced" / "Best") resolved from the connection's
-// Capability Table (packages/shared model-tiers), else the provider's model label. Keys and model ids stay internal.
-import { tierOfModel, type ModelTier } from '@expertmotion/shared';
-import type { AgentKind, CapabilityRow, DisplayNameDto, ModelStateDto } from '../api/types.js';
+// Creator-facing names for models (Operator decisions 2026-10-25): Local Models show their product name (`displayName`, en/id)
+// instead of the upstream name; LLM models show the provider's model label from the connection's Capability Table
+// (e.g. "Anthropic: Claude Haiku 5.5"), never a tier name; the raw model id only when the table has no row for it.
+import type { CapabilityRow, DisplayNameDto, ModelStateDto } from '../api/types.js';
 import type { Lang } from '../i18n/index.js';
 
 type Named = { label: string; displayName?: DisplayNameDto | undefined };
@@ -16,11 +15,8 @@ export function localModelByRef(models: readonly ModelStateDto[], ref: string): 
   return hits.find((m) => m.key === bare) ?? hits.find((m) => m.status === 'installed') ?? hits.find((m) => m.recommended) ?? hits[0];
 }
 
-/** Display name of an LLM model id on a connection: tier name when it is a tier's model, else the provider's label, else the id. */
-export function llmModelName(t: (k: string, v?: Record<string, string | number>) => string, rows: readonly CapabilityRow[], modelId: string | null | undefined, agent?: AgentKind): string {
+/** Display name of an LLM model id on a connection: the provider's label, else the id ('' when none). */
+export function llmModelName(rows: readonly CapabilityRow[], modelId: string | null | undefined): string {
   if (!modelId) return '';
-  const tier: ModelTier | null = tierOfModel(rows, modelId, agent);
-  if (tier) return t(`ui.scr.providers.tier.${tier}`);
-  const r = rows.find((x) => x.modelId === modelId);
-  return r?.label || modelId;
+  return rows.find((x) => x.modelId === modelId)?.label || modelId;
 }

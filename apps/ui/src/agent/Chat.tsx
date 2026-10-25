@@ -1,11 +1,11 @@
 // Shared chat pieces (CMP-13 bubbles, composer, footer) for the Brainstorming Chat and the Editor Chat.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Copy, ImagePlus, Paperclip, SendHorizontal, TriangleAlert, X } from 'lucide-react';
 import { errCode, useStore } from '../state/store.js';
 import type { AgentKind, CapabilityRow, MessageDto } from '../api/types.js';
-import { Button, IconButton, Popover, cx } from '../components/ui.js';
+import { Button, IconButton, Popover, cx, inputCls } from '../components/ui.js';
+import { ModelPicker } from '../components/ModelPicker.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
-import { MODEL_TIERS, resolveModelTiers } from '@expertmotion/shared';
 import { useModelNames } from '../state/use-model-names.js';
 import { copyText } from '../api/client.js';
 
@@ -201,68 +201,47 @@ export function useAssignedCapability(agent: AgentKind): CapabilityRow | null {
 /** FR-074 colour thresholds: amber from 60 %, red from 80 %. */
 export const ctxTone = (pct: number): 'danger' | 'warn' | 'muted' => (pct >= 0.8 ? 'danger' : pct >= 0.6 ? 'warn' : 'muted');
 
-/** FR-073: inline per-agent model picker over every validated connection, Capability Table columns inline. */
-function ModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void }) {
+/** FR-073: per-agent model popover with the shared ModelPicker (compact) over one validated connection (a connection select
+ *  appears when there are several); a pick switches that agent's model for the next request only. */
+function FooterModelPicker({ agent, onClose }: { agent: AgentKind; onClose: () => void }) {
   const { state, runtime, dispatch, actions, t } = useStore();
   const names = useModelNames();
   const valid = state.connections.filter((c) => c.status === 'valid');
-  useEffect(() => {
-    for (const c of valid) if (!state.capabilities[c.id]) runtime.api.connectionModels(c.id).then((r) => dispatch({ type: 'capabilities', connectionId: c.id, rows: r.items })).catch(() => undefined);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const cur = state.assignments?.[agent];
-  const pick = async (connectionId: string, modelId: string) => {
+  const [connId, setConnId] = useState<string | null>(cur && valid.some((c) => c.id === cur.connectionId) ? cur.connectionId : valid[0]?.id ?? null);
+  const [loading, setLoading] = useState(false);
+  const rows = connId ? state.capabilities[connId] ?? [] : [];
+  useEffect(() => {                                                                      // cached Capability Table (R-095, no provider call)
+    if (!connId || state.capabilities[connId]) return;
+    setLoading(true);
+    runtime.api.connectionModels(connId).then((r) => dispatch({ type: 'capabilities', connectionId: connId, rows: r.items })).catch(() => undefined).finally(() => setLoading(false));
+  }, [connId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const refresh = async () => {
+    if (!connId) return;
+    setLoading(true);
+    try { const r = await runtime.api.refreshConnectionModels(connId); dispatch({ type: 'capabilities', connectionId: connId, rows: r.items }); } catch (e) { actions.error(e); }
+    setLoading(false);
+  };
+  const pick = async (modelId: string) => {
+    if (!connId) return;
     try {
-      const a = await runtime.api.putAssignments({ [agent]: { agent, connectionId, modelId, settings: cur?.connectionId === connectionId ? cur.settings : {} } });
+      const a = await runtime.api.putAssignments({ [agent]: { agent, connectionId: connId, modelId, settings: cur?.connectionId === connId ? cur.settings : {} } });
       dispatch({ type: 'providers', assignments: a });
-      actions.announce(t('ui.agent.footer.model.changed', { model: names.llm(modelId, agent, connectionId) }));
+      actions.announce(t('ui.agent.footer.model.changed', { model: names.llm(modelId, agent, connId) }));
       onClose();
     } catch (e) { actions.error(e); }
   };
-  const price = (r: CapabilityRow) => (r.pricePerMInput === null ? '—' : `$${r.pricePerMInput}/${r.pricePerMOutput ?? '—'}`);
   return (
-    <Popover onClose={onClose} width={380} label={t('ui.agent.footer.model.title')}>
-      {valid.length === 0 ? <div className="p-2 text-em-muted">{t('ui.agent.composer.noprovider')}</div> : (
-        <div className="max-h-72 overflow-y-auto">
-          {valid.map((c) => (
-            <div key={c.id}>
-              <div className="px-2 pt-1 text-[10px] font-semibold uppercase text-em-muted">{c.label || t(`ui.scr.providers.provider.${c.provider}`)}</div>
-              {(state.capabilities[c.id] ?? []).length === 0 && <div className="px-2 text-[11px] text-em-muted">{t('ui.common.loading')}</div>}
-              {(() => {                                                                          // tiers first (FR-115); exact models under Advanced
-                const rows = state.capabilities[c.id] ?? [];
-                const tiers = resolveModelTiers(rows, agent);
-                if (!tiers.balanced) return null;
-                return (
-                  <div className={cx('grid gap-1 px-2 py-1', tiers.free ? 'grid-cols-4' : 'grid-cols-3')}>
-                    {MODEL_TIERS.filter((tier) => tier !== 'free' || tiers.free).map((tier) => {
-                      const id = tiers[tier]!;
-                      const on = cur?.connectionId === c.id && cur.modelId === id && names.llm(id, agent, c.id) === t(`ui.scr.providers.tier.${tier}`);
-                      return <button key={tier} type="button" data-el={`agent.${agent}.footer.model.tier`} data-tier={tier} aria-pressed={on} onClick={() => void pick(c.id, id)}
-                        className={cx('rounded-[6px] border px-1.5 py-0.5 text-left text-[11px] hover:bg-em-panel', on ? 'border-em-accent text-em-accent' : 'border-em-line')}>{on ? '✓ ' : ''}{t(`ui.scr.providers.tier.${tier}`)}</button>;
-                    })}
-                  </div>
-                );
-              })()}
-              {(state.capabilities[c.id] ?? []).length > 0 && (
-                <details className="px-0">
-                  <summary className="cursor-pointer px-2 text-[10px] text-em-muted">{t('ui.scr.providers.tier.advanced')}</summary>
-                  <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-2 px-2 pb-1 text-[10px] text-em-muted">
-                    <span>{t('ui.agent.footer.model.col.model')}</span><span>{t('ui.agent.footer.model.col.ctx')}</span><span>{t('ui.agent.footer.model.col.tools')}</span><span>{t('ui.agent.footer.model.col.image')}</span><span>{t('ui.agent.footer.model.col.price')}</span>
-                  </div>
-              {(state.capabilities[c.id] ?? []).slice(0, 200).map((r) => {
-                const on = cur?.connectionId === c.id && cur.modelId === r.modelId;
-                return (
-                  <button key={r.modelId} type="button" data-el={`agent.${agent}.footer.model.option`} aria-pressed={on} onClick={() => void pick(c.id, r.modelId)}
-                    className={cx('grid w-full grid-cols-[1fr_auto_auto_auto_auto] items-center gap-x-2 rounded-[6px] px-2 py-0.5 text-left text-[11px] hover:bg-em-panel', on && 'text-em-accent')}>
-                    <span className="truncate" title={r.modelId}>{on ? '✓ ' : ''}{r.label || r.modelId}</span>
-                    <span className="t-mono">{r.contextLength ? formatTokens(r.contextLength) : '—'}</span>
-                    <span>{r.toolCalling ? '✓' : '—'}</span><span>{r.imageInput ? '✓' : '—'}</span><span className="t-mono">{price(r)}</span>
-                  </button>
-                );
-              })}
-                </details>
-              )}
-            </div>
-          ))}
+    <Popover el={`agent.${agent}.footer.model.popover`} onClose={onClose} width={400} label={t('ui.agent.footer.model.title')}>
+      {valid.length === 0 || !connId ? <div className="p-2 text-em-muted">{t('ui.agent.composer.noprovider')}</div> : (
+        <div className="flex flex-col gap-1.5 p-1">
+          {valid.length > 1 && (
+            <select data-el={`agent.${agent}.footer.model.connection`} aria-label={t('ui.agent.footer.model.connection')} className={cx(inputCls, '!h-7')} value={connId} onChange={(e) => setConnId(e.target.value)}>
+              {valid.map((c) => <option key={c.id} value={c.id}>{c.label || t(`ui.scr.providers.provider.${c.provider}`)}</option>)}
+            </select>
+          )}
+          <ModelPicker compact el={`agent.${agent}.footer.model.picker`} rows={rows} agent={agent} value={cur?.connectionId === connId ? cur.modelId : ''} loading={loading}
+            onSelect={(id) => void pick(id)} onRefresh={() => void refresh()} refreshDisabledReason={state.settings?.privateMode ? t('err.EM-8202.title') : null} />
         </div>
       )}
       <button type="button" className="mt-1 w-full px-2 py-1 text-left text-[11px] text-em-accent underline" onClick={() => { onClose(); actions.setScreen({ kind: 'providers' }); }}>{t('ui.agent.footer.model.manage')}</button>
@@ -274,6 +253,7 @@ export function Footer({ agent }: { agent: AgentKind }) {
   const { state, t, lang } = useStore();
   const names = useModelNames();
   const [picker, setPicker] = useState(false);
+  const closePicker = useCallback(() => setPicker(false), []);                        // stable: Popover re-focuses on a new onClose
   const a = state.assignments?.[agent];
   const ctx = state.contextUsage[agent];
   const cap = useAssignedCapability(agent);
@@ -295,7 +275,7 @@ export function Footer({ agent }: { agent: AgentKind }) {
         <button type="button" data-el={`agent.${agent}.footer.model`} data-popover-trigger="" aria-haspopup="dialog" aria-expanded={picker} className="max-w-full truncate text-em-muted hover:text-em-text" onClick={() => setPicker((p) => !p)}>
           {a ? <span title={a.modelId}>{`${names.agent(agent)} ▾`}</span> : t('ui.agent.footer.nomodel')}
         </button>
-        {picker && <ModelPicker agent={agent} onClose={() => setPicker(false)} />}
+        {picker && <FooterModelPicker agent={agent} onClose={closePicker} />}
       </span>
       {agent === 'editor' && cap && !cap.toolCalling && <span className="rounded-[4px] border border-em-line px-1 text-em-muted">{t('ui.agent.footer.jsonmode')}</span>}
       <span className="flex-1" />
