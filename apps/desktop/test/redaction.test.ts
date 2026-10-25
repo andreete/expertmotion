@@ -13,6 +13,6 @@ describe('log redaction (SEC-100) as used by the Shell', () => {
   });
 
   it('leaves ordinary log text intact', () => {
-    expect(redact('service ready on 127.0.0.1:47650')).toBe('service ready on 127.0.0.1:47650');
+    expect(redact('service ready on 127.0.0.1:42350')).toBe('service ready on 127.0.0.1:42350');
   });
 });

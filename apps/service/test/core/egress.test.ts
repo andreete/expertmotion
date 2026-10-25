@@ -37,6 +37,14 @@ describe('egress purposes (SEC-080, SEC-082)', () => {
       expect(customBaseUrlProblem(bad), bad).not.toBeNull();
   });
 
+  it('with an Operator model CDN the model-download list is exactly that host (SEC-071)', async () => {
+    const f = fake(() => new Response('ok'));
+    const e = createEgress({ isPrivate: () => false, impl: f.impl, modelHosts: () => ['models.expertmotion.example'] });
+    expect((await e.for('model-download')('https://models.expertmotion.example/m/abc')).ok).toBe(true);
+    await expect(e.for('model-download')('https://huggingface.co/x')).rejects.toMatchObject({ code: 'EM-8203' });
+    await expect(e.for('model-download')('https://objects.githubusercontent.com/x')).rejects.toMatchObject({ code: 'EM-8203' });
+  });
+
   it('Private Mode refuses before any call', async () => {
     const f = fake(() => new Response('ok'));
     const e = createEgress({ isPrivate: () => true, impl: f.impl });

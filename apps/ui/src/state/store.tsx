@@ -131,6 +131,10 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     const error = (err: unknown) => {
       const code = errCode(err);
       if (code === 'EM-8001' && stateRef.current.stream === 'offline') return;     // sys.offline suppresses other error toasts (§10)
+      if (code === 'EM-5010') {                                                     // licence gone (revoked / removed): the licence screen takes over
+        void api.getLicense().then((licence) => dispatch({ type: 'licence', licence })).catch(() => undefined);
+        return;
+      }
       if (code === 'EM-4201') {                                                     // FR-117 / AI-016: Change budget → the budget field
         const d = (err instanceof EmError ? err.details : undefined) as { scope?: string; connectionId?: string } | undefined;
         const focus = { field: d?.scope === 'month' ? 'month' as const : 'project' as const, ...(d?.connectionId ? { connectionId: d.connectionId } : {}) };
@@ -647,17 +651,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         ]);
         if (cancelled) return;
         dispatch({ type: 'globals', health, settings, licence, hardware });
+        // No Trial Mode: without a verified key the Service answers EM-5010 everywhere else, so stop here and show only the
+        // licence screen; activation reboots this sequence (effect below) and continues to onboarding / the Editor.
+        if (licence.status !== 'licensed') { if (!cancelled) dispatch({ type: 'boot', boot: 'unlicensed' }); return; }
         // FR-129: EM-3402 (T0) and EM-8305 (< 8 GB RAM) once per install; the onboarding Hardware step shows them itself.
         const onboardingPending = !prefsRef.current.onboardingDone && settings.onboardingDone !== true;
         const fresh = (['EM-3402', 'EM-8305'] as const).filter((c) => hardware?.warnings.includes(c) && !prefsRef.current.nudgesDismissed.includes(`hw:${c}`));
         if (fresh.length) {
           if (!onboardingPending) for (const c of fresh) actions.toast('warn', `err.${c}.title`, { ram: Math.round((hardware?.ramTotalMb ?? 0) / 1024) }, { code: c });
           setPrefs({ nudgesDismissed: [...prefsRef.current.nudgesDismissed, ...fresh.map((c) => `hw:${c}`)] });
-        }
-        // FR-133: EM-5001 once per install at first launch in Trial Mode (the onboarding Licence step shows it inline instead).
-        if (licence.status === 'trial' && !prefsRef.current.nudgesDismissed.includes('lic:EM-5001')) {
-          if (!onboardingPending) actions.toast('info', 'err.EM-5001.title', undefined, { code: 'EM-5001', sticky: true, action: { labelKey: 'ui.hdr.license.enterkey', run: () => dispatch({ type: 'screen', screen: { kind: 'license' } }) } });
-          setPrefs({ nudgesDismissed: [...prefsRef.current.nudgesDismissed, 'lic:EM-5001'] });
         }
         await actions.loadProviders();
         await actions.loadModels();
@@ -675,6 +677,10 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     })();
     return () => { cancelled = true; };
   }, [runtime, actions, dispatch, setPrefs, bootNonce]);
+
+  // Activation (or a licence.changed back to licensed) while the boot stopped at the licence screen: continue without a restart.
+  const licensedNow = state.licence?.status === 'licensed';
+  useEffect(() => { if (state.boot === 'unlicensed' && licensedNow) rebootNow(); }, [state.boot, licensedNow]);
 
   // ── SSE: one stream per open project (projectId filter), reopened on project change ──
   const projectId = state.project?.id;

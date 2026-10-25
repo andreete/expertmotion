@@ -16,7 +16,7 @@ import { Button, IconButton, cx } from './components/ui.js';
 import { useShortcuts } from './shortcuts.js';
 import { Onboarding } from './screens/Onboarding.js';
 import { Tour } from './screens/Tour.js';
-import { LicenseScreen } from './screens/License.js';
+import { LicenseGate, LicenseScreen } from './screens/License.js';
 import { ProvidersScreen } from './screens/Providers.js';
 import { ModelsScreen } from './screens/Models.js';
 import { CustomRatioDialog, HistoryScreen, NewProjectDialog, OpenProjectDialog, ProjectSettingsDialog, RecoverDialog } from './screens/ProjectDialogs.js';
@@ -77,6 +77,17 @@ export function App() {
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
 
   if (state.boot === 'no-service') return <I18nContext.Provider value={i18n}>{state.fatal ? <FatalOverlay /> : <NoService />}</I18nContext.Provider>;
+  // No Trial Mode: until a Licence Key verifies, the licence screen is the whole product (also after a revocation mid-session).
+  if (state.boot === 'unlicensed' || (state.licence && state.licence.status !== 'licensed')) {
+    return (
+      <I18nContext.Provider value={i18n}>
+        <LicenseGate />
+        <Toasts />
+        <LiveRegion />
+        {state.fatal && <FatalOverlay />}
+      </I18nContext.Provider>
+    );
+  }
   return (
     <I18nContext.Provider value={i18n}>
       <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ minWidth: 1024 }}>
@@ -234,6 +245,8 @@ function Toasts() {
     if (timers.current.has(id)) return;
     timers.current.set(id, setTimeout(() => { timers.current.delete(id); dispatch({ type: 'dismissToast', id }); }, ms));
   }, [dispatch]);
+  // Clear pending auto-dismiss timers when the toast host unmounts (licence screen ↔ Editor switch, window teardown).
+  useEffect(() => { const m = timers.current; return () => { for (const h of m.values()) clearTimeout(h); m.clear(); }; }, []);
   useEffect(() => {
     for (const toast of state.toasts) { const ms = toastDismissMs(toast); if (ms !== null) schedule(toast.id, ms); }
   }, [state.toasts, schedule]);

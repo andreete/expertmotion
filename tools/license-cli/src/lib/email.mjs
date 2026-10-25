@@ -12,7 +12,7 @@ Thank you for buying Expertmotion. Your licence key is attached as {lid}.emlicen
 
 How to activate (takes one minute):
 1. Open Expertmotion.
-2. Click "Purchase" in the top bar, or Help > Licence.
+2. The licence screen opens by itself (or choose Help > Licence).
 3. Paste the key into the field (or drop the attached file onto it) and click "Activate".
 
 Your key:
@@ -38,7 +38,7 @@ Terima kasih telah membeli Expertmotion. Kunci lisensi Anda terlampir sebagai {l
 
 Cara mengaktifkan (sekitar satu menit):
 1. Buka Expertmotion.
-2. Klik "Purchase" di bilah atas, atau Help > Licence.
+2. Layar lisensi terbuka sendiri (atau pilih Help > Licence).
 3. Tempel kunci ke kolom yang tersedia (atau seret berkas terlampir ke kolom itu) lalu klik "Activate".
 
 Kunci Anda:

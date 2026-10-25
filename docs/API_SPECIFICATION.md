@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Local Service lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 005, 006, 010, 013, 014, 015), ARCHITECTURE.md §4–§7, BLUEPRINT.md §3–§4, SECURITY.md (SEC-002, SEC-008, SEC-010), DATABASE_SCHEMA.md (tables, Composition Model), AI_WORKFLOW.md §3, §5, §6, §8, §12, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md §2, §3, §7, ERROR_CATALOGUE.md, SECURITY.md (SEC-), TRD.md §3.2 |
 | Used by | apps/ui (client), apps/service (routes), apps/desktop (lifecycle calls), TEST_PLAN.md (contract tests), FRD.md (FR- acceptance), MCP_AND_TOOLING.md |
 | Owner of | route table, request/response DTOs named here, HTTP status ↔ `EM-` mapping, pagination, idempotency, media grant lifecycle (API side; control in SEC-010), SSE event names and payloads, reconnection semantics |
@@ -15,7 +15,7 @@ Schemas owned elsewhere are referenced by their Zod names: `CompositionModel`, `
 
 | Item | Rule |
 |---|---|
-| Base URL | `http://127.0.0.1:<port>/api/v1`. `<port>` is chosen by the Desktop Shell at random among free ports in 47600–47699 (SEC-008) and handed to the Editor through the preload bootstrap; in development it is `EM_PORT` (fixed 4110 on the shared Linux server, with the Vite Editor on 4120). Media files are served from `http://127.0.0.1:<port>/media/<grant>/…` (outside `/api/v1`, §2.2 and §6.5). |
+| Base URL | `http://127.0.0.1:<port>/api/v1`. `<port>` is chosen by the Desktop Shell at random among free ports in 42300–42399 (SEC-008) and handed to the Editor through the preload bootstrap; in development it is `EM_PORT` (fixed 4110 on the shared Linux server, with the Vite Editor on 4120). Media files are served from `http://127.0.0.1:<port>/media/<grant>/…` (outside `/api/v1`, §2.2 and §6.5). |
 | Transport | HTTP/1.1 over loopback only; no TLS (loopback, token-authenticated, ADR-005). |
 | Content types | Requests: `application/json; charset=utf-8` (≤ 2 MB), `multipart/form-data` for browser-dev uploads only. Responses: `application/json`, `text/event-stream` (SSE), `video/*`, `image/*`, `audio/*`, `application/json` (waveform), `application/zip` (backup, diagnostics). |
 | Encoding | UTF-8; ids are ULIDs; timestamps ISO-8601 UTC; durations integer milliseconds; money `number` USD with `approximate: boolean`. |
@@ -59,6 +59,10 @@ URL shape: `http://127.0.0.1:<port>/media/<grant>/<assetId>/<variant>` and `http
 
 `POST /service/shutdown` and the `paths[]` form of `POST /projects/:id/assets` are **trusted-caller** routes: they require the header `X-Expertmotion-Caller: shell` in addition to the token. In production the Editor's preload sets this header only for calls that originate from a Shell dialog result (the path list comes from `pickFiles`); in browser development the header is accepted when `EM_TOKEN` is set. This is a labelling control, not a second secret; the real protection is path canonicalisation and the allowed-roots check (TR-081).
 
+### 2.3a Licence gate (no Trial Mode)
+
+Until a Licence Key verifies as `licensed` (LICENSE_OPERATIONS.md §7), every `/api/v1` route answers `403` `{ error: { code: "EM-5010", details: { status } } }` (`status` = `unlicensed` | `invalid` | `revoked` | `machine-mismatch`) except: `GET /health`, `GET /version`, `GET /license` (R-160), `POST /license/activate` (R-161), `GET /settings`, `PUT /settings` whose body has only `uiLanguage` and/or `theme`, `GET /events`, `GET /renders` and `POST /service/shutdown` (Shell close/update checks). The gate runs after the Service Token guard and before every module's routes (also for unknown paths, so it reveals no route list). It opens the moment R-161 succeeds; no restart.
+
 ### 2.4 Host and Origin
 
 | Check | Allowed | Otherwise |
@@ -93,13 +97,13 @@ URL shape: `http://127.0.0.1:<port>/media/<grant>/<assetId>/<variant>` and `http
 |---|---|---|
 | 400 | request does not parse or fails the Zod request schema; a parameter is outside its range | `EM-9002` (schema), `EM-2102` (preset param range), `EM-2402` (custom ratio) |
 | 401 | Service Token missing or wrong | `EM-8004` |
-| 403 | Host/Origin refused; path outside allowed roots; Shell-only route without the caller header | `EM-8005`, `EM-8302`, `EM-1007` |
+| 403 | Host/Origin refused; path outside allowed roots; Shell-only route without the caller header; product not activated (§2.3a) | `EM-8005`, `EM-8302`, `EM-1007`, `EM-5010` |
 | 404 | resource does not exist (or is soft-deleted) | `EM-9003` (generic), `EM-6101` (project), `EM-2401` (version), `EM-1301` (asset file missing on disk, on media routes) |
 | 409 | state conflict: stale plan, busy resource, duplicate name, already running | `EM-2301`, `EM-2309`, `EM-4305`, `EM-6004`, `EM-6103`, `EM-6303`, `EM-7104` |
 | 413 | too large | `EM-8006`, `EM-1002`, `EM-1008`, `EM-1010` |
 | 422 | well-formed but semantically rejected (validation of the Composition Model, intents, plans, preflight, licence keys, provider keys) | `EM-2001`, `EM-2002`, `EM-2101`, `EM-2104`, `EM-2105`, `EM-2201`, `EM-2202`, `EM-2302`, `EM-2303`, `EM-2304`, `EM-2306`, `EM-3101`…`EM-3106`, `EM-1001`, `EM-1003`, `EM-1009`, `EM-4002`, `EM-4004`, `EM-5002`…`EM-5008`, `EM-7004`, `EM-7105`, `EM-7106` |
 | 423 | locked by Private Mode (any outbound action) or agents unavailable | `EM-8202`, `EM-4401` |
-| 429 | rate or connection limit | `EM-9005` |
+| 429 | rate or connection limit; licence activation lockout | `EM-9005`, `EM-5011` |
 | 500 | unexpected failure (logged with stack, Creator sees "Something went wrong") | `EM-9001` |
 | 502 | provider returned an error | `EM-4103`, `EM-4104` |
 | 503 | storage unavailable, offline, engine missing | `EM-6001`, `EM-6002`, `EM-6005`, `EM-8201`, `EM-3001`, `EM-4003` |
@@ -148,7 +152,7 @@ export const RenderJobDto = z.object({ id: Id, projectId: Id, versionId: Id, out
   etaMs: z.number().int().nullable(), outputId: Id.nullable(), errorCode: z.string().nullable(), failedFrame: z.number().int().min(0).nullable() /* FR-143: frame a failed job stopped at (renderer error, else last progress); null = unknown */, width: z.number().int().nullable(), height: z.number().int().nullable(),
   createdAt: Iso, startedAt: Iso.nullable(), finishedAt: Iso.nullable() });
 export const OutputDto = z.object({ id: Id, projectId: Id, renderJobId: Id, kind: z.enum(['video','gif','still','audio']), fileName: z.string(), bytes: z.number().int(),
-  width: z.number().int().nullable(), height: z.number().int().nullable(), fps: z.number().nullable(), durationMs: z.number().int().nullable(), validated: z.boolean(), watermarked: z.boolean(),
+  width: z.number().int().nullable(), height: z.number().int().nullable(), fps: z.number().nullable(), durationMs: z.number().int().nullable(), validated: z.boolean(),   /* `watermarked` removed 2026-10-25 (no Trial Mode) */
   path: z.string() /* absolute, for Reveal */, media: z.object({ file: z.literal(true), thumb: z.boolean() }) /* URL = /media/<grant>/outputs/<outputId>/<file|thumb> */, createdAt: Iso });
 export const MediaGrantDto = z.object({ grant: z.string().regex(/^[A-Za-z0-9_-]{43}$/), projectId: Id, kind: z.literal('preview'), expiresAt: Iso, baseUrl: z.string().url() /* http://127.0.0.1:<port>/media/<grant> */ });
 export const IntentQueueDto = z.object({ projectId: Id, headHash: z.string(), items: z.array(EditIntent), lockedKeys: z.array(z.string()) });
@@ -180,11 +184,12 @@ export const HardwareTickDto = z.object({ at: Iso, cpuPercent: z.number(), ramFr
 // `tasklist /fo csv /nh` at most every 30 s while the meter is read, matched by Engine image name (approximate; never PowerShell/WMI per tick, NFR-009).
 // shellMb = Electron main/renderer/GPU working set pushed by the Shell over parentPort every 30 s ({type:'metrics', shellMb}); null when absent or older than 90 s.
 // Expertmotion process memory (FR-127) = shellMb + processMb + chromeMb.
-export const LicenseDto = z.object({ status: z.enum(['trial','active','revoked','invalid','updates-expired']), code: z.string().regex(/^EM-\d{4}$/).nullable(), clockAnomaly: z.boolean(), warnings: z.array(z.object({ code: z.literal('EM-5007'), lastSeen: Iso, now: Iso })), licenseeName: z.string().nullable(), tier: z.string().nullable(), licenseeHash: z.string().nullable(), updatesUntil: Iso.nullable(),
-  updatesEligible: z.boolean(), machineCode: z.string(), limits: z.object({ watermark: z.boolean(), maxResolution: Resolution }) });
+export const LicenseDto = z.object({ status: z.enum(['licensed','unlicensed','invalid','revoked','machine-mismatch']),   // only `licensed` opens the §2.3a gate
+  code: z.string().regex(/^EM-\d{4}$/).nullable(), clockAnomaly: z.boolean(), warnings: z.array(z.object({ code: z.literal('EM-5007'), lastSeen: Iso, now: Iso })), licenseeName: z.string().nullable(), tier: z.string().nullable(), licenseeHash: z.string().nullable(), updatesUntil: Iso.nullable(),
+  updatesEligible: z.boolean(), machineCode: z.string() });   // `limits` removed 2026-10-25: single edition, no Trial Mode limits; `tier` kept for compatibility, never gates a feature
 export const SettingsDto = z.object({ privateMode: z.boolean(), outputFolder: z.string(), autoPlan: z.boolean(), uiLanguage: z.enum(['en','id']), theme: z.enum(['dark','light','system']),
   defaultPerformanceProfile: PerformanceProfile, defaultRatio: Ratio, defaultResolution: Resolution, defaultFps: Fps, checkUpdates: z.boolean(), diagnosticsIncludeStructure: z.boolean(),
-  onboardingDone: z.boolean(), onboardingSkippedSteps: z.array(z.enum(['license','provider','models','hardware','tour'])),   // FR-004 onboarding record
+  onboardingDone: z.boolean(), onboardingSkippedSteps: z.array(z.enum(['license','provider','models','hardware','tour'])),   // FR-004 onboarding record ('license' only in records written before 2026-10-25; there is no Licence step any more)
   layout: z.object({ panelSizes: z.record(z.enum(['narrow','standard','wide']), z.object({ lib, agent, timeline }).partial()), libCollapsed: z.boolean(), agentCollapsed: z.boolean(), outputCollapsed: z.boolean() }).optional() });   // FR-099/FR-155 Editor layout (the settings.json state), absent until first saved
 export const ModelStateDto = z.object({ key: z.string(), engine: z.string(), version: z.string(), task: z.enum(['stt','tts','image','music']), label: z.string(), licence: z.object({ name: z.string(), url: z.string() }),
   tiers: z.array(z.enum(['T0','T1','T2'])), bytesTotal: z.number().int(), bytesDone: z.number().int(), status: z.enum(['not-installed','downloading','verifying','paused','installed','failed']), errorCode: z.string().nullable(), installedAt: Iso.nullable(),
@@ -302,12 +307,13 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **gra
 | R-143 | POST | `/models/:key/cancel` | T | cancel download | 6.14 |
 | R-144 | DELETE | `/models/:key` | T | remove weights | 6.14 |
 | R-146 | POST | `/models/engines/:engine/reveal` | T | per-engine models folder for the Shell to open | 6.14 |
+| R-147 | POST | `/models/registry/refresh` | T | check the Operator model CDN for a newer signed model list now (outbound) | 6.14 |
 | R-150 | GET | `/hardware/profile` | T | tier and static facts | 6.15 |
 | R-151 | POST | `/hardware/profile/refresh` | T | re-detect | 6.15 |
 | R-152 | GET | `/hardware/live` | T | latest cheap-meter tick | 6.15 |
 | R-160 | GET | `/license` | T | licence status | 6.16 |
 | R-161 | POST | `/license/activate` | T | verify and store key | 6.16 |
-| R-162 | POST | `/license/deactivate` | T | remove key (Trial Mode) | 6.16 |
+| R-162 | POST | `/license/deactivate` | T | remove key (the product locks again) | 6.16 |
 | R-170 | GET | `/settings` | T | settings | 6.17 |
 | R-171 | PUT | `/settings` | T | settings incl. Private Mode | 6.17 |
 | R-172 | POST | `/settings/caches/clear` | T | delete proxies/thumbs/stills caches | 6.17 |
@@ -336,7 +342,7 @@ With the token the body also carries `buildDate` (YYYY-MM-DD, the licence eligib
 
 ```http
 GET /api/v1/health
-→ 200 { "status":"ok","version":"1.0.0","mode":"production","uptimeMs":5120,"tier":"T0","licence":{"status":"trial","tier":null,"updatesEligible":false},
+→ 200 { "status":"ok","version":"1.0.0","mode":"production","uptimeMs":5120,"tier":"T0","licence":{"status":"licensed","tier":"standard","updatesEligible":true},
         "privateMode":false,"engine":{"bundleVersion":"6b1d…","remotionVersion":"4.0.535","browserReady":true,"ffmpeg":true},"db":{"schemaVersion":1,"ok":true},
         "workload":{"rendering":false,"ingesting":0,"agentRuns":0,"downloading":0},"seq":418 }
 ```
@@ -632,11 +638,11 @@ R-093 detail (FR-119): with `force=true`, each affected agent moves to the oldes
 export const RenderCreateInput = z.object({ projectId: Id, versionId: Id.optional() /* default head */, outputProfile: OutputProfile, performanceProfile: PerformanceProfile, fileName: z.string().max(80).optional(), folder: z.string().optional() /* default settings.outputFolder */ });
 ```
 
-Runs the Export preflight (PERFORMANCE.md §7) and an estimate (frames × measured ms/frame for the tier, bitrate heuristic). Response `{ ok: boolean, dimensions: {width, height}, totalFrames, durationMs, estimate: { seconds: number | null, bytes: number | null, confidence: 'low'|'medium'|'high' }, checks: Array<{ check: 'disk'|'memory'|'dimensions'|'duration'|'assets'|'engine'|'licence'|'folder', ok: boolean, code?: string, details? }>, effectiveProfile: OutputProfile /* after Trial and GIF caps */, watermark: boolean, warnings: Issue[], notices: string[] /* EM-5001, EM-3208 */, defaultFileName: string, privateMode: boolean, queue: { active: Id | null, queued: number } }`. Never `4xx` for a failed check (the Export dialog renders the list); `404 EM-6101|EM-2401` only.
+Runs the Export preflight (PERFORMANCE.md §7) and an estimate (frames × measured ms/frame for the tier, bitrate heuristic). Response `{ ok: boolean, dimensions: {width, height}, totalFrames, durationMs, estimate: { seconds: number | null, bytes: number | null, confidence: 'low'|'medium'|'high' }, checks: Array<{ check: 'disk'|'memory'|'dimensions'|'duration'|'assets'|'engine'|'folder', ok: boolean, code?: string, details? }>, effectiveProfile: OutputProfile /* after the GIF cap */, warnings: Issue[], notices: string[] /* EM-3208 */, defaultFileName: string, privateMode: boolean, queue: { active: Id | null, queued: number } }`. Never `4xx` for a failed check (the Export dialog renders the list); `404 EM-6101|EM-2401` only.
 
 Additions (FR-137…FR-140, FR-147, FR-163): `defaultFileName` is the stem `<project>-<ratio>-<res>-<yyyymmdd-hhmm>` (sanitised; R-111 uses it when `fileName` is absent and adds `-2`, `-3`… on collision); the `folder` check reports `EM-8302` (outside the allowed roots) or `EM-3206` (not writable, nearest existing parent tested); the `engine` check covers Chrome Headless Shell, the compositor FFmpeg (`binariesDirectory/ffmpeg[.exe]`) and the Engine bundle hash against `resources/engine-manifest.json` (hashed once at service start; mismatch → `EM-3003`, missing → `EM-3001`, `details: { missing[], mismatched[] }`); GIF is capped to 720p with an info warning `EM-3103` and encoded from an H.264 intermediate with FFmpeg `palettegen`/`paletteuse` at ≤ 15 fps, `-loop 0`; `privateMode` lets the dialog show "Private Mode on".
 
-**R-111 `POST /renders`** — header `Idempotency-Key` recommended. Body `RenderCreateInput`. Re-runs preflight (blocking checks → `422` with the first failing code: `EM-3101`, `EM-3102`, `EM-3103`, `EM-3104`, `EM-1301`; `503 EM-3001` engine missing; `403 EM-8302` folder not allowed; `422 EM-3206` folder not writable), writes a pre-render checkpoint, enqueues. When the job starts, the queue issues a render media grant scoped to the job's assets and revokes it on the final event (§2.2). Trial Mode: profile capped to 720p and `watermark:true` with `notices:['EM-5001']`. Response `202 RenderJobDto` (`status:'queued'`; `notices:['EM-3208']` when another job is rendering). Events: `render.queued`, then `render.progress`…, `render.done|failed|cancelled`.
+**R-111 `POST /renders`** — header `Idempotency-Key` recommended. Body `RenderCreateInput`. Re-runs preflight (blocking checks → `422` with the first failing code: `EM-3101`, `EM-3102`, `EM-3103`, `EM-3104`, `EM-1301`; `503 EM-3001` engine missing; `403 EM-8302` folder not allowed; `422 EM-3206` folder not writable), writes a pre-render checkpoint, enqueues. When the job starts, the queue issues a render media grant scoped to the job's assets and revokes it on the final event (§2.2). No licence-based cap or watermark exists (single edition); while not licensed the route answers `403 EM-5010` (§2.3a). Response `202 RenderJobDto` (`status:'queued'`; `notices:['EM-3208']` when another job is rendering). Events: `render.queued`, then `render.progress`…, `render.done|failed|cancelled`.
 
 ```http
 POST /api/v1/renders
@@ -718,6 +724,10 @@ Downloads also pause by themselves while a Standard or Accelerated Render Job is
 
 R-140 also returns `registry: { source: 'built-in' | 'signed', seq, code: 'EM-7111' | null, reason }` (SEC-072): a `models.json` + `models.json.sig` in the models folder is used only after its Ed25519 signature verifies against an embedded manifest public key and its `seq` is not older than the last accepted one; otherwise the built-in registry is used and `code` is `EM-7111`.
 
+With an Operator model CDN in the build (LOCAL_AI_MODELS §4.5) R-140 first checks `<cdn>/models.json` + `.sig` when the last answered check is older than 24 h (a network failure is retried after 15 min; at most 10 s), and returns `registryUpdate: { cdn: string | null, checkedAt: string | null, outcome: 'updated' | 'unchanged' | 'refused' | 'failed' | 'skipped' | null, code: 'EM-7111' | 'EM-8201' | 'EM-8202' | 'EM-8203' | null, reason: string | null, seq: number | null }` (`reason: 'no-cdn'` in development builds). A refused or failed check never replaces the accepted list.
+
+**R-147 `POST /models/registry/refresh`** — the same check without the 24 h interval (Model Manager Refresh). Response `{ registry, registryUpdate }` as in R-140; never fails because of the CDN (the outcome is in `registryUpdate`; Private Mode → `outcome: 'skipped', code: 'EM-8202'`, no request made).
+
 **R-146 `POST /models/engines/:engine/reveal`** (FR-126) — response `{ path }`: the absolute `<models>\<engine>\` folder (created if missing) for the Shell's `openFolder`; the Editor shows `EM-8303` with the path when the Shell cannot open it. Errors: `404 EM-9003` unknown engine.
 
 **R-144 `DELETE /models/:key`** — removes weights and partials. Response `204`. Errors: `409 EM-7104` in use.
@@ -732,11 +742,11 @@ FR-128: the hardware module checks the data drive with one `statfs` call ~10 s a
 
 ### 6.16 Licence
 
-**R-160 `GET /license`** — response `LicenseDto` (`machineCode` is the Creator-facing short form of the Machine Fingerprint for purchase, LICENSE_OPERATIONS.md).
+**R-160 `GET /license`** — open while not licensed (§2.3a). Response `LicenseDto` (`machineCode` is the Creator-facing short form of the Machine Fingerprint the Operator binds the key to, LICENSE_OPERATIONS.md).
 
-**R-161 `POST /license/activate`** — body `{ key: z.string().min(40).max(4096) }`. Offline Ed25519 verification, fingerprint match, revocation list, `updatesUntil` vs build date, clock check. Response `LicenseDto`. Errors: `422 EM-5006` format, `EM-5002` signature, `EM-5003` other machine, `EM-5004` revoked, `EM-5008` transfer limit; `200` with `warnings:['EM-5005']` when the build postdates `updatesUntil` (key stored, status `active`, `updatesEligible:false`); `422 EM-5007` clock moved backwards. Events: `license.changed`.
+**R-161 `POST /license/activate`** — open while not licensed (§2.3a). Body `{ key: z.string().min(40).max(4096) }`. Offline Ed25519 verification, fingerprint match (constant-time), revocation list, `updatesUntil` vs build date, clock check. Response `LicenseDto` with `status:'licensed'`; the gate opens immediately. Errors (`422`, `details.status` = the state the key would give): `EM-5006` format, `EM-5002` signature, `EM-5009` unknown key id, `EM-5003` other machine (`machine-mismatch`), `EM-5004` revoked, `EM-5005` the build postdates `updatesUntil` (`details.date`; key not stored). A rejected key is never stored. Rate limit: 5 failed attempts within 60 s → `429 EM-5011` with `Retry-After` and `details.retryAfterSeconds`; each further lockout doubles (60 s, 120 s, … up to 1 h); a success resets it. Events: `license.changed`.
 
-**R-162 `POST /license/deactivate`** — body `{ confirm: true }`. Returns to Trial Mode (`EM-5001`). Response `LicenseDto`. Events: `license.changed`.
+**R-162 `POST /license/deactivate`** — body `{ confirm: true }`. Removes the stored key; the state becomes `unlicensed` and the §2.3a gate closes again. Response `LicenseDto`. Events: `license.changed`.
 
 ### 6.17 Settings
 
@@ -823,7 +833,7 @@ data: {"seq":419,"at":"2026-10-24T03:05:12.410Z","projectId":"01JAZK…","jobId"
 2. On each event: if `data.seq <= lastSeq` → drop; else dispatch and set `lastSeq`.
 3. On `error`: the browser auto-reconnects after `retry` (2 s) sending `Last-Event-ID`; count attempts; after 3 consecutive failures within 30 s show `sys.offline` (`EM-8001`) and poll `GET /health` every 2 s (no token needed) until `status:'ok'`.
 4. On reconnect: if the first event is `service.notice {kind:'resync'}` or `health.seq < lastSeq` (Service restarted) → call R-016 for the open project and R-112 for jobs, then continue.
-5. On `settings.changed {scope:'privateMode'}` or `license.changed` → update global state immediately (banner, composer state, export limits).
+5. On `settings.changed {scope:'privateMode'}` or `license.changed` → update global state immediately (banner, composer state; a licence state other than `licensed` shows the licence screen).
 
 ## 8. Examples of composed flows
 

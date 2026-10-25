@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (targets marked "to confirm" are re-measured in the Stage 2 PoC, PERFORMANCE.md §5) |
 | Owner | Requirements engineer + principal architect |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, PRD.md, FRD.md, ARCHITECTURE.md, PERFORMANCE.md, AI_WORKFLOW.md, DECISIONS.md, ELEMENT_IDS.md, ERROR_CATALOGUE.md, SECURITY.md, DATABASE_SCHEMA.md, MASTER_PROJECT_PROMPT.md §4, §9, §11–§16, §19 |
 | Used by | TRD.md, API_SPECIFICATION.md, DATABASE_SCHEMA.md, SECURITY.md, TEST_PLAN.md, DEPLOYMENT_AND_PACKAGING.md, ACCESSIBILITY_AND_I18N.md, DEFINITION_OF_DONE.md |
 | Owner of | every `NFR-` id, its metric, target and measurement method |
@@ -109,7 +109,7 @@ External systems reached only from the Local Service and only when configured: L
 | Model weights downloaded on first use; runtime bundled | ADR-008 |
 | Performance Profiles are resource policies, frame rate is a Project Setting | ADR-010 |
 | English UI with i18n keys; Indonesian variants for content, onboarding, errors, tour | ADR-012 |
-| Offline Ed25519 licence; Trial Mode watermark + 720p | ADR-014 |
+| Offline Ed25519 licence; activation required before use (no Trial Mode, licence gate EM-5010) | ADR-014 |
 | No MCP in MVP; typed in-process Tools | ADR-015 |
 | Remotion licence confirmation is a launch blocker | ADR-017 |
 | Development server limits (1.9 GB RAM, no display): only headless parts run there | PERFORMANCE §5 note |

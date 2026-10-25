@@ -69,7 +69,7 @@ export function buildBundle(ctx: ServiceContext, includeStructure: boolean): { p
   const settings = ctx.settings.get();
   json('settings.json', { ...settings, outputFolder: settings.outputFolder ? '[set]' : null });
   const lic = one<{ status: string; tier: string | null; updates_until: string | null; fingerprint_hash: string }>(ctx, 'SELECT status, tier, updates_until, fingerprint_hash FROM license WHERE id = 1');
-  json('license.json', lic ? { status: lic.status, tier: lic.tier, updatesUntil: lic.updates_until, fingerprintPrefix: lic.fingerprint_hash.slice(0, 8), trialExports: ctx.hooks.isTrial() } : { status: 'unknown' });
+  json('license.json', lic ? { status: lic.status, tier: lic.tier, updatesUntil: lic.updates_until, fingerprintPrefix: lic.fingerprint_hash.slice(0, 8), licensed: ctx.hooks.isLicensed() } : { status: 'unknown' });
   json('projects.json', all<Record<string, unknown>>(ctx, `SELECT p.id, p.name, p.language, p.created_at createdAt, p.deleted_at deletedAt, (SELECT count(*) FROM composition_versions v WHERE v.project_id = p.id) versions,
     (SELECT r.error_code FROM render_jobs r WHERE r.project_id = p.id AND r.error_code IS NOT NULL ORDER BY r.created_at DESC LIMIT 1) lastRenderError FROM projects p ORDER BY p.created_at DESC LIMIT 200`));
   json('render-jobs.json', all(ctx, 'SELECT id, project_id projectId, status, performance_profile performanceProfile, progress, error_code errorCode, error_detail errorDetail, created_at createdAt, finished_at finishedAt FROM render_jobs ORDER BY created_at DESC LIMIT 20'));

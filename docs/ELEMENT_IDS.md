@@ -4,7 +4,7 @@
 |---|---|
 | Status | Baseline (new elements may be added; existing IDs never change meaning) |
 | Owner | UI/UX lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, docs/assets/expertmotion-editor-mockup.png |
 | Used by | FRD.md, UI_UX_SPECIFICATION.md, EDITOR_INTERACTION_MODEL.md, TEST_PLAN.md, ONBOARDING_TOUR.md, ERROR_CATALOGUE.md |
 
@@ -29,7 +29,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 │ hdr.logo  hdr.menu.file hdr.menu.home hdr.menu.design hdr.menu.tools hdr.menu.help            │
 │                         hdr.title  [Untitled ✎]                                               │
 │   hdr.action.hardware  hdr.action.save  hdr.action.backup  hdr.action.restore                 │
-│   hdr.action.models  hdr.action.purchase  hdr.action.license  hdr.action.export  hdr.win.*    │
+│   hdr.action.models  hdr.action.license  hdr.action.export  hdr.win.*                        │
 ├────────────────────┬──────────────────────────────────────────────┬───────────────────────────┤
 │ lib.search.input   │ stage.player.frame                          │ agent.modelbar            │
 │ lib.mode.header    │  stage.player.canvas                        │  agent.modelbar.provider  │
@@ -86,8 +86,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.action.restore` | cloud-sync icon (repurposed) | Restore Project from a zip (`scr.backup.restore`). |
 | `hdr.action.undo` / `hdr.action.redo` | (added) | Move the project head between Composition Versions (Ctrl+Z / Ctrl+Shift+Z; Ctrl+Y also redoes). |
 | `hdr.action.models` | grid icon | Opens Model Manager (`scr.models`). |
-| `hdr.action.purchase` | Purchase | Opens Licence screen (`scr.license`). Hidden when licensed. |
-| `hdr.action.license` | avatar | Licence status popover (trial / licensed / expired updates). |
+| `hdr.action.license` | avatar | Licence status popover (licensed to {name}, updates date) with "Manage licence" → `scr.license`. The Editor is only reachable while licensed (no Trial Mode). |
 | `hdr.action.export` | Export | Opens Export dialog. `hdr.action.export.disabled` until a Composition Version with ≥ 1 Clip exists. |
 | `hdr.win.minimize` / `hdr.win.maximize` / `hdr.win.close` | window controls | Standard window controls. |
 
@@ -193,8 +192,8 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 
 | Element ID | Purpose |
 |---|---|
-| `scr.onboarding` | First-run wizard: `.welcome`, `.license`, `.provider`, `.models`, `.hardware`, `.tour`, `.done`. |
-| `scr.license` | Licence entry / status / purchase link; `.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.trial.continue`, `.remove`, `.rebind`, `.error`. |
+| `scr.onboarding` | First-run wizard (after activation): `.welcome`, `.provider`, `.models`, `.hardware`, `.tour`, `.done`. |
+| `scr.license` | Licence screen. Unlicensed: the whole window (`data-gate`), nothing else of the product; licensed: "Manage licence" modal. Parts: `.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.help`, `.lang`, `.steps`, `.remove`, `.rebind`, `.error`. |
 | `scr.providers` | Provider Connections: `.list`, `.add`, `.provider.select`, `.key.input`, `.validate`, `.models.list`, `.assign.brainstorm`, `.assign.editor`, `.budget.project`, `.budget.month`, `.test`, `.save`. FR-109…FR-119 additions: `.row` (one connection), `.row.usage`, `.row.isdefault`, `.row.edit`, `.row.test`, `.row.default` (Set default), `.row.remove`, `.row.remove.confirm`, `.row.remove.yes`, `.edit`, `.edit.save`, `.add.open`, `.cancel`, `.label.input`, `.provider.disclosure` (what is sent + terms link), `.key.toggle` (show/hide), `.key.shape`, `.locked`, `.models.search`, `.models.refresh`, `.assign.note` (EM-4005 / image-input note), `.budget.warn` (EM-4202), `.test.result`. |
 | `scr.models` | Model Manager: `.list`, `.row`, `.row.install`, `.row.remove`, `.row.progress`, `.tier`. FR-120…FR-126 additions: `.filter`, `.filter.purpose`, `.filter.installed`, `.filter.fits`, `.row.expand`, `.row.card`, `.row.notice` (engine licence notice), `.row.recommended`, `.row.tier`, `.row.status`, `.row.pause`, `.row.cancel`, `.row.install.confirm` (EM-7005), `.row.install.anyway`, `.row.remove.confirm`, `.row.remove.yes`, `.footer`, `.folder` (per-engine open folder), `.registry` (EM-7111). |
 | `scr.hardware` | Hardware Monitor popover: `.cpu`, `.ram`, `.procmem`, `.disk`, `.gpu`, `.workload`. FR-127…FR-130 additions: `.output` (output drive), `.vram`, `.tier`, `.recheck`, `.workload.item`, `.workload.cancel`. |
@@ -298,7 +297,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | ID | Element | Behaviour |
 |---|---|---|
 | `hdr.menu.help.onboarding` | Help ▸ Resume onboarding | Reopens `scr.onboarding` at the last step reached (FR-004). |
-| `scr.onboarding.skip` | per-step "Skip" ("Lewati") | On Licence, Provider, Models, Hardware: records the step in the onboarding record and moves on. |
+| `scr.onboarding.skip` | per-step "Skip" ("Lewati") | On Provider, Models, Hardware: records the step in the onboarding record and moves on. |
 | `scr.onboarding.provider.consequence` | Provider step note | "Agents stay off until a provider is connected" (FR-007). |
 | `scr.onboarding.hardware.disk` | Hardware step free disk | Free space on the data drive (FR-006). |
 | `scr.onboarding.hardware.recheck` | Hardware step "Check again" | Re-runs the hardware check (R-151) and a live reading (R-152). |
@@ -326,7 +325,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.help.performance.table` | Performance profiles topic table | What Standard / Accelerated / Turbo change (PERFORMANCE §2), in plain words (FR-091). |
 | `scr.help.online` | Online documentation link | Opens the system browser; in Private Mode shows `.blocked` (EM-8202) with the URL to copy instead. |
 | `scr.help.online.blocked` | EM-8202 note with copyable URL | Shown instead of opening the browser while Private Mode is on. |
-| `scr.license.buy.blocked` | EM-8202 note on the buy link | Private Mode: the storefront URL with Copy instead of opening the browser (FR-132). |
+| `scr.license.buy.blocked` | EM-8202 note on the "Get a licence key" link | Private Mode: the storefront URL with Copy instead of opening the browser (FR-132). `scr.license.help.blocked` is the same for the activation help link. |
 | `scr.license.clock` | "Clock changed" badge | EM-5007, informational; licence state unchanged (FR-134). Also in the header licence popover. |
 | `scr.export.still.time` | PNG frame time (s) | Chosen time for the PNG still (`stillAtMs`), default the playhead; "Use playhead" resets it (FR-138, FR-147). |
 | `scr.export.preflight.fix` | Recovery button of a preflight row | Choose folder, Use Standard, Open Output Settings, Go to assets, Open Diagnostics, Enter licence key, View progress or Check again (FR-139). |
@@ -352,7 +351,6 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `sys.update.restart` | Update "Restart now" | EM-8105; disabled while an export runs, the Shell also defers the install until the queue is empty. |
 | `sys.update.later` | Update "Later" | Hides the banner; the update stays downloaded. |
 | `sys.update.retry` | Update "Try again" | EM-8104 (interrupted update, previous version kept), EM-8102, EM-8101: runs a new check (FR-152). |
-| `scr.license.trial.notice` | EM-5001 notice in the onboarding Licence step | First launch in Trial Mode (FR-133); outside onboarding the same notice is a one-time `sys.toast`. |
 | `agent.brainstorm.budget` / `agent.editor.budget` | "Change budget" in the EM-4201 message | FR-117 / AI-016: opens `scr.providers` with focus on `.budget.project` (or `.budget.month`) of the connection whose cap is used up. |
 | `scr.generate.voice.voice` | Voice picker | Installed Piper/Kokoro voices (FR-101). |
 | `scr.generate.voice.speed` | Speed slider | 0.8–1.2 (FR-101). |
@@ -415,3 +413,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 4. "480p" in the mockup is treated as the draft preview quality, not an export preset (Master Project Prompt §13 lists 720p as the smallest export preset).
 5. The three timeline rows in the mockup become five Tracks (video, overlay, text, caption, audio).
 6. Chat footers show the per-agent model and context usage; the top Model Bar shows the default Provider Connection.
+
+## Retired ids
+
+Removed on 2026-10-25 together with Trial Mode (Operator decision; LICENSE_OPERATIONS §7); the names are not reused: `hdr.action.purchase` (header Purchase button), `scr.license.trial.continue` ("Continue with Trial"), `scr.license.trial.notice` (EM-5001 notice), `scr.onboarding.license` (onboarding Licence step).

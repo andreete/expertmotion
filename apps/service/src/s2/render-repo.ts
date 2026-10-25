@@ -44,5 +44,5 @@ export function toJobDto(r: RenderJobRow): Record<string, unknown> {
 }
 export function toOutputDto(ctx: ServiceContext, o: OutputRow): Record<string, unknown> {
   return { id: o.id, projectId: o.project_id, renderJobId: o.render_job_id, kind: o.kind, fileName: path.basename(o.path), bytes: o.bytes, width: o.width, height: o.height, fps: o.fps,
-    durationMs: o.duration_ms, validated: o.validated === 1, watermarked: o.watermarked === 1, path: outputAbsPath(ctx, o.path), media: { file: true, thumb: !!o.thumb_path }, createdAt: o.created_at };
+    durationMs: o.duration_ms, validated: o.validated === 1, path: outputAbsPath(ctx, o.path), media: { file: true, thumb: !!o.thumb_path }, createdAt: o.created_at };
 }

@@ -11,6 +11,7 @@ import { createHardwareModule } from '../../src/modules/hardware.js';
 import { createLicenseModule, type LicenseOptions } from '../../src/modules/license.js';
 import { createDiagnosticsModule } from '../../src/modules/diagnostics.js';
 import { eventsModule } from '../../src/modules/events.js';
+import { MODULES } from '../../src/modules/index.js';
 import { tierFor, type RawHardware } from '../../src/s3/hardware.js';
 import { readZip } from '../../src/s3/zip.js';
 import { s3 } from '../../src/s3/state.js';
@@ -130,53 +131,72 @@ describe('licence integration (dev keys only, injected fingerprint)', () => {
   let s: TestService;
   const events: Array<{ n: string; d: Record<string, unknown> }> = [];
   const boot = async (opts: LicenseOptions, dataDir?: string, dbKeyHex?: string) => {
-    s = await startService({ modules: [health, createLicenseModule(opts)], ...(dataDir ? { dataDir } : {}), ...(dbKeyHex ? { cfg: { dbKeyHex } } : {}) });
+    s = await startService({ modules: [health, settingsModule, createLicenseModule(opts), providersModule], ...(dataDir ? { dataDir } : {}), ...(dbKeyHex ? { cfg: { dbKeyHex } } : {}) });
     const orig = s.ctx.bus.emit.bind(s.ctx.bus); s.ctx.bus.emit = (n, d) => { events.push({ n, d }); return orig(n, d); };
   };
   beforeAll(async () => { await boot(base); });
   afterAll(async () => { await s.close(); });
-  type Lic = { status: string; code: string | null; machineCode: string; limits: { watermark: boolean; maxResolution: string }; updatesEligible: boolean; warnings: string[]; tier: string | null };
+  type Lic = { status: string; code: string | null; machineCode: string; limits?: unknown; updatesEligible: boolean; warnings: string[]; tier: string | null };
 
-  it('starts in Trial Mode with this machine\'s code', async () => {
+  it('starts unlicensed with this machine\'s code; no Trial Mode limits in the DTO', async () => {
     const l = await body<Lic>(await s.api('/license'));
-    expect(l).toMatchObject({ status: 'trial', machineCode: fpA.machineCode, limits: { watermark: true, maxResolution: '720p' }, updatesEligible: false });
-    expect(s.ctx.hooks.isTrial()).toBe(true);
+    expect(l).toMatchObject({ status: 'unlicensed', machineCode: fpA.machineCode, updatesEligible: false });
+    expect(l.limits).toBeUndefined();
+    expect(s.ctx.hooks.isLicensed()).toBe(false);
+  });
+
+  it('while unlicensed every /api/v1 route answers EM-5010 except what the licence screen needs', async () => {
+    const blocked = await s.api('/providers/connections');
+    expect(blocked.status).toBe(403);
+    expect(await body(blocked)).toMatchObject({ error: { code: 'EM-5010', details: { status: 'unlicensed' } } });
+    expect((await s.api('/projects')).status).toBe(403);                         // unknown route is gated too (no route discovery)
+    for (const p of ['/health', '/version', '/license', '/settings']) expect((await s.api(p)).status).toBe(200);
+    expect((await s.api('/settings', { method: 'PUT', json: { uiLanguage: 'id', theme: 'light' } })).status).toBe(200);
+    const other = await s.api('/settings', { method: 'PUT', json: { uiLanguage: 'en', privateMode: true } });
+    expect(other.status).toBe(403);
+    expect((await body<{ error: { code: string } }>(other)).error.code).toBe('EM-5010');
+    expect((await s.api('/license/deactivate', { method: 'POST', json: { confirm: true } })).status).toBe(403);
+    expect((await s.api('/health', { auth: false })).status).toBe(200);         // auth guard still runs first
+    expect((await s.api('/license', { auth: false })).status).toBe(401);
   });
 
   it('rejects a key for another computer, a tampered key and garbage', async () => {
     const other = await s.api('/license/activate', { method: 'POST', json: { key: signPayload(payloadFor(fpB), key) } });
     expect(other.status).toBe(422);
-    expect((await body<{ error: { code: string } }>(other)).error.code).toBe('EM-5003');
+    expect(await body(other)).toMatchObject({ error: { code: 'EM-5003', details: { status: 'machine-mismatch' } } });
     const good = signPayload(payloadFor(fpA), key);
     const parts = good.split('-'); const p = parts[2]!; parts[2] = p.slice(0, 10) + (p[10] === 'A' ? 'B' : 'A') + p.slice(11);
     const tampered = await body<{ error: { code: string } }>(await s.api('/license/activate', { method: 'POST', json: { key: parts.join('-') } }));
     expect(['EM-5002', 'EM-5006']).toContain(tampered.error.code);
     expect((await body<{ error: { code: string } }>(await s.api('/license/activate', { method: 'POST', json: { key: 'X'.repeat(60) } }))).error.code).toBe('EM-5006');
-    expect(s.ctx.hooks.isTrial()).toBe(true);
+    expect(s.ctx.hooks.isLicensed()).toBe(false);
   });
 
-  it('activates a key bound to this Machine Code; the token is sealed at rest; deactivate returns to Trial Mode', async () => {
+  it('activates a key bound to this Machine Code without restart; the token is sealed at rest; deactivate locks the product again', async () => {
     const good = signPayload(payloadFor(fpA), key);
     const r = await s.api('/license/activate', { method: 'POST', json: { key: good } });
     const txt = await r.text();
     expect(r.status).toBe(200);
     expect(txt).not.toContain(good.slice(10, 60));
-    expect(JSON.parse(txt)).toMatchObject({ status: 'active', tier: 'standard', updatesEligible: true, limits: { watermark: false, maxResolution: '2160p' } });
-    expect(s.ctx.hooks.isTrial()).toBe(false);
+    expect(JSON.parse(txt)).toMatchObject({ status: 'licensed', tier: 'standard', updatesEligible: true });
+    expect(s.ctx.hooks.isLicensed()).toBe(true);
+    expect((await s.api('/providers/connections')).status).toBe(200);           // the gate opens at once
     const row = s.ctx.db.prepare('SELECT token_enc, status, fingerprint_hash FROM license WHERE id = 1').get() as { token_enc: Buffer; status: string; fingerprint_hash: string };
-    expect(row.status).toBe('active'); expect(row.fingerprint_hash).toBe(fpA.fpHex);
+    expect(row.status).toBe('licensed'); expect(row.fingerprint_hash).toBe(fpA.fpHex);
     expect(row.token_enc.includes(Buffer.from(good.slice(4, 40)))).toBe(false);
-    expect(events.some((e) => e.n === 'license.changed' && (e.d['licence'] as { status: string }).status === 'active')).toBe(true);
+    expect(events.some((e) => e.n === 'license.changed' && (e.d['licence'] as { status: string }).status === 'licensed')).toBe(true);
     expect((await s.api('/license/deactivate', { method: 'POST', json: { confirm: false } })).status).toBe(400);
-    expect(await body(await s.api('/license/deactivate', { method: 'POST', json: { confirm: true } }))).toMatchObject({ status: 'trial' });
+    expect(await body(await s.api('/license/deactivate', { method: 'POST', json: { confirm: true } }))).toMatchObject({ status: 'unlicensed' });
     expect((s.ctx.db.prepare('SELECT token_enc FROM license WHERE id = 1').get() as { token_enc: Buffer | null }).token_enc).toBeNull();
-    expect(s.ctx.hooks.isTrial()).toBe(true);
+    expect(s.ctx.hooks.isLicensed()).toBe(false);
+    expect((await s.api('/providers/connections')).status).toBe(403);
   });
 
-  it('a build after updatesUntil activates with EM-5005 and keeps Trial exports', async () => {
-    const r = await body<Lic>(await s.api('/license/activate', { method: 'POST', json: { key: signPayload(payloadFor(fpA, { upd: '2026-01-31' }), key) } }));
-    expect(r).toMatchObject({ status: 'updates-expired', updatesEligible: false, warnings: ['EM-5005'], limits: { watermark: true } });
-    expect(s.ctx.hooks.isTrial()).toBe(true);
+  it('a build after updatesUntil is refused with EM-5005 and stays locked', async () => {
+    const r = await s.api('/license/activate', { method: 'POST', json: { key: signPayload(payloadFor(fpA, { upd: '2026-01-31' }), key) } });
+    expect(r.status).toBe(422);
+    expect(await body(r)).toMatchObject({ error: { code: 'EM-5005', details: { status: 'invalid', date: '2026-01-31' } } });
+    expect(s.ctx.hooks.isLicensed()).toBe(false);
   });
 
   it('the hourly check re-verifies the stored key and announces a clock rollback (EM-5007) without changing the status', async () => {
@@ -185,39 +205,78 @@ describe('licence integration (dev keys only, injected fingerprint)', () => {
     await s.api('/license/activate', { method: 'POST', json: { key: signPayload(payloadFor(fpA), key) } });
     await s.close();
     await boot({ ...base, now: () => t, tickMs: 30 }, dataDir, dbKeyHex);
-    expect(await body(await s.api('/license'))).toMatchObject({ status: 'active', clockAnomaly: false });
+    expect(await body(await s.api('/license'))).toMatchObject({ status: 'licensed', clockAnomaly: false });
     events.length = 0;
     t = new Date('2026-10-01T10:00:00Z');                                       // clock set back > 24 h
     for (let i = 0; i < 50 && !events.some((e) => e.n === 'license.changed'); i++) await new Promise((r) => setTimeout(r, 20));
     const ev = events.find((e) => e.n === 'license.changed');
-    expect(ev?.d['licence']).toMatchObject({ status: 'active', clockAnomaly: true });
+    expect(ev?.d['licence']).toMatchObject({ status: 'licensed', clockAnomaly: true });
     await s.close();
     await boot(base, dataDir, dbKeyHex);
   });
 
-  it('survives a restart, and a newer signed revoked.json revokes the stored key at startup', async () => {
+  it('survives a restart, and a newer signed revoked.json revokes the stored key at startup (product locked again)', async () => {
     await s.api('/license/activate', { method: 'POST', json: { key: signPayload(payloadFor(fpA), key) } });
     const { dataDir, dbKeyHex } = s.cfg;
     await s.close();
     await boot(base, dataDir, dbKeyHex);
-    expect(await body(await s.api('/license'))).toMatchObject({ status: 'active' });
-    expect(s.ctx.hooks.isTrial()).toBe(false);
+    expect(await body(await s.api('/license'))).toMatchObject({ status: 'licensed' });
+    expect(s.ctx.hooks.isLicensed()).toBe(true);
     await s.close();
     const list = signedRevocationList([{ lid: payloadFor(fpA).lid, epoch: 1, reason: 'refund' }], key);
     events.length = 0;
     await boot({ ...base, revocationCopies: () => [{ bytes: list.bytes, signatureText: list.sig }] }, dataDir, dbKeyHex);
-    expect(await body(await s.api('/license'))).toMatchObject({ status: 'revoked', code: 'EM-5004', limits: { watermark: true } });
-    expect(s.ctx.hooks.isTrial()).toBe(true);
+    expect(await body(await s.api('/license'))).toMatchObject({ status: 'revoked', code: 'EM-5004' });
+    expect(s.ctx.hooks.isLicensed()).toBe(false);
+    expect(await body(await s.api('/providers/connections'))).toMatchObject({ error: { code: 'EM-5010', details: { status: 'revoked' } } });
     expect(s.ctx.bus.lastSeq).toBeGreaterThanOrEqual(1);                       // license.changed emitted during start
-    expect(s.ctx.db.prepare("SELECT details_json d FROM audit_log WHERE event = 'license.status-changed' ORDER BY id DESC LIMIT 1").get()).toEqual({ d: JSON.stringify({ from: 'active', to: 'revoked', code: 'EM-5004' }) });
+    expect(s.ctx.db.prepare("SELECT details_json d FROM audit_log WHERE event = 'license.status-changed' ORDER BY id DESC LIMIT 1").get()).toEqual({ d: JSON.stringify({ from: 'licensed', to: 'revoked', code: 'EM-5004' }) });
+  });
+});
+
+describe('licence activation rate limit (EM-5011)', () => {
+  const key = makeDevKey('T2');
+  let t = Date.parse('2026-11-20T10:00:00Z');
+  let s: TestService;
+  beforeAll(async () => {
+    s = await startService({ modules: [health, createLicenseModule({ keys: () => [key.entry], fingerprintSource: { platform: 'test', read: async () => MACHINE_A }, buildDate: BUILD_DATE,
+      now: () => new Date(t), revocationCopies: () => [] })] });
+  });
+  afterAll(async () => { await s.close(); });
+  const attempt = (k: string) => s.api('/license/activate', { method: 'POST', json: { key: k } });
+
+  it('5 failed attempts per minute, then a lockout that grows; a valid key after the lockout activates', async () => {
+    const bad = signPayload(payloadFor(fpB), key);
+    for (let i = 0; i < 5; i++) expect((await attempt(bad)).status).toBe(422);
+    const locked = await attempt(signPayload(payloadFor(fpA), key));             // even a valid key waits during the lockout
+    expect(locked.status).toBe(429);
+    expect(locked.headers.get('retry-after')).toBe('60');
+    expect(await body(locked)).toMatchObject({ error: { code: 'EM-5011', details: { retryAfterSeconds: 60 } } });
+    t += 61_000;
+    for (let i = 0; i < 5; i++) expect((await attempt(bad)).status).toBe(422);
+    const second = await attempt(bad);
+    expect(second.status).toBe(429);
+    expect(second.headers.get('retry-after')).toBe('120');                      // doubled
+    t += 121_000;
+    const ok = await attempt(signPayload(payloadFor(fpA), key));
+    expect(ok.status).toBe(200);
+    expect(await body(ok)).toMatchObject({ status: 'licensed' });
+    expect((await attempt(bad)).status).toBe(422);                               // success reset the counter
+  });
+
+  it('the production module list installs the licence gate', () => {
+    expect(MODULES.filter((m) => typeof m.middleware === 'function').map((m) => m.name)).toEqual(['license']);
   });
 });
 
 describe('diagnostics and shutdown', () => {
   let s: TestService; let shutdowns = 0;
   beforeAll(async () => {
+    const dk = makeDevKey('T3');
     s = await startService({ modules: [health, settingsModule, providersModule, createHardwareModule({ detect: async () => hw(8192), detectOnStart: false }),
-      createLicenseModule({ keys: () => [], fingerprintSource: { platform: 'test', read: async () => MACHINE_A }, revocationCopies: () => [] }), createDiagnosticsModule({ onShutdown: () => { shutdowns++; }, shutdownDelayMs: 20 })] });
+      createLicenseModule({ keys: () => [dk.entry], buildDate: BUILD_DATE, fingerprintSource: { platform: 'test', read: async () => MACHINE_A }, revocationCopies: () => [] }), createDiagnosticsModule({ onShutdown: () => { shutdowns++; }, shutdownDelayMs: 20 })] });
+    expect((await s.api('/diagnostics/codes')).status).toBe(403);                // locked until activated (EM-5010)
+    expect((await s.api('/license/activate', { method: 'POST', json: { key: signPayload(payloadFor(fpA), dk) } })).status).toBe(200);
     await s.api('/providers/connections', { method: 'POST', json: { provider: 'openrouter', label: 'k', secret: SECRET, validateNow: false } });
     await s.api('/hardware/profile');
     s.ctx.log.error({ code: 'EM-4103', detail: `failed with ${SECRET}` }, 'provider error');
@@ -242,7 +301,7 @@ describe('diagnostics and shutdown', () => {
     for (const needle of [SECRET, 'f00dcafef00dcafe', s.cfg.dbKeyHex, s.token, os.homedir(), 'Rahasia']) expect(all).not.toContain(needle);
     expect(all).toContain('[13 chars]');
     expect(JSON.parse(zip.get('hardware.json')!.toString()).profile).toMatchObject({ tier: 'T2' });
-    expect(JSON.parse(zip.get('license.json')!.toString())).toMatchObject({ status: 'trial', fingerprintPrefix: fpA.fpHex.slice(0, 8) });
+    expect(JSON.parse(zip.get('license.json')!.toString())).toMatchObject({ status: 'licensed', licensed: true, fingerprintPrefix: fpA.fpHex.slice(0, 8) });
     expect(JSON.parse(zip.get('events.json')!.toString()).join('\n')).toContain('EM-4103');
   });
 

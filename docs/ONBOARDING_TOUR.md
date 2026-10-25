@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | UI/UX lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, ELEMENT_IDS.md, UXRD.md (UX-001, UX-002, UX-003, UX-024, UX-025), USER_FLOWS.md (F1), UI_UX_SPECIFICATION.md (§8 `scr.onboarding`, tokens), ACCESSIBILITY_AND_I18N.md (`onb.*`, `tour.*` keys, §7 language switch), PERFORMANCE.md (tier copy), DECISIONS.md (ADR-008, 012, 014) |
 | Used by | FRD.md, TEST_PLAN.md, UI_UX_SPECIFICATION.md |
 | Owner of | onboarding wizard copy and skip rules, the 8-step tour (targets, copy, triggers; FR-149 ≤ 8), re-run rules, first-project nudges, success-moment copy |
@@ -16,8 +16,8 @@ Copy is EN / ID. Keys follow ACCESSIBILITY_AND_I18N.md §4 (`onb.<step>.<field>`
 
 | # | Rule |
 |---|---|
-| 1 | The wizard asks only for what the first export needs: licence or trial, one provider (skippable), model assignment (defaults), hardware check (informational). Nothing else. |
-| 2 | Every step is skippable except the licence/trial choice (which has a one-click "Continue with trial"). Skipping never blocks the Editor; skipped items are reachable later and the Editor nudges once. |
+| 1 | The wizard asks only for what the first export needs: one provider (skippable), model assignment (defaults), hardware check (informational). Nothing else. The Licence Key is activated before the wizard, on the licence screen (LICENSE_OPERATIONS.md §7: no Trial Mode). |
+| 2 | Every step is skippable. Skipping never blocks the Editor; skipped items are reachable later and the Editor nudges once. |
 | 3 | The wizard never uses the forbidden words (UX-040). "Engine", "model", "provider" are allowed and explained on first use. |
 | 4 | Copy is short: title ≤ 6 words, body ≤ 2 sentences, one primary action, one ghost action. |
 | 5 | Progress is visible (step n of 6) and the Creator can go back. State is saved per step so a crash mid-wizard resumes at the same step. |
@@ -25,12 +25,12 @@ Copy is EN / ID. Keys follow ACCESSIBILITY_AND_I18N.md §4 (`onb.<step>.<field>`
 
 ## 2. Onboarding wizard (`scr.onboarding`)
 
-Layout: full-window, 720 px centred column (UI_UX_SPECIFICATION.md §8); step indicator top; "Skip setup" / "Lewati pengaturan" ghost top-right (visible from ONB-2 onward); Back / Next bottom.
+Layout: full-window, 720 px centred column (UI_UX_SPECIFICATION.md §8); step indicator top; "Skip setup" / "Lewati pengaturan" ghost top-right (visible from ONB-3 onward); Back / Next bottom.
 
 | Step | Element id | Title EN / ID | Body EN / ID | Fields / actions (EN / ID) | Skip rule | Completion writes |
 |---|---|---|---|---|---|---|
 | ONB-1 | `scr.onboarding.welcome` | Welcome to Expertmotion / Selamat datang di Expertmotion | Turn your clips into a polished motion video: pick looks, describe what you want, and export. Setup takes about three minutes. / Ubah klip kamu menjadi video motion yang rapi: pilih tampilan, jelaskan keinginan kamu, lalu ekspor. Pengaturan memakan waktu sekitar tiga menit. | Primary "Get started" / "Mulai"; link "Bahasa Indonesia" (switches onb/tour copy); footnote "Everything runs on this PC. The internet is used only for the AI models you connect." / "Semua berjalan di PC ini. Internet dipakai hanya untuk model AI yang kamu hubungkan." | Cannot skip (one click) | `onboarding.language` |
-| ONB-2 | `scr.onboarding.license` | Licence or trial / Lisensi atau uji coba | Paste your licence key, or start a trial. The trial has every feature; exports carry a watermark and are limited to 720p. / Tempel kunci lisensi kamu, atau mulai uji coba. Uji coba punya semua fitur; hasil ekspor diberi watermark dan dibatasi 720p. | `scr.license.input` "Licence key" / "Kunci lisensi" (masked, paste button); `scr.license.activate` "Activate" / "Aktifkan"; `scr.license.trial.continue` "Continue with trial" / "Lanjutkan uji coba"; link "Buy a licence" / "Beli lisensi" (system browser); `scr.license.error` inline (`EM-5xxx`) | Must choose one; "Skip setup" here = trial | licence state |
+| ONB-2 | — (retired 2026-10-25) | — | The Licence step was removed with Trial Mode: an install that is not licensed shows only the licence screen (`scr.license`, `data-gate`) and the wizard starts after activation. | — | — | — |
 | ONB-3 | `scr.onboarding.provider` | Connect an AI provider / Hubungkan penyedia AI | The Brainstorming Agent and Editor Agent run on an AI model you bring. OpenRouter gives one key for many models; you pay the provider directly, usually cents per video. / Brainstorming Agent dan Editor Agent berjalan pada model AI yang kamu bawa. OpenRouter memberi satu kunci untuk banyak model; kamu membayar penyedia langsung, biasanya hanya beberapa sen per video. | `scr.providers.provider.select` (OpenRouter default; others P1); `scr.providers.key.input` "API key" / "Kunci API" with "Where do I get a key?" / "Di mana mendapatkan kunci?" link; `scr.providers.validate` "Validate" / "Validasi" → "Checking key…" / "Memeriksa kunci…" → "{n} models available" / "{n} model tersedia"; errors inline (`EM-4xxx`) | "Skip for now" / "Lewati dulu" → agents disabled; Model Bar shows "Connect an AI provider" | Provider Connection (encrypted) |
 | ONB-4 | `scr.onboarding.models` | Choose your models / Pilih model kamu | We picked a balanced default for each agent. The Editor Agent needs a model that can follow a strict format; marked ones can. / Kami memilih bawaan yang seimbang untuk tiap agen. Editor Agent perlu model yang bisa mengikuti format ketat; yang bertanda bisa. | `scr.providers.assign.brainstorm` "Brainstorming Agent" with model, context "200k", "≈ $/M" or "n/a"; `scr.providers.assign.editor` "Editor Agent" (tools/structured badge required); `scr.providers.budget.month` "Monthly budget (optional)" / "Anggaran bulanan (opsional)" default empty, hint "We warn at 80 % and stop at the limit" / "Kami memperingatkan pada 80 % dan berhenti di batas"; `scr.providers.test` "Test both" / "Uji keduanya" → "Test passed" / "Tes berhasil" | Shown only if ONB-3 completed; "Use defaults" / "Pakai bawaan" skips the test | Model Assignments, budget |
 | ONB-5 | `scr.onboarding.hardware` | Checking your PC / Memeriksa PC kamu | Expertmotion adapts to your hardware. Nothing here needs a fix; it only sets safe defaults. / Expertmotion menyesuaikan diri dengan perangkat kamu. Tidak ada yang perlu diperbaiki; ini hanya mengatur bawaan yang aman. | Read-only card: "Tier {tier} · {ram} GB RAM · GPU: {gpu}" and the consequence line: T0 "Standard profile · exports up to 1080p · effects run slower" / "Profil Standard · ekspor hingga 1080p · efek berjalan lebih lambat"; T1 "Accelerated available · up to 2160p with a warning" / "Accelerated tersedia · hingga 2160p dengan peringatan"; T2 "Turbo available · all presets" / "Turbo tersedia · semua preset". Warning if RAM < 8 GB (USER_FLOWS.md F1.E5). Link "Open Hardware Monitor later from the header" / "Buka Monitor Perangkat Keras nanti dari header" | "Next" only (nothing to decide); never auto-advances (A11Y: no timed steps) | `hardware_profiles` row |
@@ -42,7 +42,7 @@ Behaviour notes:
 |---|---|
 | Resume | If the app closes mid-wizard, it resumes at the last incomplete step with saved values (except the API key field, which is re-requested unless already validated and stored). |
 | Private Mode | Not offered in the wizard (it would block ONB-3); the tour step TOUR-7 introduces it. |
-| Re-run | File ▸ (none). The wizard itself is not re-runnable; its pieces are: Licence (`hdr.action.license`), Providers (`agent.modelbar`), Hardware (`hdr.action.hardware`), Tour (`hdr.menu.help.tour`). |
+| Re-run | File ▸ (none). The wizard itself is not re-runnable; its pieces are: Licence (`hdr.action.license` → Manage licence), Providers (`agent.modelbar`), Hardware (`hdr.action.hardware`), Tour (`hdr.menu.help.tour`). |
 | Sample project for the tour | "Sample · Kafe Senja" / "Contoh · Kafe Senja": three bundled 5 s clips (CC0), one SRT, Theme `preset:palette.editorial-dark`; created only when the tour starts; deleted when the Creator creates or opens another project unless they saved it under a new name. |
 | Sample implementation | Created by API R-025 `POST /projects/sample` (idempotent; `isSample: true` in `ProjectDto`; hard-deleted by the Service when R-011 creates or R-016 opens another project; Save As keeps a normal copy). Media: `resources/sample/` (three 5 s 1280×720 clips and `kafe-senja.srt`, CC0 1.0, rendered by our own Engine) built by `packages/engine/scripts/build-sample.mjs` and shipped as `extraResources` `sample/`. |
 
@@ -88,7 +88,7 @@ Nudges are one-time (per installation) inline hints with a dismiss ×; they use 
 | NUDGE-5 | `agent.editor.intentqueue` empty | No intents yet | Your picks and requests appear here. Simple picks apply directly; the rest become a plan you approve. / Pilihan dan permintaan kamu muncul di sini. Pilihan sederhana langsung diterapkan; sisanya menjadi rencana yang kamu setujui. | — |
 | NUDGE-6 | `agent.modelbar` | Provider skipped in ONB-3; shown on first visit to the Agent Panel | Connect an AI provider to use the agents. Picks and export work without one. / Hubungkan penyedia AI untuk memakai agen. Pilihan dan ekspor tetap berjalan tanpanya. | "Connect" / "Hubungkan" |
 | NUDGE-7 | first Plan Card | First plan ever | Read the steps and risks. Nothing changes until you press Execute, and you can undo it after. / Baca langkah dan risikonya. Tidak ada yang berubah sampai kamu menekan Execute, dan kamu bisa membatalkannya setelahnya. | Highlights `agent.editor.execute` |
-| NUDGE-8 | `scr.export` preflight, Trial Mode | First export in Trial Mode | Trial exports carry a watermark and are 720p. Everything else is identical. / Ekspor uji coba diberi watermark dan 720p. Selebihnya sama persis. | "Purchase" / "Beli Lisensi" · "Continue" / "Lanjutkan" |
+| NUDGE-8 | — (retired 2026-10-25) | — | Trial Mode no longer exists, so there is no trial export nudge. | — |
 
 Nudges are suppressed while the tour is running and while `sys.offline` or a modal is shown.
 
@@ -98,7 +98,7 @@ Nudges are suppressed while the tour is running and while `sys.offline` or a mod
 |---|---|---|---|
 | First Insert | `sys.toast` success | Your clips are in. Now pick a look in Design, or ask the Brainstorming Agent. / Klip kamu sudah masuk. Sekarang pilih tampilan di Design, atau tanya Brainstorming Agent. | "Open Design" / "Buka Design" |
 | First Execute | Plan Card badge + toast | Applied · version {v}. Undo is always one step away. / Diterapkan · versi {v}. Batalkan selalu satu langkah saja. | "Undo" / "Batalkan" |
-| **First export** (`scr.export.done`, first ever on this installation) | Done phase of the Export dialog, `t-display` title | Your first video is ready. / Video pertama kamu sudah jadi. · Body: "{filename} · {duration} · {w}×{h} · {size}. It was rendered on this PC; nothing was uploaded." / "{filename} · {duration} · {w}×{h} · {size}. Dirender di PC ini; tidak ada yang diunggah." · In Trial Mode add: "This export has a watermark and is 720p. A licence removes both." / "Ekspor ini berwatermark dan 720p. Lisensi menghapus keduanya." | "Open folder" / "Buka folder" (primary) · "Export another size" / "Ekspor ukuran lain" (reopens setup with the next common ratio suggested: 9:16 → 1:1) · Trial: "Purchase" / "Beli Lisensi" |
+| **First export** (`scr.export.done`, first ever on this installation) | Done phase of the Export dialog, `t-display` title | Your first video is ready. / Video pertama kamu sudah jadi. · Body: "{filename} · {duration} · {w}×{h} · {size}. It was rendered on this PC; nothing was uploaded." / "{filename} · {duration} · {w}×{h} · {size}. Dirender di PC ini; tidak ada yang diunggah." | "Open folder" / "Buka folder" (primary) · "Export another size" / "Ekspor ukuran lain" (reopens setup with the next common ratio suggested: 9:16 → 1:1) |
 | First export (later ones) | Standard done phase | Export complete. / Ekspor selesai. | as UI_UX_SPECIFICATION.md §8 |
 | First recovery | `scr.project.recover` after Restore | Recovered version {v}. Expertmotion checkpoints your work every few seconds. / Versi {v} dipulihkan. Expertmotion menyimpan checkpoint pekerjaan kamu tiap beberapa detik. | — |
 

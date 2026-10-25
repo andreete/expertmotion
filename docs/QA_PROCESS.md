@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | QA lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | MASTER_PROJECT_PROMPT.md §19; GLOSSARY.md; PRD.md §5, §7; ARCHITECTURE.md §7, §9; AI_WORKFLOW.md §12, §13; PERFORMANCE.md; DESIGN_CATALOGUE.md; UXRD.md §7, §8; ASSESSMENT.md §1; DEFINITION_OF_DONE.md; STAGE_MANAGEMENT.md |
 | Used by | TEST_PLAN.md, ROADMAP.md, STAGE_MANAGEMENT.md gates, VULNERABILITY_CHECKLIST.md, GOLDEN_SCENARIOS.md |
 | ID range | none (test cases are `QA-` in TEST_PLAN.md; severities are `S1`–`S4`) |
@@ -58,14 +58,14 @@ D1, D2 (as VM) and D5 are mandatory for v1.0; D3/D4 rows are marked "not run" in
 
 ## 5. Render matrix
 
-Full space: 7 Aspect Ratios × 4 Resolutions × 5 frame rates = 140 Output Profiles, × 3 Performance Profiles, × Trial/licensed. Sampled per release:
+Full space: 7 Aspect Ratios × 4 Resolutions × 5 frame rates = 140 Output Profiles, × 3 Performance Profiles (licensed only: there is no Trial Mode). Sampled per release:
 
 | Set | Rows | Content | Checks |
 |---|---|---|---|
 | **A: pixel table** (28) | every ratio × every resolution at 30 fps, Standard, licensed | 3 clips, 2 transitions (`fade`, `slide`), caption `box`, title text, audio bed; 10 s | ffprobe width×height equals PERFORMANCE.md §3; even dimensions; fps 30; duration = Σ clips − Σ transitions ± 1 frame; audio stream present; first/last frame not black; file plays in Windows Media Player and VLC |
 | **B: frame rates** (5) | 16:9 1080p at 24/25/30/50/60; 9:16 1080p at 30/60 | same content | ffprobe `r_frame_rate`; frame count = round(ms × fps / 1000); captions aligned to the same ms; audio sync (clap test: visual flash vs audio spike within 1 frame) |
 | **C: profiles** (6) | 16:9 1080p30 and 9:16 1080p30 × Standard / Accelerated / Turbo | 30 s PERFORMANCE.md §5 workload | output identical in dimensions/duration across profiles (md5 of frame-decoded stills within diff ≤ 1 %); time and peak RAM recorded against budgets; Turbo on T1 shows the warning |
-| **D: edge** (8) | Custom 1:3 and 3:1 at 720p; Custom near-odd dimension (round-to-even); 4K on T0 disabled with reason; 2K on T1; alpha export (WebM + `background.none`); GIF; PNG still; Trial Mode 1080p request → 720p + watermark | — | per TEST_PLAN.md §11–12 |
+| **D: edge** (8) | Custom 1:3 and 3:1 at 720p; Custom near-odd dimension (round-to-even); 4K on T0 disabled with reason; 2K on T1; alpha export (WebM + `background.none`); GIF; PNG still; unlicensed `POST /renders` → 403 EM-5010 | — | per TEST_PLAN.md §11–12 |
 | **E: durations** (4) | 1 s minimum; 30 min maximum (Standard, T0, 720p to bound time); 0.9 s and 30:01 rejected | colour bars | EM-3104 for rejects; the 30 min run records time and RAM (may be nightly) |
 
 Set A+B+D run per release; set C per release on D1 (and D3 when available); set E 30-min row at least once per minor.

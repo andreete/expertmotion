@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | UI/UX lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, ELEMENT_IDS.md, UXRD.md, PRD.md, AI_WORKFLOW.md, ARCHITECTURE.md (§5, §6), PERFORMANCE.md, DECISIONS.md (ADR-002, 008, 011, 014) |
 | Used by | EDITOR_INTERACTION_MODEL.md, UI_UX_SPECIFICATION.md, ONBOARDING_TOUR.md, FRD.md, GOLDEN_SCENARIOS.md, TEST_PLAN.md |
 | Owner of | flow numbering F1 … F15 and their step numbering |
@@ -34,7 +34,7 @@ F9 crash/recovery, F11 Model Manager (P1), F12 Voice/Captions (P1), F14 Backup/R
 
 ---
 
-## F1 First run: install → launch → onboarding → licence/trial → provider → models → hardware check → tour → empty project
+## F1 First run: install → launch → licence activation → onboarding → provider → models → hardware check → tour → empty project
 
 Preconditions: clean Windows 10/11, installer downloaded, no app data folder. Verifies UX-001, UX-025, PRD-001, PRD-018.
 
@@ -42,22 +42,22 @@ Preconditions: clean Windows 10/11, installer downloaded, no app data folder. Ve
 |---|---|---|---|---|
 | F1.1 | Runs the signed installer | Installs to `%LOCALAPPDATA%\Expertmotion\app`; creates Start Menu/desktop shortcuts | Installer progress; "Launch Expertmotion" checkbox | — |
 | F1.2 | Launches `Expertmotion.exe` | Desktop Shell acquires single-instance lock, creates Database Key via `safeStorage`, spawns Local Service (ARCHITECTURE.md §5.1–5.3) | Splash window with wordmark and "Starting…" / "Memulai…" (≤ 5 s target) | — (the Service reports `ready` on stdout to the Shell; the SSE stream opens afterwards) |
-| F1.3 | — | Local Service detects Hardware Tier, opens empty DB, reports ready; Shell loads the Editor and opens `scr.onboarding` | Full-window wizard, step 1 of 6 (`scr.onboarding.welcome`) | — |
-| F1.4 | Reads Welcome, clicks Next (or "Skip setup" → F1.11 with Trial Mode, no provider) | Advances | Step indicator 2/6 (`scr.onboarding.license`) | — |
-| F1.5 | Enters Licence Key and clicks Activate, **or** clicks Continue with trial | Licence module verifies offline (Ed25519, Machine Fingerprint); stores state | Licensed: "Activated for <licensee>" / "Diaktifkan untuk <licensee>"; Trial: "Trial: watermark and 720p. Purchase to remove." / "Uji coba: watermark dan 720p. Beli lisensi untuk menghapusnya." | `license.changed` |
-| F1.6 | Step 3 (`scr.onboarding.provider`): selects provider (OpenRouter default), pastes key, clicks Validate | Local Service validates the key over HTTPS (not in Private Mode), stores encrypted, fetches model list | Spinner "Checking key…" / "Memeriksa kunci…" then green check and model count; **or** "Skip for now" (agents unavailable until configured) | — |
-| F1.7 | Step 4 (`scr.onboarding.models`): accepts suggested Model Assignment for Brainstorming Agent and Editor Agent, optionally sets budget limit; clicks Test | Runs a 1-token test per assignment; records usage | Two rows with model name, context length, tool-calling badge, approximate price "≈ $/M tokens" or "n/a"; "Test passed" / "Tes berhasil" | — |
-| F1.8 | Step 5 hardware check (`scr.onboarding.hardware`) | Shows tier, RAM, disk, GPU; sets Performance Profile default and resolution gating | "Your PC: Tier T0 · 16 GB RAM · no GPU acceleration. Standard profile, up to 1080p." / "PC kamu: Tier T0 · RAM 16 GB · tanpa akselerasi GPU. Profil Standard, hingga 1080p." Warning if RAM < 8 GB. | — |
-| F1.9 | Step 6 (`scr.onboarding.tour`): "Start tour" or "Skip tour" | Creates project "Untitled" (default settings: 30 fps, Auto ratio, 1080p) | Editor with empty project; tour overlay if chosen (ONBOARDING_TOUR.md) | — |
+| F1.3 | — | Local Service detects Hardware Tier, opens empty DB, reports ready; no Licence Key is stored, so every `/api/v1` route except the licence screen's answers EM-5010 (no Trial Mode) | The licence screen alone (`scr.license`, `data-gate`): "Activate Expertmotion" / "Aktifkan Expertmotion", three steps, this computer's Machine Code with Copy, key field, Activate, "Get a licence key" and help links, language switch | — |
+| F1.4 | Copies the Machine Code and sends it (purchase / support); receives the key bound to it (§12 email of LICENSE_OPERATIONS.md) | — | "Copied" / "Tersalin" on `scr.license.machinecode.copy` | — |
+| F1.5 | Pastes the key (or drops the `.emlicense` file) and clicks Activate | Licence module verifies offline (Ed25519, Machine Fingerprint, revocation, build date); stores state; the gate opens | Toast "Licence activated" / "Lisensi diaktifkan"; the Editor continues without restart to `scr.onboarding.welcome` (step 1 of 5); "Skip setup" leads to F1.11 without a provider | `license.changed` |
+| F1.6 | Step 2 (`scr.onboarding.provider`): selects provider (OpenRouter default), pastes key, clicks Validate | Local Service validates the key over HTTPS (not in Private Mode), stores encrypted, fetches model list | Spinner "Checking key…" / "Memeriksa kunci…" then green check and model count; **or** "Skip for now" (agents unavailable until configured) | — |
+| F1.7 | Step 3 (`scr.onboarding.models`): accepts suggested Model Assignment for Brainstorming Agent and Editor Agent, optionally sets budget limit; clicks Test | Runs a 1-token test per assignment; records usage | Two rows with model name, context length, tool-calling badge, approximate price "≈ $/M tokens" or "n/a"; "Test passed" / "Tes berhasil" | — |
+| F1.8 | Step 4 hardware check (`scr.onboarding.hardware`) | Shows tier, RAM, disk, GPU; sets Performance Profile default and resolution gating | "Your PC: Tier T0 · 16 GB RAM · no GPU acceleration. Standard profile, up to 1080p." / "PC kamu: Tier T0 · RAM 16 GB · tanpa akselerasi GPU. Profil Standard, hingga 1080p." Warning if RAM < 8 GB. | — |
+| F1.9 | Step 5 (`scr.onboarding.tour`): "Start tour" or "Skip tour" | Creates project "Untitled" (default settings: 30 fps, Auto ratio, 1080p) | Editor with empty project; tour overlay if chosen (ONBOARDING_TOUR.md) | — |
 | F1.10 | Completes or skips the tour | Marks onboarding done in settings.json | `scr.onboarding.done` success moment, then Editor | — |
-| F1.11 | — | Empty project state | `lib.assets.empty`, `stage.timeline.empty`, `hdr.action.export.disabled`, `hdr.action.purchase` visible in Trial Mode | — |
+| F1.11 | — | Empty project state | `lib.assets.empty`, `stage.timeline.empty`, `hdr.action.export.disabled` | — |
 
 Failure branches:
 
 | Branch | Condition | System response | Creator sees | Recovery |
 |---|---|---|---|---|
 | F1.E1 | Local Service fails to start 3× (ARCHITECTURE.md §5.6) | Shell shows native error dialog with diagnostics path | "Expertmotion could not start its local service · EM-8xxx. Copy diagnostics and contact support." / "Expertmotion tidak dapat memulai layanan lokalnya · EM-8xxx. Salin diagnostik dan hubungi dukungan." | Copy diagnostics; Retry |
-| F1.E2 | Licence Key invalid / tampered / bound to another machine | `scr.license.error` | "This key is not valid for this computer · EM-5xxx" / "Kunci ini tidak berlaku untuk komputer ini · EM-5xxx" with "Re-bind" (if re-binds remain) or "Continue with trial" | F13 |
+| F1.E2 | Licence Key invalid / tampered / bound to another machine / revoked / too many attempts | `scr.license.error`; the licence screen stays the only screen | The catalogue copy of EM-5002 / EM-5003 (with the re-bind steps) / EM-5004 / EM-5005 / EM-5006 / EM-5009 / EM-5011 ("Wait {seconds} seconds") | Fix the key, contact support, or wait (F13) |
 | F1.E3 | Provider key rejected | Inline `EM-4xxx` under `scr.providers.key.input` | "The provider rejected this key. Check it and try again." / "Penyedia menolak kunci ini. Periksa dan coba lagi." | Edit key; Skip |
 | F1.E4 | No internet during F1.6 | Validation times out (30 s) | "No connection. You can skip and connect later from the Model Bar." / "Tidak ada koneksi. Kamu bisa lewati dan hubungkan nanti dari Model Bar." | Skip |
 | F1.E5 | RAM < 8 GB | Warning in F1.8, not a block | "Below the minimum 8 GB. Expect slow previews; exports above 720p may fail." / "Di bawah minimum 8 GB. Pratinjau akan lambat; ekspor di atas 720p mungkin gagal." | Continue |
@@ -294,7 +294,7 @@ Failure branches:
 | F8.E1 | Preflight disk fail | `EM-3102`; Start disabled | Row ⚠ "Need 1.6 GB free, have 0.9 GB" / "Perlu 1,6 GB kosong, tersedia 0,9 GB" | Change folder; free space |
 | F8.E2 | Preflight memory fail | `EM-3101` | "Close other apps: need 2 GB free RAM" / "Tutup aplikasi lain: perlu RAM kosong 2 GB" | Retry preflight |
 | F8.E3 | Engine binaries missing | `EM-3001` | "Rendering engine is missing · EM-3001. Repair the installation." / "Mesin render tidak ditemukan · EM-3001. Perbaiki pemasangan." | Repair (reinstall) |
-| F8.E4 | Trial Mode | `EM-5001` notice, forces 720p + watermark | Row ℹ "Trial: watermark and 720p" with Purchase link | F13 |
+| F8.E4 | (Removed 2026-10-25: Trial Mode no longer exists; exports are never watermarked or capped by the licence) | — | — | — |
 | F8.E5 | 2160p on T0 | Button `.disabled` with reason; not reachable | "Needs a GPU tier" / "Perlu GPU" | — |
 | F8.E6 | Render process crash | job `failed`, partial removed | Toast "Export failed · EM-3xxx" with Try again / Details | Retry; lower Resolution or profile |
 | F8.E7 | Output validation mismatch | job `failed` | "The file did not pass checks (duration mismatch) · EM-3xxx" / "Berkas tidak lolos pemeriksaan (durasi tidak cocok) · EM-3xxx" | Retry |
@@ -405,8 +405,8 @@ Verifies PRD-017, ADR-014.
 
 | Step | Creator action | System response | Creator sees | Events |
 |---|---|---|---|---|
-| F13.1 | Clicks `hdr.action.purchase` (Trial) or `hdr.action.license` → "Enter key" | Opens `scr.license` | Status card (Trial / Licensed to … / Updates until …), `.input`, `.activate`, purchase link (opens the Operator's store in the system browser) | — |
-| F13.2 | Pastes key, clicks `.activate` | Offline Ed25519 verification against the embedded public key; fingerprint match; revocation list check | "Activated. Watermark removed; all resolutions available for your tier." / "Diaktifkan. Watermark dihapus; semua resolusi tersedia untuk tier Anda."; `hdr.action.purchase` hidden | `license.changed` |
+| F13.1 | Not licensed: launches Expertmotion (licence screen only). Licensed: `hdr.action.license` → "Manage licence" or Help ▸ Licence | Opens `scr.license` (whole window while locked, modal while licensed) | Machine Code with Copy, `.input`, `.activate`, "Get a licence key" and help links; while licensed the status card "Licensed to … · updates until …" and Deactivate | — |
+| F13.2 | Pastes key, clicks `.activate` | Offline Ed25519 verification against the embedded public key; fingerprint match; revocation list check; rate limit (5 failures per minute) | "Licence activated" / "Lisensi diaktifkan"; onboarding or the Editor opens without restart | `license.changed` |
 | F13.3 | On a new PC: pastes the same key | Fingerprint mismatch; re-bind allowed if count < limit | "This key is bound to another computer. Move it here? (1 of 2 moves left)" / "Kunci ini terikat ke komputer lain. Pindahkan ke sini? (1 dari 2 pemindahan tersisa)" → `scr.license.rebind` | — |
 | F13.4 | Confirms re-bind | New binding recorded (per LICENSE_OPERATIONS.md) | Activated | — |
 
@@ -417,7 +417,8 @@ Failure branches:
 | F13.E1 | Signature invalid | `scr.license.error` `EM-5xxx` | "This key is not valid · EM-5xxx. Check for typos or contact support." / "Kunci tidak valid · EM-5xxx. Periksa salah ketik atau hubungi dukungan." |
 | F13.E2 | Revoked | `EM-5xxx` | "This key has been revoked" / "Kunci ini telah dicabut" |
 | F13.E3 | Re-bind limit reached | `EM-5xxx` | "No moves left. Contact support." / "Tidak ada pemindahan tersisa. Hubungi dukungan." |
-| F13.E4 | Clock tampering detected | monotonic check | "System clock problem · EM-5xxx. Fix the date and time." / "Masalah jam sistem · EM-5xxx. Perbaiki tanggal dan waktu." |
+| F13.E4 | Too many attempts | `EM-5011` (HTTP 429) | "Too many activation attempts. Wait {seconds} seconds, then try again." / "Terlalu banyak percobaan aktivasi. Tunggu {seconds} detik, lalu coba lagi." |
+| F13.E5 | Clock moved back more than 24 h | `EM-5007` (info; licence unaffected) | Badge "Clock changed" / "Jam berubah" in the licence popover |
 | F13.E5 | Update-eligibility date passed | Licensed, but `sys.update` says the update needs a renewed licence | "Update 1.4 is available but your updates ended on 2027-10-24." / "Pembaruan 1.4 tersedia tetapi masa pembaruan kamu berakhir 2027-10-24." |
 
 ---

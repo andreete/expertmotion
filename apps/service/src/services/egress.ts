@@ -2,7 +2,8 @@
 // internet. Every call names its purpose and is checked against that purpose's allow-list (SEC-082):
 //   provider        openrouter.ai, api.openai.com, api.anthropic.com, generativelanguage.googleapis.com + the host of a saved
 //                   custom (OpenRouter-compatible) base URL — https, a hostname, never an IP literal or localhost
-//   model-download  the model hosts of the signed registry (LOCAL_AI_MODELS §3)
+//   model-download  the model hosts of the signed registry (LOCAL_AI_MODELS §3): exactly the Operator model CDN host when the
+//                   build has one (services/model-cdn.ts, SEC-071), the built-in Hugging Face/GitHub list otherwise
 //   licence         none in the MVP (activation is verified offline, LICENSE_OPERATIONS)
 //   update          none in the Service (the Desktop Shell's electron-updater owns update checks, SEC-090)
 // Private Mode refuses before any DNS lookup (EM-8202); a host off the purpose's list is EM-8203; HTTPS only. Redirects are never
@@ -10,6 +11,7 @@
 // same list; model downloads follow hops in packages/models (download.ts), each hop again through this module.
 // SEC-084: provider bodies are capped while streaming (4 MB, model lists 8 MB, one stream line ≤ 64 KB) and aborted with EM-4103.
 import { EmError } from '@expertmotion/shared';
+import { modelCdnHost } from './model-cdn.js';
 
 export const PROVIDER_HOSTS = ['openrouter.ai', 'api.openai.com', 'api.anthropic.com', 'generativelanguage.googleapis.com'] as const;
 export const MODEL_HOSTS = ['huggingface.co', 'cdn-lfs.huggingface.co', 'cas-bridge.xethub.hf.co', 'github.com', 'objects.githubusercontent.com'] as const;
@@ -74,6 +76,8 @@ export function createEgress(opts: {
   isPrivate: () => boolean;
   /** Hosts of saved custom provider base URLs (read at call time; each is re-validated here). */
   customProviderHosts?: () => string[];
+  /** model-download allow-list (default: the build's model CDN host only, else MODEL_HOSTS). */
+  modelHosts?: () => readonly string[];
   /** Tests only: extra hosts for every purpose. */
   extraHosts?: () => string[];
   impl?: typeof fetch;
@@ -86,7 +90,7 @@ export function createEgress(opts: {
         const custom = (opts.customProviderHosts?.() ?? []).filter((h) => customBaseUrlProblem(`https://${h}/`) === null);
         return [...PROVIDER_HOSTS, ...custom, ...extra];
       }
-      case 'model-download': return [...MODEL_HOSTS, ...extra];
+      case 'model-download': { const cdn = modelCdnHost(); return [...(opts.modelHosts?.() ?? (cdn ? [cdn] : MODEL_HOSTS)), ...extra]; }
       case 'licence': return [...LICENCE_HOSTS, ...extra];
       case 'update': return [...UPDATE_HOSTS, ...extra];
     }

@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (API names verified against remotion.dev on 2026-10-24 unless marked **[UNVERIFIED]**) |
 | Owner | Engine lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 004, 008, 011, 016, 017), ARCHITECTURE.md §7, DESIGN_CATALOGUE.md, PERFORMANCE.md, AI_WORKFLOW.md §8, ASSESSMENT.md §3–4, MASTER_PROJECT_PROMPT.md §10 |
 | Used by | DESIGN_CATALOGUE.md (mapping column), BLUEPRINT.md, TRD.md, POC_PLAN.md, TEST_PLAN.md, DEPLOYMENT_AND_PACKAGING.md, ERROR_CATALOGUE.md, RISKS_AND_ASSUMPTIONS.md |
 | Owner of | the mapping of every menu item and every `preset:` id to a Remotion package/API; the Remotion Adapter contract; the render-option policy per Performance Profile; the Engine version policy; the "deliberately not used" list |
@@ -60,7 +60,6 @@ type TimelineProps = {
   assets: Record<AssetId, { url: string; proxyUrl?: string; durationMs: number; width: number; height: number; hasAudio: boolean; kind: 'video'|'image'|'audio'|'animated-image' }>;
   quality: 'draft' | 'full';               // Draft swaps proxyUrl for url (PERFORMANCE.md §2)
   theme: ResolvedTheme;                    // palette + font pair, already resolved by the Local Service
-  watermark: boolean;                      // Trial Mode (ADR-014)
 };
 ```
 
@@ -100,7 +99,6 @@ export const ExpertmotionTimeline: React.FC<TimelineProps> = (p) => {
       <TextTrack elements={p.model.tracks.text} … />
       <CaptionTrack pages={p.model.captions.pages} style={p.model.captions.style} … />
       <AudioTrack layers={p.model.tracks.audio} ducking={…} … />
-      {p.watermark ? <TrialWatermark /> : null}
     </AbsoluteFill>
   );
 };
@@ -443,7 +441,7 @@ Props available and their use: `trimBefore`, `durationInFrames`, `volume`, `play
 
 | Content | How it reaches Chrome | Why |
 |---|---|---|
-| Bundled, immutable: fonts (woff2), SFX pack, catalogue loop posters, watermark | `staticFile('fonts/Inter-800.woff2')` from the bundle's `public/` | shipped inside the Engine bundle; no I/O at runtime |
+| Bundled, immutable: fonts (woff2), SFX pack, catalogue loop posters | `staticFile('fonts/Inter-800.woff2')` from the bundle's `public/` | shipped inside the Engine bundle; no I/O at runtime |
 | Creator media (originals, proxies), generated voice/music/thumbnails | `http://127.0.0.1:<port>/media/<assetId>/<variant>` served by the Local Service (ARCHITECTURE.md §7) | (1) one URL form for Player and renderer gives preview/render parity; (2) `file://` URLs are blocked or inconsistent in Chromium for media fetches and cannot be used from the Editor's `app://` origin; (3) the Local Service can enforce path restrictions, range requests and MIME types centrally; (4) paths under `%APPDATA%` never appear in the Composition Model (portability, backup/restore). Asset ids are random 128-bit; the media listener is loopback-only (ADR-005). |
 
 `inputProps.assets` carries the resolved URLs; the Composition Model stores only `assetId`. Open question ARCHITECTURE.md §11.2 (HTTP vs `file://` for speed) is settled here in favour of HTTP unless POC-007 shows ≥ 20 % render slowdown.
@@ -566,7 +564,7 @@ Options set per Performance Profile (values from PERFORMANCE.md §2, which owns 
 | Audio only (P1) | `'mp3'` / `'aac'` / `'wav'` | quality ignored | — | `.mp3` … | `audioCodec` implied | encoding guide |
 | PNG still (thumbnail, golden frame) | `renderStill` | — | `imageFormat: 'png'|'jpeg'|'webp'` | `.png` | §E.4 | https://www.remotion.dev/docs/renderer/render-still |
 
-Trial Mode forces 720p + watermark (`EM-5001` notice) before any of the above.
+No licence-based cap or watermark applies (Trial Mode removed 2026-10-25; an unlicensed install cannot reach the render routes, EM-5010).
 
 ### E.4 `renderStill`
 
@@ -608,7 +606,7 @@ After `renderMedia` resolves, the queue runs the bundled `ffprobe -v error -prin
 <Player
   ref={playerRef}
   component={ExpertmotionTimeline}
-  inputProps={{model, assets, quality: draft ? 'draft' : 'full', theme, watermark}}
+  inputProps={{model, assets, quality: draft ? 'draft' : 'full', theme}}
   durationInFrames={meta.durationInFrames} fps={meta.fps}
   compositionWidth={meta.width} compositionHeight={meta.height}   // Draft: 720p row of the pixel table
   controls={false}                 // Expertmotion draws its own controls (stage.player.controls.*)

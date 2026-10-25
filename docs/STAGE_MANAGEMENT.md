@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Engineering manager |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | MASTER_PROJECT_PROMPT.md §18, §19, §21; GLOSSARY.md; ROADMAP.md; DEFINITION_OF_DONE.md; QA_PROCESS.md; DECISIONS.md; DATABASE_SCHEMA.md §5 |
 | Used by | process.md, memory.md, AGENTS.md, CLAUDE.md, HOOKS_AND_GUARDRAILS.md, DEPLOYMENT_AND_PACKAGING.md, LICENSE_OPERATIONS.md |
 | ID range | none (gates are `G<stage>`; checklists are numbered within this file) |
@@ -139,7 +139,7 @@ A release is cut from `release/x.y` when the Stage 7 exit gate (or, for later mi
 | R3 | `npm run verify && npm run test:e2e` green on Windows; golden frames green; dependency audit and licence check clean (DEVELOPMENT_WORKFLOW.md §11) | outputs in `reports/release-x.y.z/` |
 | R4 | `npm run build:engine` (bundle + catalogue loops) and `npm run build:desktop` produce reproducible artefacts (same lockfile, pinned Electron and Remotion versions; two builds differ only in signature and timestamp) | hashes |
 | R5 | Installer, updater package and every embedded executable (Chrome Headless Shell, FFmpeg, engine binaries) signed with the OV certificate; `signtool verify /pa` passes | output |
-| R6 | Installer smoke on a **clean Windows 10 and Windows 11 VM** without dev tools: install, first run (Trial Mode), create project, import, Insert, pick, export 10 s MP4, close, reopen (recovery), uninstall with data-retention prompt (TEST_PLAN.md §2) | QA record |
+| R6 | Installer smoke on a **clean Windows 10 and Windows 11 VM** without dev tools: install, first run (licence screen, activate a key issued for the VM), create project, import, Insert, pick, export 10 s MP4, close, reopen (recovery), uninstall with data-retention prompt (TEST_PLAN.md §2) | QA record |
 | R7 | Update path tested: previous release → this release via the signed feed; interrupted update recovers | QA record |
 | R8 | Licence runbook: issue a key for the test machine, activate, reboot, verify; tampered key rejected; key on the revocation list rejected (LICENSE_OPERATIONS.md) | QA record |
 | R9 | Revocation list `listVersion` incremented and bundled | file |

@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Product manager |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | MASTER_PROJECT_PROMPT.md, ASSESSMENT.md, GLOSSARY.md, DECISIONS.md |
 | Used by | BRD.md, FRD.md, SRS.md, UXRD.md, ROADMAP.md, TEST_PLAN.md |
 | ID range | PRD-001 … PRD-099 |
@@ -26,7 +26,7 @@ Expertmotion lets a person with no editing team and no technical skills turn raw
 ## 3. The core workflow (brief §2)
 
 1. Launch `Expertmotion.exe` → the Desktop Shell starts the Local Service and opens the Editor.
-2. First run: onboarding (licence or trial, provider connection, model assignment, hardware check, tour).
+2. First run: licence activation (the licence screen is the only screen until a key made for this computer verifies; no Trial Mode), then onboarding (provider connection, model assignment, hardware check, tour).
 3. Import assets by drag-and-drop; ingestion probes, transcodes if needed, makes proxies and thumbnails.
 4. Order assets with Sequence Badges; **Insert** places them as Clips.
 5. Pick designs in Design/Home; each pick becomes an Edit Intent in the Intent Queue.
@@ -57,7 +57,7 @@ Expertmotion lets a person with no editing team and no technical skills turn raw
 | PRD-014 | Render and export H.264 MP4 (plus GIF and PNG still) locally with progress, ETA, cancellation, output folder control, pre-render checks (disk, memory, dimensions) | brief §13 | 30 s 1080p30 render completes; cancel removes partial file |
 | PRD-015 | Recoverable errors with the Error Catalogue copy; render failure never crashes the app | brief §7.3 | Kill Chrome during render → job failed, app alive |
 | PRD-016 | Essential security: Service Token, Host/Origin guards, path restrictions, Electron hardening, encrypted credentials, signed installer | brief §12 | VULNERABILITY_CHECKLIST passes |
-| PRD-017 | Offline Ed25519 licence with Trial Mode (watermark + 720p cap) | ADR-014 | Valid key activates; tampered key rejected |
+| PRD-017 | Offline Ed25519 licence bound to the Machine Code; no Trial Mode: the product is locked until activation (licence screen only, Local Service gate EM-5010); single edition; exports never watermarked | ADR-014, LICENSE_OPERATIONS §7 | Valid key activates without restart; tampered key rejected; unlicensed API calls answer EM-5010 |
 | PRD-018 | Onboarding wizard and in-app tour | brief §9 | New user reaches first export in ≤ 10 minutes in usability test |
 | PRD-019 | Hardware Monitor (CPU, RAM, process memory, disk, GPU availability, workload) informing defaults and warnings | brief §14 | T0/T1/T2 detected; 4K disabled on T0 with reason |
 | PRD-020 | Private Mode blocking all outbound calls | brief §4.1 | Network monitor shows zero outbound connections while on |

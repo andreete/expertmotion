@@ -4,7 +4,7 @@
 |---|---|
 | Status | Living |
 | Owner | Documentation lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 
 This index is the map of the documentation. Status values: `planned`, `draft`, `review`, `baseline`. "Owner of" lists the concepts a document is the single source of truth for; other documents reference, never redefine.
 
@@ -57,7 +57,7 @@ This index is the map of the documentation. Status values: `planned`, `draft`, `
 | SECURITY.md | Security requirements and controls | SEC list | SEC- | baseline |
 | THREAT_MODEL.md | STRIDE, boundaries, not-protected list | threats | — | baseline |
 | VULNERABILITY_CHECKLIST.md | Per-release checklist | checklist | — | baseline |
-| LICENSE_OPERATIONS.md | Licence key format and runbook, trial | licence ops | LIC- | baseline |
+| LICENSE_OPERATIONS.md | Licence key format and runbook, activation gate (no Trial Mode) | licence ops | LIC- | baseline |
 | DEPLOYMENT_AND_PACKAGING.md | Electron build, signing, installer, updater | packaging | — | baseline |
 | ROADMAP.md | Stages 0–7, milestones | roadmap | — | baseline |
 | STAGE_MANAGEMENT.md | Gates, criteria, roles, releases | gates | — | baseline |

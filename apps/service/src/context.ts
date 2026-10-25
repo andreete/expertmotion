@@ -32,8 +32,8 @@ export interface Hooks {
   /** providers module: record usage (never throws; budgetCheck blocks the next run). */
   recordUsage(projectId: string, agent: 'brainstorm' | 'editor', runId: string, usage: ChatUsage[]): void;
   budgetCheck(projectId: string): void;
-  /** license module: whether exports must be watermarked (Trial Mode). */
-  isTrial(): boolean;
+  /** license module: true only while a Licence Key verifies as `licensed` (no Trial Mode; the /api/v1 gate uses the module directly). */
+  isLicensed(): boolean;
   /** projects module: notify that the project head changed (autosave, SSE). */
   headChanged(projectId: string, versionId: string): void;
   /** projects module (FR-165): write a checkpoint right before a risky operation (render start); never throws. */
@@ -73,7 +73,7 @@ export interface ServiceContext {
 export function defaultHooks(): Hooks {
   const no = (code: EmCode) => (): never => { throw new EmError(code, 'Not available.'); };
   return {
-    assetFacts: () => [], tier: () => 'T1', providerFor: no('EM-4001'), recordUsage: () => {}, budgetCheck: () => {}, isTrial: () => true, headChanged: () => {},
+    assetFacts: () => [], tier: () => 'T1', providerFor: no('EM-4001'), recordUsage: () => {}, budgetCheck: () => {}, isLicensed: () => false, headChanged: () => {},
     composition: no('EM-9003'), applyOps: no('EM-9003'), createPlan: async () => no('EM-9003')(),
   };
 }

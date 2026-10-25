@@ -12,17 +12,17 @@ const validKey = signPayload(payloadFor(fpA), key);
 describe('LICENSE_OPERATIONS §15 L-cases (module level)', () => {
   it('L-1 valid key activates', () => {
     const r = verifyLicense(validKey, ctxFor(key));
-    expect(r).toMatchObject({ status: 'active', tier: 'standard', updatesUntil: '2027-11-01', trialExports: false, warnings: [] });
+    expect(r).toMatchObject({ status: 'licensed', tier: 'standard', updatesUntil: '2027-11-01', warnings: [] });
     expect(r.code).toBeUndefined();
     expect(r.licensee).toMatchObject({ lid: '01JB5X7K2QG6V9ZT3M4N8P0R1S', name: 'Septi Rahayu', kid: 'T1', rev: 0 });
   });
 
-  it('L-2 tampered key (one character inside the payload field) → EM-5002, exports stay trial, key kept for copying', () => {
+  it('L-2 tampered key (one character inside the payload field) → EM-5002, state invalid (product locked), key kept for copying', () => {
     const [p, k, payload, sig] = validKey.split('-') as [string, string, string, string];
     const i = Math.floor(payload.length / 2);
     const tampered = `${p}-${k}-${payload.slice(0, i)}${payload[i] === 'A' ? 'B' : 'A'}${payload.slice(i + 1)}-${sig}`;
     const r = verifyLicense(tampered, ctxFor(key));
-    expect(r).toMatchObject({ status: 'invalid', code: 'EM-5002', trialExports: true, tier: null, keyInput: tampered });
+    expect(r).toMatchObject({ status: 'invalid', code: 'EM-5002', tier: null, keyInput: tampered });
   });
 
   it('L-2b tampered payload semantics (upd extended, signature reused) → EM-5002', () => {
@@ -34,7 +34,7 @@ describe('LICENSE_OPERATIONS §15 L-cases (module level)', () => {
   it('L-3 wrong machine (all three components differ) → EM-5003', () => {
     const other = computeFingerprint({ machineGuid: 'x', diskSerial: 'Y', cpuModel: 'Z' });
     const r = verifyLicense(validKey, ctxFor(key, { fingerprint: other }));
-    expect(r).toMatchObject({ status: 'invalid', code: 'EM-5003', trialExports: true });
+    expect(r).toMatchObject({ status: 'machine-mismatch', code: 'EM-5003' });
     expect(r.fingerprintMatch).toMatchObject({ compared: 3, matched: 0 });
   });
 
@@ -42,32 +42,32 @@ describe('LICENSE_OPERATIONS §15 L-cases (module level)', () => {
     const wrong = 'MFRGGZDFMZTWQ'; // some other 8-byte component
     const oneWrong = { ...payloadFor(fpA), fpc: [fpA.fpc[0], wrong, fpA.fpc[2]] };
     const oneWrongKey = signPayload({ ...oneWrong, fp: fpOf(oneWrong.fpc) }, key);
-    expect(verifyLicense(oneWrongKey, ctxFor(key)).status).toBe('active');
+    expect(verifyLicense(oneWrongKey, ctxFor(key)).status).toBe('licensed');
     const twoWrong = { ...payloadFor(fpA), fpc: [fpA.fpc[0], wrong, 'ONSWG4TFOQQGC'] };
     const twoWrongKey = signPayload({ ...twoWrong, fp: fpOf(twoWrong.fpc) }, key);
     expect(verifyLicense(twoWrongKey, ctxFor(key)).code).toBe('EM-5003');
   });
 
-  it('L-5 revocation: list epoch 1 > rev 0 → EM-5004 (state revoked, exports trial); re-bound key rev 1 → active', () => {
+  it('L-5 revocation: list epoch 1 > rev 0 → EM-5004 (state revoked); re-bound key rev 1 → licensed', () => {
     const list = signedRevocationList([{ lid: '01JB5X7K2QG6V9ZT3M4N8P0R1S', epoch: 1, reason: 'rebind' }], key);
     const r = verifyLicense(validKey, ctxFor(key, { revocations: list.trusted }));
-    expect(r).toMatchObject({ status: 'revoked', code: 'EM-5004', trialExports: true });
+    expect(r).toMatchObject({ status: 'revoked', code: 'EM-5004' });
     const rebound = signPayload(payloadFor(fpA, { rev: 1 }), key);
-    expect(verifyLicense(rebound, ctxFor(key, { revocations: list.trusted })).status).toBe('active');
+    expect(verifyLicense(rebound, ctxFor(key, { revocations: list.trusted })).status).toBe('licensed');
   });
 
-  it('L-6 updates expired for this build (upd < buildDate) → EM-5005, state updates-expired, exports trial', () => {
+  it('L-6 updates expired for this build (upd < buildDate) → EM-5005, state invalid (this build is not covered)', () => {
     const k = signPayload(payloadFor(fpA, { upd: '2026-11-01' }), key);
     const r = verifyLicense(k, ctxFor(key, { buildDate: '2026-11-15' }));
-    expect(r).toMatchObject({ status: 'updates-expired', code: 'EM-5005', updatesUntil: '2026-11-01', trialExports: true, tier: 'standard' });
+    expect(r).toMatchObject({ status: 'invalid', code: 'EM-5005', updatesUntil: '2026-11-01', tier: 'standard' });
     // upd == buildDate is still covered
-    expect(verifyLicense(signPayload(payloadFor(fpA, { upd: BUILD_DATE }), key), ctxFor(key)).status).toBe('active');
+    expect(verifyLicense(signPayload(payloadFor(fpA, { upd: BUILD_DATE }), key), ctxFor(key)).status).toBe('licensed');
   });
 
-  it('L-7 Trial Mode when no key: status trial, trialExports true (watermark + 720p applied by render preflight)', () => {
+  it('L-7 no key: status unlicensed (no Trial Mode; the service gate locks the product)', () => {
     for (const input of [null, undefined, '', '  \n ']) {
       const r = verifyLicense(input, ctxFor(key));
-      expect(r).toMatchObject({ status: 'trial', tier: null, trialExports: true, keyInput: null });
+      expect(r).toMatchObject({ status: 'unlicensed', tier: null, keyInput: null });
       expect(r.code).toBeUndefined();
     }
   });
@@ -76,7 +76,7 @@ describe('LICENSE_OPERATIONS §15 L-cases (module level)', () => {
     const last = new Date('2026-11-20T10:00:00Z');
     const store = memoryLastSeen(last);
     const r = verifyLicense(validKey, ctxFor(key, { now: () => new Date('2026-11-17T10:00:00Z'), lastSeen: store }));
-    expect(r.status).toBe('active');
+    expect(r.status).toBe('licensed');
     expect(r.clockAnomaly).toBe(true);
     expect(r.warnings).toEqual([{ code: 'EM-5007', lastSeen: last.toISOString(), now: '2026-11-17T10:00:00.000Z' }]);
     expect(store.value).toEqual(last);
@@ -86,9 +86,9 @@ describe('LICENSE_OPERATIONS §15 L-cases (module level)', () => {
 
 describe('additional verification cases', () => {
   it('one Licence Key works on exactly one computer: same key on a second fingerprint → EM-5003', () => {
-    expect(verifyLicense(validKey, ctxFor(key, { fingerprint: fpA })).status).toBe('active');
+    expect(verifyLicense(validKey, ctxFor(key, { fingerprint: fpA })).status).toBe('licensed');
     const r = verifyLicense(validKey, ctxFor(key, { fingerprint: fpB })); // same laptop model, other machine
-    expect(r).toMatchObject({ status: 'invalid', code: 'EM-5003' });
+    expect(r).toMatchObject({ status: 'machine-mismatch', code: 'EM-5003' });
     expect(r.fingerprintMatch).toMatchObject({ compared: 3, matched: 1 });
   });
 
@@ -97,16 +97,16 @@ describe('additional verification cases', () => {
     const oldKey = signPayload(payloadFor(fpA, { lid, rev: 0 }), key);
     const newKey = signPayload(payloadFor(fpB, { lid, rev: 1 }), key);
     // before revoked.json reaches the old machine: accepted leakage (ASM-021)
-    expect(verifyLicense(oldKey, ctxFor(key, { fingerprint: fpA })).status).toBe('active');
+    expect(verifyLicense(oldKey, ctxFor(key, { fingerprint: fpA })).status).toBe('licensed');
     const list = signedRevocationList([{ lid, epoch: 1, reason: 'rebind' }], key).trusted;
     expect(verifyLicense(oldKey, ctxFor(key, { fingerprint: fpA, revocations: list })).code).toBe('EM-5004');
-    expect(verifyLicense(newKey, ctxFor(key, { fingerprint: fpB, revocations: list })).status).toBe('active');
+    expect(verifyLicense(newKey, ctxFor(key, { fingerprint: fpB, revocations: list })).status).toBe('licensed');
     expect(verifyLicense(newKey, ctxFor(key, { fingerprint: fpA, revocations: list })).code).toBe('EM-5003');
   });
 
   it('fingerprint drift: 1 component changed → active; 2 changed → EM-5003', () => {
     const one = computeFingerprint({ ...MACHINE_A, diskSerial: 'REPLACED-DISK' });
-    expect(verifyLicense(validKey, ctxFor(key, { fingerprint: one })).status).toBe('active');
+    expect(verifyLicense(validKey, ctxFor(key, { fingerprint: one })).status).toBe('licensed');
     const two = computeFingerprint({ ...MACHINE_A, diskSerial: 'REPLACED-DISK', machineGuid: 'reinstalled' });
     expect(verifyLicense(validKey, ctxFor(key, { fingerprint: two })).code).toBe('EM-5003');
   });
@@ -125,7 +125,7 @@ describe('additional verification cases', () => {
     const revokedKey = { ...key, entry: { ...key.entry, status: 'revoked' as const } };
     expect(verifyLicense(validKey, ctxFor(revokedKey)).code).toBe('EM-5002');
     const retiring = { ...key, entry: { ...key.entry, status: 'retiring' as const } };
-    expect(verifyLicense(validKey, ctxFor(retiring)).status).toBe('active');
+    expect(verifyLicense(validKey, ctxFor(retiring)).status).toBe('licensed');
   });
 
   it('malformed inputs → EM-5006', () => {
@@ -159,10 +159,10 @@ describe('additional verification cases', () => {
 
   it('accepts display grouping, line breaks, lower case and OCR slips', () => {
     const grouped = validKey.split('-').map((f) => f.replace(/(.{8})/g, '$1 ')).join('-\n').toLowerCase();
-    expect(verifyLicense(` ${grouped} ​`, ctxFor(key)).status).toBe('active');
+    expect(verifyLicense(` ${grouped} ​`, ctxFor(key)).status).toBe('licensed');
     const [p, k, payload, sig] = validKey.split('-') as [string, string, string, string];
     const slip = `${p}-${k}-${payload.replace(/O/g, '0').replace(/I/g, '1')}-${sig.replace(/B/g, '8')}`;
-    expect(verifyLicense(slip, ctxFor(key)).status).toBe('active');
+    expect(verifyLicense(slip, ctxFor(key)).status).toBe('licensed');
   });
 
   it('build date check does not use the clock: rolling the clock back cannot un-expire', () => {

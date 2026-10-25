@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (targets marked "to confirm" are re-measured in Stage 2 PoC) |
 | Owner | Engine lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-010), ASSESSMENT.md |
 | Used by | FRD.md, SRS.md, UI_UX_SPECIFICATION.md, DEPLOYMENT_AND_PACKAGING.md, TEST_PLAN.md, LOCAL_AI_MODELS.md |
 | Owner of | Hardware Tiers, Performance Profiles, ratio × resolution pixel table, render/memory budgets, monitoring policy |
@@ -108,7 +108,7 @@ Development-server note: on the shared 1.9 GB Linux server only headless parts m
 | Assets | all referenced assets present and probed | EM-1301 |
 | Chrome/FFmpeg | engine binaries present and executable | EM-3001 |
 | Resolution vs tier | selected Resolution allowed for the current Hardware Tier (UI already disables higher ones; preflight re-checks after a tier change) | EM-3105 (info; offers the highest allowed preset) |
-| Licence | Trial Mode → force 720p + watermark; show notice | EM-5001 (notice) |
+| Licence | none in preflight: without a valid key the whole API is locked (EM-5010, LICENSE_OPERATIONS §7); exports are never watermarked or capped | — |
 
 ## 8. Known slow paths and mitigations (from Remotion docs and the book §8.6)
 

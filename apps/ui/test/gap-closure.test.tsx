@@ -28,7 +28,7 @@ describe('Asset Panel import (FR-014, FR-041, FR-042, FR-050)', () => {
   it('the packaged picker shows ingesting cards at once with a stage label; a duplicate by path is a toast, not a card', async () => {
     const runtime = createMockRuntime({ seed: 'sample', delays: false });
     live(runtime);                                                   // packaged app: Shell bridge + path import
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: ['lic:EM-5001'] }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: [] }}><App /></StoreProvider>);
     await until(() => els('lib.assets.card').length === 3, 'sample cards');
     const pid = runtime.seededProjectId!;
     const before = els('lib.assets.card').length;
@@ -71,7 +71,7 @@ describe('Asset Panel import (FR-014, FR-041, FR-042, FR-050)', () => {
     let gone = false;
     vi.spyOn(runtime.api, 'listAssets').mockImplementation(async (...args) => { const p = await list(...args); return gone ? p : { ...p, items: [...p.items, { ...ingesting(args[0], failedId, 'kopi.mov'), status: 'failed', errorCode: 'EM-1201' }] }; });
     const del = vi.spyOn(runtime.api, 'deleteAsset').mockImplementation(async () => { gone = true; return undefined; });
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: ['lic:EM-5001'] }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: [] }}><App /></StoreProvider>);
     await until(() => el('lib.assets.card.action.importagain'), 'Import again');
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
     const clicked = vi.spyOn(input, 'click').mockImplementation(() => undefined);
@@ -110,7 +110,7 @@ describe('Asset Panel selection, banner, inspector (FR-045, FR-053, FR-048)', ()
     const list = runtime.api.listAssets.bind(runtime.api);
     vi.spyOn(runtime.api, 'listAssets').mockImplementation(async (...args) => { const p = await list(...args); return { ...p, items: p.items.map((x, i) => (i === 0 ? { ...x, missing: true } : x)) }; });
     const remove = vi.spyOn(runtime.api, 'deleteAsset');
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: ['lic:EM-5001'] }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: [] }}><App /></StoreProvider>);
     await until(() => el('stage.timeline.element.missing'), 'missing marker');
     await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-el="stage.timeline.element"][data-missing="true"]')!); });
     await until(() => el('stage.timeline.inspector.missing'), 'inspector missing box');
@@ -162,7 +162,7 @@ describe('Held picks and Save (FR-037, FR-012)', () => {
   it('FR-037 a pick that needs a missing model is held (EM-2104) and applies after the model is installed', async () => {
     sessionStorage.clear(); localStorage.clear();
     const runtime = createMockRuntime({ seed: 'sample', delays: false, modelFlagOf: (id) => (id === 'preset:transition.fade' ? 'model:whisper' : undefined) });
-    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: ['lic:EM-5001'] }}><App /></StoreProvider>);
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, nudgesDismissed: [] }}><App /></StoreProvider>);
     await until(() => document.querySelector('[data-el="lib.catalogue.tab"][data-category="transition"]'), 'catalogue');
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="transition"]')!);
     await until(() => document.querySelector('[data-preset-id="preset:transition.fade"]'), 'fade card');

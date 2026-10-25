@@ -39,4 +39,24 @@ INSERT OR IGNORE INTO project_connection_budgets(project_id, connection_id, limi
   SELECT b.project_id, c.id, b.limit_usd, b.updated_at FROM project_budgets b CROSS JOIN provider_connections c WHERE b.limit_usd IS NOT NULL AND b.limit_usd > 0;
 UPDATE project_budgets SET limit_usd = NULL WHERE limit_usd IS NOT NULL;
 ` },
+  // Trial Mode removed (Operator decision 2026-10-25): licence states become licensed / unlicensed / invalid / revoked /
+  // machine-mismatch. SQLite cannot alter a CHECK, so the one-row table is rebuilt; the status is re-derived at every start anyway.
+  { version: 32, name: 's3_license_states_no_trial', sql: `
+CREATE TABLE license_new (
+  id                 INTEGER PRIMARY KEY CHECK(id = 1),
+  token_enc          BLOB,                    -- encrypted licence token (NULL = no key: unlicensed)
+  status             TEXT NOT NULL CHECK(status IN ('licensed','unlicensed','invalid','revoked','machine-mismatch')),
+  tier               TEXT,                    -- payload tier, kept for compatibility; never gates features
+  licensee_hash      TEXT,
+  updates_until      TEXT,
+  last_seen_at       TEXT NOT NULL,           -- clock-tamper reference
+  fingerprint_hash   TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+);
+INSERT INTO license_new(id, token_enc, status, tier, licensee_hash, updates_until, last_seen_at, fingerprint_hash, updated_at)
+  SELECT id, token_enc, CASE status WHEN 'active' THEN 'licensed' WHEN 'trial' THEN 'unlicensed' WHEN 'updates-expired' THEN 'invalid' ELSE status END,
+         tier, licensee_hash, updates_until, last_seen_at, fingerprint_hash, updated_at FROM license;
+DROP TABLE license;
+ALTER TABLE license_new RENAME TO license;
+` },
 ];

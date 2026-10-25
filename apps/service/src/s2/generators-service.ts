@@ -108,7 +108,7 @@ function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
         for (const id of i.assetIds) { const a = getAsset(ctx, id); if (a) assets[id] = { kind: a.kind === 'subtitle' ? 'image' : a.kind, playable: `${base}/${id}/playable`, ...(a.duration_ms !== null ? { durationMs: a.duration_ms } : {}) }; }
         const { cancelSignal, cancel } = R.makeCancelSignal();
         c.signal.addEventListener('abort', () => cancel(), { once: true });
-        const common = { serveUrl: ctx.resources.engineBundle, inputProps: { model: i.model, assets, quality: 'full', watermark: ctx.hooks.isTrial() }, port, logLevel: 'error',
+        const common = { serveUrl: ctx.resources.engineBundle, inputProps: { model: i.model, assets, quality: 'full' }, port, logLevel: 'error',
           chromiumOptions: { gl: ctx.hooks.tier() === 'T0' ? 'swangle' : 'angle' }, ...(ctx.resources.browserExecutable ? { browserExecutable: ctx.resources.browserExecutable } : {}),
           ...(ctx.resources.binariesDirectory ? { binariesDirectory: ctx.resources.binariesDirectory } : {}) };
         const composition = await R.selectComposition({ ...common, id: 'ExpertmotionTimeline' });

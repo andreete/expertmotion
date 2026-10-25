@@ -1,5 +1,5 @@
 // A service module owns a set of routes, tables (its migration range) and optionally installs cross-module hooks.
-import type { Router } from 'express';
+import type { RequestHandler, Router } from 'express';
 import type { ServiceContext } from '../context.js';
 
 export interface ServiceModule {
@@ -8,6 +8,8 @@ export interface ServiceModule {
   register(router: Router, ctx: ServiceContext): void;
   /** Routes outside /api/v1 (only the media routes R-040/R-041, `/media/...`). Mounted at the root, after the guards. */
   registerRoot?(router: Router, ctx: ServiceContext): void;
+  /** Middleware on /api/v1 that runs before every module's routes (only the licence gate, EM-5010). */
+  middleware?(ctx: ServiceContext): RequestHandler;
   /** Install hooks, start timers, recover interrupted work. Called before any `register`. */
   start?(ctx: ServiceContext): void | Promise<void>;
   /** Graceful shutdown (cancel jobs, flush). */

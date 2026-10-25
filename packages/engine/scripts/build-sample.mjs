@@ -78,7 +78,7 @@ for (const c of CLIPS) {
     { op: 'op:text.add', args: { text: c.title, variant: 'preset:text.title', atMs: 0, durationMs: CLIP_MS } },
     { op: 'op:text.add', args: { text: c.sub, variant: 'preset:text.subtitle', atMs: 600, durationMs: CLIP_MS - 600 } },
     { op: 'op:project.setDurationPolicy', args: { policy: 'fixed', fixedMs: CLIP_MS } }]);
-  const inputProps = { model, assets: {}, quality: 'full', watermark: false };
+  const inputProps = { model, assets: {}, quality: 'full' };
   const comp = await selectComposition({ serveUrl, id: 'ExpertmotionTimeline', inputProps, ...opts });
   const t = Date.now();
   await renderMedia({ composition: comp, serveUrl, codec: 'h264', crf: 28, muted: true, pixelFormat: 'yuv420p', outputLocation: `${file}.part.mp4`, inputProps, ...opts });

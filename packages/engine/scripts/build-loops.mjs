@@ -29,7 +29,7 @@ const base = () => createEmptyModel('loops', { autoRatio: false, ratio: '16:9', 
 const SCALE = 480 / 1280;
 
 async function render(model, assetsProps, file) {
-  const inputProps = { model, assets: assetsProps, quality: 'full', watermark: false };
+  const inputProps = { model, assets: assetsProps, quality: 'full' };
   const comp = await selectComposition({ serveUrl, id: 'ExpertmotionTimeline', inputProps, ...opts });
   fs.mkdirSync(path.dirname(file), { recursive: true });
   await renderMedia({ composition: comp, serveUrl, codec: 'vp8', crf: 20, muted: true, outputLocation: `${file}.part.webm`, inputProps, scale: SCALE, ...opts });
@@ -46,7 +46,7 @@ async function fixture(name, palette, label) {
     { op: 'op:background.set', args: { presetId: 'preset:background.moving-gradient' } },
     { op: 'op:text.add', args: { text: label, variant: 'preset:text.title', atMs: 0, durationMs: 2500 } },
     { op: 'op:project.setDurationPolicy', args: { policy: 'fixed', fixedMs: 2500 } }]);
-  const inputProps = { model: m, assets: {}, quality: 'full', watermark: false };
+  const inputProps = { model: m, assets: {}, quality: 'full' };
   const comp = await selectComposition({ serveUrl, id: 'ExpertmotionTimeline', inputProps, ...opts });
   fs.mkdirSync(fxDir, { recursive: true });
   await renderMedia({ composition: comp, serveUrl, codec: 'h264', crf: 26, outputLocation: file, inputProps, scale: SCALE, ...opts });

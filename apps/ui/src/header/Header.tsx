@@ -33,7 +33,7 @@ export function Header() {
   const exportReason = hasClip ? null : t('ui.hdr.export.disabled');
   const queue = renderQueue(state.renders);
   const rendering = queue.active ?? queue.queued[0];
-  const licensed = state.licence?.status === 'active';
+  const licensed = state.licence?.status === 'licensed';
   const lowResources = state.tick ? state.tick.ramFreeMb < 2048 || (state.tick.diskFreeMb ?? Infinity) < 1024 : false;
   const close = () => setMenu(null);
   const mode = (m: LibMode, el: string, icon: ReactNode, key: string) => (
@@ -138,7 +138,6 @@ export function Header() {
         <IconButton el="hdr.action.restore" label={t('ui.hdr.action.restore')} icon={<ArchiveRestore size={16} />} onClick={() => actions.setScreen({ kind: 'restore' })} />
         <IconButton el="hdr.action.models" label={t('ui.hdr.action.models')} icon={<Boxes size={16} />} onClick={() => actions.setScreen({ kind: 'models' })}
           badge={state.models.some((m) => m.status === 'downloading') ? <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-em-info em-pulse" aria-hidden /> : undefined} />
-        {!licensed && <Button el="hdr.action.purchase" variant="primary" size={28} className="mx-1" onClick={() => actions.setScreen({ kind: 'license' })}>{t('ui.hdr.action.purchase')}</Button>}
         <div className="relative">
           <IconButton el="hdr.action.license" data-popover-trigger="" label={t('ui.hdr.action.license')} icon={licensed ? <BadgeCheck size={16} className="text-em-success" /> : <KeyRound size={16} className="text-em-warn" />} onClick={() => setMenu(menu === 'license' ? null : 'license')} />
           {menu === 'license' && (

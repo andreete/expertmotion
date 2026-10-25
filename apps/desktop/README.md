@@ -16,7 +16,7 @@ src/
   preload.ts         the contextBridge: window.expertmotion (SEC-031)
   lib/               PURE logic, no `electron` import — unit-tested on Linux
     constants.ts     port range, backoff schedule, CSP directives, IPC channels, EM codes, bridge keys
-    port.ts          free loopback port 47600–47699 with retry (SEC-008)
+    port.ts          free loopback port 42300–42399 with retry (SEC-008)
     backoff.ts       restart policy 1/3/9 s, max 3, budget reset (SEC-033)
     csp.ts           the Editor CSP string, prod + dev (SEC-024)
     protocol.ts      app:// path resolution with traversal containment (SEC-025)

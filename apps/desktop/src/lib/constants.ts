@@ -9,7 +9,7 @@ export const APP_HOST = 'expertmotion';
 export const APP_ORIGIN = `${APP_SCHEME}://${APP_HOST}` as const;
 
 /** Loopback port range and retry budget for the Local Service (SEC-008, TRD TR-003). */
-export const PORT_RANGE = { min: 47600, max: 47699 } as const;
+export const PORT_RANGE = { min: 42300, max: 42399 } as const;
 export const PORT_MAX_ATTEMPTS = 10;
 
 /** Supervisor restart backoff: 1 s, 3 s, 9 s, then EM-8002 (ARCHITECTURE.md §5 step 6, DEPLOYMENT §14). */

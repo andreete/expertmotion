@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | UI/UX lead + AI agent architect |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | MASTER_PROJECT_PROMPT.md §16, GLOSSARY.md, ELEMENT_IDS.md, UXRD.md, USER_FLOWS.md, AI_WORKFLOW.md (§3–§7, §12), DESIGN_CATALOGUE.md, PERFORMANCE.md, ARCHITECTURE.md §5 |
 | Used by | UI_UX_SPECIFICATION.md, FRD.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md, ERROR_CATALOGUE.md |
 | Owner of | the ten-point interaction spec per UI action, selection model, keyboard shortcuts, drag-and-drop rules, panel resize/collapse rules, responsive rules, focus management |
@@ -348,7 +348,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 6 | Player keeps working (Draft); background ingest/download paused in Standard/Accelerated. |
 | 7 | Unchanged. |
 | 8 | Job rows, output file under `outputs/<projectId>/`, thumbnail. |
-| 9 | Preflight `EM-3101…3104`, `EM-1301`, `EM-3001`, `EM-5001` notice; runtime `EM-3xxx` with Try again / Details; cancel removes partial files. |
+| 9 | Preflight `EM-3101…3104`, `EM-1301`, `EM-3001`; runtime `EM-3xxx` with Try again / Details; cancel removes partial files. |
 | 10 | Cancel; re-export; failed job retains settings for one-click retry. |
 
 ### IX-22 Save / Save As / Open / New / Recent / Project Settings

@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Principal architect |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md, ASSESSMENT.md, PERFORMANCE.md |
 | Used by | BLUEPRINT.md, TRD.md, API_SPECIFICATION.md, DATABASE_SCHEMA.md, AI_WORKFLOW.md, SECURITY.md, DEPLOYMENT_AND_PACKAGING.md, POC_PLAN.md |
 
@@ -101,12 +101,12 @@ flowchart TB
 | `render` | apps/service (ported RenderQueue) | queue, `selectComposition` + `renderMedia` with Output Profile and Performance Profile, cancel, ETA, output validation (ffprobe duration/dimensions/fps), thumbnail |
 | `models` | packages/models | registry, download with hash/resume, engine process adapters (`transcribe`, `synthesize`, `generateImage`, `generateMusic`) |
 | `hardware` | apps/service | tier detection, cheap meter, preflight checks |
-| `license` | apps/service (bytecode-protected module) | Ed25519 verification, fingerprint, trial state, watermark flag |
+| `license` | apps/service (bytecode-protected module) | Ed25519 verification, fingerprint, licence state, the `/api/v1` licence gate (EM-5010) and activation rate limit; no Trial Mode, no watermark |
 | `settings` | apps/service | preferences, provider connections (encrypted), model assignments, Private Mode |
 
 ## 5. Process model and lifecycle
 
-1. `Expertmotion.exe` starts → Shell acquires single-instance lock → reads/creates the wrapped Database Key via `safeStorage` → generates a 256-bit Service Token → picks a free loopback port (prefers 47600–47699; never a fixed well-known port) → starts the Local Service with Electron `utilityProcess.fork` (the `RunAsNode` fuse is off, so a plain Node child is not available) and passes `{token, port, dataDir, dbKey}` over the `parentPort`/`postMessage` channel (never argv or env, so they do not appear in process listings; SEC-002).
+1. `Expertmotion.exe` starts → Shell acquires single-instance lock → reads/creates the wrapped Database Key via `safeStorage` → generates a 256-bit Service Token → picks a free loopback port (prefers 42300–42399; never a fixed well-known port) → starts the Local Service with Electron `utilityProcess.fork` (the `RunAsNode` fuse is off, so a plain Node child is not available) and passes `{token, port, dataDir, dbKey}` over the `parentPort`/`postMessage` channel (never argv or env, so they do not appear in process listings; SEC-002).
 2. Local Service opens the encrypted DB, runs migrations, marks interrupted render jobs failed and interrupted agent runs cancelled, loads the licence state, detects the Hardware Tier, warms the browser (`ensureBrowser`) in the background, and reports `ready` over the parent port.
 3. Shell loads the Editor (`app://` scheme in production, Vite dev server in development) and injects `{port, token}` via preload (`contextBridge`).
 4. Editor opens `EventSource('/api/v1/events')` (all routes live under `/api/v1`, see API_SPECIFICATION.md) with the token in the query string (EventSource cannot set headers; the token is single-use-per-launch and loopback only) and uses `Authorization: Bearer <token>` on fetch.

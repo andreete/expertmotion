@@ -103,11 +103,11 @@ export function StagePlayer() {
   const assets = useMemo(() => buildAssetUrls(state, runtime.api), [state.assets, state.grant, runtime.api]); // eslint-disable-line react-hooks/exhaustive-deps
   const preview = useMemo(() => (head && state.previewPresetId ? previewModel(head, state.previewPresetId, state) : null), [head, state.previewPresetId]); // eslint-disable-line react-hooks/exhaustive-deps
   const model = preview ?? head ?? null;
-  const inputProps = useMemo<EngineInputProps | null>(() => (model ? { model, assets, quality: draft ? 'draft' : 'full', watermark: Boolean(state.licence?.limits.watermark) } : null), [model, assets, draft, state.licence]);
+  const inputProps = useMemo<EngineInputProps | null>(() => (model ? { model, assets, quality: draft ? 'draft' : 'full' } : null), [model, assets, draft]);
   const meta = useMemo(() => (inputProps ? calculateMetadata({ props: inputProps }) : null), [inputProps]);
   const fps = meta?.fps ?? 30;
   const durationMs = meta ? (meta.durationInFrames / meta.fps) * 1000 : 0;
-  const exportDims = useMemo(() => (model ? calculateMetadata({ props: { model, assets: {}, quality: 'full', watermark: false } }) : null), [model]);
+  const exportDims = useMemo(() => (model ? calculateMetadata({ props: { model, assets: {}, quality: 'full' } }) : null), [model]);
 
   useEffect(() => {
     const el = box.current;

@@ -42,9 +42,9 @@ describe('calculateMetadata (one code path for Player and renderer)', () => {
     const m = calculateMetadata({ props: { ...EMPTY_INPUT, model: model() } as EngineInputProps });
     expect(m).toMatchObject({ width: 1920, height: 1080, fps: 30, durationInFrames: 90 + 90 - 15 });
   });
-  it('draft quality and Trial Mode use the 720p row', () => {
+  it('draft quality uses the 720p row; full quality is never capped (no Trial Mode)', () => {
     expect(calculateMetadata({ props: { ...EMPTY_INPUT, model: model(), quality: 'draft' } })).toMatchObject({ width: 1280, height: 720 });
-    expect(calculateMetadata({ props: { ...EMPTY_INPUT, model: model(), watermark: true } })).toMatchObject({ width: 1280, height: 720 });
+    expect(calculateMetadata({ props: { ...EMPTY_INPUT, model: model(), quality: 'full' } })).toMatchObject({ width: 1920, height: 1080 });
   });
   it('an empty project still has 1 s', () => expect(calculateMetadata({ props: EMPTY_INPUT }).durationInFrames).toBe(30));
 });

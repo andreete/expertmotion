@@ -29,7 +29,8 @@ export type Screen =
 export interface Streaming { runId: string; text: string; modelId: string }
 
 export interface AppState {
-  boot: 'loading' | 'ready' | 'no-service';
+  /** `unlicensed`: globals loaded, nothing else; only the licence screen is shown until a key verifies (no Trial Mode) */
+  boot: 'loading' | 'ready' | 'no-service' | 'unlicensed';
   stream: StreamStatus;
   streamAttempt: number;
   /** FR-171: bumps when the Shell pushed a new Service endpoint (restart); the SSE stream reconnects on change. */

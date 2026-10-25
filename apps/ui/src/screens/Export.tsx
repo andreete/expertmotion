@@ -26,7 +26,7 @@ export function recoveryFor(c: { check: PreflightCheckName; ok: boolean; code?: 
     case 'EM-3103': return 'settings';
     case 'EM-2202': case 'EM-1301': return 'assets';
     case 'EM-3001': case 'EM-3003': return 'diagnostics';
-    case 'EM-5001': return 'license';
+    case 'EM-5010': return 'license';
     case 'EM-3208': return 'progress';
     default: return c.ok ? null : 'recheck';
   }
@@ -89,10 +89,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   };
   const elapsedMs = job?.startedAt ? Math.max(0, (job.finishedAt ? Date.parse(job.finishedAt) : now) - Date.parse(job.startedAt)) : 0;
   const thumb = output?.media.thumb && state.grant ? runtime.api.outputMediaUrl(state.grant, output.id, 'thumb') : output?.kind === 'still' && state.grant ? runtime.api.outputMediaUrl(state.grant, output.id, 'file') : null;
-  const res = est?.effectiveProfile.resolution ?? profile.resolution;
   const summary = `${est ? `${est.dimensions.width}×${est.dimensions.height}` : '…'} · ${format === 'png' ? t('ui.scr.export.still') : `${format === 'gif' ? Math.min(15, profile.fps) : profile.fps} fps`} · ${formatDuration(format === 'png' ? 0 : durationMs)} · ${t(`ui.agent.output.profile.${state.performanceProfile}`)}`
-    + ` · ≈ ${est?.estimate.bytes != null ? formatBytes(est.estimate.bytes, lang) : '…'} · ≈ ${est?.estimate.seconds != null ? formatDuration(est.estimate.seconds * 1000) : '…'}`
-    + (est?.watermark ? ` · ${t('ui.scr.export.trialres', { res })}` : '');
+    + ` · ≈ ${est?.estimate.bytes != null ? formatBytes(est.estimate.bytes, lang) : '…'} · ≈ ${est?.estimate.seconds != null ? formatDuration(est.estimate.seconds * 1000) : '…'}`;
   const notices = (est?.notices ?? []).filter((n) => n === 'EM-3208');
 
   return (
@@ -105,7 +103,6 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       {!job && (
         <div className="flex flex-col gap-3">
           <div data-el="scr.export.profile.summary" className="t-mono rounded-[6px] border border-em-line px-2 py-1.5">{summary}</div>
-          {est?.watermark && <p className="rounded-[6px] border border-em-warn px-2 py-1.5 text-em-warn">{t('ui.scr.export.trial')}</p>}
           <div data-el="scr.export.codec"><Segmented<Format> label={t('ui.scr.export.codec')} value={format} onChange={setFormat}
             options={[{ value: 'mp4', label: 'MP4 (H.264)', el: 'scr.export.codec.mp4' },
               { value: 'webm', label: t('ui.scr.export.codec.webm'), el: 'scr.export.codec.webm', disabledReason: alphaOk ? null : t('ui.scr.export.alpha.needsnone') },
@@ -178,7 +175,6 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           {thumb ? <img data-el="scr.export.done.thumb" src={thumb} alt={output?.fileName ?? ''} className="max-h-40 rounded-[6px] border border-em-line" /> : <CheckCircle2 size={32} className="text-em-success" />}
           <div className="text-[20px] font-semibold">{t('ui.scr.export.done')}</div>
           {output && <div className="text-em-text-2">{t('ui.scr.export.done.body', { name: output.fileName, duration: formatDuration(output.durationMs ?? 0), w: output.width ?? 0, h: output.height ?? 0, size: formatBytes(output.bytes, lang) })}</div>}
-          {output?.watermarked && <div className="text-em-warn">{t('ui.scr.export.done.trial')}</div>}
           {output && (
             <div className="flex gap-2">
               <Button el="scr.export.done.play" size={28} icon={<Play size={14} />} onClick={() => void play()}>{t('ui.scr.export.play')}</Button>

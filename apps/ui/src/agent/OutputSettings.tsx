@@ -1,7 +1,7 @@
 // Output Settings (agent.output.*): Performance Profile, Aspect Ratio (+ Auto, Custom), Resolution with tier gating,
 // Private Mode, Reset to Defaults (IX-18 … IX-20). Pixel sublabels come from PERFORMANCE.md §3 via resolveDimensions.
 import { useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, CircleHelp, Lock, RotateCcw, ShieldCheck } from 'lucide-react';
+import { ChevronDown, ChevronRight, CircleHelp, RotateCcw, ShieldCheck } from 'lucide-react';
 import { resolveDimensions } from '@expertmotion/engine/formats';
 import { RATIOS, RESOLUTIONS, aspectOf, type Ratio, type Resolution } from '@expertmotion/composition-model';
 import { outputDefaults, useStore } from '../state/store.js';
@@ -73,7 +73,6 @@ export function OutputSettings() {
   const setOpen = (f: (o: boolean) => boolean) => setPrefs({ outputCollapsed: !f(open) });
   const s = state.head?.model?.settings ?? state.project?.settings;
   const tier = state.hardware?.tier ?? 'T0';
-  const trial = state.licence?.status !== 'active';
   const profile = state.performanceProfile;
   const ratio = s?.ratio ?? '16:9';
   const res = s?.resolution ?? '1080p';
@@ -116,8 +115,8 @@ export function OutputSettings() {
           <Row label={t('ui.agent.output.resolution')}>
             <Segmented<Resolution> label={t('ui.agent.output.resolution')} value={s ? res : null} onChange={(r) => void actions.layoutPick({ resolution: r })}
               options={RESOLUTIONS.map((r) => ({
-                value: r, el: `agent.output.resolution.${r}`, label: <span className="inline-flex items-center gap-0.5">{trial && r !== '720p' && <Lock size={10} aria-label={t('ui.agent.output.resolution.trial')} />}{RES_LABEL[r]}</span>,
-                sub: resReason(r) ?? dims(ratio, r), disabledReason: noProject ? t('ui.common.noproject') : resReason(r), warn: r === '2160p' && tier === 'T1' ? t('ui.agent.output.resolution.warn') : trial && r !== '720p' ? t('ui.agent.output.resolution.trial') : null,
+                value: r, el: `agent.output.resolution.${r}`, label: <span className="inline-flex items-center gap-0.5">{RES_LABEL[r]}</span>,
+                sub: resReason(r) ?? dims(ratio, r), disabledReason: noProject ? t('ui.common.noproject') : resReason(r), warn: r === '2160p' && tier === 'T1' ? t('ui.agent.output.resolution.warn') : null,
               }))} />
             <button type="button" className="text-left text-[12px] text-em-text-2 hover:text-em-text" onClick={() => actions.setScreen({ kind: 'project.settings' })}>{t('ui.agent.output.fps', { fps: s?.fps ?? 30 })}</button>
           </Row>

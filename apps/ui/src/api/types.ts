@@ -55,7 +55,7 @@ export interface RenderJobDto {
 }
 export interface OutputDto {
   id: Id; projectId: Id; renderJobId: Id; kind: 'video' | 'gif' | 'still' | 'audio'; fileName: string; bytes: number; width: number | null; height: number | null;
-  fps: number | null; durationMs: number | null; validated: boolean; watermarked: boolean; path: string; media: { file: true; thumb: boolean }; createdAt: Iso;
+  fps: number | null; durationMs: number | null; validated: boolean; path: string; media: { file: true; thumb: boolean }; createdAt: Iso;
 }
 export interface MediaGrantDto { grant: string; projectId: Id; kind: 'preview'; expiresAt: Iso; baseUrl: string }
 
@@ -150,9 +150,11 @@ export interface HardwareTickDto {
   outputDiskFreeMb?: number | null;
   workload: { rendering: boolean; ingesting: number; downloading: number; agentRuns: number; items?: WorkloadItemDto[] };
 }
+export type LicenseStatus = 'licensed' | 'unlicensed' | 'invalid' | 'revoked' | 'machine-mismatch';
 export interface LicenseDto {
-  status: 'trial' | 'active' | 'revoked' | 'invalid' | 'updates-expired'; tier: string | null; licenseeHash: string | null; updatesUntil: Iso | null; updatesEligible: boolean; machineCode: string;
-  limits: { watermark: boolean; maxResolution: Resolution }; warnings?: string[]; code?: string | null; licenseeName?: string | null; clockAnomaly?: boolean;
+  /** no Trial Mode: only `licensed` unlocks the Editor; every other state shows the licence screen alone (EM-5010 from the Service) */
+  status: LicenseStatus; tier: string | null; licenseeHash: string | null; updatesUntil: Iso | null; updatesEligible: boolean; machineCode: string;
+  warnings?: string[]; code?: string | null; licenseeName?: string | null; clockAnomaly?: boolean;
 }
 export interface SettingsDto {
   privateMode: boolean; outputFolder: string; autoPlan: boolean; uiLanguage: Lang; theme: 'dark' | 'light' | 'system'; defaultPerformanceProfile: PerformanceProfile;
@@ -162,7 +164,8 @@ export interface SettingsDto {
   /** FR-099 / FR-155: Editor layout (panel sizes per window-width bucket, collapsed panels); absent until first saved. */
   layout?: { panelSizes: Partial<Record<'narrow' | 'standard' | 'wide', { lib?: number; agent?: number; timeline?: number }>>; libCollapsed: boolean; agentCollapsed: boolean; outputCollapsed: boolean };
 }
-export type OnboardingStep = 'license' | 'provider' | 'models' | 'hardware' | 'tour';
+/** 'license' is no longer a step (licence screen before onboarding); old records may still contain it and are ignored. */
+export type OnboardingStep = 'provider' | 'models' | 'hardware' | 'tour';
 export type ModelTask = 'stt' | 'tts' | 'image' | 'music';
 export interface ModelStateDto {
   key: string; engine: string; version: string; task: ModelTask; label: string; licence: { name: string; url: string }; tiers: Tier[]; bytesTotal: number; bytesDone: number;
@@ -214,11 +217,11 @@ export interface OpenProjectResponse {
 }
 export interface CompositionHeadResponse { head: VersionDto; canUndo: boolean; canRedo: boolean; timing: { durationMs: number; cutStartMs: number[] }; issues: Issue[] }
 export interface RenderCreateInput { projectId: Id; versionId?: Id; outputProfile: OutputProfile; performanceProfile: PerformanceProfile; fileName?: string; folder?: string }
-export type PreflightCheckName = 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence' | 'folder';
+export type PreflightCheckName = 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'folder';
 export interface RenderEstimate {
   ok: boolean; dimensions: { width: number; height: number }; totalFrames: number; durationMs: number;
   estimate: { seconds: number | null; bytes: number | null; confidence: 'low' | 'medium' | 'high' };
-  checks: Array<{ check: PreflightCheckName; ok: boolean; code?: string; details?: unknown }>; effectiveProfile: OutputProfile; watermark: boolean; warnings: Issue[];
+  checks: Array<{ check: PreflightCheckName; ok: boolean; code?: string; details?: unknown }>; effectiveProfile: OutputProfile; warnings: Issue[];
   notices?: string[]; defaultFileName?: string; privateMode?: boolean; queue?: { active: Id | null; queued: number };
 }
 export interface CatalogueItemDto {

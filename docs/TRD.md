@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (versions marked "pin at Stage n" are fixed at that Roadmap Stage gate and recorded here) |
 | Owner | Principal architect |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 004, 005, 006, 007, 008, 010, 012, 013, 014, 017), ARCHITECTURE.md §4, §5, §7, BLUEPRINT.md, SECURITY.md (SEC-002, SEC-008, SEC-010, SEC-028), DEVELOPMENT_WORKFLOW.md, PERFORMANCE.md, DATABASE_SCHEMA.md, AI_WORKFLOW.md, ASSESSMENT.md §1, §4, §5, §8, §9 |
 | Used by | SRS.md (NFR derivation), DEPLOYMENT_AND_PACKAGING.md, DEVELOPMENT_WORKFLOW.md, DEFINITION_OF_DONE.md, TEST_PLAN.md, SECURITY.md, POC_PLAN.md |
 | Owner of | the stack and pinned versions, dependency policy, TR-xxx technical requirements, development environment variables, development-server constraints, compatibility matrix, coding standards, logging and diagnostics format |
@@ -91,7 +91,7 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 |---|---|---|---|---|
 | TR-001 | The Local Service runs as an Electron **utility process** started by the Desktop Shell with `utilityProcess.fork(service.cjs)` (SEC-033); the `RunAsNode` fuse is disabled (SEC-028), so no plain Node child and no separate Node binary exist. | Must | clean-VM test lists only `Expertmotion.exe` processes + Chrome Headless Shell + ffmpeg during render; fuse check in VULNERABILITY_CHECKLIST | PRD-001, ADR-004 |
 | TR-002 | The Shell passes `{type:'bootstrap', token, port, dataDir, dbKeyHex}` to the Service with `utilityProcess.postMessage` and the Service receives it on `parentPort` (`process.parentPort.once('message')`), answering `{type:'ready', port}` or `{type:'fatal', code}`; nothing secret appears in argv, the environment, stdin or any file (SEC-002, SEC-043). In development without a Shell, `EM_*` variables substitute (§4). | Must | process listing and `/proc`-style inspection during run show no token; unit test of the bootstrap parser | ARCHITECTURE.md §5, SEC-002 |
-| TR-003 | The Service binds only `127.0.0.1` on the port the Shell chose at random among free ports in 47600–47699 (SEC-008; on `EADDRINUSE` the Service reports `fatal` and the Shell retries with another port, max 10) or on `EM_PORT` in development (4110 on the shared Linux server); binding `0.0.0.0`, `::` or a hostname is impossible by construction (the host is a constant). | Must | `netstat` in TEST_PLAN; code review | ADR-005, SEC-008 |
+| TR-003 | The Service binds only `127.0.0.1` on the port the Shell chose at random among free ports in 42300–42399 (SEC-008; on `EADDRINUSE` the Service reports `fatal` and the Shell retries with another port, max 10) or on `EM_PORT` in development (4110 on the shared Linux server); binding `0.0.0.0`, `::` or a hostname is impossible by construction (the host is a constant). | Must | `netstat` in TEST_PLAN; code review | ADR-005, SEC-008 |
 | TR-004 | The Shell restarts a crashed Service with backoff 1 s, 3 s, 9 s and gives up after 3 attempts (EM-8002); the Editor shows `sys.offline` within 2 s and reconnects automatically. | Must | kill the service in e2e; observe banner and recovery | UX-032, EM-8001/8002/8003 |
 | TR-005 | On startup the Service marks interrupted work: `render_jobs` `queued|rendering` → `failed` (EM-3203), `agent_runs` `running` → `cancelled` (EM-4304), ingesting assets → `failed` (EM-1201); partial output files are deleted. | Must | integration test with a pre-seeded DB | DATABASE_SCHEMA.md §7 |
 | TR-006 | Graceful shutdown: on a `{type:'shutdown'}` parent-port message or `POST /service/shutdown`, the Service checkpoints every open project, cancels running renders (Chrome killed), closes the DB and exits within 5 s; the Shell force-kills after 5 s. | Must | e2e timing | ARCHITECTURE.md §5 |
@@ -144,7 +144,7 @@ Columns: priority (Must/Should/Could), verification (how the requirement is chec
 | TR-050 | Fonts come only from `packages/engine/public/fonts/*.woff2` via `@remotion/fonts` `loadFont` + `staticFile`; `@remotion/google-fonts` and any `https://fonts.*` URL are forbidden in the engine graph. | Must | grep gate; offline render | DESIGN_CATALOGUE.md §10 |
 | TR-051 | Preview parity: for every P0 preset and each of the 7 ratios, a Player screenshot and `renderStill` of the same frame differ by ≤ 1 % of pixels (perceptual diff); failures block the release. | Must | TEST_PLAN golden frames | PRD §5, POC-002 |
 | TR-052 | Memory discipline in the Engine: no module-level caches of decoded media or models; `premountFor` ≤ 2 s; effects limited per element (CM-006); catalogue cards use prerendered loops, never live Players (ADR-011). | Must | code review; PERFORMANCE.md §5 budgets | ADR-011 |
-| TR-053 | Trial Mode: the Engine renders the watermark component when `inputProps.watermark = true`; the Service forces it and caps the resolution to 720p for unlicensed installs; the Player never shows the watermark. | Must | licence tests | PRD-017 |
+| TR-053 | (Superseded 2026-10-25: Trial Mode removed. The Engine has no watermark component and `EngineInputProps` no `watermark` field; the licence gate in the Local Service replaces it, SEC-122.) Former text: Trial Mode: the Engine renders the watermark component when `inputProps.watermark = true`; the Service forces it and caps the resolution to 720p for unlicensed installs; the Player never shows the watermark. | Must | licence tests | PRD-017 |
 
 ### 3.5 Agents and providers
 
@@ -235,7 +235,7 @@ Production receives its configuration from the `utilityProcess` bootstrap messag
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `EM_PORT` | `4110` (fixed, on the shared Linux server and in every dev setup; the predecessor already uses 4100/5173 and the other tenant 3000/4000). Production never uses it: the Shell picks a random free port in 47600–47699 | Local Service port when no bootstrap message is present |
+| `EM_PORT` | `4110` (fixed, on the shared Linux server and in every dev setup; the predecessor already uses 4100/5173 and the other tenant 3000/4000). Production never uses it: the Shell picks a random free port in 42300–42399 | Local Service port when no bootstrap message is present |
 | `EM_DATA_DIR` | `./.em-data` (git-ignored) in development; `%APPDATA%\Expertmotion` in production | root of `data\`, `media\`, `outputs\`, `models\`, `logs\` |
 | `EM_TOKEN` | none (the Service generates one, prints it once and writes `<dataDir>/dev-token` 0600 when absent; SEC-014) | **dev-only** fixed Service Token so the Vite Editor and curl can authenticate; refused when a bootstrap message is present |
 | `EM_DB_KEY_HEX` | none (dev: derived from a file `.em-data/dev.key` created on first run) | **dev-only** Database Key; never set in production |

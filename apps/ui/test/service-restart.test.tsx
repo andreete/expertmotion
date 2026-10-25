@@ -27,7 +27,7 @@ function harness() {
     if (accepted.has(tok)) h.set('Authorization', `Bearer ${MOCK_TOKEN}`);
     return server.fetch(input.replace(/^http:\/\/127\.0\.0\.1:\d+/, server.baseUrl), { ...init, headers: h });
   };
-  const api = new ApiClient({ baseUrl: 'http://127.0.0.1:47601', token: server.token, fetch, mediaResolver: server.mediaResolver });
+  const api = new ApiClient({ baseUrl: 'http://127.0.0.1:42301', token: server.token, fetch, mediaResolver: server.mediaResolver });
   let push: ((s: unknown) => void) | null = null;
   const openFolder = vi.fn();
   const bridge = { onServiceState: (cb: (s: unknown) => void) => { push = cb; return () => { push = null; }; }, openFolder };
@@ -61,12 +61,12 @@ describe('FR-171 Service restart in the Editor', () => {
     const fresh = 'fresh-token-after-restart-0001';
     h.accepted.add(fresh);
     const before = h.calls.length;
-    await h.push({ status: 'ready', bootstrap: { port: 47622, token: fresh } });
-    expect(h.api.baseUrl).toBe('http://127.0.0.1:47622');
+    await h.push({ status: 'ready', bootstrap: { port: 42322, token: fresh } });
+    expect(h.api.baseUrl).toBe('http://127.0.0.1:42322');
     await waitFor(() => { if (!h.sources.some((u) => u.includes(`token=${fresh}`))) throw new Error('SSE not reconnected'); });
     await waitFor(() => { if (!h.calls.slice(before).some((c) => /\/projects\/[^/]+\/open$/.test(c.url))) throw new Error('project not refetched'); });
     const after = h.calls.slice(before);
-    expect(after.every((c) => c.url.startsWith('http://127.0.0.1:47622/') && c.auth === `Bearer ${fresh}`)).toBe(true);
+    expect(after.every((c) => c.url.startsWith('http://127.0.0.1:42322/') && c.auth === `Bearer ${fresh}`)).toBe(true);
     await waitFor(() => { if (el('sys.offline')) throw new Error('still offline'); });
   });
 
@@ -89,7 +89,7 @@ describe('FR-171 Service restart in the Editor', () => {
     await waitFor(() => { if (!el('sys.fatal')) throw new Error('no fatal'); });
     expect(el('sys.fatal')!.textContent).toContain('Project storage cannot be opened');
     expect(el('sys.fatal')!.textContent).toContain('Restore backup');
-    await h.push({ status: 'ready', bootstrap: { port: 47630, token: 'tok-empty-storage-0001' }, code: 'EM-6001' });
+    await h.push({ status: 'ready', bootstrap: { port: 42330, token: 'tok-empty-storage-0001' }, code: 'EM-6001' });
     await waitFor(() => { if (el('sys.fatal')) throw new Error('fatal still shown'); });
     await waitFor(() => { if (!document.querySelector('[data-el^="scr.backup.restore"]')) throw new Error('restore not opened'); });
   });
@@ -99,9 +99,9 @@ describe('FR-171 Service restart in the Editor', () => {
     const bridge = { getBootstrap: async () => null as unknown as { port: number; token: string }, onServiceState: (cb: (s: unknown) => void) => { push = cb; return () => undefined; } };
     const p = createLiveRuntime(bridge);
     await new Promise((r) => setTimeout(r, 10));
-    push!({ status: 'ready', bootstrap: { port: 47640, token: 'first-token-000001' } });
+    push!({ status: 'ready', bootstrap: { port: 42340, token: 'first-token-000001' } });
     const rt = await p;
-    expect(rt?.api.baseUrl).toBe('http://127.0.0.1:47640');
+    expect(rt?.api.baseUrl).toBe('http://127.0.0.1:42340');
     expect(rt?.api.serviceToken).toBe('first-token-000001');
     expect(rt?.service?.current().status).toBe('ready');
   });

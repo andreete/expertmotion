@@ -29,6 +29,7 @@ Read this before any work. Update it after architecture decisions, milestones, f
 | 015 | No MCP in MVP; typed in-process Tools | accepted |
 | 016 | Priorities per brief §17: Tools in P1 (voice, captions) and P2 (music, thumbnails) | provisional (reconciliation flagged) |
 | 017 | Remotion licence confirmation is a launch blocker | accepted |
+| 026 | Model files served only from the Operator's Cloudflare R2 CDN (`EM_MODEL_CDN_URL`, signed `models.json`, `tools/model-mirror`) | accepted (Operator 2026-10-25) |
 
 Operator decisions given in chat on 2026-10-24: Windows first; local open-source models for generative Tools; new repo; offline signed licence key. The Operator intends to hand execution of later stages to other models (e.g. Opus); documents must be self-sufficient.
 

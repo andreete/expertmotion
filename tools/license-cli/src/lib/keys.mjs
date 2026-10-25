@@ -78,6 +78,9 @@ function unseal(obj, passphrase) {
 }
 
 function readPassphrase(opts) {
+  // `passphrase` is programmatic only (apps/admin passes the Operator's typed passphrase in memory);
+  // the CLI's strict option parser has no --passphrase flag, so it never appears on a command line.
+  if (typeof opts.passphrase === 'string' && opts.passphrase !== '') return opts.passphrase;
   if (opts['passphrase-file']) return readFileSync(opts['passphrase-file'], 'utf8').replace(/\r?\n$/, '');
   if (process.env.EXPERTMOTION_LICENSE_PASSPHRASE) return process.env.EXPERTMOTION_LICENSE_PASSPHRASE;
   return null;

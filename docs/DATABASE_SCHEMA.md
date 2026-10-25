@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Database and security engineer |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 002, 006), ARCHITECTURE.md, AI_WORKFLOW.md, DESIGN_CATALOGUE.md, PERFORMANCE.md |
 | Used by | API_SPECIFICATION.md, BLUEPRINT.md, SECURITY.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md |
 | Owner of | SQLite DDL, migrations policy, encryption/key wrapping, the Composition Model JSON Schema, checkpoint/backup formats |
@@ -53,9 +53,9 @@ CREATE TABLE settings (                       -- app-wide preferences (non-secre
 
 CREATE TABLE license (
   id                 INTEGER PRIMARY KEY CHECK(id = 1),
-  token_enc          BLOB,                    -- encrypted licence token (NULL = trial)
-  status             TEXT NOT NULL CHECK(status IN ('trial','active','revoked','invalid','updates-expired')),
-  tier               TEXT,
+  token_enc          BLOB,                    -- encrypted licence token (NULL = no key: unlicensed)
+  status             TEXT NOT NULL CHECK(status IN ('licensed','unlicensed','invalid','revoked','machine-mismatch')),   -- migration 32 (no Trial Mode)
+  tier               TEXT,                    -- payload tier, kept for compatibility; never gates a feature
   licensee_hash      TEXT,
   updates_until      TEXT,
   last_seen_at       TEXT NOT NULL,           -- clock-tamper reference
@@ -240,7 +240,7 @@ CREATE TABLE outputs (
   kind           TEXT NOT NULL CHECK(kind IN ('video','gif','still','audio')),
   bytes          INTEGER NOT NULL, width INTEGER, height INTEGER, fps REAL, duration_ms INTEGER,
   validated      INTEGER NOT NULL DEFAULT 0,  -- ffprobe check passed
-  watermarked    INTEGER NOT NULL DEFAULT 0,
+  watermarked    INTEGER NOT NULL DEFAULT 0,   -- legacy (Trial Mode removed 2026-10-25): always 0, not in OutputDto
   created_at     TEXT NOT NULL
 );
 
@@ -426,6 +426,7 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 | 30 | s3_budgets_defaults_handoffs | `project_budgets(project_id, limit_usd, updated_at)` (per-project AI cap per calendar month, NULL or 0 = no limit, FR-117); `provider_defaults(default_connection_id)` (R-097); `brainstorm_handoffs(id, project_id, message_id, intents_json, status pending/enqueued, created_at)` (R-082 payloads until the intents module enqueues them); `agent_runs.plan_id`; indexes on runs and `usage_records` |
 
 | 31 | s3_project_connection_budgets | `project_connection_budgets(project_id, connection_id, limit_usd, updated_at, PK(project_id, connection_id))` (FR-117: the per-Project cap is per Provider Connection; calendar month; NULL or 0 = no limit; both FKs cascade); existing `project_budgets` caps are copied onto every connection and the project-wide value is cleared (the table stays for R-100 rows without `connectionId`); index `agent_runs(project_id, connection_id)` |
+| 32 | s3_license_states_no_trial | Trial Mode removed (Operator decision 2026-10-25, LICENSE_OPERATIONS §7): the one-row `license` table is rebuilt with `status IN ('licensed','unlicensed','invalid','revoked','machine-mismatch')`; existing rows map `active` → `licensed`, `trial` → `unlicensed`, `updates-expired` → `invalid` (`revoked`, `invalid` unchanged). The state is re-derived from the stored key at every start, so the mapping only has to satisfy the CHECK |
 
 Later migrations append rows here (ADR-024).
 

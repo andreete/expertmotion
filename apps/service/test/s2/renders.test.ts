@@ -70,7 +70,6 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     s.ctx.db.prepare(`INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, playable_path, duration_ms, width, height, has_audio, status, created_at, updated_at)
       VALUES (?,?,'video','kopi.mp4','h',5,?,?,4000,1080,1920,0,'ready',?,?)`).run(assetId, pid, `${pid}/${assetId}/original.mp4`, `${pid}/${assetId}/original.mp4`, now, now);
     s.ctx.hooks.applyOps(pid, [{ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId } }], { kind: 'system', summary: 'seed' });
-    s.ctx.hooks.isTrial = () => false;
   });
   afterAll(async () => { await s.close(); });
   const create = (body: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
@@ -81,7 +80,7 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     const r = await json<{ ok: boolean; dimensions: { width: number; height: number }; totalFrames: number; checks: Array<{ check: string; ok: boolean; code?: string }>; estimate: { bytes: number } }>(
       await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard' } }));
     expect(r.ok).toBe(true); expect(r.dimensions).toEqual({ width: 1080, height: 1920 }); expect(r.totalFrames).toBe(120);
-    expect(r.checks.map((c) => c.check).sort()).toEqual(['assets', 'dimensions', 'disk', 'duration', 'engine', 'folder', 'licence', 'memory']);
+    expect(r.checks.map((c) => c.check).sort()).toEqual(['assets', 'dimensions', 'disk', 'duration', 'engine', 'folder', 'memory']);
     expect(r.estimate.bytes).toBeGreaterThan(0);
     mem = 1e9;
     const low = await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard' } });
@@ -110,8 +109,8 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     expect((await fetch(url)).status).toBe(404);                                                  // grant revoked after the final event
     expect(s.ctx.mediaOrigins.size).toBe(0);
     expect(fake.seen.calls[0]!['port']).toBe(4131);
-    const out = await json<{ path: string; fileName: string; validated: boolean; watermarked: boolean; width: number }>(await s.api(`/outputs/${done.outputId}`));
-    expect(out.fileName).toMatch(/^Promo-Kopi-9x16-1080p-.*\.mp4$/); expect(out.width).toBe(1080); expect(out.validated).toBe(false); expect(out.watermarked).toBe(false);
+    const out = await json<{ path: string; fileName: string; validated: boolean; watermarked?: boolean; width: number }>(await s.api(`/outputs/${done.outputId}`));
+    expect(out.fileName).toMatch(/^Promo-Kopi-9x16-1080p-.*\.mp4$/); expect(out.width).toBe(1080); expect(out.validated).toBe(false); expect(out.watermarked).toBeUndefined();
     expect(fs.existsSync(out.path)).toBe(true);
     const rev = await json<{ path: string; folder: string }>(await s.api(`/outputs/${done.outputId}/reveal`, { method: 'POST' }));
     expect(rev.path).toBe(out.path);
@@ -163,7 +162,7 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     expect((await s.api('/health', { auth: false })).status).toBe(200);
   });
 
-  it('Idempotency-Key returns the first job with EM-2308; Trial Mode caps to 720p with a watermark', async () => {
+  it('Idempotency-Key returns the first job with EM-2308; exports keep the chosen resolution and never carry a watermark', async () => {
     fake = fakeRenderer({ mode: 'ok', steps: 1, stepMs: 5 });
     const first = await json<Job>(await create({}, { 'Idempotency-Key': 'export-1' }));
     const second = await create({}, { 'Idempotency-Key': 'export-1' });
@@ -171,12 +170,11 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     const sj = await json<Job>(second);
     expect(sj.id).toBe(first.id); expect(sj.notice).toBe('EM-2308');
     await waitFinal(first.id);
-    s.ctx.hooks.isTrial = () => true;
     const t = await json<Job>(await create());
-    expect(t.outputProfile.resolution).toBe('720p'); expect(t.notices).toContain('EM-5001'); expect(t.width).toBe(720);
+    expect(t.outputProfile.resolution).toBe('1080p'); expect(t.notices ?? []).not.toContain('EM-5001'); expect(t.width).toBe(1080);
     await waitFinal(t.id);
-    expect((fake.seen.calls.at(-1)!['inputProps'] as EngineInputProps).watermark).toBe(true);
-    s.ctx.hooks.isTrial = () => false;
+    const props = fake.seen.calls.at(-1)!['inputProps'] as EngineInputProps & { watermark?: unknown };
+    expect(props.quality).toBe('full'); expect('watermark' in props).toBe(false);
   });
 
   it('estimate returns the default filename, Private Mode and queue facts; GIF is capped to 720p with a note', async () => {
@@ -300,7 +298,6 @@ describe('output validation with ffprobe (FR-145, SEC-068)', () => {
       s.ctx.db.prepare(`INSERT INTO assets (id, project_id, kind, name, sha256, bytes, original_path, playable_path, duration_ms, width, height, has_audio, status, created_at, updated_at)
         VALUES (?,?,'video','kopi.mp4','h',5,?,?,4000,1080,1920,0,'ready',?,?)`).run(assetId, pid, `${pid}/${assetId}/original.mp4`, `${pid}/${assetId}/original.mp4`, now, now);
       s.ctx.hooks.applyOps(pid, [{ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId } }], { kind: 'system', summary: 'seed' });
-      s.ctx.hooks.isTrial = () => false;
       const job = await json<Job>(await s.api('/renders', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard' } }));
       const ev = await s.waitEvent((e) => ['render.done', 'render.failed'].includes(e.name) && e.data['jobId'] === job.id);
       expect(ev.name).toBe('render.failed');

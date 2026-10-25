@@ -4,13 +4,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { appendAudit, defaultAuditPath, deriveRevocationEntries, licenceState, readAudit, REBIND_LIMIT, rebindsInLast12Months } from './lib/audit.mjs';
+import { defaultAuditPath, licenceState, readAudit, REBIND_LIMIT, rebindsInLast12Months } from './lib/audit.mjs';
 import { emailBody } from './lib/email.mjs';
 import { CliError } from './lib/errors.mjs';
-import { addMonths, decodeMachineCode, emailHash, isoDate, isoSeconds, ulid } from './lib/format.mjs';
+import { decodeMachineCode, emailHash, isoDate, isoSeconds } from './lib/format.mjs';
 import { keygen, loadPrivateKey, loadPublicKeys } from './lib/keys.mjs';
 import { enforceOffline } from './lib/net.mjs';
-import { buildPayload, signRevocationList, signToken, verifyKey, verifyRevocationList } from './lib/token.mjs';
+import {
+  exportRevocations, issueLicence, machineFromCode, parseLid, rebindLicence, renewLicence, revocationListBytes, revokeLicence, signAndRecord,
+} from './lib/ops.mjs';
+import { verifyKey, verifyRevocationList } from './lib/token.mjs';
 
 const HELP = `expertmotion-license — Operator CLI for Expertmotion Licence Keys (offline; LICENSE_OPERATIONS.md §10)
 
@@ -66,7 +69,6 @@ const OPTIONS = {
   'allow-network': { type: 'boolean' }, 'dev-allow-network': { type: 'boolean' },
 };
 
-const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const print = (s) => process.stdout.write(`${s}\n`);
 
 function req(opts, name, hint = '') {
@@ -75,78 +77,12 @@ function req(opts, name, hint = '') {
   return String(v).trim();
 }
 
-function months(opts) {
-  const raw = opts['updates-months'] ?? '12';
-  if (!/^\d{1,3}$/.test(raw)) throw new CliError('--updates-months must be a whole number of months (0-999).', 2);
-  return Number(raw);
-}
-
-function parseLid(opts) {
-  const lid = req(opts, 'lid').toUpperCase();
-  if (!ULID_RE.test(lid)) throw new CliError('--lid must be a 26-character ULID.', 2);
-  return lid;
-}
-
-/** Machine Code → fingerprint fields; refuses CRC mismatch (RISK-022) and unusable codes. */
-function machineFromOpts(opts, command) {
-  const mc = opts.fingerprint;
-  if (mc === undefined || String(mc).trim() === '') {
-    throw new CliError(
-      `${command} requires the Creator's Machine Code (--fingerprint MC1-…). Every Licence Key is bound to exactly one computer; there is no unbound or floating key.`,
-      2,
-    );
-  }
-  const d = decodeMachineCode(String(mc));
-  if (!d.ok) {
-    throw new CliError(
-      d.reason === 'crc'
-        ? 'Machine Code checksum does not match — probably a typo. Ask the Creator to copy it again with the Copy button.'
-        : 'This is not a valid Machine Code (expected MC1- followed by 42 base32 characters).',
-      3,
-    );
-  }
-  if (d.present.filter(Boolean).length < 2) {
-    throw new CliError('This Machine Code has fewer than two readable components; a key bound to it could never verify. Ask the Creator for diagnostics.', 3);
-  }
-  return d;
-}
-
-function validateName(name) {
-  const n = name.trim();
-  if (n === '' || [...n].length > 64 || /[\u0000-\u001f\u007f]/.test(n)) throw new CliError('--name must be 1-64 characters without control characters.', 2);
-  return n;
-}
-function validateEmail(email) {
-  const e = email.trim();
-  if (!/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(e) || e.length > 254) throw new CliError('--email does not look like an email address.', 2);
-  return e;
-}
-
-function writeLicenceFiles(opts, lid, rev, key) {
-  const dir = opts['out-dir'] ?? 'out';
-  mkdirSync(dir, { recursive: true });
-  const latest = path.join(dir, `${lid}.emlicense`);
-  writeFileSync(latest, `${key}\n`);
-  writeFileSync(path.join(dir, `${lid}.r${rev}.emlicense`), `${key}\n`);
-  return latest;
-}
+const parseLidOpt = (opts) => parseLid(req(opts, 'lid'));
+const files = (opts) => ({ auditPath: defaultAuditPath(opts), outDir: opts['out-dir'] ?? 'out' });
 
 function report(opts, data, text) {
   if (opts.json) print(JSON.stringify(data, null, 2));
   else print(text);
-}
-
-function signAndRecord(opts, { action, key, lid, rev, name, email, tier, machine, upd, order = '', reason = '', note = '', now }) {
-  const payload = buildPayload({
-    lid, name, eh: emailHash(email), tier, fp: machine.fp, fpc: machine.fpc, iat: isoSeconds(now), upd, rev,
-  });
-  const token = signToken(payload, key);
-  const file = writeLicenceFiles(opts, lid, rev, token);
-  appendAudit(defaultAuditPath(opts), {
-    timestamp_utc: isoSeconds(now), action, lid, kid: key.kid, rev, name, email, tier, fp_hex: machine.fp,
-    machine_code: machine.machineCode, updates_until: upd, order_ref: order, reason, operator_note: note,
-  });
-  return { payload, token, file };
 }
 
 function issueLike(opts, result, action) {
@@ -185,99 +121,35 @@ function cmdKeygen(opts) {
 }
 
 function cmdIssue(opts) {
-  const machine = machineFromOpts(opts, 'issue');
-  const name = validateName(req(opts, 'name'));
-  const email = validateEmail(req(opts, 'email'));
-  const tier = opts.tier ?? 'standard';
-  if (!['standard', 'pro'].includes(tier)) throw new CliError('--tier must be standard or pro.', 2);
-  const n = months(opts);
-  const key = loadPrivateKey(opts);
-  const rows = readAudit(defaultAuditPath(opts));
-  const order = (opts.order ?? '').trim();
-  if (order && rows.some((r) => r.action === 'issue' && r.order_ref === order) && !opts.override) {
-    throw new CliError(`Order ${order} already has a licence (see audit). Use rebind/renew, or --override "<reason>" for a second licence.`, 3);
-  }
-  const now = new Date();
-  const lid = ulid(now.getTime());
-  const r = signAndRecord(opts, {
-    action: 'issue', key, lid, rev: 0, name, email, tier, machine, upd: addMonths(isoDate(now), n), order, reason: opts.override ?? '', note: opts.note ?? '', now,
+  machineFromCode(opts.fingerprint, 'issue'); // Machine Code is checked first (same order as before the ops refactor)
+  const r = issueLicence({
+    ...files(opts), loadKey: () => loadPrivateKey(opts), machineCode: opts.fingerprint, name: req(opts, 'name'), email: req(opts, 'email'),
+    tier: opts.tier ?? 'standard', months: opts['updates-months'] ?? '12', order: opts.order ?? '', override: opts.override ?? '', note: opts.note ?? '',
   });
-  issueLike(opts, { ...r, machineCode: machine.machineCode }, 'issue');
-}
-
-function requireActiveState(rows, lid, command) {
-  const st = licenceState(rows, lid);
-  if (!st || !st.latestKey) throw new CliError(`No licence ${lid} in the audit log.`, 3);
-  if (st.revoked) throw new CliError(`Licence ${lid} was revoked (${st.rows.filter((r) => r.action === 'revoke').map((r) => r.reason).join(', ')}); ${command} is not allowed. Issue a new licence for a new purchase.`, 3);
-  if (st.latestKey.email === 'deleted') throw new CliError(`Licence ${lid} had its personal data deleted; the email hash cannot be recomputed. Issue a new licence.`, 3);
-  return st;
+  issueLike(opts, r, 'issue');
 }
 
 function cmdRebind(opts) {
-  const lid = parseLid(opts);
-  const machine = machineFromOpts(opts, 'rebind');
-  const auditPath = defaultAuditPath(opts);
-  const rows = readAudit(auditPath);
-  const st = requireActiveState(rows, lid, 'rebind');
-  const now = new Date();
-  const count = rebindsInLast12Months(rows, lid, now);
-  const override = (opts.override ?? '').trim();
-  if (count >= REBIND_LIMIT && !override) {
-    throw new CliError(
-      `EM-5008 Transfer limit reached: licence ${lid} has been moved ${count} times in the last 12 months (limit ${REBIND_LIMIT}). `
-        + 'No key was issued. If you decide to allow it, re-run with --override "<reason>" (recorded in the audit log).',
-      3,
-      'EM-5008',
-    );
-  }
-  if (st.latestKey.machine_code === machine.machineCode && !override) {
-    throw new CliError(`Licence ${lid} is already bound to this Machine Code. Resend out/${lid}.emlicense instead, or use --override.`, 3);
-  }
-  const key = loadPrivateKey(opts);
-  const rev = st.currentRev + 1;
-  const last = st.latestKey;
-  const r = signAndRecord(opts, {
-    action: 'rebind', key, lid, rev, name: last.name, email: last.email, tier: last.tier, machine, upd: last.updates_until,
-    order: opts.order ?? '', reason: override, note: opts.note ?? `move ${count + 1} of ${REBIND_LIMIT} in 12 months`, now,
+  const r = rebindLicence({
+    ...files(opts), loadKey: () => loadPrivateKey(opts), lid: parseLidOpt(opts), machineCode: opts.fingerprint,
+    override: opts.override ?? '', order: opts.order ?? '', note: opts.note,
   });
-  issueLike(opts, { ...r, machineCode: machine.machineCode, revocationEpoch: rev }, 'rebind');
+  issueLike(opts, r, 'rebind');
 }
 
 function cmdRenew(opts) {
-  const lid = parseLid(opts);
-  const n = months(opts);
-  const rows = readAudit(defaultAuditPath(opts));
-  const st = requireActiveState(rows, lid, 'renew');
-  const last = st.latestKey;
-  const machine = decodeMachineCode(last.machine_code);
-  if (!machine.ok) throw new CliError(`Audit row for ${lid} has an unreadable Machine Code.`, 4);
-  const key = loadPrivateKey(opts);
-  const now = new Date();
-  const today = isoDate(now);
-  const upd = addMonths(last.updates_until > today ? last.updates_until : today, n);
-  const rev = st.currentRev + 1;
-  const r = signAndRecord(opts, {
-    action: 'renew', key, lid, rev, name: last.name, email: last.email, tier: last.tier, machine, upd, order: opts.order ?? '', note: opts.note ?? '', now,
+  const r = renewLicence({
+    ...files(opts), loadKey: () => loadPrivateKey(opts), lid: parseLidOpt(opts), months: opts['updates-months'] ?? '12',
+    order: opts.order ?? '', note: opts.note ?? '',
   });
-  issueLike(opts, { ...r, machineCode: machine.machineCode, revocationEpoch: rev }, 'renew');
+  issueLike(opts, r, 'renew');
 }
 
 function cmdRevoke(opts) {
-  const lid = parseLid(opts);
+  const lid = parseLidOpt(opts);
   const reason = req(opts, 'reason', 'refund|fraud');
-  if (!['refund', 'fraud'].includes(reason)) throw new CliError('--reason must be refund or fraud.', 2);
-  const auditPath = defaultAuditPath(opts);
-  const rows = readAudit(auditPath);
-  const st = licenceState(rows, lid);
-  if (!st) throw new CliError(`No licence ${lid} in the audit log.`, 3);
-  if (st.revoked) throw new CliError(`Licence ${lid} is already revoked.`, 3);
-  const epoch = st.currentRev + 1;
-  const last = st.latestKey ?? st.rows[st.rows.length - 1];
-  appendAudit(auditPath, {
-    timestamp_utc: isoSeconds(new Date()), action: 'revoke', lid, kid: last.kid, rev: epoch, name: last.name, email: last.email, tier: last.tier,
-    fp_hex: last.fp_hex, machine_code: last.machine_code, updates_until: last.updates_until, order_ref: opts.order ?? '', reason, operator_note: opts.note ?? '',
-  });
-  report(opts, { action: 'revoke', lid, epoch, reason }, `revoke: ${lid} epoch ${epoch} (${reason}). Run export-revocations and publish revoked.json the same day.`);
+  const r = revokeLicence({ auditPath: defaultAuditPath(opts), lid, reason, note: opts.note ?? '', order: opts.order ?? '' });
+  report(opts, r, `revoke: ${r.lid} epoch ${r.epoch} (${r.reason}). Run export-revocations and publish revoked.json the same day.`);
 }
 
 function cmdVerify(opts) {
@@ -313,24 +185,11 @@ function cmdVerify(opts) {
   if (!r.valid) process.exitCode = 1;
 }
 
-export function revocationListBytes(rows) {
-  const entries = deriveRevocationEntries(rows);
-  const tsList = (entries.length ? entries.map((e) => e.ts) : rows.map((r) => r.timestamp_utc)).sort();
-  const generatedAt = tsList[tsList.length - 1] ?? '1970-01-01T00:00:00Z';
-  const lines = entries.map((e) => `    ${JSON.stringify({ lid: e.lid, epoch: e.epoch, reason: e.reason })}`);
-  const json = `{\n  "v": 1,\n  "generatedAt": ${JSON.stringify(generatedAt)},\n  "entries": [${lines.length ? `\n${lines.join(',\n')}\n  ` : ''}]\n}\n`;
-  return { bytes: Buffer.from(json, 'utf8'), count: entries.length, generatedAt };
-}
+export { revocationListBytes };
 
 function cmdExportRevocations(opts) {
-  const out = opts.out ?? path.join('dist', 'revoked.json');
-  const rows = readAudit(defaultAuditPath(opts));
-  const key = loadPrivateKey(opts);
-  const { bytes, count, generatedAt } = revocationListBytes(rows);
-  mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
-  writeFileSync(out, bytes);
-  writeFileSync(`${out}.sig`, signRevocationList(bytes, key));
-  report(opts, { out, sig: `${out}.sig`, entries: count, generatedAt, kid: key.kid }, `export-revocations: ${count} entries, generatedAt ${generatedAt}, signed with ${key.kid} → ${out} (+ .sig)`);
+  const r = exportRevocations({ auditPath: defaultAuditPath(opts), out: opts.out ?? path.join('dist', 'revoked.json'), loadKey: () => loadPrivateKey(opts) });
+  report(opts, r, `export-revocations: ${r.entries} entries, generatedAt ${r.generatedAt}, signed with ${r.kid} → ${r.out} (+ .sig)`);
 }
 
 function cmdReissue(opts) {
@@ -339,7 +198,7 @@ function cmdReissue(opts) {
   const rows = readAudit(defaultAuditPath(opts));
   let lids;
   if (opts['all-active']) lids = [...new Set(rows.map((r) => r.lid))];
-  else if (opts.lid) lids = [parseLid(opts)];
+  else if (opts.lid) lids = [parseLidOpt(opts)];
   else throw new CliError('reissue needs --all-active or --lid.', 2);
   const now = new Date();
   const batch = [];
@@ -351,7 +210,7 @@ function cmdReissue(opts) {
     const machine = decodeMachineCode(last.machine_code);
     if (!machine.ok) continue;
     const rev = st.currentRev + 1;
-    const r = signAndRecord(opts, {
+    const r = signAndRecord(files(opts), {
       action: 'reissue', key, lid, rev, name: last.name, email: last.email, tier: last.tier, machine, upd: last.updates_until, reason: 'keyrotation', note: opts.note ?? '', now,
     });
     batch.push(`To: ${last.email}\nAttachment: ${r.file}\n\n${emailBody({ name: last.name, lid, key: r.token, machineCode: machine.machineCode, updatesUntil: last.updates_until, lang: opts.lang, updated: true, signature: opts.signature })}`);

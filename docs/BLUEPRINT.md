@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Principal architect |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 002, 004, 005, 011, 013, 015), ARCHITECTURE.md §4, §5, §7, SECURITY.md (SEC-002, SEC-008, SEC-010), DEVELOPMENT_WORKFLOW.md, DATABASE_SCHEMA.md, AI_WORKFLOW.md, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md, ASSESSMENT.md §1, PRD.md, MASTER_PROJECT_PROMPT.md §5, §10, §12 |
 | Used by | TRD.md, API_SPECIFICATION.md, DEPLOYMENT_AND_PACKAGING.md, ROADMAP.md, POC_PLAN.md, DEVELOPMENT_WORKFLOW.md, TEST_PLAN.md, AGENT_DESIGN.md §6 (subagent scopes) |
 | Owner of | monorepo layout, package purposes and public API surfaces, dependency rules, the file-by-file port list from `/home/andre/experthinker-studio`, module data contracts (as names; schemas stay with their owners), build and release artefact list, the P0 vertical slice, PRD → package traceability |
@@ -237,7 +237,7 @@ Public API (root, React):
 
 ```ts
 export const ExpertmotionTimeline: React.FC<EngineInputProps>;
-export type EngineInputProps = { model: CompositionModelT; assets: Record<string, AssetUrls>; quality: 'draft'|'full'; watermark: boolean };
+export type EngineInputProps = { model: CompositionModelT; assets: Record<string, AssetUrls>; quality: 'draft'|'full' };   // `watermark` removed 2026-10-25 (no Trial Mode)
    // AssetUrls = { playable: string; proxy?: string; durationMs: number; width?: number; height?: number; hasAudio: boolean }
    // URLs are `http://127.0.0.1:<port>/media/<grant>/<assetId>/<variant>`: the Local Service builds them with the media grant of the
    // current preview session (Player) or of the Render Job (Chrome Headless Shell); see API_SPECIFICATION.md §2.2 and SEC-010
@@ -411,7 +411,7 @@ Exports: none consumed by other packages. Every interactive element carries `dat
 
 ```
 apps/desktop/src/
-  main/index.ts        single-instance lock, safeStorage keyring (wrap/unwrap Database Key), random free loopback port 47600–47699 (SEC-008), `utilityProcess.fork(service.cjs)` + bootstrap `postMessage({token, port, dataDir, dbKeyHex})` (SEC-002), wait for `{type:'ready'}`, restart backoff 1 s/3 s/9 s (EM-8001/8002), window, app:// protocol for apps/ui/dist, close flow (EM-8304), tray, updater
+  main/index.ts        single-instance lock, safeStorage keyring (wrap/unwrap Database Key), random free loopback port 42300–42399 (SEC-008), `utilityProcess.fork(service.cjs)` + bootstrap `postMessage({token, port, dataDir, dbKeyHex})` (SEC-002), wait for `{type:'ready'}`, restart backoff 1 s/3 s/9 s (EM-8001/8002), window, app:// protocol for apps/ui/dist, close flow (EM-8304), tray, updater
   main.ts (IPC)        handlers: pickFiles({filters, multiple}) → paths; pickFolder; pickSavePath; openFolder(path); openExternal(url: HTTPS on EXTERNAL_HOSTS only); getBootstrap() → {port, token}
   preload.ts           contextBridge.exposeInMainWorld('expertmotion', { getBootstrap, pickFiles, pickFolder, pickSavePath, openFolder, openExternal, getPathsForFiles (webUtils, drag-and-drop), onServiceState, onUpdateState, getUpdateState, updateAction, openPath }) — closed set, asserted by test/bridge-surface.test.ts
   main/license/        bytecode-protected (ADR-007): nothing else lives here; verification itself is in apps/service/license (also bytecode)
@@ -601,7 +601,7 @@ Explicitly **not** in the slice: agents runtime, providers, Brainstorming, capti
 | PRD-014 | render/export MP4 (+GIF, PNG), progress, ETA, cancel, preflight | `apps/service/render` | `apps/ui/screens/export`, `packages/engine` (bundle) |
 | PRD-015 | recoverable errors, render failure never crashes | `packages/shared/errors`, `apps/service/http/errors.ts`, `apps/service/render/queue.ts` | `apps/ui/components` (error cards) |
 | PRD-016 | Service Token, Host/Origin, path restrictions, media grants, Electron hardening, encrypted credentials, signed installer | `apps/service/http/guards.ts`, `apps/service/media/{server,grants}.ts`, `apps/desktop`, `apps/service/settings` | `tools/release` (signing) |
-| PRD-017 | offline Ed25519 licence, Trial Mode | `apps/service/license`, `tools/license-cli` | `packages/engine/components/Watermark.tsx`, `apps/service/render/preflight.ts` (720p cap) |
+| PRD-017 | offline Ed25519 licence (Trial Mode removed 2026-10-25: licence gate instead of watermark/720p cap) | `apps/service/license`, `tools/license-cli` | `apps/service/src/modules/license.ts` (gate, rate limit) |
 | PRD-018 | onboarding wizard, tour | `apps/ui/screens/onboarding` | `apps/service/settings` |
 | PRD-019 | Hardware Monitor, tiers | `apps/service/hardware` | `apps/ui/screens/hardware`, `packages/catalogue` (flags) |
 | PRD-020 | Private Mode blocks all outbound calls | `apps/service/agents/egress.ts`, `apps/service/settings` | `packages/agents/providers` (`Egress`), `packages/models` (downloads), `apps/desktop` (updater gate) |

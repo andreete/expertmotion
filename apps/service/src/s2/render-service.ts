@@ -33,7 +33,7 @@ export function gifPaletteArgs(input: string, output: string, fps: number): stri
 
 export type PerfProfile = 'standard' | 'accelerated' | 'turbo';
 export interface RenderInput { projectId: string; versionId?: string | undefined; outputProfile: OutputProfileT; performanceProfile: PerfProfile; fileName?: string | undefined; folder?: string | undefined }
-export interface Check { check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence' | 'folder'; ok: boolean; code?: string; details?: Record<string, unknown> }
+export interface Check { check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'folder'; ok: boolean; code?: string; details?: Record<string, unknown> }
 
 /** The subset of @remotion/renderer the queue uses (kept loose so a fake can stand in for tests). */
 export interface RendererLike {
@@ -45,7 +45,7 @@ export interface RendererLike {
 export interface RenderOptions {
   renderer?: () => Promise<RendererLike>;
   freeMemBytes?: () => number;
-  /** Remotion's own bundle server port (never 3000/4000): dev 4130…4139, packaged a free port in 47600…47699. */
+  /** Remotion's own bundle server port (never 3000/4000): dev 4130…4139, packaged a free port in 42300…42399. */
   remotionPort?: (ctx: ServiceContext) => Promise<number>;
   stallMs?: number;
   wallClockMs?: number;
@@ -64,7 +64,7 @@ const PROFILE_POLICY: Record<PerfProfile, { cache: number; parallelEncoding: boo
 };
 
 export async function defaultRemotionPort(ctx: ServiceContext): Promise<number> {
-  const [lo, hi] = ctx.cfg.dev ? [4130, 4139] : [47600, 47699];
+  const [lo, hi] = ctx.cfg.dev ? [4130, 4139] : [42300, 42399];
   for (let p = lo; p <= hi; p++) {
     if (p === ctx.cfg.port || p === 3000 || p === 4000) continue;
     const free = await new Promise<boolean>((r) => { const s = net.createServer(); s.once('error', () => r(false)); s.listen(p, '127.0.0.1', () => s.close(() => r(true))); });
@@ -75,7 +75,7 @@ export async function defaultRemotionPort(ctx: ServiceContext): Promise<number> 
 const loadRemotion = async (): Promise<RendererLike> => (await import('@remotion/renderer')) as unknown as RendererLike;
 
 interface Prepared {
-  model: CompositionModelT; versionId: string; profile: OutputProfileT; watermark: boolean; dims: { width: number; height: number }; frames: number; durationMs: number;
+  model: CompositionModelT; versionId: string; profile: OutputProfileT; dims: { width: number; height: number }; frames: number; durationMs: number;
   assetIds: string[]; checks: Check[]; warnings: Array<{ code: string; path: string; message: string; severity: 'info' | 'warn' }>; notices: string[];
   estimate: { seconds: number | null; bytes: number | null; confidence: 'low' | 'medium' | 'high' };
   defaultFileName: string; privateMode: boolean; queue: { active: string | null; queued: number };
@@ -112,15 +112,12 @@ export class RenderService {
       model = JSON.parse(v.model_json) as CompositionModelT; versionId = input.versionId;
     }
     const checks: Check[] = []; const warnings: Prepared['warnings'] = []; const notices: string[] = [];
-    const watermark = ctx.hooks.isTrial();
-    const profile: OutputProfileT = { ...input.outputProfile };
-    if (watermark) { if (profile.resolution !== '720p') profile.resolution = '720p'; notices.push('EM-5001'); }
+    const profile: OutputProfileT = { ...input.outputProfile };   // single edition: no resolution cap, never a watermark
     // FR-138: WebM with alpha only when the background is None (or absent); the Editor disables the option with a reason
     if (profile.alpha && profile.format === 'webm' && model.background && model.background.presetId !== 'preset:background.none')
       throw em('EM-9002', 'A transparent WebM needs the background set to None.', { status: 422, path: 'outputProfile.alpha', details: { reason: 'alpha-needs-background-none', background: model.background.presetId } });
     // FR-138: GIF is capped at 720p (and 15 fps at encode time)
     if (profile.format === 'gif' && profile.resolution !== '720p') { warnings.push({ code: 'EM-3103', path: 'outputProfile.resolution', message: `GIF exports are limited to 720p (${profile.resolution} chosen).`, severity: 'info' }); profile.resolution = '720p'; }
-    checks.push({ check: 'licence', ok: true, ...(watermark ? { code: 'EM-5001', details: { watermark: true, maxResolution: '720p' } } : {}) });
     if (ctx.hooks.tier() === 'T0' && (profile.resolution === '2k' || profile.resolution === '2160p')) warnings.push({ code: 'EM-3105', path: 'outputProfile.resolution', message: `${profile.resolution} needs a graphics card; 1080p is the highest option here.`, severity: 'info' });
     model.settings = { ...model.settings, ratio: profile.ratio, resolution: profile.resolution, fps: profile.fps, ...(profile.ratio === 'custom' && profile.customRatio ? { customRatio: profile.customRatio } : {}) };
 
@@ -163,13 +160,13 @@ export class RenderService {
     checks.push({ check: 'memory', ok: mem >= needMem, ...(mem >= needMem ? {} : { code: 'EM-3101' }), details: { needBytes: needMem, freeBytes: mem } });
     if (this.queue.size > 0) notices.push('EM-3208');
     const projectName = (ctx.db.prepare('SELECT name FROM projects WHERE id = ?').get(input.projectId) as { name: string } | undefined)?.name ?? 'video';
-    return { model, versionId, profile, watermark, dims, frames, durationMs: timing.durationMs, assetIds, checks, warnings, notices, estimate,
+    return { model, versionId, profile, dims, frames, durationMs: timing.durationMs, assetIds, checks, warnings, notices, estimate,
       defaultFileName: defaultFileStem(projectName, profile), privateMode: ctx.settings.get().privateMode, queue: { active: this.queue.running, queued: Math.max(0, this.queue.size - (this.queue.running ? 1 : 0)) } };
   }
 
   estimateResponse(p: Prepared): Record<string, unknown> {
     return { ok: p.checks.every((c) => c.ok), dimensions: p.dims, totalFrames: p.frames, durationMs: p.durationMs, estimate: p.estimate, checks: p.checks,
-      effectiveProfile: p.profile, watermark: p.watermark, warnings: p.warnings, notices: p.notices, defaultFileName: p.defaultFileName, privateMode: p.privateMode, queue: p.queue };
+      effectiveProfile: p.profile, warnings: p.warnings, notices: p.notices, defaultFileName: p.defaultFileName, privateMode: p.privateMode, queue: p.queue };
   }
 
   /** FR-009/FR-015: a project's own output folder (R-018 `outputFolder`) beats the app default. */
@@ -292,7 +289,7 @@ export class RenderService {
           assets[id] = { kind: a.kind === 'subtitle' ? 'image' : a.kind, playable: `${base}/${id}/playable`, ...(a.proxy_path ? { proxy: `${base}/${id}/proxy` } : {}),
             ...(a.duration_ms !== null ? { durationMs: a.duration_ms } : {}), ...(a.width !== null ? { width: a.width } : {}), ...(a.height !== null ? { height: a.height } : {}), hasAudio: a.has_audio === 1 };
         }
-        const inputProps = { model: prep.model, assets, quality: 'full', watermark: prep.watermark };
+        const inputProps = { model: prep.model, assets, quality: 'full' };
         const tier = ctx.hooks.tier(); const pol = PROFILE_POLICY[input.performanceProfile];
         const threads = os.cpus().length;
         const concurrency = input.performanceProfile === 'standard' ? 1 : Math.max(1, Math.min(input.performanceProfile === 'turbo' ? 4 : 2, Math.floor(threads / 2)));
@@ -350,7 +347,7 @@ export class RenderService {
         ctx.db.transaction(() => {
           ctx.db.prepare(`INSERT INTO outputs (id, project_id, render_job_id, path, thumb_path, kind, bytes, width, height, fps, duration_ms, validated, watermarked, created_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(outputId, input.projectId, jobId, outputRelPath(ctx, outFile), thumbRel, KIND[f], bytes, f === 'wav' ? null : composition.width,
-            f === 'wav' ? null : composition.height, f === 'png' || f === 'wav' ? null : composition.fps, f === 'png' ? null : prep.durationMs, v.validated ? 1 : 0, prep.watermark ? 1 : 0, ctx.now());
+            f === 'wav' ? null : composition.height, f === 'png' || f === 'wav' ? null : composition.fps, f === 'png' ? null : prep.durationMs, v.validated ? 1 : 0, 0, ctx.now());   // outputs.watermarked: legacy column, always 0
           ctx.db.prepare('UPDATE render_jobs SET progress = 1, rendered_frames = ?, output_id = ?, eta_ms = 0 WHERE id = ?').run(prep.frames, outputId, jobId);
         })();
         this.finish(getJob(ctx, jobId)!, 'done', null, undefined, { output: toOutputDto(ctx, getOutput(ctx, outputId)!), notices: prep.notices.filter((n) => n !== 'EM-3208') });

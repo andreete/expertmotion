@@ -14,6 +14,20 @@ const dist = path.resolve('dist');
 const generated = path.resolve('../../packages/agents/src/prompts.generated.ts');
 for (const f of ['assets.enc', 'prompt-half-b.hex']) fs.rmSync(path.join(dist, f), { force: true });
 
+// Operator model CDN (Cloudflare R2 custom domain; DEPLOYMENT_AND_PACKAGING.md §16): https only. Unset → the placeholder, which
+// src/services/model-cdn.ts treats as "no CDN" (development) and scripts/release-check.mjs refuses for a release.
+const MODEL_CDN_PLACEHOLDER = 'PLACEHOLDER_SET_EM_MODEL_CDN_URL';
+const modelCdnUrl = (() => {
+  const raw = (process.env.EM_MODEL_CDN_URL ?? '').trim();
+  if (!raw) return MODEL_CDN_PLACEHOLDER;
+  let u;
+  try { u = new URL(raw); } catch { throw new Error(`EM_MODEL_CDN_URL is not a URL: ${raw}`); }
+  if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash || u.port || !u.hostname.includes('.') || /^\d{1,3}(\.\d{1,3}){3}$/.test(u.hostname))
+    throw new Error(`EM_MODEL_CDN_URL must be https://<host name>[/path] without credentials, port, query or fragment: ${raw}`);
+  return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
+})();
+console.log(`model CDN: ${modelCdnUrl === MODEL_CDN_PLACEHOLDER ? 'not set (placeholder; development build)' : modelCdnUrl}`);
+
 let halfA = '';
 const plugins = [];
 if (encrypt) {
@@ -49,7 +63,7 @@ await build({
   entryPoints: ['src/main.ts'], bundle: true, platform: 'node', target: 'node22', format: 'cjs', outfile: 'dist/service.cjs',
   external: ['better-sqlite3-multiple-ciphers', '@remotion/renderer', '@remotion/compositor-*', 'systeminformation', 'electron'],
   conditions: ['source'], sourcemap: false, minify: process.env.EM_MINIFY !== '0', legalComments: 'none',
-  define: { 'import.meta.url': '__em_import_meta_url', EM_BUILD_DATE: JSON.stringify(process.env.EM_BUILD_DATE ?? new Date().toISOString().slice(0, 10)), __EM_PROMPT_HALF_A__: JSON.stringify(halfA) }, banner: { js: 'const __em_import_meta_url = require("url").pathToFileURL(__filename).href;' },
+  define: { 'import.meta.url': '__em_import_meta_url', EM_BUILD_DATE: JSON.stringify(process.env.EM_BUILD_DATE ?? new Date().toISOString().slice(0, 10)), __EM_PROMPT_HALF_A__: JSON.stringify(halfA), __EM_MODEL_CDN_URL__: JSON.stringify(modelCdnUrl) }, banner: { js: 'const __em_import_meta_url = require("url").pathToFileURL(__filename).href;' },
   loader: { '.sql': 'text' }, logLevel: 'info', plugins,
 });
 

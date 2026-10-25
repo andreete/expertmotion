@@ -24,7 +24,6 @@ describe.skipIf(!enabled)('render smoke (real renderer)', () => {
     s = await startS2([health, createAssetsModule({ importRoots: () => [src] }), mediaModule, createRendersModule({ freeMemBytes: () => 4 * 1024 ** 3 })]);
     s.ctx.resources.engineBundle = BUNDLE;
     s.ctx.hooks.tier = () => 'T0';
-    s.ctx.hooks.isTrial = () => false;
     pid = s.project('Smoke');
     const check = s.ctx.grants.check.bind(s.ctx.grants);
     s.ctx.grants.check = (t, p, a) => { const g = check(t, p, a); if (g?.kind === 'render') renderHits++; return g; };

@@ -18,9 +18,14 @@ export function createModelsModule(opts: ModelsOptions = {}): ServiceModule {
     register(router, ctx) {
       const svc = modelsServiceOf(ctx, opts);
       route(router, 'get', '/models', {}, async () => {                                                                    // R-140
+        const registryUpdate = await svc.refreshRegistry();                                // CDN manifest check, at most once per 24 h (SEC-072)
         const items = await Promise.all(svc.defs().map((d) => svc.dto(d)));
         const totalInstalledBytes = items.filter((i) => i['status'] === 'installed').reduce((a, i) => a + Number(i['bytesTotal']), 0);
-        return { items, tier: ctx.hooks.tier(), totalInstalledBytes, diskFreeBytes: await (opts.freeBytes ?? freeBytes)(ctx.paths.models), registry: svc.registrySource() };
+        return { items, tier: ctx.hooks.tier(), totalInstalledBytes, diskFreeBytes: await (opts.freeBytes ?? freeBytes)(ctx.paths.models), registry: svc.registrySource(), registryUpdate };
+      });
+      route(router, 'post', '/models/registry/refresh', {}, async () => {                                                  // R-147 (Model Manager "Refresh")
+        const registryUpdate = await svc.refreshRegistry({ force: true });
+        return { registry: svc.registrySource(), registryUpdate };
       });
       route(router, 'get', '/models/:key', { params: Key }, ({ params }) => svc.dto(svc.require(params.key)));                // R-141
       route(router, 'post', '/models/:key/install', { params: Key, status: 202 }, ({ params }) => svc.install(params.key));   // R-142

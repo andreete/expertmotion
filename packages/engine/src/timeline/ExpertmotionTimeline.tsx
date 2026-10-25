@@ -24,7 +24,7 @@ export const ExpertmotionTimeline: React.FC<EngineInputProps> = (props) => {
   return <ThemeProvider theme={props.model.theme}><TimelineInner {...props} /></ThemeProvider>;
 };
 
-const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality, watermark }) => {
+const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) => {
   const layout = useLayout(model.settings.ratio);
   const { fps, durationInFrames } = useVideoConfig();
   const ft = useMemo(() => deriveFrameTiming(model), [model]);
@@ -76,7 +76,6 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality, wat
         const dur = a.loop || a.durationMs === undefined ? Math.max(1, durationInFrames - from) : Math.max(1, framesOf(a.durationMs, fps));
         return <Sequence key={a.id} from={from} durationInFrames={dur} premountFor={premountFor}><AudioLayerView layer={a} src={urls.playable} startFrame={from} durationInFrames={dur} duck={a.ducking ? duckWindows : []} /></Sequence>;
       })}
-      {watermark && <Watermark layout={layout} />}
     </AbsoluteFill>
   );
 };
@@ -137,7 +136,3 @@ const AudioLayerView: React.FC<{ layer: AudioLayerT; src: string; startFrame: nu
   return <Audio src={src} trimBefore={framesOf(layer.trimBeforeMs, fps)} loop={layer.loop} volume={vol * fadeIn * fadeOut} />;
 };
 
-/** Trial Mode watermark (LICENSE_OPERATIONS.md): "Expertmotion Trial", bottom-right, 4 % of the frame height. */
-const Watermark: React.FC<{ layout: Layout }> = ({ layout }) => (
-  <div style={{ position: 'absolute', right: layout.safe.right, bottom: layout.safe.bottom * 0.5, fontFamily: 'Inter', fontWeight: 700, fontSize: layout.height * 0.04 * 0.6, color: 'rgba(255,255,255,0.7)', textShadow: '0 1px 4px rgba(0,0,0,0.6)' }}>Expertmotion Trial</div>
-);

@@ -53,7 +53,8 @@ export const LicensePayloadSchema = z
 
 export type LicensePayload = z.infer<typeof LicensePayloadSchema>;
 
-export type LicenseStatus = 'trial' | 'active' | 'invalid' | 'revoked' | 'updates-expired';
+/** Licence states (single edition, no Trial Mode; Operator decision 2026-10-25). Only `licensed` unlocks the product. */
+export type LicenseStatus = 'licensed' | 'unlicensed' | 'invalid' | 'revoked' | 'machine-mismatch';
 export type LicenseErrorCode = 'EM-5002' | 'EM-5003' | 'EM-5004' | 'EM-5005' | 'EM-5006' | 'EM-5009';
 
 export interface ClockWarning {
@@ -100,10 +101,8 @@ export interface LicenseResult {
   /** EM-5007 when the clock went backwards by more than 24 h; never affects status */
   readonly warnings: readonly ClockWarning[];
   readonly clockAnomaly: boolean;
-  /** max(lastSeen, now) — use for the trial reminder, update-feed eligibility, revoked.json freshness */
+  /** max(lastSeen, now) — use for update-feed eligibility and revoked.json freshness */
   readonly effectiveNow: string;
-  /** true for every status except `active`: render preflight injects `trial: true`, clamps to 720p (SEC-122) */
-  readonly trialExports: boolean;
   /** support diagnostics only (no raw identifiers) */
   readonly fingerprintMatch?: FingerprintMatch;
   /** the normalised key string, kept so a rejected key stays visible for copying */
@@ -142,10 +141,10 @@ const decoder = new TextDecoder('utf-8', { fatal: true });
 
 /**
  * Verify a Licence Key offline (§6 steps 1–10). Never throws for any input string.
- * `input` null / empty → Trial Mode.
+ * `input` null / empty → `unlicensed` (the product stays locked until a key is activated).
  */
 export function verifyLicense(input: string | null | undefined, ctx: VerifyContext): LicenseResult {
-  const clock = tickClock(ctx); // step 10 runs on every path so lastSeen stays monotonic even in Trial Mode
+  const clock = tickClock(ctx); // step 10 runs on every path so lastSeen stays monotonic even without a key
   const base = {
     warnings: clock.warning ? [clock.warning] : [],
     clockAnomaly: clock.anomaly,
@@ -153,19 +152,18 @@ export function verifyLicense(input: string | null | undefined, ctx: VerifyConte
   };
   const raw = typeof input === 'string' ? input : '';
   if (raw.trim() === '') {
-    return { ...base, status: 'trial', tier: null, updatesUntil: null, licensee: null, trialExports: true, keyInput: null };
+    return { ...base, status: 'unlicensed', tier: null, updatesUntil: null, licensee: null, keyInput: null };
   }
 
   const reject = (code: LicenseErrorCode, keyInput: string | null, extra?: { fingerprintMatch?: FingerprintMatch; payload?: LicensePayload; kid?: string }): LicenseResult => {
     const p = extra?.payload;
     const r: LicenseResult = {
       ...base,
-      status: code === 'EM-5004' ? 'revoked' : code === 'EM-5005' ? 'updates-expired' : 'invalid',
+      status: code === 'EM-5004' ? 'revoked' : code === 'EM-5003' ? 'machine-mismatch' : 'invalid',   // EM-5005 (build not covered) → invalid
       code,
       tier: p ? p.tier : null,
       updatesUntil: p ? p.upd : null,
       licensee: p && extra?.kid ? toLicensee(p, extra.kid) : null,
-      trialExports: true,
       keyInput,
       ...(extra?.fingerprintMatch ? { fingerprintMatch: extra.fingerprintMatch } : {}),
     };
@@ -213,11 +211,10 @@ export function verifyLicense(input: string | null | undefined, ctx: VerifyConte
 
   return {
     ...base,
-    status: 'active',
-    tier: payload.tier,
+    status: 'licensed',
+    tier: payload.tier,   // kept for compatibility; never gates a feature (single edition)
     updatesUntil: payload.upd,
     licensee: toLicensee(payload, parts.kid),
-    trialExports: false,
     fingerprintMatch,
     keyInput,
   };

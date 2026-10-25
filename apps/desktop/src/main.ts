@@ -6,7 +6,7 @@
  *   - Database Key keyring: generate 32 random bytes on first run, wrap with safeStorage (DPAPI)
  *     into data/keyring.bin, unwrap on start; refuse with EM-6001 if unavailable (SEC-040)
  *   - per-launch 256-bit Service Token (SEC-001)
- *   - free loopback port 47600–47699 (SEC-008)
+ *   - free loopback port 42300–42399 (SEC-008)
  *   - start the Local Service with utilityProcess.fork and postMessage bootstrap (SEC-002)
  *   - supervise with restart backoff 1/3/9 s, max 3 (SEC-033)
  *   - graceful close via POST /service/shutdown then {type:'shutdown'} then kill (SEC §5 step 5)
@@ -165,7 +165,7 @@ async function startService(): Promise<void> {
   endpoint = { port, token };
 
   const proc = utilityProcess.fork(serviceModulePath(), [], {
-    serviceName: 'expertmotion-service',
+    serviceName: 'Expertmotion Helper',
     env: serviceEnv(),
     stdio: 'pipe',
   });

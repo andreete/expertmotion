@@ -1,13 +1,13 @@
-# Licence Operations: key format, Machine Fingerprint, verification, Trial Mode, issuance runbook
+# Licence Operations: key format, Machine Fingerprint, verification, activation gate, issuance runbook
 
 | Field | Value |
 |---|---|
 | Status | draft (implementable specification; items marked `[Operator decision]` need confirmation before Stage 4) |
 | Owner | Security engineer |
-| Last updated | 2026-10-24 |
-| Depends on | GLOSSARY.md (Licence Key, Machine Fingerprint, Trial Mode, Database Key, Service Token), DECISIONS.md (ADR-006, ADR-007, ADR-014), ARCHITECTURE.md (§4 `license` module, §5 lifecycle, §8 filesystem), PERFORMANCE.md (§3 pixel table, §7 preflight), ELEMENT_IDS.md (`hdr.action.purchase`, `hdr.action.license`, `scr.license`, `scr.onboarding.license`), BRD.md (§3 business model, BRD-001…BRD-008, BRD-023), RISKS_AND_ASSUMPTIONS.md (RISK-008, 019, 021, 022, 027) |
+| Last updated | 2026-10-25 |
+| Depends on | GLOSSARY.md (Licence Key, Machine Fingerprint, Database Key, Service Token), DECISIONS.md (ADR-006, ADR-007, ADR-014), ARCHITECTURE.md (§4 `license` module, §5 lifecycle, §8 filesystem), PERFORMANCE.md (§3 pixel table, §7 preflight), ELEMENT_IDS.md (`hdr.action.purchase`, `hdr.action.license`, `scr.license`, `scr.onboarding.license`), BRD.md (§3 business model, BRD-001…BRD-008, BRD-023), RISKS_AND_ASSUMPTIONS.md (RISK-008, 019, 021, 022, 027) |
 | Used by | SECURITY.md, THREAT_MODEL.md, ERROR_CATALOGUE.md (EM-5xxx), TEST_PLAN.md (QA- licence cases), API_SPECIFICATION.md (`/license` routes), DATABASE_SCHEMA.md (`license_state` table), DEPLOYMENT_AND_PACKAGING.md (`revoked.json`, build date, public keys), UI_UX_SPECIFICATION.md (`scr.license` copy), ONBOARDING_TOUR.md |
-| Owner of | Licence Key token format and encoding, signing keys and rotation, Machine Fingerprint derivation and tolerance rule, offline verification algorithm, Trial Mode rules, re-bind policy, revocation list format, clock-tamper handling, issuance runbook, delivery email, refund/revoke procedure, support scripts, licence test-case descriptions |
+| Owner of | Licence Key token format and encoding, signing keys and rotation, Machine Fingerprint derivation and tolerance rule, offline verification algorithm, activation rules (no Trial Mode), re-bind policy, revocation list format, clock-tamper handling, issuance runbook, delivery email, refund/revoke procedure, support scripts, licence test-case descriptions |
 | ID range | `LIC-` (reserved in GLOSSARY.md for licence-operations requirements). This document currently states its rules as numbered algorithm steps and section references (e.g. "LICENSE_OPERATIONS §6 step 7") and has no separate requirement list; when one is written it uses `LIC-001…`. Error codes EM-5001…5009 are owned by ERROR_CATALOGUE.md (final); test IDs are assigned in TEST_PLAN.md; business rules are BRD-001…BRD-008. |
 
 Wording rule (GLOSSARY "Words to avoid"): this document never claims the licence is unbreakable. Every check below can be bypassed by patching the binary; that is the accepted ADR-007 boundary (§14). The licence exists to make honest purchase the easy path and casual sharing inconvenient, not to stop a determined attacker.
@@ -17,8 +17,8 @@ Wording rule (GLOSSARY "Words to avoid"): this document never claims the licence
 | Actor | Does |
 |---|---|
 | Operator | generates and guards the Ed25519 private key; issues, re-binds, renews and revokes Licence Keys with the `expertmotion-license` CLI on an offline machine; maintains the audit log and `revoked.json`; answers support |
-| Local Service (`license` module, bytecode-protected per ADR-007) | computes the Machine Fingerprint, verifies the Licence Key offline, decides `licensed` / `trial` / `updatesExpired`, exposes `GET /license`, `POST /license/activate`, `DELETE /license`, `GET /license/machine-code` (routes owned by API_SPECIFICATION.md), sets the `trial` flag on render `inputProps` |
-| Editor (`scr.license`) | shows status, Machine Code, Buy link, key entry; never verifies anything itself |
+| Local Service (`license` module, bytecode-protected per ADR-007) | computes the Machine Fingerprint, verifies the Licence Key offline, decides `licensed` / `unlicensed` / `invalid` / `revoked` / `machine-mismatch`, exposes `GET /license`, `POST /license/activate`, `POST /license/deactivate` (routes owned by API_SPECIFICATION.md; the Machine Code is part of `GET /license`), and gates every other `/api/v1` route until the state is `licensed` (§7) |
+| Editor (`scr.license`) | while not licensed, the only screen: Machine Code with Copy, key entry, Activate, links; never verifies anything itself |
 | Desktop Shell | stores nothing licence-specific except the wrapped Database Key; opens the Buy URL in the system browser |
 
 Everything is offline (ADR-014). No licence server exists at launch. The only network touch points are the Buy link (system browser) and the signed `revoked.json` fetched with the update feed when Private Mode is off.
@@ -152,31 +152,30 @@ Runs at Local Service start (ARCHITECTURE §5 step 2), on `POST /license/activat
 | 6 | Parse the Payload as JSON and validate with the Zod schema of §3.1 (`v === 1`, ULID shape, tier enum, `fpc.length === 3`, dates parse) | EM-5006 |
 | 7 | Revocation: load the newest trusted `revoked.json` (§8); if an entry with `lid` exists and `entry.epoch > payload.rev` | EM-5004 revoked |
 | 8 | Fingerprint: compute `c1..c3` (§5.2) and apply the tolerance rule (§5.4) against `fpc` | EM-5003 fingerprint mismatch |
-| 9 | Updates eligibility: compare the compiled `buildDate` (ISO date of the release, DEPLOYMENT_AND_PACKAGING.md) with `upd`: `buildDate ≤ upd` → covered; otherwise the licence is genuine but does not cover this build | EM-5005 updates expired for this build → state `updatesExpired` (exports behave as Trial Mode; §7) |
+| 9 | Updates eligibility: compare the compiled `buildDate` (ISO date of the release, DEPLOYMENT_AND_PACKAGING.md) with `upd`: `buildDate ≤ upd` → covered; otherwise the licence is genuine but does not cover this build | EM-5005 updates expired for this build → state `invalid` with code EM-5005; the build stays locked (§7) |
 | 10 | Clock check (§9): update `lastSeen`, set `clockAnomaly` if the clock went backwards by more than 24 h; never fails the licence | EM-5007 (info) |
 | 11 | Persist `{licenseKey, lid, tier, name, upd, status, lastVerifiedAt, clockAnomaly}` in the encrypted database table `license_state` (DATABASE_SCHEMA.md); keep the decision in memory for the session | — |
 | 12 | Emit SSE `license.changed {status, tier, upd}` (API_SPECIFICATION events table) so `hdr.action.license` and `scr.license` refresh | — |
 
-Resulting states: `trial` (no key or a rejected key — the rejected key is kept so the Creator can see the error and copy it to support), `licensed`, `updatesExpired`. The Editor receives only the state and the error code, never the reason internals.
+Resulting states: `licensed` (steps 1–9 pass), `unlicensed` (no key stored), `invalid` (stored key fails steps 1–6 or 9; code EM-5002 / EM-5005 / EM-5006 / EM-5009), `revoked` (step 7, EM-5004), `machine-mismatch` (step 8, EM-5003). A key rejected on `POST /license/activate` is not stored; the state stays what it was and the Editor keeps the typed key visible so the Creator can copy it to support. The Editor receives only the state and the error code, never the reason internals.
 
 Performance: steps 1–7 are microseconds; step 8 uses the cached components; the full routine runs well under 50 ms after the first component read.
 
-## 7. Trial Mode rules
+## 7. Activation gate (Trial Mode removed)
+
+Operator decision 2026-10-25: **there is no Trial Mode.** Every install must be activated with a Licence Key bound to its Machine Code before the product is usable. There is a single edition; the Payload `tier` field stays for compatibility but never gates a feature.
 
 | Rule | Specification | Status |
 |---|---|---|
-| Entry | fresh install, no key, or key rejected; also the export behaviour of `updatesExpired` | normative |
-| Editor | everything works: import, agents, catalogue, Player, Timeline View, all Output Settings UI | normative (GLOSSARY "Trial Mode") |
-| Resolution cap | at render time the Local Service clamps the Output Profile to the **720p row** of PERFORMANCE §3 for the chosen Aspect Ratio (e.g. 9:16 → 720×1280); the Editor shows the chosen resolution struck through with "720p in Trial Mode" | normative |
-| Watermark | text **"Expertmotion Trial"**, rendered by the Engine as a top-most layer: anchored bottom-right, text height = **4 % of the output height**, right and bottom margins = 2 % of the output height, white at 85 % opacity with a 1 px dark shadow for contrast, bundled UI font; present on every frame, GIFs and stills included; the Player shows the same watermark in Draft and Full preview so preview = export | normative; the string is a brand mark and is **not translated** (ID variant: "Expertmotion Trial") |
-| Who sets the flag | the Local Service injects `trial: true` into the render `inputProps` and the Player props; the Editor cannot change it (the HTTP API has no parameter for it) | normative |
-| Notice | export preflight shows EM-5001 (informational) with the two actions "Buy" and "I have a key" (PERFORMANCE §7) | normative |
-| Time limit | **none**. Trial Mode never expires functionally | normative (BRD-002) |
-| Soft reminder | after 14 days from `firstLaunchAt` (stored in `license_state`), a dismissible `sys.toast` once per 7 days: "You've used Expertmotion Trial for two weeks. Buy a licence to remove the watermark and export in full resolution." | `[Operator decision D-3]` keep / change / remove |
-| Agents | fully available (the Creator pays the provider anyway); no artificial limit | normative |
-| Project compatibility | a trial project opens unchanged after activation; nothing is stored differently | normative |
-
-Indonesian variants of the strings above are in §16.3.
+| Locked states | `unlicensed`, `invalid`, `revoked`, `machine-mismatch` (§6). Only `licensed` unlocks the product | normative |
+| Service gate | while locked, every `/api/v1` route answers **EM-5010** (HTTP 403, `details.status` = the state) except: `GET /health`, `GET /version`, `GET /license` (state + Machine Code), `POST /license/activate`, `GET /settings`, `PUT /settings` with only `uiLanguage` / `theme`, `GET /events` (so `license.changed` reaches the screen), and the Shell's `GET /renders` and `POST /service/shutdown` (close and update checks). The gate runs in the Local Service before every module's routes, after the Service Token guard (SEC-122) | normative |
+| Editor | while locked, the licence screen (`scr.license` with `data-gate`) is the whole window: Machine Code with Copy, key field (paste or drop `.emlicense`), Activate, "Get a licence key" and activation-help links, language switch. No Header, Library, Stage, Agents, onboarding or Export | normative |
+| After activation | the Editor continues to onboarding (first run) or the Editor without a restart; a later revocation or removal (`license.changed`, or EM-5010 on any call) returns to the licence screen; projects and media are never touched | normative |
+| Exports | never watermarked and never resolution-capped; the Engine has no watermark component | normative |
+| Activation rate limit | 5 failed activations within 60 s lock `POST /license/activate` for 60 s; each further lockout doubles the wait up to 1 h; a success resets the counter; answer **EM-5011** (HTTP 429, `Retry-After`, `details.retryAfterSeconds`). In memory per launch (SEC-123) | normative |
+| Constant time | Machine Fingerprint components are compared in constant time (§5.4); signatures are checked with the Ed25519 verify primitive, never by comparing secret bytes | normative |
+| Updates expired (§6 step 9) | a key whose `upd` is before the build date does not activate this build (EM-5005); the Creator installs an earlier version or renews | normative |
+| Former Trial Mode installs | migration 32 maps a stored `trial` state to `unlicensed` and `updates-expired` to `invalid`; the state is re-derived from the stored key at every start anyway | normative |
 
 ## 8. Re-bind policy and revocation list
 
@@ -211,7 +210,7 @@ Indonesian variants of the strings above are in §16.3.
 | Shipping | embedded in every release (`resources/license/revoked.json` + `.sig`); additionally fetched from the update feed host at startup when Private Mode is off, at most once per 24 h, verified, and stored under `%APPDATA%\Expertmotion\data\revoked.json` |
 | Monotonicity | a fetched or embedded list replaces the stored one only if its signature verifies and `generatedAt` is newer; an attacker cannot roll the list back by supplying an older signed copy |
 | Size | one line per entry; thousands of entries remain a few hundred KB; no pruning needed in the first years |
-| Trial Mode interaction | revocation puts the install into `trial`, keeps projects intact, shows EM-5004 with the support action |
+| Gate interaction | revocation puts the install into `revoked`: the licence screen alone is shown (§7) with EM-5004 and the support action; projects stay intact and open again after a valid key is activated |
 
 ## 9. Clock-tamper handling
 
@@ -220,9 +219,9 @@ Indonesian variants of the strings above are in §16.3.
 | Stored value | `lastSeen` = the latest wall-clock time observed by the Local Service, written to `license_state` at startup, every hour while running, and at shutdown; a copy is wrapped with the Database Key material in `keyring.bin` (ARCHITECTURE §8) so deleting the database alone does not reset it |
 | Detection | at startup and hourly: if `now < lastSeen − 24 h` → set `clockAnomaly = true`, log the two timestamps (no other data), raise EM-5007 (info, shown once in `hdr.action.license` as a small badge "clock changed") |
 | Effect on the licence | **none**. The licence is perpetual; `licensed` stays `licensed`. The flag exists for support diagnosis and to disarm the incentive to tamper |
-| Effective time | `effectiveNow = max(lastSeen, now)` is used for: the Trial soft reminder, the update-feed eligibility check (a release whose `releaseDate > upd` is not offered by the updater), and the `revoked.json` freshness comparison |
+| Effective time | `effectiveNow = max(lastSeen, now)` is used for: the update-feed eligibility check (a release whose `releaseDate > upd` is not offered by the updater), and the `revoked.json` freshness comparison |
 | Build-date check | §6 step 9 compares `buildDate` with `upd` and does not use the clock at all, so rolling the clock back cannot make an uncovered build covered |
-| Forward jumps | ignored (a forward jump only makes `lastSeen` larger, which is harmless: it can at most hide a reminder) |
+| Forward jumps | ignored (a forward jump only makes `lastSeen` larger, which is harmless) |
 | Reset | `lastSeen` is never reset by the Creator; it is replaced when a Backup is restored on another machine (the restored value is accepted if newer) |
 
 ## 10. Issuance runbook (Operator)
@@ -274,19 +273,36 @@ Rules: append-only; one row per action (`issue`, `rebind`, `renew`, `revoke`, `r
 3. Send the batch (online machine) with the §12 template variant "Your updated licence key".
 4. Revocation entries are not needed for a dead key, but are added anyway for `keyrotation` so a stolen old key cannot be revived on a build that still trusts the old `kid`.
 
+### 10.5 Operator admin app (Expertmotion License Admin)
+
+A small Windows desktop app for the Operator, in `apps/admin` ("Expertmotion License Admin"). It is a GUI over the same library as the CLI and is **never shipped to Creators**: it is not part of the Expertmotion installer, the release scripts or the update feed.
+
+| Item | Behaviour |
+|---|---|
+| Code reuse | All crypto, encoding and licence policy come from `tools/license-cli/src/lib` (`keys.mjs`, `token.mjs`, `format.mjs`, `audit.mjs`, `email.mjs`, and `ops.mjs`, which holds the issue/rebind/renew/revoke/export rules that `cli.mjs` also calls). The app adds no crypto of its own. |
+| Keys screen | Create a key pair: kid, passphrase twice (at least 12 characters, strength hint), a folder the Operator picks; the key file is always sealed (scrypt + AES-256-GCM, mode 0600, never overwritten) and named `expertmotion-signing-key-<kid>.json`. Shows the public key hex and the ready-made entry for `apps/service/src/license/keys.ts` with Copy buttons. Open an existing sealed key with its passphrase; unsealed (development) key files are refused. Folders inside any git working tree are refused. |
+| Key in memory | The seed exists only in main-process memory while unlocked. Auto-lock after 15 minutes without Operator activity (keyboard or pointer), on Lock, and on quit; locking overwrites the seed bytes with zeros. Not protected: the typed passphrase is a JavaScript string and cannot be wiped, and intermediate buffers from unsealing are freed only by the garbage collector. The key and passphrase are never logged or written to the settings file. |
+| Issue screen | Name, email, order id, updates months, tier, the Creator's Machine Code (format and CRC checked live), optional override reason. Generate shows the Licence Key with Copy and the §12 email (both languages, order per setting) with Copy; writes `out/<lid>.emlicense` and appends the audit row. Same refusals as the CLI (no Machine Code, CRC mismatch, fewer than two components, duplicate order without override). |
+| Licences screen | Search the audit log (name, email, order, lid, Machine Code); per licence: history, Rebind (new Machine Code; EM-5008 after 3 moves in 12 months unless an override reason is given), Renew (months, order id), Revoke (refund or fraud, note). Every action needs a second confirming click. Export `revoked.json` + `.sig` to the workspace `dist/` or a chosen folder. Revoke also requires the unlocked key. |
+| Verify screen | Paste a key and optionally a Machine Code: decoded Payload, the EM- code, fingerprint match count, and the revocation check against the workspace `revoked.json` when its signature verifies. Works while locked (public keys of key files opened here are remembered). |
+| Workspace | One folder (default `Documents/Expertmotion License Admin`): `audit/licences.csv`, `out/`, `dist/revoked.json`. Back it up with the key to the encrypted media. |
+| Network policy | Setting with two values. **Strict** (default) is the §10.2 rule: creating/opening the key and every signing or audit-writing action is refused while a non-loopback interface is up; Verify and the licence list still work. **Warn only** allows those actions on an online PC and keeps a banner visible. The banner shows whenever an interface is up. |
+| Window hardening | Local content only (`file://` inside the app; every other request is cancelled), contextIsolation, sandbox, no Node in the renderer, strict CSP (`default-src 'none'`, no inline script), navigation/new windows/webviews/permission requests refused, one preload function `request(channel, args)` limited to a closed channel list. Main validates every IPC argument (types, lengths, enums, no unknown keys) and accepts file paths only when it produced them itself (dialog results, files it wrote). Packaged builds flip the same Electron fuses as the Shell (SEC-028). |
+| Build | `npm run build:admin` (esbuild bundle: `dist/main.cjs`, `dist/preload.cjs`, `dist/renderer/`), `npm run pack:admin:win` → `release/admin/<version>/Expertmotion-License-Admin-<version>-win-x64.zip` (portable zip; unzip and run `Expertmotion-License-Admin.exe`; no installer, not code-signed). Runbook: `poc/WINDOWS_RUNBOOK.md` §8. |
+
 ## 11. Refund and revoke procedure
 
 | Step | Action | Who |
 |---|---|---|
 | 1 | Refund request arrives within the window (14 days of first purchase; BRD-008, `[Operator decision D-5]`) with order reference or licence email | Creator → Operator |
 | 2 | Operator verifies the order in the storefront and finds `lid` via `audit --email` (hash match) | Operator (online machine, public data only) |
-| 3 | Operator asks the Creator to deactivate (`scr.license` → "Remove key", `DELETE /license`), which returns the install to Trial Mode immediately; not mandatory — step 4 covers non-cooperation | Creator |
+| 3 | Operator asks the Creator to deactivate (`scr.license` → "Remove key", `POST /license/deactivate`), which locks the install immediately (licence screen only, §7); not mandatory — step 4 covers non-cooperation | Creator |
 | 4 | `expertmotion-license revoke --lid … --reason refund`; `export-revocations`; the new `revoked.json` is uploaded to the update feed the same day and included in the next release | Operator (offline machine → USB → online) |
 | 5 | Refund issued through the storefront; `refund` row appended with the order reference | Operator |
 | 6 | Confirmation email EN/ID (§12.3) | Operator |
 | Fraud / chargeback | same as steps 4–5 with `--reason fraud`; no reissue for that `lid`; the email hash is noted in `operator_note` for future orders | Operator |
 
-The Creator's projects and media are never touched by revocation; only the watermark and 720p cap return.
+The Creator's projects and media are never touched by revocation; the install shows only the licence screen until a valid key is activated (§7).
 
 ## 12. Delivery email templates
 
@@ -303,7 +319,7 @@ Thank you for buying Expertmotion. Your licence key is attached as {lid}.emlicen
 
 How to activate (takes one minute):
 1. Open Expertmotion.
-2. Click "Purchase" in the top bar, or Help > Licence.
+2. The licence screen opens by itself on a computer that is not activated yet (otherwise Help > Licence).
 3. Paste the key into the field (or drop the attached file onto it) and click "Activate".
 
 Your key:
@@ -333,7 +349,7 @@ Terima kasih telah membeli Expertmotion. Kunci lisensi Anda terlampir sebagai {l
 
 Cara mengaktifkan (sekitar satu menit):
 1. Buka Expertmotion.
-2. Klik "Purchase" di bilah atas, atau Help > Licence.
+2. Layar lisensi terbuka sendiri di komputer yang belum diaktifkan (jika tidak, Help > Licence).
 3. Tempel kunci ke kolom yang tersedia (atau seret berkas terlampir ke kolom itu) lalu klik "Activate".
 
 Kunci Anda:
@@ -354,9 +370,9 @@ Jika kunci tidak diterima, balas dengan kode kesalahan yang ditampilkan (EM-5xxx
 
 ### 12.3 Refund confirmation (EN / ID)
 
-EN: `Subject: Your Expertmotion refund` — "Hi {name}, your refund for order {order_ref} has been issued and your licence key {lid_short} has been revoked. Expertmotion continues to work in Trial Mode (watermark, 720p). Your projects are untouched. Thank you for trying it."
+EN: `Subject: Your Expertmotion refund` — "Hi {name}, your refund for order {order_ref} has been issued and your licence key {lid_short} has been revoked. Expertmotion stays locked on that computer until a licence key is activated again. Your projects are untouched. Thank you for trying it."
 
-ID: `Subjek: Pengembalian dana Expertmotion Anda` — "Halo {name}, pengembalian dana untuk pesanan {order_ref} telah diproses dan kunci lisensi {lid_short} telah dicabut. Expertmotion tetap dapat digunakan dalam Trial Mode (watermark, 720p). Proyek Anda tidak berubah. Terima kasih telah mencobanya."
+ID: `Subjek: Pengembalian dana Expertmotion Anda` — "Halo {name}, pengembalian dana untuk pesanan {order_ref} telah diproses dan kunci lisensi {lid_short} telah dicabut. Expertmotion di komputer itu terkunci sampai kunci lisensi diaktifkan lagi. Proyek Anda tidak berubah. Terima kasih telah mencobanya."
 
 ## 13. Support: "licence not accepted"
 
@@ -364,11 +380,13 @@ ID: `Subjek: Pengembalian dana Expertmotion Anda` — "Halo {name}, pengembalian
 
 | Code | Trigger (§6 step) | Severity | Copy (EN) | Copy (ID) | Primary action |
 |---|---|---|---|---|---|
-| EM-5001 | Trial Mode export preflight | notice | Trial Mode: this export will be 720p with an "Expertmotion Trial" watermark. | Trial Mode: ekspor ini akan berukuran 720p dengan watermark "Expertmotion Trial". | Buy / I have a key / Continue |
+| EM-5001 | — (retired 2026-10-25 with Trial Mode) | deprecated | — | — | — |
+| EM-5010 | §7 gate: any `/api/v1` call while not licensed | error | Expertmotion needs a licence key before you can use it. Copy this computer's Machine Code, send it to get your key, then paste the key and choose Activate. | Expertmotion memerlukan kunci lisensi sebelum dapat digunakan. Salin Machine Code komputer ini, kirimkan untuk mendapatkan kunci, lalu tempel kunci dan pilih Aktifkan. | Enter licence key |
+| EM-5011 | §7 rate limit on `POST /license/activate` | error | Too many activation attempts. Wait {seconds} seconds, then try again. | Terlalu banyak percobaan aktivasi. Tunggu {seconds} detik, lalu coba lagi. | OK |
 | EM-5002 | step 3 (revoked `kid`) or step 5 | error | This licence key's signature is not valid. Check that you pasted the whole key, or contact support with this code. | Tanda tangan kunci lisensi ini tidak valid. Pastikan seluruh kunci tertempel, atau hubungi dukungan dengan kode ini. | Paste again / Contact support |
 | EM-5003 | step 8 | error | This licence key belongs to a different computer. To move it here, send this computer's Machine Code to support. | Kunci lisensi ini terikat pada komputer lain. Untuk memindahkannya ke sini, kirim Machine Code komputer ini ke dukungan. | Copy Machine Code / Contact support |
 | EM-5004 | step 7 | error | This licence key has been revoked (for example after a refund or a move to another computer). Contact support if this is unexpected. | Kunci lisensi ini telah dicabut (misalnya setelah pengembalian dana atau pindah ke komputer lain). Hubungi dukungan jika ini tidak Anda duga. | Contact support |
-| EM-5005 | step 9 | warning | Your licence covers updates until {upd}; this version was released later. Exports run in Trial Mode until you renew or install a version from before that date. | Lisensi Anda mencakup pembaruan hingga {upd}; versi ini dirilis setelahnya. Ekspor berjalan dalam Trial Mode sampai Anda memperpanjang atau memasang versi sebelum tanggal itu. | Renew / Get earlier version |
+| EM-5005 | step 9 | error | Your licence covers versions released until {upd}; this version is newer, so the key does not activate it. Install a version from before that date, or renew. | Lisensi Anda mencakup versi yang dirilis hingga {upd}; versi ini lebih baru, sehingga kunci tidak dapat mengaktifkannya. Pasang versi sebelum tanggal itu, atau perpanjang. | Renew / Get earlier version |
 | EM-5006 | steps 1, 2, 4, 6 | error | This doesn't look like an Expertmotion licence key. Keys start with "EM1-". Paste the full key or drop the .emlicense file here. | Ini tidak terlihat seperti kunci lisensi Expertmotion. Kunci diawali "EM1-". Tempel kunci lengkap atau seret berkas .emlicense ke sini. | Paste again |
 | EM-5007 | step 10 | info | The computer's clock moved backwards. Your licence is unaffected. | Jam komputer bergeser mundur. Lisensi Anda tidak terpengaruh. | Dismiss |
 | EM-5009 | step 3 (unknown `kid`) | warning | This key was issued for a newer version of Expertmotion. Update Expertmotion, then activate again. | Kunci ini diterbitkan untuk versi Expertmotion yang lebih baru. Perbarui Expertmotion, lalu aktifkan lagi. | Check for updates |
@@ -408,101 +426,88 @@ What this document does not promise: it never says the licence "cannot be bypass
 
 | # | Case | Steps | Expected |
 |---|---|---|---|
-| L-1 | Valid key activates | Issue a key for the test VM's Machine Code with the CLI; paste into `scr.license.input`; Activate | state `licensed`; `hdr.action.purchase` hidden; `hdr.action.license` shows name and `upd`; a 1080p export has no watermark and is 1920×1080 |
-| L-2 | Tampered key rejected | Change one character inside the payload field of a valid key; Activate | EM-5002; state stays `trial`; the rejected key remains visible for copying |
+| L-1 | Valid key activates | Fresh install (licence screen only); issue a key for the test VM's Machine Code with the CLI; paste into `scr.license.input`; Activate | state `licensed`; the Editor (onboarding on first run) appears without restart; `hdr.action.license` shows name and `upd`; a 1080p export has no watermark and is 1920×1080 |
+| L-2 | Tampered key rejected | Change one character inside the payload field of a valid key; Activate | EM-5002; state stays `unlicensed` (licence screen only); the rejected key remains visible for copying |
 | L-3 | Wrong machine | Issue a key for a different Machine Code (all three components differ); Activate | EM-5003; `scr.license.machinecode` shows this machine's code with a copy button |
 | L-4 | 2-of-3 tolerance | Issue a key whose `fpc[1]` (disk) is wrong but `fpc[0]` and `fpc[2]` are right | state `licensed` (passes); then also break `fpc[2]` → EM-5003 |
-| L-5 | Revocation | Activate a valid key; install a release (or inject via test hook) whose `revoked.json` lists the `lid` with epoch 1 while the key has `rev` 0 | EM-5004 on next startup; state `trial`; projects open normally; then activate the re-bound key with `rev` 1 → `licensed` |
-| L-6 | Updates expired for this build | Issue a key with `--updates-months 0` so `upd` is before the build date | EM-5005; state `updatesExpired`; the Editor works; an export is clamped to 720p with watermark; the updater does not offer newer releases |
-| L-7 | Trial Mode output | Fresh install, no key; set 9:16 at 1080p; export MP4, GIF and still | files are 720×1280; watermark "Expertmotion Trial" at bottom-right with height 4 % of the output height (≈ 51 px at 1280) on every sampled frame, GIF and still; EM-5001 shown at preflight; Player preview shows the same watermark |
-| L-8 | Clock rollback | Activate; run once; set the system clock 3 days back; restart | state stays `licensed`; `clockAnomaly` true in `GET /license`; EM-5007 badge shown once; the trial reminder timer (on a trial install) does not reset |
+| L-5 | Revocation | Activate a valid key; install a release (or inject via test hook) whose `revoked.json` lists the `lid` with epoch 1 while the key has `rev` 0 | EM-5004 on next startup; state `revoked`; only the licence screen is shown and every other route answers EM-5010; then activate the re-bound key with `rev` 1 → `licensed`, projects open unchanged |
+| L-6 | Updates expired for this build | Issue a key with `--updates-months 0` so `upd` is before the build date | EM-5005 on Activate; state stays locked (`invalid` when such a key is stored); the updater does not offer newer releases |
+| L-7 | Locked without a key; no watermark | Fresh install, no key: call `GET /projects` and `POST /renders` with the Service Token; then activate and export 9:16 at 1080p as MP4, GIF and still | before activation both answer 403/EM-5010 and the window shows only the licence screen; after activation the files are 1080×1920 (GIF 720 wide, its own cap) and carry no watermark |
+| L-8 | Clock rollback | Activate; run once; set the system clock 3 days back; restart | state stays `licensed`; `clockAnomaly` true in `GET /license`; EM-5007 badge shown once |
 
-Additional cases TEST_PLAN.md should derive: malformed strings (EM-5006 variants: missing field, wrong prefix, non-base32 characters, whitespace and line breaks that must be accepted), `.emlicense` drag-and-drop, unknown `kid` (EM-5009), CLI CRC rejection of a mistyped Machine Code, CLI refusal of a fourth re-bind without `--override`, `export-revocations` idempotency, `verify` output equals the app's decision for all of L-1…L-6.
+Additional cases TEST_PLAN.md should derive: activation rate limit (6th wrong key within a minute → EM-5011, growing lockout), `PUT /settings` while locked accepts only `uiLanguage`/`theme`, malformed strings (EM-5006 variants: missing field, wrong prefix, non-base32 characters, whitespace and line breaks that must be accepted), `.emlicense` drag-and-drop, unknown `kid` (EM-5009), CLI CRC rejection of a mistyped Machine Code, CLI refusal of a fourth re-bind without `--override`, `export-revocations` idempotency, `verify` output equals the app's decision for all of L-1…L-6.
 
-## 16. Activation UX and purchase flow
+## 16. Activation UX
 
 ### 16.1 Entry points
 
 | Element ID (ELEMENT_IDS.md) | Behaviour |
 |---|---|
-| `hdr.action.purchase` ("Purchase", hidden when `licensed`) | opens `scr.license` |
-| `hdr.action.license` (avatar) | popover: state (`trial` / `licensed` / `updatesExpired`), licensee name, `upd`, Machine Code, "Manage licence" → `scr.license` |
-| `hdr.menu.help.license` | opens `scr.license` |
-| `scr.onboarding.license` | the same content as `scr.license` embedded in the first-run wizard, with "Continue with Trial" as the default button |
-| Export preflight EM-5001 | actions "Buy" and "I have a key" open `scr.license` |
+| launch while not licensed | the licence screen (`scr.license`, `data-gate`) is the whole window (§7); nothing else of the product is reachable |
+| `hdr.action.license` (avatar, licensed only) | popover: licensee name, `upd`, "Manage licence" → `scr.license` (modal) |
+| `hdr.menu.help.license` | opens `scr.license` (modal) |
+| EM-5010 on any call (revoked / removed while running) | the Editor refetches `GET /license` and shows the licence screen |
 
-### 16.2 `scr.license` layout
+### 16.2 `scr.license` layout (licence screen while locked)
 
 ```
-┌ scr.license ──────────────────────────────────────────────────────────┐
-│ Status card   scr.license.status      Trial Mode / Licensed to {name} │
-│               scr.license.machinecode  MC1-…  [Copy] scr.license.machinecode.copy │
-│                                                                        │
-│ [ Buy Expertmotion ]  scr.license.buy  → opens {storeUrl} in browser   │
-│ ───────────────────────────── or ───────────────────────────────────── │
-│ I have a key                                                           │
-│  ┌ scr.license.input (textarea, accepts .emlicense drop) ───────────┐  │
-│  └──────────────────────────────────────────────────────────────────┘  │
+┌ scr.license (data-gate) ───────────────────────────────────────────────┐
+│ Activate Expertmotion                         [Bahasa Indonesia] .lang │
+│ 1 Copy this computer's Machine Code  2 Send it  3 Paste key, Activate  │
+│ Status card   scr.license.status   (only after a rejected stored key)  │
+│ Machine Code  scr.license.machinecode  MC1-…  [Copy] .machinecode.copy │
+│ Licence key   scr.license.input (masked; Paste; accepts .emlicense)    │
 │  [ Activate ] scr.license.activate      scr.license.error (EM-5xxx)    │
-│                                                                        │
-│ Licensed state only:  [ Remove key ] scr.license.remove                │
-│                       [ Move to another computer… ] scr.license.rebind │
-│ Trial only:           [ Continue with Trial ] scr.license.trial.continue│
+│  scr.license.rebind (EM-5003: move-to-this-computer steps)             │
+│  Get a licence key → {storeUrl}  scr.license.buy                       │
+│  Help with activation → {docsUrl}  scr.license.help                    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-All elements are defined in ELEMENT_IDS.md (`scr.license` row): `scr.license.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.trial.continue`, `.remove`, `.rebind`, `.error`. `{storeUrl}` is a build-time constant (`EXPERTMOTION_STORE_URL`, placeholder `https://example.invalid/expertmotion/buy` until `[Operator decision D-2]`); the Desktop Shell opens it with `shell.openExternal` after validating it is `https:`. The Editor never embeds a payment page.
+While licensed, the same form is the "Manage licence" modal: status card "Licensed to {name}", Machine Code, key field (to replace the key), and `scr.license.remove` "Deactivate on this computer" (confirmation; the install locks again). All elements are defined in ELEMENT_IDS.md (`scr.license` row): `.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.help`, `.lang`, `.steps`, `.remove`, `.rebind`, `.error`. `{storeUrl}` is a build-time constant (`VITE_EM_STORE_URL`, placeholder until `[Operator decision D-2]`); the Desktop Shell opens it with `shell.openExternal` after validating it is `https:`; in Private Mode the link shows the URL to copy (EM-8202). The Editor never embeds a payment page.
 
-Flow "Buy": `hdr.action.purchase` → `scr.license` → `scr.license.buy` → system browser → storefront → payment → the Creator receives the §12 email → back in `scr.license`, pastes or drops the key → `scr.license.activate` → `POST /license/activate` → §6 → SSE `license.updated` → status card updates, `hdr.action.purchase` disappears, `sys.toast` "Licence activated. Thank you!".
+Flow "Activate": first launch → licence screen → Copy Machine Code → the Creator sends it (purchase / support) → the Operator issues a key bound to it (CLI or the admin app, §10) → §12 email → paste or drop the key → `scr.license.activate` → `POST /license/activate` → §6 → SSE `license.changed` → `sys.toast` "Licence activated" → onboarding (first run) or the Editor, without restart.
 
-Flow "Move to another computer": `scr.license.rebind` shows a dialog with the Machine Code of *this* machine and the instruction to open the same screen on the new machine and send *that* Machine Code to support (the support email is `mailto:` with a prefilled subject containing `lid_short`).
+Flow "Move to another computer": on the new computer the licence screen shows its Machine Code; the Creator sends it with the licence email to support; the Operator re-binds (§8.1); the old computer locks once its `revoked.json` lists the old epoch. EM-5003 on activation shows the same steps (`scr.license.rebind`).
 
 ### 16.3 Strings (EN / ID)
 
+The shipped copy lives in `apps/ui/src/i18n/{en,id}.json` under `ui.scr.license.*` and `err.EM-50xx.*` (the latter generated from ERROR_CATALOGUE.md). Key strings:
+
 | Key (i18n) | EN | ID |
 |---|---|---|
-| `license.status.trial` | Trial Mode — exports are 720p with a watermark | Trial Mode — ekspor berukuran 720p dengan watermark |
-| `license.status.licensed` | Licensed to {name} · updates until {upd} | Berlisensi atas nama {name} · pembaruan hingga {upd} |
-| `license.status.updatesExpired` | Licensed to {name} · updates ended {upd} — this version is newer | Berlisensi atas nama {name} · pembaruan berakhir {upd} — versi ini lebih baru |
-| `license.machinecode.label` | Machine Code | Machine Code |
-| `license.machinecode.copy` | Copy | Salin |
-| `license.machinecode.copied` | Copied | Tersalin |
-| `license.buy` | Buy Expertmotion | Beli Expertmotion |
-| `license.or` | or | atau |
-| `license.haveKey` | I have a key | Saya punya kunci |
-| `license.input.placeholder` | Paste your licence key (starts with EM1-) or drop the .emlicense file here | Tempel kunci lisensi Anda (diawali EM1-) atau seret berkas .emlicense ke sini |
-| `license.activate` | Activate | Aktifkan |
-| `license.activating` | Checking key… | Memeriksa kunci… |
-| `license.activated.toast` | Licence activated. Thank you! | Lisensi aktif. Terima kasih! |
-| `license.remove` | Remove key | Hapus kunci |
-| `license.remove.confirm` | Remove the licence key from this computer? Expertmotion returns to Trial Mode. Your projects are not affected. | Hapus kunci lisensi dari komputer ini? Expertmotion kembali ke Trial Mode. Proyek Anda tidak terpengaruh. |
-| `license.rebind` | Move to another computer… | Pindah ke komputer lain… |
-| `license.rebind.help` | Open Help › Licence on the new computer, copy its Machine Code and send it to support. You can move your licence up to 3 times per 12 months. | Buka Help › Licence di komputer baru, salin Machine Code-nya, dan kirim ke dukungan. Anda dapat memindahkan lisensi hingga 3 kali per 12 bulan. |
-| `license.trial.continue` | Continue with Trial | Lanjutkan dengan Trial |
-| `license.trial.reminder` | You've used Expertmotion Trial for two weeks. Buy a licence to remove the watermark and export in full resolution. | Anda telah memakai Expertmotion Trial selama dua minggu. Beli lisensi untuk menghapus watermark dan mengekspor dalam resolusi penuh. |
-| `license.export.capped` | 720p in Trial Mode | 720p dalam Trial Mode |
-| `license.watermark.text` | Expertmotion Trial | Expertmotion Trial (brand mark, not translated) |
-| `license.clock.badge` | Clock changed | Jam berubah |
-| `license.support.subject` | Expertmotion licence help ({lid_short}) | Bantuan lisensi Expertmotion ({lid_short}) |
+| `ui.scr.license.gate.title` | Activate Expertmotion | Aktifkan Expertmotion |
+| `ui.scr.license.gate.body` | Expertmotion needs a licence key made for this computer. It takes a minute: | Expertmotion memerlukan kunci lisensi yang dibuat untuk komputer ini. Hanya butuh semenit: |
+| `ui.scr.license.status.licensed` | Licensed | Berlisensi |
+| `ui.scr.license.status.unlicensed` | Not activated | Belum diaktifkan |
+| `ui.scr.license.status.invalid` | Key not valid | Kunci tidak valid |
+| `ui.scr.license.status.revoked` | Revoked | Dicabut |
+| `ui.scr.license.status.machine-mismatch` | Key for another computer | Kunci untuk komputer lain |
+| `ui.scr.license.machinecode` | Machine code | Kode mesin |
+| `ui.scr.license.activate` | Activate | Aktifkan |
+| `ui.scr.license.activated` | Licence activated | Lisensi diaktifkan |
+| `ui.scr.license.buy` | Get a licence key (opens browser) | Dapatkan kunci lisensi (membuka browser) |
+| `ui.scr.license.help` | Help with activation (opens browser) | Bantuan aktivasi (membuka browser) |
+| `ui.scr.license.remove.confirm` | Remove the key from this computer? Expertmotion locks until a key is activated again. Your projects are not affected. | Hapus kunci dari komputer ini? Expertmotion terkunci sampai kunci diaktifkan lagi. Proyek Anda tidak terpengaruh. |
 
 ## 17. Traceability
 
 | This document | Governs / is governed by |
 |---|---|
 | §3–§6 token, keys, fingerprint, verification | BRD-001 (business rule), ADR-014 (decision), SEC- requirements to be written in SECURITY.md, QA cases L-1…L-6 |
-| §7 Trial Mode | BRD-002, PRD-017, PERFORMANCE §7 (EM-5001), QA L-7 |
+| §7 Activation gate (no Trial Mode) | BRD-002, PRD-017, SEC-122, SEC-123, EM-5010, EM-5011, QA L-7 |
 | §8 re-bind and revocation | BRD-006, BRD-007, ASM-021, QA L-5 |
 | §9 clock | RISK-019, QA L-8 |
 | §10–§12 runbook, emails | BRD-023 (data minimisation), K-07, RISK-016, RISK-021, RISK-022, RISK-026 |
-| §13 error codes | ERROR_CATALOGUE.md (EM-5001…5009) |
+| §13 error codes | ERROR_CATALOGUE.md (EM-5002…5011; EM-5001 retired) |
 | §14 threats | THREAT_MODEL.md, ADR-007 |
-| §16 UX | ELEMENT_IDS.md (`scr.license.*`, `hdr.action.purchase`), UI_UX_SPECIFICATION.md, ONBOARDING_TOUR.md, ACCESSIBILITY_AND_I18N.md |
+| §16 UX | ELEMENT_IDS.md (`scr.license.*`; `hdr.action.purchase` retired), UI_UX_SPECIFICATION.md, ONBOARDING_TOUR.md, ACCESSIBILITY_AND_I18N.md |
 
 ## 18. Open decisions and proposals for other documents
 
 | # | Item | Owner document | Needed by |
 |---|---|---|---|
-| 1 | 14-day soft reminder keep / change / remove (`[Operator decision D-3]`) | BRD.md §12 | Stage 4 |
+| 1 | **Closed** 2026-10-25: Trial Mode removed, so the 14-day reminder (D-3) no longer exists | BRD.md §12 | done |
 | 2 | Store URL (`[Operator decision D-2]`) | BRD.md §12 | Stage 6 |
 | 3 | Re-bind beyond 3 per 12 months: fee or discretion | BRD.md §3.2 | Stage 6 |
 | 4 | Revoke the old key on renewal (default yes) | this document §10.2 | Stage 4 |
@@ -517,13 +522,14 @@ These choices were made while implementing `apps/service/src/license/` and `tool
 
 | Topic | Choice |
 |---|---|
-| Status names | `trial`, `active`, `invalid`, `revoked`, `updates-expired` (the `license.status` CHECK was extended). A rejected key is `invalid` and keeps Trial Mode exports. |
+| Status names | Since 2026-10-25 (Trial Mode removed): `licensed`, `unlicensed`, `invalid`, `revoked`, `machine-mismatch` (migration 32 rebuilt the `license.status` CHECK and mapped `active` → `licensed`, `trial` → `unlicensed`, `updates-expired` → `invalid`). Only `licensed` opens the `/api/v1` gate. |
 | Machine Code checksum | CRC-16/CCITT-FALSE (polynomial 0x1021, init 0xFFFF). |
 | `revoked.json.sig` | One line `EMREV1-<kid>-<BASE32(sig)>`, signed over `"EMREV1" ‖ 0 ‖ kid ‖ 0 ‖ bytes`. `generatedAt` is the time of the latest revoking audit row, so repeated exports are byte-identical. |
 | Fingerprint sources | Windows disk serial from `Win32_DiskDrive.SerialNumber` of the system volume (lowest disk index as fallback) via `execFile`; CPU from `os.cpus()[0].model`. |
 | Sealed signing key | scrypt + AES-256-GCM (libsodium is not a dependency); passphrase from `EXPERTMOTION_LICENSE_PASSPHRASE` or `--passphrase-file`. |
 | Signature strictness | Strict RFC 8032 (`zip215: false`); the payload `fp` must equal SHA-256 of `fpc`. |
-| Clock check | Runs on every path, Trial Mode included, so `lastSeen` keeps moving forward. |
+| Clock check | Runs on every path, also without a key, so `lastSeen` keeps moving forward. |
 | CLI policy | `issue` needs a Machine Code; rebind revokes the previous key; the fourth rebind within 12 months is refused with EM-5008 unless `--override "<reason>"` is given and logged; renew revokes the previous key; signing refuses to run while a network interface is up (`--dev-allow-network` for development only). |
 | CLI exit codes | 0 ok, 1 key not valid, 2 usage, 3 refused by policy, 4 environment. |
+| Shared operations | Issue/rebind/renew/revoke/export rules live in `tools/license-cli/src/lib/ops.mjs`, used by both the CLI and the admin app (§10.5). `keys.mjs` also accepts an in-memory passphrase from the admin app; the CLI has no `--passphrase` flag, so a passphrase never appears on a command line. |
 | Production key | `PRODUCTION_PUBLIC_KEY_A1_HEX` in `keys.ts` is a placeholder; until the Operator runs `keygen --kid A1 --seal` and pastes the public key, every key reports EM-5009. |

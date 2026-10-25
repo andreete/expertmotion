@@ -176,9 +176,8 @@ describe('Onboarding (FR-004…FR-008)', () => {
     const { runtime } = await renderEditor('sample', { prefs: { onboardingDone: false } });
     await until(() => el('scr.onboarding.welcome'), 'wizard');
     fireEvent.click(byText('Get started')!);
-    await until(() => el('scr.onboarding.license'));
-    fireEvent.click(el('scr.onboarding.skip')!);                         // licence → provider
-    await until(() => el('scr.onboarding.provider'));
+    await until(() => el('scr.onboarding.provider'));                    // no Licence step: the key is activated before onboarding
+    expect(el('scr.onboarding.license')).toBeNull();
     expect(el('scr.onboarding.provider.consequence')!.textContent).toBe('Agents stay off until a provider is connected');
     expect((document.querySelector('[data-el="scr.providers.add"] select') as HTMLSelectElement | null)?.value ?? 'openrouter').toBe('openrouter');
     fireEvent.click(byText('Skip for now')!);                            // provider + models skipped
@@ -195,7 +194,7 @@ describe('Onboarding (FR-004…FR-008)', () => {
     await until(() => el('scr.project.new'), 'new dialog');
     expect((el('scr.project.new.name') as HTMLInputElement).value).toBe('Untitled');
     await untilAsync(async () => (await runtime.api.getSettings()).onboardingDone === true, 'server record');
-    expect((await runtime.api.getSettings()).onboardingSkippedSteps).toEqual(expect.arrayContaining(['license', 'provider', 'models', 'tour']));
+    expect((await runtime.api.getSettings()).onboardingSkippedSteps).toEqual(expect.arrayContaining(['provider', 'models', 'tour']));
   });
 
   it('Help ▸ Resume onboarding reopens the wizard', async () => {

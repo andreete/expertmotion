@@ -47,6 +47,8 @@ interface ProjectState {
 }
 
 export interface MockOptions { seed?: 'sample' | 'empty'; delays?: boolean; bus?: MockBus; onboardingDone?: boolean;
+  /** start licensed (default true, so Editor tests boot straight in); false = first launch, licence screen only (no Trial Mode) */
+  licensed?: boolean;
   /** FR-037 test seam: the `model:<id>` flag of a preset (no P0 preset carries one yet). */
   modelFlagOf?: (presetId: string) => string | undefined }
 export interface MockServer { fetch: (input: string, init?: RequestInit) => Promise<Response>; mediaResolver: MediaResolver; bus: MockBus; token: string; baseUrl: string; firstProjectId: () => string | null }
@@ -84,7 +86,9 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     privateMode: false, outputFolder: 'C:\\Users\\septi\\Videos\\Expertmotion', autoPlan: false, uiLanguage: 'en', theme: 'dark', defaultPerformanceProfile: 'standard',
     defaultRatio: '9:16', defaultResolution: '1080p', defaultFps: 30, checkUpdates: true, diagnosticsIncludeStructure: false,
   };
-  let license: LicenseDto = { status: 'trial', tier: null, licenseeHash: null, updatesUntil: null, updatesEligible: false, machineCode: 'MC1-7Q4K-2M9X-HV3T-8PZD', limits: { watermark: true, maxResolution: '720p' } };
+  const UNLICENSED: LicenseDto = { status: 'unlicensed', tier: null, licenseeHash: null, licenseeName: null, updatesUntil: null, updatesEligible: false, machineCode: 'MC1-7Q4K-2M9X-HV3T-8PZD', clockAnomaly: false };
+  const licensedDto = (): LicenseDto => ({ ...UNLICENSED, status: 'licensed', tier: 'standard', licenseeHash: 'a1b2c3', licenseeName: 'Septianus Angga', updatesUntil: new Date(Date.now() + 365 * 86400_000).toISOString(), updatesEligible: true });
+  let license: LicenseDto = opts.licensed === false ? UNLICENSED : licensedDto();
   const hardware: HardwareProfileDto = { tier: 'T0', cpuModel: 'Intel Core i5-1135G7', cpuThreads: 8, ramTotalMb: 16_384, gpuVendor: 'Intel', gpuModel: 'Iris Xe (shared)', vramMb: null, nvenc: false, detectedAt: nowIso(), warnings: [] };
   const connections: ConnectionDto[] = [];
   const assignments: { brainstorm: AssignmentDto | null; editor: AssignmentDto | null; defaultConnectionId: string | null } = { brainstorm: null, editor: null, defaultConnectionId: null };
@@ -546,30 +550,29 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   function estimate(body: RenderCreateInput) {
     const p = proj(body.projectId);
     const m = head(p).model;
-    const capped = license.status !== 'active';
-    const effectiveProfile = { ...body.outputProfile, ...(capped ? { resolution: '720p' as const } : {}) };
+    const effectiveProfile = { ...body.outputProfile };
     const dims = resolveDimensions(effectiveProfile.ratio, effectiveProfile.resolution, effectiveProfile.customRatio);
     const t = deriveTiming(m);
     const totalFrames = Math.round((t.durationMs / 1000) * body.outputProfile.fps);
     const hasClips = m.tracks.video.length > 0;
-    const checks: Array<{ check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'licence' | 'folder'; ok: boolean; code?: string }> = [
+    const checks: Array<{ check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'folder'; ok: boolean; code?: string }> = [
       { check: 'folder' as const, ok: true },
       { check: 'disk' as const, ok: true }, { check: 'memory' as const, ok: true }, { check: 'dimensions' as const, ok: true },
       { check: 'duration' as const, ok: hasClips, ...(hasClips ? {} : { code: 'EM-2202' }) },
       { check: 'assets' as const, ok: p.assets.every((a) => a.status !== 'ingesting'), ...(p.assets.some((a) => a.status === 'ingesting') ? { code: 'EM-1301' } : {}) },
-      { check: 'engine' as const, ok: true }, { check: 'licence' as const, ok: true, ...(capped ? { code: 'EM-5001' } : {}) },
+      { check: 'engine' as const, ok: true },
     ];
     const active = renders.find((j) => j.status === 'rendering' || j.status === 'queued');
     const d = new Date(); const pad = (n: number) => String(n).padStart(2, '0');
     const defaultFileName = `${p.dto.name.replace(/[^\p{L}\p{N}._-]+/gu, '-')}-${effectiveProfile.ratio.replace(':', 'x')}-${effectiveProfile.resolution}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
-    return { ok: checks.every((c) => c.ok), dimensions: dims, totalFrames, durationMs: t.durationMs, estimate: { seconds: Math.round(totalFrames * 0.08), bytes: Math.round(t.durationMs * 900), confidence: 'low' as const }, checks, effectiveProfile, watermark: capped, warnings: [],
-      notices: [...(capped ? ['EM-5001'] : []), ...(active ? ['EM-3208'] : [])], defaultFileName, privateMode: settings.privateMode, queue: { active: active?.id ?? null, queued: renders.filter((j) => j.status === 'queued').length } };
+    return { ok: checks.every((c) => c.ok), dimensions: dims, totalFrames, durationMs: t.durationMs, estimate: { seconds: Math.round(totalFrames * 0.08), bytes: Math.round(t.durationMs * 900), confidence: 'low' as const }, checks, effectiveProfile, warnings: [],
+      notices: [...(active ? ['EM-3208'] : [])], defaultFileName, privateMode: settings.privateMode, queue: { active: active?.id ?? null, queued: renders.filter((j) => j.status === 'queued').length } };
   }
   function startRender(body: RenderCreateInput): RenderJobDto {
     const e = estimate(body);
     if (!e.ok) { const f = e.checks.find((c) => !c.ok); throw new HttpError(422, f?.code ?? 'EM-3104', 'Export preflight failed.'); }
     const p = proj(body.projectId);
-    const job: RenderJobDto = { id: newId(), projectId: p.dto.id, versionId: head(p).id, outputProfile: e.effectiveProfile, performanceProfile: body.performanceProfile, status: 'queued', progress: 0, renderedFrames: null, totalFrames: e.totalFrames, etaMs: null, outputId: null, errorCode: null, width: e.dimensions.width, height: e.dimensions.height, createdAt: nowIso(), startedAt: null, finishedAt: null, ...(e.watermark ? { notices: ['EM-5001'] } : {}) };
+    const job: RenderJobDto = { id: newId(), projectId: p.dto.id, versionId: head(p).id, outputProfile: e.effectiveProfile, performanceProfile: body.performanceProfile, status: 'queued', progress: 0, renderedFrames: null, totalFrames: e.totalFrames, etaMs: null, outputId: null, errorCode: null, width: e.dimensions.width, height: e.dimensions.height, createdAt: nowIso(), startedAt: null, finishedAt: null };
     renders.unshift(job);
     emit('render.queued', { projectId: p.dto.id, job });
     let step = 0;
@@ -580,10 +583,10 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       job.progress = Math.min(1, step / 10); job.renderedFrames = Math.round(job.progress * e.totalFrames); job.etaMs = step >= 2 ? (10 - step) * 400 : null;
       if (step < 10) { emit('render.progress', { projectId: p.dto.id, jobId: job.id, progress: job.progress, renderedFrames: job.renderedFrames, totalFrames: e.totalFrames, etaMs: job.etaMs, stage: 'rendering' }); later(400, tick); return; }
       const fileName = `${(body.fileName ?? p.dto.name).replace(/[^A-Za-z0-9._-]+/g, '-')}.${body.outputProfile.format}`;
-      const out: OutputDto = { id: newId(), projectId: p.dto.id, renderJobId: job.id, kind: body.outputProfile.format === 'gif' ? 'gif' : body.outputProfile.format === 'png' ? 'still' : 'video', fileName, bytes: e.estimate.bytes ?? 0, width: e.dimensions.width, height: e.dimensions.height, fps: body.outputProfile.fps, durationMs: e.durationMs, validated: true, watermarked: e.watermark, path: `${settings.outputFolder}\\${fileName}`, media: { file: true, thumb: false }, createdAt: nowIso() };
+      const out: OutputDto = { id: newId(), projectId: p.dto.id, renderJobId: job.id, kind: body.outputProfile.format === 'gif' ? 'gif' : body.outputProfile.format === 'png' ? 'still' : 'video', fileName, bytes: e.estimate.bytes ?? 0, width: e.dimensions.width, height: e.dimensions.height, fps: body.outputProfile.fps, durationMs: e.durationMs, validated: true, path: `${settings.outputFolder}\\${fileName}`, media: { file: true, thumb: false }, createdAt: nowIso() };
       p.outputs.unshift(out);
       job.status = 'done'; job.progress = 1; job.outputId = out.id; job.finishedAt = nowIso(); job.etaMs = 0;
-      emit('render.done', { projectId: p.dto.id, jobId: job.id, output: out, notices: e.watermark ? ['EM-5001'] : [] });
+      emit('render.done', { projectId: p.dto.id, jobId: job.id, output: out, notices: [] });
     };
     later(300, tick);
     return job;
@@ -1263,12 +1266,12 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('GET', '/license', () => license);
   r('POST', '/license/activate', (_m, b) => {
     const key = String(obj(b)['key'] ?? '').trim();
-    if (key.length < 40 || !key.startsWith('EM1.')) throw new HttpError(422, 'EM-5006', 'This does not look like a licence key.');
-    license = { ...license, status: 'active', tier: 'creator', licenseeHash: 'a1b2c3', licenseeName: 'Septianus Angga', clockAnomaly: false, updatesUntil: new Date(Date.now() + 365 * 86400_000).toISOString(), updatesEligible: true, limits: { watermark: false, maxResolution: '2160p' } };
+    if (key.length < 40 || !/^EM1[-.]/.test(key)) throw new HttpError(422, 'EM-5006', 'This does not look like a licence key.');
+    license = licensedDto();
     emit('license.changed', { licence: license });
     return license;
   });
-  r('POST', '/license/deactivate', () => { license = { ...license, status: 'trial', tier: null, licenseeHash: null, licenseeName: null, updatesUntil: null, updatesEligible: false, limits: { watermark: true, maxResolution: '720p' } }; emit('license.changed', { licence: license }); return license; });
+  r('POST', '/license/deactivate', () => { license = UNLICENSED; emit('license.changed', { licence: license }); return license; });
   r('GET', '/settings', () => settings);
   r('PUT', '/settings', (_m, b) => {
     const prevPrivate = settings.privateMode;
@@ -1293,6 +1296,10 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     }
     let body: unknown;
     if (typeof init.body === 'string') { try { body = JSON.parse(init.body); } catch { return respond(400, { error: { code: 'EM-9002', message: 'Invalid JSON.' } }); } }
+    // Licence gate (service: modules/license.ts): only the licence screen's routes answer while unlicensed.
+    const open = (method === 'GET' && ['/health', '/version', '/license', '/settings', '/events', '/renders'].includes(path)) || (method === 'POST' && path === '/license/activate')
+      || (method === 'PUT' && path === '/settings' && !!body && typeof body === 'object' && Object.keys(body).every((k) => k === 'uiLanguage' || k === 'theme'));
+    if (license.status !== 'licensed' && !open) return respond(403, { error: { code: 'EM-5010', message: 'Activate Expertmotion with a Licence Key to continue.', details: { status: license.status } } });
     for (const [m, re, h] of routes) {
       if (m !== method) continue;
       const match = path.match(re);

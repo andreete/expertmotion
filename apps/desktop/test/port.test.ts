@@ -3,9 +3,9 @@ import { isInPortRange, NoFreePortError, nextCandidate, pickPort } from '../src/
 import { PORT_RANGE } from '../src/lib/constants.js';
 
 describe('port selection (SEC-008)', () => {
-  it('only accepts ports in 47600–47699', () => {
-    expect(isInPortRange(47600)).toBe(true);
-    expect(isInPortRange(47699)).toBe(true);
+  it('only accepts ports in 42300–42399', () => {
+    expect(isInPortRange(42300)).toBe(true);
+    expect(isInPortRange(42399)).toBe(true);
     expect(isInPortRange(47599)).toBe(false);
     expect(isInPortRange(47700)).toBe(false);
     expect(isInPortRange(4000)).toBe(false);
@@ -28,8 +28,8 @@ describe('port selection (SEC-008)', () => {
   });
 
   it('picks the first free port', async () => {
-    const free = 47650;
-    const port = await pickPort({ probe: async (p) => p === free, random: () => 0, range: { min: 47650, max: 47699 } });
+    const free = 42350;
+    const port = await pickPort({ probe: async (p) => p === free, random: () => 0, range: { min: 42350, max: 42399 } });
     expect(port).toBe(free);
   });
 
@@ -41,9 +41,9 @@ describe('port selection (SEC-008)', () => {
   });
 
   it('occupying a port causes the next to be chosen', async () => {
-    const occupied = 47600;
-    // random always returns index 0 of the remaining list; first candidate is 47600 (occupied).
+    const occupied = 42300;
+    // random always returns index 0 of the remaining list; first candidate is 42300 (occupied).
     const port = await pickPort({ probe: async (p) => p !== occupied, random: () => 0 });
-    expect(port).toBe(47601);
+    expect(port).toBe(42301);
   });
 });

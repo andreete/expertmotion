@@ -1,6 +1,6 @@
 /**
  * Loopback port selection for the Local Service (SECURITY.md SEC-008, TRD TR-003).
- * The Shell probes a random free port in 47600–47699, hands it to the Service, and on
+ * The Shell probes a random free port in 42300–42399, hands it to the Service, and on
  * `EADDRINUSE` (reported by the Service) picks another. Never a fixed well-known port.
  */
 import { createServer } from 'node:net';

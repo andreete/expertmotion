@@ -16,6 +16,7 @@ import { renderQueue } from '../src/state/workload.js';
 import { hasWaitingIntents } from '../src/state/store.js';
 import { BUNDLED_NOTICES, HELP_SECTIONS } from '../src/screens/Misc.js';
 import { DOCS_URL, STORE_URL } from '../src/api/client.js';
+import { EmError } from '@expertmotion/shared';
 import type { EditIntent, GeneratorJobDto, LicenseDto, RenderJobDto } from '../src/api/types.js';
 
 import en from '../src/i18n/en.json';
@@ -43,17 +44,20 @@ describe('pure rules', () => {
     expect(recoveryFor({ check: 'dimensions', ok: false, code: 'EM-3103' }, 'standard')).toBe('settings');
     expect(recoveryFor({ check: 'assets', ok: false, code: 'EM-1301' }, 'standard')).toBe('assets');
     expect(recoveryFor({ check: 'engine', ok: false, code: 'EM-3003' }, 'standard')).toBe('diagnostics');
-    expect(recoveryFor({ check: 'licence', ok: true, code: 'EM-5001' }, 'standard')).toBe('license');
+    expect(recoveryFor({ check: 'engine', ok: false, code: 'EM-5010' }, 'standard')).toBe('license');
     expect(recoveryFor({ check: 'disk', ok: true }, 'standard')).toBeNull();
     expect(QUALITY_CRF).toEqual({ standard: 18, smaller: 23 });
   });
-  it('FR-134: licence states, name/tier/date, clock-changed badge', () => {
-    const base: LicenseDto = { status: 'active', tier: 'standard', licenseeHash: 'h', licenseeName: 'Septi', updatesUntil: '2027-10-01T00:00:00.000Z', updatesEligible: true, machineCode: 'MC', limits: { watermark: false, maxResolution: '2160p' } };
-    expect(licenceView(base)).toMatchObject({ status: 'active', tone: 'success', vars: { name: 'Septi', tier: 'standard', date: '2027-10-01' }, clock: false });
-    expect(licenceView({ ...base, status: 'updates-expired' })).toMatchObject({ code: 'EM-5005' });
+  it('FR-134: licence states (no Trial Mode), name/tier/date, clock-changed badge', () => {
+    const base: LicenseDto = { status: 'licensed', tier: 'standard', licenseeHash: 'h', licenseeName: 'Septi', updatesUntil: '2027-10-01T00:00:00.000Z', updatesEligible: true, machineCode: 'MC' };
+    expect(licenceView(base)).toMatchObject({ status: 'licensed', tone: 'success', vars: { name: 'Septi', tier: 'standard', date: '2027-10-01' }, clock: false });
+    expect(licenceView({ ...base, status: 'invalid', code: 'EM-5005' })).toMatchObject({ code: 'EM-5005', bodyKey: 'ui.scr.license.expired.body' });
+    expect(licenceView({ ...base, status: 'invalid', code: 'EM-5002' })).toMatchObject({ code: 'EM-5002', tone: 'danger' });
     expect(licenceView({ ...base, status: 'revoked' })).toMatchObject({ code: 'EM-5004', tone: 'danger' });
+    expect(licenceView({ ...base, status: 'machine-mismatch' })).toMatchObject({ code: 'EM-5003', tone: 'danger' });
     expect(licenceView({ ...base, clockAnomaly: true }).clock).toBe(true);
-    expect(licenceView(null).status).toBe('trial');
+    expect(licenceView(null).status).toBe('unlicensed');
+    expect(licenceView({ ...base, status: 'trial' as never }).status).toBe('unlicensed');   // an old state name never unlocks anything
   });
   it('FR-104 edited caption text keeps timing; FR-108 Generated list keeps 7 days of uninserted results', () => {
     const p = { text: 'halo dunia', startMs: 1000, durationMs: 1000, tokens: [] };
@@ -97,27 +101,65 @@ describe('Editor screens (mock mode)', () => {
     expect(el('scr.help.online.blocked')?.textContent).toContain('Blocked by Private Mode');
   });
 
-  it('FR-132/FR-135: buy link is blocked in Private Mode with the URL; after Deactivate the re-bind steps appear', async () => {
+  it('FR-131/FR-132: first launch shows only the licence screen; the key link is blocked in Private Mode; activation continues to the Editor without restart', async () => {
     const s = shell();
-    const { runtime } = await renderEditor('sample');
+    try { localStorage.clear(); sessionStorage.clear(); } catch { /* ignore */ }
+    const runtime = createMockRuntime({ seed: 'sample', delays: false, licensed: false });
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    await waitFor(() => { if (!document.querySelector('[data-el="scr.license"][data-gate]')) throw new Error('no licence gate'); });
+    expect(el('stage.timeline')).toBeNull(); expect(el('hdr.title')).toBeNull();                         // nothing else of the product
+    expect(el('scr.license.machinecode')?.textContent).toBe('MC1-7Q4K-2M9X-HV3T-8PZD');
+    expect(el('scr.license.machinecode.copy')).not.toBeNull();
+    expect(el('scr.license.trial.continue')).toBeNull(); expect(el('scr.onboarding.license')).toBeNull();
+    expect((await runtime.api.listProjects({ limit: 1 }).catch((e: unknown) => e)) as EmError).toMatchObject({ code: 'EM-5010' });
+    await act(async () => { await runtime.api.putSettings({ uiLanguage: 'en' }); });                       // language/theme stay changeable
+    fireEvent.click(el('scr.license.help')!);
+    expect(s.openExternal).toHaveBeenCalledWith(DOCS_URL);
+    fireEvent.change(el('scr.license.input')!, { target: { value: `EM1-${'A'.repeat(60)}` } });
+    await act(async () => { fireEvent.click(el('scr.license.activate')!); });
+    await waitFor(() => { if (!el('stage.timeline') || !el('hdr.title')?.textContent?.trim()) throw new Error('editor not booted'); });
+    expect(document.querySelector('[data-el="scr.license"][data-gate]')).toBeNull();
+    expect(el('hdr.action.purchase')).toBeNull();
+    s.openExternal.mockClear();
+    // buy link (unlicensed only) honours Private Mode: deactivate from Manage licence → gate again
+    await act(async () => { fireEvent.click(el('hdr.action.license')!); });
+    await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-licence-status] button')!); });
+    await waitFor(() => { if (el('scr.license.status')?.getAttribute('data-status') !== 'licensed') throw new Error('not licensed'); });
+    expect(el('scr.license.status')?.textContent).toContain('Septianus Angga');
+    expect(el('scr.license.buy')).toBeNull();
     await act(async () => { await runtime.api.putSettings({ privateMode: true }); });
-    await act(async () => { fireEvent.click(el('hdr.action.purchase')!); });
-    await waitFor(() => { if (!el('scr.license')) throw new Error('no licence'); });
+    fireEvent.click(el('scr.license.remove')!);
+    await act(async () => { fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('[data-el="scr.license"] button')].find((b) => b.textContent === 'Confirm')!); });
+    await waitFor(() => { if (!document.querySelector('[data-el="scr.license"][data-gate]')) throw new Error('gate not back'); });
+    expect(el('stage.timeline')).toBeNull();
     fireEvent.click(el('scr.license.buy')!);
     expect(s.openExternal).not.toHaveBeenCalled();
     expect(el('scr.license.buy.blocked')?.textContent).toContain(STORE_URL);
-    await act(async () => { await runtime.api.putSettings({ privateMode: false }); });
-    fireEvent.change(el('scr.license.input')!, { target: { value: `EM1.${'A'.repeat(60)}` } });
+  });
+
+  it('FR-135: wrong key, other computer and rate limit show clear errors; EM-5003 shows the re-bind steps', async () => {
+    shell();
+    try { localStorage.clear(); sessionStorage.clear(); } catch { /* ignore */ }
+    const runtime = createMockRuntime({ seed: 'sample', delays: false, licensed: false });
+    const spy = vi.spyOn(runtime.api, 'activateLicense')
+      .mockRejectedValueOnce(new EmError('EM-5002', 'bad', { status: 422 }))
+      .mockRejectedValueOnce(new EmError('EM-5003', 'other pc', { status: 422 }))
+      .mockRejectedValueOnce(new EmError('EM-5011', 'wait', { status: 429, details: { retryAfterSeconds: 60 } }));
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
+    await waitFor(() => { if (!el('scr.license.input')) throw new Error('no gate'); });
+    fireEvent.change(el('scr.license.input')!, { target: { value: `EM1-${'C'.repeat(60)}` } });
     await act(async () => { fireEvent.click(el('scr.license.activate')!); });
-    await act(async () => { fireEvent.click(el('hdr.action.license')!); });
-    await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-licence-status] button')!); });
-    await waitFor(() => { if (el('scr.license.status')?.getAttribute('data-status') !== 'active') throw new Error('not active'); });
-    expect(el('scr.license.status')?.textContent).toContain('Septianus Angga');
-    fireEvent.click(el('scr.license.remove')!);
-    await act(async () => { fireEvent.click([...document.querySelectorAll<HTMLButtonElement>('[data-el="scr.license"] button')].find((b) => b.textContent === 'Confirm')!); });
-    await waitFor(() => { if (!el('scr.license.rebind')) throw new Error('no rebind'); });
+    await waitFor(() => { if (!el('scr.license.error')?.textContent?.includes('EM-5002')) throw new Error('no EM-5002'); });
+    expect(el('scr.license.error')!.textContent).toContain('Licence key not valid');
+    expect(el('scr.license.rebind')).toBeNull();
+    await act(async () => { fireEvent.click(el('scr.license.activate')!); });
+    await waitFor(() => { if (!el('scr.license.error')?.textContent?.includes('EM-5003')) throw new Error('no EM-5003'); });
     expect(el('scr.license.rebind')!.querySelectorAll('li').length).toBe(3);
-    expect(el('scr.license.status')?.getAttribute('data-status')).toBe('trial');
+    await act(async () => { fireEvent.click(el('scr.license.activate')!); });
+    await waitFor(() => { if (!el('scr.license.error')?.textContent?.includes('EM-5011')) throw new Error('no EM-5011'); });
+    expect(el('scr.license.error')!.textContent).toContain('Wait 60 seconds');
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(el('stage.timeline')).toBeNull();
   });
 
   it('FR-136…FR-147: default filename, quality labels, PNG frame time, Private Mode row, recovery buttons, done with Play/Copy path', async () => {
@@ -128,8 +170,9 @@ describe('Editor screens (mock mode)', () => {
     await waitFor(() => { if (!el('scr.export.private')) throw new Error('no estimate'); });
     expect((el('scr.export.filename') as HTMLInputElement).value).toMatch(/-\d{8}-\d{4}$/);
     expect([...(el('scr.export.quality') as HTMLSelectElement).options].map((o) => o.text)).toEqual(['Standard (CRF 18)', 'Smaller file (CRF 23)']);
-    expect(el('scr.export.profile.summary')!.textContent).toMatch(/720p \(trial\)/);
-    expect(els('scr.export.preflight.fix').some((b) => b.textContent === 'Enter licence key')).toBe(true);
+    expect(el('scr.export.profile.summary')!.textContent).toMatch(/1080×1920/);                      // no Trial Mode cap
+    expect(el('scr.export.profile.summary')!.textContent).not.toMatch(/trial/i);
+    expect(els('scr.export.preflight.fix').some((b) => b.textContent === 'Enter licence key')).toBe(false);
     fireEvent.click(el('scr.export.codec.png')!);
     await waitFor(() => { if (!el('scr.export.still.time')) throw new Error('no still time'); });
     const est = vi.spyOn(runtime.api, 'estimateRender');
@@ -190,37 +233,37 @@ describe('Editor screens (mock mode)', () => {
     expect(el('sys.update')!.textContent).toContain('Updates paused by Private Mode');
   });
 
-  it('FR-131: dropping a .emlicense file fills the key and activates; a non-licence file shows EM-5006', async () => {
-    const { runtime } = await renderEditor('sample');
+  it('FR-131: dropping a .emlicense file on the licence screen fills the key and activates; a non-licence file shows EM-5006', async () => {
+    try { localStorage.clear(); sessionStorage.clear(); } catch { /* ignore */ }
+    const runtime = createMockRuntime({ seed: 'sample', delays: false, licensed: false });
     const spy = vi.spyOn(runtime.api, 'activateLicense');
-    await act(async () => { fireEvent.click(el('hdr.action.purchase')!); });
-    await waitFor(() => { if (!el('scr.license')) throw new Error('no licence'); });
+    render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: false }}><App /></StoreProvider>);
+    await waitFor(() => { if (!el('scr.license.input')) throw new Error('no licence screen'); });
     const zone = el('scr.license.input')!.parentElement!;
     const bad = new File(['hello'], 'notes.pdf', { type: 'application/pdf' });
     await act(async () => { fireEvent.drop(zone, { dataTransfer: { files: [bad], types: ['Files'] } }); });
     await waitFor(() => { if (!el('scr.license.error')?.textContent?.includes('EM-5006')) throw new Error('no EM-5006'); });
     expect(spy).not.toHaveBeenCalled();
-    const key = `EM1.${'B'.repeat(60)}`;
+    const key = `EM1-${'B'.repeat(60)}`;
     const file = new File([`\uFEFF${key}\n`], 'lic-01.emlicense', { type: '' });
     await act(async () => { fireEvent.drop(zone, { dataTransfer: { files: [file], types: ['Files'] } }); });
     await waitFor(() => { if (!spy.mock.calls.length) throw new Error('not activated'); });
     expect(spy).toHaveBeenCalledWith(key);
-    await waitFor(() => { if (el('scr.license')) throw new Error('still open'); });                    // activated → screen closes, Trial limits gone
+    await waitFor(() => { if (!el('scr.onboarding.welcome')) throw new Error('onboarding did not follow activation'); });   // continues without restart
+    expect(el('scr.license.input')).toBeNull();
   });
 
-  it('FR-133: EM-5001 is shown once at first launch in Trial Mode, with "Enter licence key"', async () => {
+  it('FR-133: no trial notice at launch (EM-5001 retired); a licensed install boots straight into the Editor', async () => {
     await renderEditor('sample', { prefs: { nudgesDismissed: [] } });
-    await waitFor(() => { if (!els('sys.toast').some((x) => x.textContent?.includes('EM-5001'))) throw new Error('no EM-5001'); });
-    expect(JSON.parse(localStorage.getItem('expertmotion.prefs.v1')!).nudgesDismissed).toContain('lic:EM-5001');
-    cleanup();
-    await renderEditor('sample', { prefs: { nudgesDismissed: ['lic:EM-5001'] } });
     await new Promise((r) => setTimeout(r, 50));
     expect(els('sys.toast').some((x) => x.textContent?.includes('EM-5001'))).toBe(false);
+    expect(document.querySelector('[data-el="scr.license"][data-gate]')).toBeNull();
   });
 
   it('FR-154: toasts are announced through sys.live and are not live regions themselves', async () => {
     await renderEditor('sample', { prefs: { nudgesDismissed: [] } });
-    await waitFor(() => { if (!el('sys.live')?.textContent?.includes('EM-5001')) throw new Error(`live: ${el('sys.live')?.textContent}`); });
+    await act(async () => { fireEvent.click(el('hdr.action.save')!); });
+    await waitFor(() => { if (!el('sys.live')?.textContent?.includes('Saved')) throw new Error(`live: ${el('sys.live')?.textContent}`); });
     for (const t of els('sys.toast')) { expect(t.getAttribute('role')).toBeNull(); expect(t.getAttribute('aria-live')).toBeNull(); }
   });
 

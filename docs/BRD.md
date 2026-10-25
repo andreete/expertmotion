@@ -4,7 +4,7 @@
 |---|---|
 | Status | draft (for Operator review; prices and channel choices are Operator decisions) |
 | Owner | Product/business analyst |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | MASTER_PROJECT_PROMPT.md (§4.1, §4.3, §12, §17, §22), GLOSSARY.md, PRD.md, ASSESSMENT.md (§4, §5, §7, §10, §11), DECISIONS.md (ADR-004, 006, 007, 008, 009, 012, 014, 016, 017), RISKS_AND_ASSUMPTIONS.md, LICENSE_OPERATIONS.md |
 | Used by | ROADMAP.md, STAGE_MANAGEMENT.md, LICENSE_OPERATIONS.md, DEPLOYMENT_AND_PACKAGING.md, SECURITY.md, THREAT_MODEL.md, LOCAL_AI_MODELS.md, TEST_PLAN.md, README.md |
 | Owner of | business objectives and KPIs, business model, pricing inputs, cost structure, Remotion licence decision tree, **Licensing and compliance** (third-party licences, Creator-facing terms, legal/privacy obligations), go-to-market assumptions, stakeholder list |
@@ -47,7 +47,7 @@ Targets are for the first 6 months after v1.0. Product KPIs are the PRD §5 metr
 | K-05 Support tickets per 100 active licences per month | ≤ 10 | Operator support mailbox log | BO-3 |
 | K-06 "Licence not accepted" tickets as share of activations | ≤ 2 % | LICENSE_OPERATIONS.md audit log vs tickets | BO-3 |
 | K-07 Licence issuance turnaround (payment confirmed → key delivered) | ≤ 24 h (manual process at launch) | audit log CSV timestamps | BO-3 |
-| K-08 Trial → paid conversion | `[Operator decision]`; proposed planning value 5 % **[ASSUMPTION]** | installer downloads (store/landing analytics, not in-app) vs licences issued | BO-2 |
+| K-08 (void 2026-10-25: Trial Mode removed) Trial → paid conversion | `[Operator decision]`; proposed planning value 5 % **[ASSUMPTION]** | installer downloads (store/landing analytics, not in-app) vs licences issued | BO-2 |
 | K-09 Refund rate | ≤ 5 % of licences within the refund window | audit log | BO-2, BO-3 |
 | K-10 Operator variable cost per licence sold | US$0 (excluding payment-gateway fee) | §4 | BO-2 |
 | K-11 Legal readiness at launch | Remotion written confirmation on file; Third-Party Notices complete; ToS and privacy notice published (EN/ID) | checklist BRD-010, BRD-020, BRD-022 | BO-4 |
@@ -62,8 +62,8 @@ No telemetry is sent to the Operator (PRD §4.4). Every KPI above is measured ou
 |---|---|---|
 | Licence type | One-time, perpetual Licence Key bound to one Machine Fingerprint (ADR-014); the Creator keeps using every build released up to `updatesUntil` forever | proposed, aligns with ADR-014 |
 | Updates | 12 months of updates included (`updatesUntil = issuedAt + 12 months`); after that, the installed build keeps working; newer builds require an update renewal (new Licence Key with a later `updatesUntil`) | proposed |
-| Tiers | `standard` (sold at launch): all features, one computer. `pro` (reserved in the token format, not sold at launch): candidate differentiators are a second computer, priority support and early access; it must never gate P0 functionality behind a higher tier (Trial Mode already defines the only functional restriction) | `pro` content = Operator decision |
-| Trial Mode | Free, unlimited in time: full Editor, exports watermarked and capped at 720p (GLOSSARY "Trial Mode"; rules in LICENSE_OPERATIONS.md §7). A soft reminder appears after 14 days; the trial never expires functionally | Operator decision on the 14-day reminder |
+| Tiers | `standard` (sold at launch): all features, one computer. `pro` (reserved in the token format, not sold at launch): candidate differentiators are a second computer, priority support and early access; it must never gate P0 functionality behind a higher tier (single edition: the tier never gates a feature; there is no Trial Mode since 2026-10-25) | `pro` content = Operator decision |
+| Trial Mode | **Removed 2026-10-25 (Operator decision).** Every install must be activated with a Licence Key bound to its Machine Code before use (LICENSE_OPERATIONS.md §7). Former rule: free, unlimited in time: full Editor, exports watermarked and capped at 720p. A soft reminder appears after 14 days; the trial never expires functionally | Operator decision on the 14-day reminder |
 | Re-bind | Creator may move the licence to another computer up to 3 times per rolling 12 months by requesting a new Licence Key (LICENSE_OPERATIONS.md §8) | proposed |
 | Refunds | 14-day refund window for first purchase, provided the Licence Key is revoked (LICENSE_OPERATIONS.md §11) | Operator decision (consumer-law minimums **[UNVERIFIED]**, §7) |
 | Payment | External storefront / payment gateway; the app contains only a "Buy" link to the Operator's store URL (no in-app payment) | Operator decision on provider |
@@ -190,7 +190,7 @@ Third-Party Notices are generated at build time from the lockfile (licence check
 | T-5 | Local AI models are downloaded on first use from their publishers; each model has its own licence shown in the Model Manager. Some models (for example Stable Diffusion 1.5) forbid specific uses such as generating unlawful or harmful content. | Model AI lokal diunduh saat pertama digunakan dari penerbitnya; setiap model memiliki lisensi sendiri yang ditampilkan di Model Manager. Beberapa model (misalnya Stable Diffusion 1.5) melarang penggunaan tertentu seperti membuat konten melanggar hukum atau berbahaya. |
 | T-6 | Your Licence Key is bound to one computer. You can move it up to three times in twelve months by requesting a new key. | Licence Key Anda terikat pada satu komputer. Anda dapat memindahkannya hingga tiga kali dalam dua belas bulan dengan meminta kunci baru. |
 | T-7 | The licence is perpetual for all versions released before your update date. Later versions need an update renewal. | Lisensi berlaku selamanya untuk semua versi yang dirilis sebelum tanggal pembaruan Anda. Versi setelahnya memerlukan perpanjangan pembaruan. |
-| T-8 | Trial Mode is free without time limit; exports carry a watermark and are capped at 720p. | Trial Mode gratis tanpa batas waktu; hasil ekspor diberi watermark dan dibatasi 720p. |
+| T-8 | Expertmotion must be activated with a licence key made for your computer before use; there is no trial version (since 2026-10-25; formerly a free Trial Mode with watermark and 720p cap). | Expertmotion harus diaktifkan dengan kunci lisensi yang dibuat untuk komputer Anda sebelum digunakan; tidak ada versi uji coba. |
 | T-9 | You own the videos you create. Expertmotion claims no rights to your content. | Video yang Anda buat adalah milik Anda. Expertmotion tidak mengklaim hak apa pun atas konten Anda. |
 | T-10 | The maker stores only what is needed to issue your licence: your name, your email address and your computer's Machine Code. See the Privacy Notice. | Pembuat hanya menyimpan yang diperlukan untuk menerbitkan lisensi Anda: nama, alamat email, dan Machine Code komputer Anda. Lihat Pemberitahuan Privasi. |
 | T-11 | Encryption of your project database protects it from other users and stolen disks, not from an administrator of your own computer. | Enkripsi basis data proyek melindunginya dari pengguna lain dan disk yang dicuri, bukan dari administrator komputer Anda sendiri. |
@@ -217,7 +217,7 @@ Privacy by design is already in the product decisions: no accounts, no telemetry
 | G-1 | Indonesian creators (persona Septi) are the first market; English-speaking creators second via the English UI (ADR-012) | PRD §2 | RISK-023 (language expectations), ASM-008 |
 | G-2 | The reference book "Remotion untuk Pemula" (Septianus Angga, "Experthinker") and its readers are a launch channel; the author is assumed to be a channel partner **[ASSUMPTION, Operator to confirm]** | ASSESSMENT §3 | partner terms undefined |
 | G-3 | Distribution is a direct download from the Operator's landing page plus a storefront link; no app store at launch | §3.1 | SmartScreen reputation on an unknown OV-signed installer (RISK-004) |
-| G-4 | Trial Mode is the main acquisition tool; the watermark is the main conversion trigger | §3.1 | low conversion (K-08) |
+| G-4 | (void 2026-10-25: no Trial Mode) Trial Mode is the main acquisition tool; the watermark is the main conversion trigger | §3.1 | low conversion (K-08) |
 | G-5 | Launch content: a 10-minute Indonesian walkthrough video and three Golden Scenario templates | GOLDEN_SCENARIOS.md | — |
 | G-6 | Support channel: email only at launch; FAQ page in EN/ID; response within 2 business days | BO-3 | RISK-016, RISK-026 |
 | G-7 | Pricing in IDR for Indonesian buyers | §3.2 | payment gateway choice |
@@ -228,7 +228,7 @@ Privacy by design is already in the product decisions: no accounts, no telemetry
 | Stakeholder | Role | Interest | Interaction |
 |---|---|---|---|
 | Operator (Andre) | builds, signs, licences, supports; owns the private signing key and the licence private key | revenue, low support load, legal safety | all decisions marked `[Operator decision]` |
-| Creator (persona Septi; small business owner) | buyer and user | fast results, honest pricing, privacy, offline use | Trial Mode, ToS, support |
+| Creator (persona Septi; small business owner) | buyer and user | fast results, honest pricing, privacy, offline use | licence activation, ToS, support |
 | Remotion (remotion.dev / remotion.pro) | licensor of the Engine | licence compliance, Company License revenue if applicable | written confirmation request (BRD-010); possible Company License |
 | Provider vendors (OpenRouter, OpenAI, Anthropic, Google) | LLM providers paid by the Creator | API terms, usage policies | the Creator's own account; the app follows their API terms (RISK-011) |
 | Model publishers (OpenAI Whisper, Black Forest Labs, Stability AI, ACE-Step, Piper/rhasspy, sherpa-onnx) | licensors of Local Models and Engine Binaries | licence compliance, attribution | notices; registry (LOCAL_AI_MODELS.md) |
@@ -243,10 +243,10 @@ Priority codes: MoSCoW (Must/Should/Could/Won't) and P0/P1/P2 (PRD.md). Status i
 | ID | Requirement | Rationale | Priority | Dependencies | Acceptance criteria | Verification | Status |
 |---|---|---|---|---|---|---|---|
 | BRD-001 | Expertmotion is sold as a one-time perpetual Licence Key bound to one Machine Fingerprint with 12 months of updates (`updatesUntil`), with no account and no licence server at launch | zero running cost, ADR-014, BO-2 | Must / P0 | ADR-014, LICENSE_OPERATIONS.md §3–§6 | A valid key activates offline; a key from another machine is refused with EM-5003; a build released after `updatesUntil` is refused with EM-5005 while earlier builds keep working | TEST_PLAN licence cases (LICENSE_OPERATIONS.md §15) | planned |
-| BRD-002 | Trial Mode is available without registration, without time limit, with watermark and 720p cap as the only restrictions | acquisition (G-4), no accounts | Must / P0 | PRD-017, LICENSE_OPERATIONS.md §7 | Fresh install exports a 720p file with the watermark; every editor feature works; EM-5001 notice shown at export | clean-VM test | planned |
+| BRD-002 | **Superseded 2026-10-25 (Operator decision): no Trial Mode; activation with a Licence Key is required before use (LICENSE_OPERATIONS.md §7).** Former text: Trial Mode is available without registration, without time limit, with watermark and 720p cap as the only restrictions | acquisition (G-4), no accounts | Must / P0 | PRD-017, LICENSE_OPERATIONS.md §7 | Fresh install exports a 720p file with the watermark; every editor feature works; EM-5001 notice shown at export | clean-VM test | planned |
 | BRD-003 | Operator variable cost per Creator is zero: no Operator-paid inference, no Operator-run servers; Creators use their own provider keys; generative Tools run locally | BO-2, brief §4.3 "never embed developer-owned API secrets" | Must / P0 | PRD-010, ADR-009 | Static scan of the build finds no Operator credentials; network capture shows outbound calls only to the Creator-configured provider, model hosts and the update feed | VULNERABILITY_CHECKLIST + network capture | planned |
 | BRD-004 | The launch price, renewal price and `pro` tier definition are recorded as Operator decisions in this document before Stage 7 (Hardening and release) | release readiness | Must / P0 | §3.2 | §3.2 contains numbers, not placeholders; DECISIONS.md records the decision | document review at Stage 6 gate | planned |
-| BRD-005 | The Purchase action in the Header (`hdr.action.purchase`) opens `scr.license`, which offers "Buy" (external store URL) and "I have a key" (activation) | conversion path (G-4) | Must / P0 | ELEMENT_IDS.md, LICENSE_OPERATIONS.md §16 | Clicking Buy opens the system browser at the configured store URL; the app never processes payment | UI test | planned |
+| BRD-005 | The licence screen (`scr.license`; the only screen until activation since 2026-10-25, the Header Purchase button is retired) offers "Get a licence key" (external store URL) and the key field with Activate | conversion path (G-4) | Must / P0 | ELEMENT_IDS.md, LICENSE_OPERATIONS.md §16 | Clicking Buy opens the system browser at the configured store URL; the app never processes payment | UI test | planned |
 | BRD-006 | Update renewals are sold as a new Licence Key with a later `updatesUntil` for the same `licenseId` and fingerprint | perpetual-fallback model | Should / P1 | BRD-001 | Renewal key replaces the old one; old key is listed in `revoked.json` with the new revocation epoch | LICENSE_OPERATIONS.md §9 | planned |
 | BRD-007 | Re-bind to another computer is allowed 3 times per rolling 12 months without charge, via new key issuance | fairness, hardware changes | Should / P1 | LICENSE_OPERATIONS.md §8 | Audit log enforces the count; fourth request within 12 months requires Operator approval | runbook test | planned |
 | BRD-008 | Refund within 14 days of first purchase after revocation of the key | consumer trust; legal minimums **[UNVERIFIED]** | Should / P0 | LICENSE_OPERATIONS.md §11 | Procedure documented and rehearsed once before launch | runbook rehearsal | planned |
@@ -295,7 +295,7 @@ Priority codes: MoSCoW (Must/Should/Could/Won't) and P0/P1/P2 (PRD.md). Status i
 |---|---|---|---|
 | D-1 | Launch price, renewal price, re-bind fee | §3.2 | Stage 6 gate (BRD-004) |
 | D-2 | Storefront / payment gateway (Indonesian gateway vs merchant of record) | §3.1 | Stage 6 |
-| D-3 | 14-day soft reminder in Trial Mode: keep, change, or remove | §3.1; LICENSE_OPERATIONS.md §7 | Stage 4 |
+| D-3 | **Closed 2026-10-25** (Trial Mode removed). 14-day soft reminder in Trial Mode: keep, change, or remove | §3.1; LICENSE_OPERATIONS.md §7 | Stage 4 |
 | D-4 | `pro` tier content | §3.1 | post-launch |
 | D-5 | Refund window and conditions (after counsel) | §3.1 | Stage 7 |
 | D-6 | Audit-log retention period | BRD-023 | Stage 7 |

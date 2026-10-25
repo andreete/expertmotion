@@ -51,6 +51,7 @@ The application code now exists; these steps build the installer from it on the 
 1. `npm ci` (downloads Electron; the Linux server skipped it with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`).
 2. `npx remotion browser ensure` (Chrome Headless Shell into `node_modules/.remotion`).
 3. Put the LGPL full FFmpeg and ffprobe for ingestion into `resources/bin/` (ADR-019; record the build URL and hash in `docs/DEPLOYMENT_AND_PACKAGING.md`).
+3b. Set `EM_MODEL_CDN_URL=https://models.<your-domain>` (the R2 custom domain, §9) in this shell; `release:win` stops without it.
 4. `npm run build:all` (service bundle, Editor, engine fonts and bundle, desktop main).
 5. `node packages/engine/scripts/build-loops.mjs` (all catalogue loops; about 8 s each on this server, faster on a GPU). Check `resources/catalogue/report.json` has no failures.
 5b. `npm run build:release -w @expertmotion/service` then `npm run build:main -w @expertmotion/desktop` (moves the AI prompts into the encrypted `assets.enc`, with half of its key in the service and half in the Shell).
@@ -77,3 +78,40 @@ Differences from the Windows release path (§6), all deliberate:
 | Integrity signing (`apps/desktop/scripts/harden.mjs`) | needs `EM_RELEASE_PRIVATE_KEY_PEM` (the script passes the test key); `--dry-run` only for a local rehearsal | fails when `EM_RELEASE_PRIVATE_KEY_PEM` is unset |
 
 Use the test installer for the §6 step 9 smoke test; ship only the signed Windows build.
+
+## 8. Expertmotion License Admin (Operator tool, added 2026-10-25)
+
+The Operator's licence admin app (`apps/admin`, `docs/LICENSE_OPERATIONS.md` §10.5). It is never shipped to Creators and is not part of `release:win`.
+
+Build (Windows or the Linux server; the zip target needs no wine, and the Electron 45.0.0 win32-x64 zip comes from the electron-builder cache or is downloaded once):
+
+```
+npm run build:admin        # esbuild bundle → apps/admin/dist
+npm run pack:admin:win     # → release/admin/<version>/Expertmotion-License-Admin-<version>-win-x64.zip
+```
+
+On the shared Linux server run both inside the cap: `bash scripts/run-capped.sh npm run pack:admin:win`.
+
+Smoke test on the signing PC (Windows):
+
+1. Unzip anywhere (e.g. the encrypted USB drive) and run `Expertmotion-License-Admin.exe`. The exe is not code-signed: SmartScreen may show "Windows protected your PC" (More info → Run anyway).
+2. With Wi-Fi on, the red banner appears and Keys > Create is refused (strict policy). Turn the network off (or switch Settings > Network policy to "Warn only" on a normal PC).
+3. Keys > Create: kid `A1`, a passphrase of 4+ unrelated words twice, Choose folder (outside any repository). Copy the public key entry into `apps/service/src/license/keys.ts` on the dev machine.
+4. Issue: paste the Machine Code from Help > Licence of a test install; Generate; activate the key in that install. Copy the email text into a mail draft and check both languages.
+5. Licences: Rebind to a second machine's code, Renew, Revoke (refund), Export revoked.json; Verify the old key against the exported list (EM-5004).
+6. Leave the app idle for 15 minutes: the key locks (the header shows "Key locked"); Issue is refused until the key is opened again.
+
+Record in `process.md`: zip size, whether SmartScreen appeared, steps 2-6 results.
+
+## 9. Model CDN on Cloudflare R2 (Operator, added 2026-10-25)
+
+Creators download models only from the Operator's R2 bucket (ADR-026; full runbook `docs/DEPLOYMENT_AND_PACKAGING.md` §16). On the Windows machine (Node 22, rclone installed; a fast disk with ≥ 25 GB free for the full set):
+
+1. Once: `node tools/license-cli/src/cli.mjs keygen --kid M1 --seal --out E:\keys\manifest-M1.key.json` on the offline signing PC; paste the public key into `MANIFEST_PUBLIC_KEY_M1_HEX` (`packages/models/src/signed-registry.ts`); create the bucket, connect the custom domain, create an R2 API token and the `r2` rclone remote (§16.1).
+2. `npm run typecheck` (builds `packages/models/dist`, which the tool reads), then `node tools/model-mirror/mirror.mjs prepare --out D:\em-mirror --cdn https://models.<your-domain> --only <keys within 10 GB>` (§16.3). Re-run it after an interruption; it resumes.
+3. `node tools/model-mirror/mirror.mjs sign --out D:\em-mirror --key E:\keys\manifest-M1.key.json`, then `... verify --out D:\em-mirror` → `verify: OK`.
+4. `rclone copy D:\em-mirror\m r2:<bucket>/m --checksum --progress`, then upload `models.json` and `models.json.sig` together (§16.2). Check `https://models.<your-domain>/models.json` opens in a browser.
+5. Build with `EM_MODEL_CDN_URL` set (§6 step 3b). Smoke test: Model Manager lists the mirrored models with hashes; install `whisper-small`; the Service log has `model manifest updated from the CDN` with the uploaded `seq`; Private Mode on → no request to the CDN.
+
+Record in `process.md`: the `--only` set, total GB, upload time, and the smoke-test result.
+

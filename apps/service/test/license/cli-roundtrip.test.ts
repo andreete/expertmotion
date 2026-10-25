@@ -61,13 +61,13 @@ describe('CLI → service round trip', () => {
     const key = r.key as string;
     expect(key).toMatch(/^EM1-Z9-[A-Z2-7]+-[A-Z2-7]{103}$/);
     const ok = verifyLicense(key, ctx());
-    expect(ok).toMatchObject({ status: 'active', tier: 'standard' });
+    expect(ok).toMatchObject({ status: 'licensed', tier: 'standard' });
     // 1 component drift on the same machine still OK
-    expect(verifyLicense(key, ctx(computeFingerprint({ ...MACHINE_A, machineGuid: 'reinstalled' }))).status).toBe('active');
+    expect(verifyLicense(key, ctx(computeFingerprint({ ...MACHINE_A, machineGuid: 'reinstalled' }))).status).toBe('licensed');
     // the same key on a second computer
     expect(verifyLicense(key, ctx(fpB)).code).toBe('EM-5003');
     // the .emlicense file verifies too (drag-and-drop path)
-    expect(verifyLicense(readFileSync(r.file as string, 'utf8'), ctx()).status).toBe('active');
+    expect(verifyLicense(readFileSync(r.file as string, 'utf8'), ctx()).status).toBe('licensed');
   });
 
   it('issue refuses without a Machine Code and with a mistyped one', () => {
@@ -88,13 +88,13 @@ describe('CLI → service round trip', () => {
     const r1 = cliJson('rebind', '--lid', lid, '--fingerprint', fpB.machineCode);
     expect(r1).toMatchObject({ rev: 1, revocationEpoch: 1 });
     const newKey = r1.key as string;
-    expect(verifyLicense(newKey, ctx(fpB)).status).toBe('active');
+    expect(verifyLicense(newKey, ctx(fpB)).status).toBe('licensed');
     expect(verifyLicense(newKey, ctx(fpA)).code).toBe('EM-5003');
     // old machine before the list arrives: still active (accepted one-release leakage)
-    expect(verifyLicense(oldKey, ctx(fpA)).status).toBe('active');
+    expect(verifyLicense(oldKey, ctx(fpA)).status).toBe('licensed');
     const list = exportedList();
     expect(verifyLicense(oldKey, ctx(fpA, list))).toMatchObject({ status: 'revoked', code: 'EM-5004' });
-    expect(verifyLicense(newKey, ctx(fpB, list)).status).toBe('active');
+    expect(verifyLicense(newKey, ctx(fpB, list)).status).toBe('licensed');
 
     // two more moves are allowed (3 per rolling 12 months), the 4th is refused
     const fpC = computeFingerprint({ machineGuid: 'c', diskSerial: 'C', cpuModel: 'C' });
@@ -107,7 +107,7 @@ describe('CLI → service round trip', () => {
     expect(fourth.stderr).toMatch(/EM-5008 Transfer limit reached.*3 times in the last 12 months/);
     // nothing was issued: the latest key is still r3, and it is valid on machine D after export
     const list2 = exportedList();
-    expect(verifyLicense(r3.key as string, ctx(fpD, list2)).status).toBe('active');
+    expect(verifyLicense(r3.key as string, ctx(fpD, list2)).status).toBe('licensed');
     expect(verifyLicense(newKey, ctx(fpB, list2)).code).toBe('EM-5004');
     // Operator override is possible and recorded
     const forced = cliJson('rebind', '--lid', lid, '--fingerprint', fpE.machineCode, '--override', 'mainboard replaced under warranty');
@@ -118,11 +118,11 @@ describe('CLI → service round trip', () => {
   it('L-6 via CLI: --updates-months 0 → EM-5005 for a later build; renew fixes it and revokes the old key', () => {
     const r = cliJson('issue', '--name', 'Budi', '--email', 'budi@example.com', '--fingerprint', fpA.machineCode, '--updates-months', '0', '--order', 'ORD-3');
     const later = '2999-01-01';
-    expect(verifyLicense(r.key as string, ctx(fpA, null, later))).toMatchObject({ status: 'updates-expired', code: 'EM-5005' });
+    expect(verifyLicense(r.key as string, ctx(fpA, null, later))).toMatchObject({ status: 'invalid', code: 'EM-5005' });
     const renewed = cliJson('renew', '--lid', r.lid as string, '--updates-months', '12', '--order', 'ORD-4');
     expect(renewed.rev).toBe(1);
     const list = exportedList();
-    expect(verifyLicense(renewed.key as string, ctx(fpA, list)).status).toBe('active');
+    expect(verifyLicense(renewed.key as string, ctx(fpA, list)).status).toBe('licensed');
     expect(verifyLicense(r.key as string, ctx(fpA, list)).code).toBe('EM-5004');
   });
 

@@ -183,7 +183,7 @@ type ModelManifest = {
 };
 ```
 
-The shipped `registry.json` (in `packages/models/registry.json`, signed as part of the installer) has the same shape per model minus the installation fields, plus `recommendedFor: Tier[]` and `flag: 'model:<id>'`. URLs are Hugging Face `resolve/<commit-sha>/<file>` links pinned to a commit so that the sha256 in the registry is stable; the Operator recomputes hashes when bumping a model and ships the new registry with a release (or, P2, as a signed registry update fetched from the update feed).
+The shipped `registry.json` (in `packages/models/registry.json`, signed as part of the installer) has the same shape per model minus the installation fields, plus `recommendedFor: Tier[]` and `flag: 'model:<id>'`. URLs are Hugging Face `resolve/<commit-sha>/<file>` links pinned to a commit so that the sha256 in the registry is stable; the Operator recomputes hashes when bumping a model and ships the new registry with a release. Since 2026-10-25 release builds take pinned URLs and hashes from the signed `models.json` on the Operator's model CDN instead (§4.5).
 
 ### 4.3 First-use download flow (`scr.models.row.install`, or from a Generator Card / Catalogue Card badge)
 
@@ -208,6 +208,19 @@ The shipped `registry.json` (in `packages/models/registry.json`, signed as part 
 | Import from file (P2) | a Creator may point to an already-downloaded file; it is hashed and accepted only if the hash matches the registry (no arbitrary weights, to keep licences known) |
 | Move models folder (P2) | setting for a different drive; the folder is moved, `registry.json` updated |
 | Private Mode | downloads, registry updates and self-tests that need downloads are blocked; everything installed works offline, which is the point of local models |
+
+### 4.5 Download policy: the Operator's model CDN (ADR-026)
+
+Operator decision 2026-10-25: Creators download model files only from the Operator's CDN (Cloudflare R2 behind a custom domain), never from Hugging Face or GitHub directly. Runbook and free-tier budget: DEPLOYMENT_AND_PACKAGING.md §16.
+
+| Rule | Behaviour |
+|---|---|
+| Source of files | `<cdn>/m/<sha256>`, mirrored by the Operator with `tools/model-mirror` (`prepare` → `sign` → `rclone copy`); the upstream URL and Hugging Face revision are recorded in the manifest (`revision`), the original file name in `name` |
+| Host allow-list (SEC-071) | release builds carry `EM_MODEL_CDN_URL`; the model-download allow-list is then exactly its host. Development builds without it keep the Hugging Face/GitHub hosts of the built-in registry |
+| Manifest | `<cdn>/models.json` + `models.json.sig` (Ed25519, manifest key, SEC-072), schema 1 with a monotonic `seq`. The Service fetches both through the egress module (purpose `model-download`; Private Mode → EM-8202 before any request) at most once per 24 h when the Model Manager list is requested (R-140), on Refresh (R-147), and when an unpinned model is installed; bodies capped at 2 MB / 4 KB, 10 s budget |
+| Acceptance | signature verified before parsing, then schema, then `seq` ≥ last accepted; only then are both files written atomically into the models folder and the registry reloaded. Entries on a host outside the allow-list are not applied |
+| Failure | offline (EM-8201), Private Mode (EM-8202), HTTP error, oversize, bad signature, stale or malformed (EM-7111, logged with `reason`): the last accepted manifest, or the built-in registry, stays in use; R-140 reports it as `registryUpdate` |
+| Licences | `redistribution: 'no'` is never mirrored; `'verify'` only after the Operator verified it (`--include-verify`) |
 
 ---
 

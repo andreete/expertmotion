@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (review at every Roadmap Stage gate and every release) |
 | Owner | DevSecOps engineer |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, SECURITY.md, DECISIONS.md (ADR-005, 006, 007, 014, 017), ARCHITECTURE.md (§3, §5, §8), AI_WORKFLOW.md (§7, §8), DATABASE_SCHEMA.md, LICENSE_OPERATIONS.md |
 | Used by | VULNERABILITY_CHECKLIST.md, TEST_PLAN.md, RISKS_AND_ASSUMPTIONS.md, QA_PROCESS.md, BRD.md (compliance) |
 | Owner of | asset and actor inventory, trust boundaries, STRIDE tables, the "Not protected against" list, abuse cases |
@@ -169,7 +169,7 @@ Likelihood and impact: L/M/H. Residual risk is what remains after the listed SEC
 |---|---|---|---|---|---|
 | T-60 | **S**poofing: forged Licence Key | free use | L (Ed25519 unforgeable without private key) | SEC-120, A7 protection | L |
 | T-61 | **T**ampering: patched `license` module or public key swap | free use | M for a pirate | SEC-131 bytecode, SEC-133 ASAR integrity, SEC-092 signature | H: **not protected** against a determined pirate (§6); cost raised |
-| T-62 | **T**ampering: clock rollback, token replay, fingerprint spoof | extend trial / reuse key | M | SEC-121, LICENSE_OPERATIONS.md | M |
+| T-62 | **T**ampering: clock rollback, token replay, fingerprint spoof | reuse key | M | SEC-121, LICENSE_OPERATIONS.md | M |
 | T-63 | **D**oS: legitimate Creator locked out by hardware change | support load | M | re-bind limit and runbook (LICENSE_OPERATIONS.md) | L |
 
 ### IP (A1, A2)
@@ -189,11 +189,11 @@ Likelihood and impact: L/M/H. Residual risk is what remains after the listed SEC
 | AC-3 Oversized media DoS | 12 GB 8K ProRes file dropped into the Asset Panel | B6, B4 | SEC-009 streaming limit, SEC-067 dimension/duration caps, PERFORMANCE.md disk/RAM preflight, SEC-063 timeouts | EM-1xxx with a reason; app responsive |
 | AC-4 Path traversal | `GET /media/..%5c..%5cdata%5ckeyring.bin` or `assetId=../../` | B2 | SEC-010 id regex + DB lookup + prefix check | 400/404; logged |
 | AC-5 Token leakage via logs | Support receives a diagnostics bundle containing `token=` | B2 → logs | SEC-005, SEC-100, SEC-102 allow-list | bundle contains `[REDACTED]` only; token is dead after the session anyway |
-| AC-6 CSRF from a web page | Page runs `fetch('http://127.0.0.1:47650/api/renders', {method:'POST', mode:'no-cors', body:…})` after scanning the port range | B2 | SEC-004 (no token → 401 before routing), SEC-006 (Origin not allowed → 403), SEC-012 (no cookies) | request rejected; POC-010 proves it |
+| AC-6 CSRF from a web page | Page runs `fetch('http://127.0.0.1:42350/api/renders', {method:'POST', mode:'no-cors', body:…})` after scanning the port range | B2 | SEC-004 (no token → 401 before routing), SEC-006 (Origin not allowed → 403), SEC-012 (no cookies) | request rejected; POC-010 proves it |
 | AC-7 Malicious provider reply | Model returns `EditPlan` with 5 000 ops touching Locked Keys and `<script>` in `goal` | B5 | `steps` ≤ 40, ops ≤ 200, `touchesLockedKeys` must be empty, text rendered as plain text (SEC-085) | plan `invalid`; Creator sees EM-4xxx |
 | AC-8 Tampered model manifest | Hostile Wi-Fi serves a `models.json` pointing at a poisoned GGUF on another host | B5 | SEC-071 host allow-list, SEC-072 signature, SEC-074 hash | manifest ignored; EM-7xxx |
 | AC-9 Fake update | DNS points the feed host at an attacker serving an unsigned installer | B5 | SEC-091 signature + publisher check | updater `error`; nothing installed |
-| AC-10 Trial abuse | Creator deletes `%APPDATA%\Expertmotion` to reset Trial Mode or rolls back the clock | A5 | LICENSE_OPERATIONS.md (Trial Mode has no time limit, only watermark + 720p, so there is nothing to reset); SEC-121 monotonic checks for licence expiry | no gain |
+| AC-10 Licence bypass without a key | Creator deletes `%APPDATA%\Expertmotion`, rolls back the clock, or calls the Local Service API directly to use the product without a key | A5 | LICENSE_OPERATIONS.md §7 (no Trial Mode since 2026-10-25: the Local Service gate answers EM-5010 to every route but the licence screen's, so deleting data only returns to the licence screen; activation is rate-limited, SEC-123). Former note: (Trial Mode has no time limit, only watermark + 720p, so there is nothing to reset); SEC-121 monotonic checks for licence expiry | no gain |
 
 ## 6. Not protected against (stated honestly, mirrored in BRD and Help ▸ Privacy)
 
@@ -201,7 +201,7 @@ Likelihood and impact: L/M/H. Residual risk is what remains after the listed SEC
 |---|---|---|---|
 | 1 | The device owner or an administrator attaching a debugger to Expertmotion, dumping memory, or unwrapping DPAPI secrets in their own session | They hold the keys by definition (ADR-006) | Protect against other users, stolen disks and out-of-session malware; say so in the UI |
 | 2 | Extraction of source code, prompts or Design Preset logic by a determined reverse engineer (unpack `app.asar`, decompile V8 bytecode, read decrypted memory) | Everything needed to run the code is on the machine (ADR-007) | Raise the cost: minify, no maps, bytecode for sensitive modules, encrypted assets, ASAR integrity, signatures; design prompts assuming eventual disclosure |
-| 3 | A patched binary that skips licence verification, Trial Mode limits or the watermark | Same as 2 (ADR-014) | Signed releases make patched copies detectable by Creators; revocation list; business measures in BRD |
+| 3 | A patched binary that skips licence verification or the licence gate | Same as 2 (ADR-014) | Signed releases make patched copies detectable by Creators; revocation list; business measures in BRD |
 | 4 | Screen capture or re-recording of rendered content or previews | Content is shown on the Creator's screen | None; not a goal |
 | 5 | A compromised operating system, kernel-level malware, or malware running as the Creator with memory-read capability | Below our trust floor | Keep secrets short-lived (per-launch token), zero buffers (SEC-044) |
 | 6 | Loss of the Creator's data if they lose their Windows profile or DPAPI master key | DPAPI binds the Database Key to the Windows user | Backup/Restore with passphrase (SEC-052) and the warning at first run |
@@ -224,7 +224,7 @@ Likelihood and impact: L/M/H. Residual risk is what remains after the listed SEC
 | Model downloads | tampered manifest, wrong host, over-declared size, resume | yes (local HTTPS fixture server) | SEC-070–075 |
 | Provider egress | `http://` base URL, IP literal, oversize stream, injection fixtures through the fake provider | yes | SEC-080–086 |
 | Updater | unsigned installer rejected; interrupted install; downgrade refused | manual on VM | SEC-090–095 |
-| Licence | tampered key, replay, clock rollback, Trial render > 720p | yes | SEC-120–122 |
+| Licence | tampered key, replay, clock rollback, API use without a key, activation brute force | yes | SEC-120–123 |
 | Artefact | no maps, bytecode present, strings grep, ASAR tamper | yes (release script) | SEC-130–134, POC-006 |
 
 ## 8. Review cadence

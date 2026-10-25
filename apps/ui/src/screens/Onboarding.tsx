@@ -1,21 +1,21 @@
 // First-run wizard (scr.onboarding.*, ONBOARDING_TOUR.md §2; FR-004…FR-008). The 10-step in-app tour (§3) lives in Tour.tsx.
 // The welcome step can switch onboarding + tour copy to Indonesian independently of the UI language (I18N-09).
-// Steps: Welcome, Licence, Provider, Models, Hardware, Tour, Done; every step but Welcome can be skipped ("Lewati"). The record
+// Steps: Welcome, Provider, Models, Hardware, Tour, Done; every step but Welcome can be skipped ("Lewati"). The Licence Key is
+// activated before onboarding starts (licence screen, no Trial Mode), so there is no Licence step. The record
 // {completed, skippedSteps[]} is stored server-side (settings.onboardingDone / onboardingSkippedSteps, R-171) and mirrored in
 // prefs; the wizard can be resumed from Help ▸ Resume onboarding. Done opens scr.project.new prefilled "Untitled" (FR-008).
 import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import { Button, cx } from '../components/ui.js';
-import { LicenseForm } from './License.js';
 import { AssignForm, ConnectForm } from './Providers.js';
 import type { OnboardingStep } from '../api/types.js';
 import { formatBytes, translate, type Lang } from '../i18n/index.js';
 
-const STEPS = ['welcome', 'license', 'provider', 'models', 'hardware', 'tour', 'done'] as const;
+const STEPS = ['welcome', 'provider', 'models', 'hardware', 'tour', 'done'] as const;
 type Step = (typeof STEPS)[number];
-const SKIPPABLE: readonly Step[] = ['license', 'provider', 'models', 'hardware'];
-/** The progress indicator counts the six working steps; Done is the closing screen. */
+const SKIPPABLE: readonly Step[] = ['provider', 'models', 'hardware'];
+/** The progress indicator counts the five working steps; Done is the closing screen. */
 const PROGRESS = STEPS.length - 1;
 
 export function Onboarding({ onClose }: { onClose: () => void }) {
@@ -75,22 +75,21 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
               <p className="text-[12px] text-em-muted">{o('onb.welcome.footnote')}</p>
             </>
           )}
-          {id === 'license' && <LicenseForm compact onDone={() => go(2)} />}
           {id === 'provider' && (
             <>
               {/* FR-007: the add-connection flow of the Providers screen, OpenRouter preselected; a valid key advances. */}
-              <ConnectForm onConnected={(ok) => { setProviderDone(ok); if (ok) go(3); }} />
+              <ConnectForm onConnected={(ok) => { setProviderDone(ok); if (ok) go(STEPS.indexOf('models')); }} />
               <div className="flex gap-2">
-                <Button variant="primary" disabledReason={providerDone ? null : o('onb.provider.validatefirst')} onClick={() => go(3)}>{o('onb.next')}</Button>
-                <Button variant="ghost" onClick={() => { skip('provider', 'models'); go(4); }}>{o('onb.provider.skip')}</Button>
+                <Button variant="primary" disabledReason={providerDone ? null : o('onb.provider.validatefirst')} onClick={() => go(STEPS.indexOf('models'))}>{o('onb.next')}</Button>
+                <Button variant="ghost" onClick={() => { skip('provider', 'models'); go(STEPS.indexOf('hardware')); }}>{o('onb.provider.skip')}</Button>
               </div>
               <p data-el="scr.onboarding.provider.consequence" className="text-[12px] text-em-muted">{o('onb.provider.skip.consequence')}</p>
             </>
           )}
           {id === 'models' && (
             <>
-              {providerDone ? <AssignForm onSaved={() => go(4)} /> : <p className="text-em-muted">{o('onb.models.skipped')}</p>}
-              <Button variant="ghost" onClick={() => go(4)}>{o('onb.models.defaults')}</Button>
+              {providerDone ? <AssignForm onSaved={() => go(STEPS.indexOf('hardware'))} /> : <p className="text-em-muted">{o('onb.models.skipped')}</p>}
+              <Button variant="ghost" onClick={() => go(STEPS.indexOf('hardware'))}>{o('onb.models.defaults')}</Button>
             </>
           )}
           {id === 'hardware' && (
@@ -105,7 +104,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
               </div>
               <p className="text-[12px] text-em-muted">{o('onb.hardware.later')}</p>
               <div className="flex gap-2">
-                <Button variant="primary" onClick={() => go(5)}>{o('onb.next')}</Button>
+                <Button variant="primary" onClick={() => go(STEPS.indexOf('tour'))}>{o('onb.next')}</Button>
                 <Button el="scr.onboarding.hardware.recheck" icon={<RefreshCw size={14} />} loading={checking} onClick={() => void recheck()}>{o('onb.hardware.recheck')}</Button>
               </div>
             </>
@@ -113,7 +112,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           {id === 'tour' && (
             <div className="flex gap-2">
               <Button variant="primary" size={36} onClick={() => finish(true)}>{o('onb.tour.start')}</Button>
-              <Button variant="ghost" onClick={() => { skip('tour'); go(6); }}>{o('onb.tour.skip')}</Button>
+              <Button variant="ghost" onClick={() => { skip('tour'); go(STEPS.indexOf('done')); }}>{o('onb.tour.skip')}</Button>
             </div>
           )}
           {id === 'done' && (

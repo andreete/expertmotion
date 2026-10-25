@@ -4,7 +4,7 @@
 |---|---|
 | Status | Living document; ADRs are append-only (supersede, never edit history) |
 | Owner | Principal architect |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | MASTER_PROJECT_PROMPT.md, ASSESSMENT.md |
 | Used by | all documents |
 
@@ -126,13 +126,14 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Selected**: new repo with `apps/desktop`, `apps/service`, `apps/ui`, `packages/composition-model`, `packages/catalogue` (React-free preset registry, added to break the engine ↔ model ↔ agents cycle), `packages/engine`, `packages/agents`, `packages/models`, `packages/shared`; port render queue, bundle manager (prebuilt path), browser warm-up, stills cache, SSE helper, formats/safe areas, layout unit, `fitText`, Player wrapper, SSE store, UI kit, SchemaForm (inspector fallback). Drop brand, evidence-first rules, six templates, MCP tools.
 - **Consequences**: `BLUEPRINT.md` has the file-by-file port list.
 
-## ADR-014 Offline Ed25519 licence bound to a Machine Fingerprint; Trial Mode
+## ADR-014 Offline Ed25519 licence bound to a Machine Fingerprint (Trial Mode removed 2026-10-25)
 
 - **Status**: accepted (Operator decision 2026-10-24)
 - **Problem**: One-time purchase without running a licence server at launch.
 - **Selected**: licence token signed with the Operator's Ed25519 private key, containing licensee, Machine Fingerprint hash, tier, issue date, update-eligibility date; verified offline with the embedded public key; re-bind limit; revocation list shipped with updates; Trial Mode = watermark + 720p cap.
 - **Trade-offs**: a patched binary can bypass checks (ADR-007 boundary); clock tampering handled by monotonic checks.
 - **Consequences**: `LICENSE_OPERATIONS.md` runbook; `scr.license` flow.
+- **Amendment 2026-10-25 (Operator decision)**: **Trial Mode is removed.** Every install must be activated with a Licence Key bound to its Machine Code before the product is usable: until then the Editor shows only the licence screen and the Local Service answers EM-5010 on every `/api/v1` route except the licence screen's (LICENSE_OPERATIONS.md §7, SEC-122). Single edition: the Payload `tier` stays for compatibility and never gates a feature. Exports are never watermarked or capped (the Engine watermark component, the 720p cap, EM-5001 and the onboarding Licence step are gone). Activation is rate-limited (EM-5011, SEC-123). Licence states become `licensed` / `unlicensed` / `invalid` / `revoked` / `machine-mismatch` (migration 32, DATABASE_SCHEMA.md §5.1); a key whose `upd` predates the build no longer runs in a degraded mode, it does not activate that build (EM-5005, now `error`). Trade-off: an evaluator cannot try the product without a key; BRD-002, D-3 and K-08 are void. **Open for the Operator**: GLOSSARY.md still defines "Trial Mode" (frozen file, HG-005); the term should be marked retired there.
 
 ## ADR-015 MCP is not used in MVP; agents call typed in-process Tools
 
@@ -162,6 +163,8 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Rule**: additions only (no renames, no meaning changes), each logged here; editing requires `GLOSSARY_CHANGE=1` (HG-005).
 - **2026-10-24 additions**: terms *Machine Code*, *keyId (kid)*, *Cut index* (0-based in data, 1-based in UI); *Asset* now includes subtitle files (SRT/VTT); *Provider Connection* includes a custom OpenAI-compatible https base URL; *Resolution* notes the stored lowercase values; *Intent Queue* notes the `removed` status; identifier prefixes `GS-`, `ASM-`, `LIC-`, `AGD-`, `TR-`, `HG-`, `IX-`, `CM-`, `K-`, `R-`; copy rule: friendly "kamu" in Creator-facing Indonesian copy, "Anda" only in legal/licence texts.
 - **Consequences**: documents written before these additions were aligned in the consistency pass of 2026-10-24.
+
+- **Change (2026-10-25)**: "Trial Mode" retired (no trial; the licence screen gates the product, EM-5010, ADR-014 amendment) and "Purchase" removed from the Header actions.
 
 ## ADR-019 Two FFmpeg builds; H.264 encoding path for ingestion
 
@@ -219,3 +222,11 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Alternatives**: (a) encrypt descriptors and decrypt in the Service, serving them to the Editor over the API — rejected: the plaintext then sits in the renderer heap and in every API response, so it adds a code path and startup latency for no extraction cost a debugger cannot bypass in minutes; (b) decrypt inside the Editor with a key in its bundle — rejected: the key would ship next to the ciphertext (no gain, ADR-007 honesty).
 - **Consequences**: the release grep check of SEC-132 ("known prompt sentence → 0 hits") stays valid; no check is claimed for preset parameter tables. Revisit if presets gain proprietary content beyond parameter tables (e.g. Operator-authored motion curves worth protecting), then a Service-side catalogue API is the path.
 
+## ADR-026 Model files are served from the Operator's Cloudflare R2 CDN
+
+- **Status**: accepted (Operator decision 2026-10-25)
+- **Problem**: Creators' apps downloaded model weights straight from Hugging Face `resolve/main` URLs: the files can change or disappear upstream, gated repositories need a Hugging Face account, and the allow-list had to trust several third-party hosts (SEC-071).
+- **Alternatives**: keep Hugging Face with pinned commits (still third-party availability and gating); Cloudflare Pages / Workers static assets (25 MB per-file limit, unusable for GB weights); a paid object store with egress fees.
+- **Selected**: the Operator mirrors each redistributable model file once (`tools/model-mirror`) into a Cloudflare R2 bucket on a custom domain (free tier 10 GB storage, no egress fee) as `m/<sha256>`, with a signed `models.json` (SEC-072). Release builds bake `EM_MODEL_CDN_URL`; the model-download allow-list is then exactly that host, and the Service fetches the signed list from it at most once per 24 h.
+- **Trade-offs**: the Operator runs the mirror and pays for storage above 10 GB (the full mirrorable set is ≈ 23.4 GB; FLUX alone is 12.25 GB); models whose licence forbids redistribution cannot be offered this way; one more Operator secret (the R2 upload token, never in the repo or binary).
+- **Consequences**: DEPLOYMENT_AND_PACKAGING.md §16 (runbook), LOCAL_AI_MODELS.md §4.5 (policy), SECURITY.md SEC-071/SEC-072, API R-147, `scripts/release-check.mjs` item for `EM_MODEL_CDN_URL`.

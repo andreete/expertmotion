@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (expected values are the contract; fixtures marked **[TO SELECT]** are chosen in Stage 2) |
 | Owner | AI agent architect + QA lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, AI_WORKFLOW.md (§3 schemas, §4 Target Resolution, §5 ops, §6 Property Classes, §7 Compile vs Rewrite, §8 tools, §9 hand-off, §12 failures, §13 evaluation), DESIGN_CATALOGUE.md, PERFORMANCE.md, ELEMENT_IDS.md, DATABASE_SCHEMA.md (§4 Composition Model), ERROR_CATALOGUE.md, MCP_AND_TOOLING.md, PRD.md, UXRD.md §4 |
 | Used by | TEST_PLAN.md, QA_PROCESS.md, AGENT_DESIGN.md, SYSTEM_PROMPT.md, POC_PLAN.md, DEFINITION_OF_DONE.md, ROADMAP.md |
 | Owner of | the 20 Golden Scenarios, the fixture set, the base states B0–B3, the scenario execution harness contract (`test/fixtures/plans/GS-xx.json`) |
@@ -71,7 +71,7 @@ Masih layak di 2026? Kita lihat.
 
 | Base | Definition | Head version | Duration |
 |---|---|---|---|
-| **B0** | New Project "GS Review HP": fps 30, ratio 16:9, 1080p, `autoRatio: false`, language `id`, theme `preset:palette.editorial-dark`, `preset:fontpair.jakarta-inter`, `preset:easing.out-cubic`, `textDefaults {fontSize 64, weight 700, colour #F4EFE6, align center, opacity 1}`; FX-V1, FX-V2, FX-V3 imported and `ready` (FX-V3 transcoded to H.264 `playable_path`); no Clips. Hardware Tier **T1**, Performance Profile Standard, licensed (not Trial Mode), Private Mode off, fake provider assigned to both agents, monthly budget unset. | `vB0` (empty model) | 0 (Export disabled: `hdr.action.export.disabled`) |
+| **B0** | New Project "GS Review HP": fps 30, ratio 16:9, 1080p, `autoRatio: false`, language `id`, theme `preset:palette.editorial-dark`, `preset:fontpair.jakarta-inter`, `preset:easing.out-cubic`, `textDefaults {fontSize 64, weight 700, colour #F4EFE6, align center, opacity 1}`; FX-V1, FX-V2, FX-V3 imported and `ready` (FX-V3 transcoded to H.264 `playable_path`); no Clips. Hardware Tier **T1**, Performance Profile Standard, licensed, Private Mode off, fake provider assigned to both agents, monthly budget unset. | `vB0` (empty model) | 0 (Export disabled: `hdr.action.export.disabled`) |
 | **B1** | B0 after GS-01: `video: [c1 = FX-V3 5 000, c2 = FX-V1 8 000, c3 = FX-V2 6 000]`, no transitions. | `vB1` | 19 000 ms (570 frames) |
 | **B2** | B1 after GS-02: `preset:transition.fade` 500 ms on `cut:0` and `cut:1`. Locked Keys: `cut:0.transition`, `cut:1.transition`, `sequence.clips`. | `vB2` | 18 000 ms (540 frames) |
 | **B3** | B1 after GS-08: title `t1` + `preset:transition.push-cut` 400 ms on both cuts (agent-set, **not** Locked). | `vB3` | 18 200 ms (546 frames) |

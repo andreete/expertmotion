@@ -26,7 +26,7 @@ Every document in this repository uses the terms below exactly as written here (
 
 | Term | Definition |
 |---|---|
-| **Header** | Top bar with the menu tabs **File**, **Home**, **Design**, **Tools**, **Help**, the Project Title, and the header actions (Save, Backup/Restore, Hardware Monitor, Model Manager, Purchase, Licence Status, Export). |
+| **Header** | Top bar with the menu tabs **File**, **Home**, **Design**, **Tools**, **Help**, the Project Title, and the header actions (Save, Backup/Restore, Hardware Monitor, Model Manager, Licence Status, Export). |
 | **Menu Tab** | One of File, Home, Design, Tools, Help. Selecting Home, Design or Tools switches the **Library Panel** mode. |
 | **Library Panel** | The left column. It has a **Catalogue Search**, a mode-dependent upper area (**Preview Catalogue** in Design mode, **Text Panel** in Home mode, **Generator Cards** in Tools mode) and the always-visible **Asset Panel**. |
 | **Preview Catalogue** | Grid of **Catalogue Cards**, one per Design Preset, grouped by category. Cards show a prerendered loop; hovering or selecting a card drives the single live preview. |
@@ -113,7 +113,7 @@ Every document in this repository uses the terms below exactly as written here (
 | **Machine Fingerprint** | A stable hash derived from hardware identifiers used to bind a Licence Key to one computer. |
 | **Machine Code** | The Creator-facing, copyable encoding of the Machine Fingerprint (`MC1-…`) shown on the Licence screen and sent to the Operator to issue a key. |
 | **keyId (kid)** | Identifier of the Operator signing key embedded in a Licence Key, enabling key rotation. |
-| **Trial Mode** | Unlicensed state: full editor, exports watermarked and capped at 720p. |
+| **Trial Mode** | Retired 2026-10-25 (ADR-018, ADR-014 amendment): there is no trial; an install without a valid Licence Key shows only the licence screen (EM-5010). |
 | **Database Key** | Random 256-bit key that encrypts the SQLite database, stored wrapped by the OS credential facility (Windows DPAPI via Electron `safeStorage`), never next to the database file. |
 
 ## Process

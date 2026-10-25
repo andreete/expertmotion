@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (Windows x64; macOS/Linux in Appendix A are P2, PRD-055) |
 | Owner | DevSecOps engineer / desktop packaging |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-004, 007, 008, 011, 013, 014, 017), ARCHITECTURE.md (§5, §7, §8), ASSESSMENT.md (§4, §5, §10), PERFORMANCE.md (§5 budgets), SECURITY.md, LICENSE_OPERATIONS.md, BLUEPRINT.md (repo layout) |
 | Used by | ROADMAP.md, STAGE_MANAGEMENT.md, VULNERABILITY_CHECKLIST.md, POC_PLAN.md, TRD.md, DEVELOPMENT_WORKFLOW.md, QA_PROCESS.md |
 | Owner of | build pipeline, installer behaviour, update flow, release artefact naming, build-machine requirements, size budget |
@@ -179,12 +179,12 @@ Size wording is unified across ADR-004, ASSESSMENT §10, PERFORMANCE §5 and thi
 | 1 | `app.requestSingleInstanceLock()`; second instance focuses the first | Shell | exit silently |
 | 2 | Create `%APPDATA%\Expertmotion\{data,media,outputs,models,tmp,logs}` | Shell | EM-6xxx dialog, exit |
 | 3 | `safeStorage.isEncryptionAvailable()`; generate Database Key (`randomBytes(32)`), wrap, write `data\keyring.bin` (first run only) | Shell | EM-6xxx dialog, exit (SEC-040) |
-| 4 | Generate Service Token, pick port 47600–47699, `utilityProcess.fork(service.cjs)`, `postMessage` bootstrap (SEC-002, SEC-008) | Shell | retry ×3 with backoff, then EM-8xxx |
+| 4 | Generate Service Token, pick port 42300–42399, `utilityProcess.fork(service.cjs)`, `postMessage` bootstrap (SEC-002, SEC-008) | Shell | retry ×3 with backoff, then EM-8xxx |
 | 5 | Verify `engine-manifest.json` hashes (SEC-061) | Service | affected feature disabled, logged |
 | 6 | Open DB (`PRAGMA key`, `cipher`), run migrations, mark interrupted jobs failed | Service | `.bak` fallback, else recovery screen (DATABASE_SCHEMA §7) |
 | 7 | Hardware Tier detection (PERFORMANCE §1); RAM < 8 GB warning | Service | T0 default |
 | 8 | Browser check: `Chrome Headless Shell` present and executable from `resources\engine\chrome`; `ensureBrowser({browserExecutable})` is **not** allowed to download (no network) — presence only | Service | EM-3001-class preflight error at Export, app usable |
-| 9 | Licence state load (Trial Mode if none) | Service | Trial |
+| 9 | Licence state load (no key → `unlicensed`: the Editor shows only the licence screen, LICENSE_OPERATIONS §7) | Service | Licence screen |
 | 10 | `ready` → Shell loads `app://expertmotion/` and shows onboarding (PRD-018) | Shell | — |
 | 11 | After the Editor is interactive and Private Mode is off: one update check (SEC-094) | Shell | logged, silent |
 
@@ -282,6 +282,70 @@ Electron's `crashReporter` is either not started or started with `uploadToServer
 | Render catalogue loops | needs Chrome Headless Shell + ≥ 1 GB headroom; the server cap is 900 MB soft | Windows (or commit loops) |
 | Full renders, parity tests, resource measurements | memory cap | Windows (POC-001/002/007) |
 | What **can** run here | unit tests of `packages/composition-model`, `packages/agents`, service HTTP tests with supertest (POC-010 parts), fake-provider tests (POC-004 parts), kill-9 persistence tests (POC-005 parts), small stills under the cgroup cap | this server |
+
+## 16. Model CDN on Cloudflare R2 (Operator runbook, ADR-026)
+
+Operator decision 2026-10-25: Creators' apps download Local Model files **only** from the Operator's own CDN, a Cloudflare R2 bucket served on a custom domain (free tier: 10 GB storage, no egress fees). Cloudflare Pages / Workers static assets are not used: they cap a single file at 25 MB. The app never contacts Hugging Face for a Creator; the Operator mirrors the files once with `tools/model-mirror` (LOCAL_AI_MODELS.md §4.5).
+
+How the app uses it: the release build bakes `EM_MODEL_CDN_URL` into the Local Service (B2, `apps/service/scripts/build.mjs` define `__EM_MODEL_CDN_URL__`, read by `apps/service/src/services/model-cdn.ts`). With it, the model-download allow-list is exactly the CDN host (SEC-071), and the Service fetches `<cdn>/models.json` + `<cdn>/models.json.sig` at most once per 24 h (and on Model Manager refresh, R-147), verifies the Ed25519 signature with the embedded manifest public key (SEC-072) and only then saves it into the models folder. Model files are `<cdn>/m/<sha256>` (opaque names; the manifest carries the original file name, size, sha256 and the Hugging Face revision). Without `EM_MODEL_CDN_URL` the build is a development build and `scripts/release-check.mjs` refuses to release it.
+
+### 16.1 One-time setup
+
+1. **Manifest signing key** (offline signing PC; separate from the licence key, LICENSE_OPERATIONS.md key inventory): `node tools/license-cli/src/cli.mjs keygen --kid M1 --seal --out <path outside any repository>/manifest-M1.key.json` (passphrase from `EXPERTMOTION_LICENSE_PASSPHRASE` or `--passphrase-file`). Paste the printed public key hex into `MANIFEST_PUBLIC_KEY_M1_HEX` in `packages/models/src/signed-registry.ts`. Back the key file up like the licence key.
+2. **Bucket**: Cloudflare dashboard → R2 → Create bucket (e.g. `expertmotion-models`, location automatic, Standard storage class).
+3. **Public access**: bucket → Settings → Custom Domains → Connect Domain → e.g. `models.<your-domain>` (the domain's DNS must be on Cloudflare). For a quick test only, the bucket's `r2.dev` public URL can be enabled; Cloudflare rate-limits `r2.dev` and does not intend it for production, so release-check refuses an `r2.dev` URL.
+4. **API token for uploads**: R2 → Manage R2 API Tokens → Create API token, permission "Object Read & Write", limited to this bucket. Note the Access Key ID, Secret Access Key and the S3 endpoint `https://<account-id>.r2.cloudflarestorage.com`.
+5. **rclone remote** (`rclone config`, or `~/.config/rclone/rclone.conf`):
+
+   ```
+   [r2]
+   type = s3
+   provider = Cloudflare
+   access_key_id = <Access Key ID>
+   secret_access_key = <Secret Access Key>
+   endpoint = https://<account-id>.r2.cloudflarestorage.com
+   acl = private
+   no_check_bucket = true
+   ```
+
+   rclone uploads files larger than its `upload_cutoff` (200 MiB by default) as S3 multipart uploads, which every file over 300 MB needs: `wrangler r2 object put` uploads a single object of at most 300 MB, so it cannot upload the Whisper, SD 1.5 or FLUX files.
+
+### 16.2 Each model update (rotate `seq` every time)
+
+```
+node tools/model-mirror/mirror.mjs prepare --out D:\em-mirror --cdn https://models.<your-domain> [--only whisper-small,whisper-large-v3-turbo] [--revision revisions.json]
+node tools/model-mirror/mirror.mjs sign --out D:\em-mirror --key E:\keys\manifest-M1.key.json
+node tools/model-mirror/mirror.mjs verify --out D:\em-mirror
+rclone copy D:\em-mirror\m r2:expertmotion-models/m --s3-chunk-size 64M --transfers 2 --checksum --progress
+rclone copy D:\em-mirror r2:expertmotion-models --include "/models.json" --include "/models.json.sig" --header-upload "Cache-Control: no-cache"
+```
+
+- `prepare` downloads each file once (streamed to disk while hashing, resumable: run it again after an interruption), keeps it as `m/<sha256>` and writes `models.json` with `seq` = previous `seq` + 1 (or `--seq N`); it removes an old `models.json.sig`, so `sign` must follow. Keep the `--out` folder between updates: unchanged files are not downloaded again and `seq` keeps increasing. The Service refuses a manifest whose `seq` is lower than the last one it accepted (`stale`).
+- Pin revisions: `--revision revisions.json` maps a model key or Hugging Face repo to a 40-hex commit (`{"ggerganov/whisper.cpp": "<commit>"}`); without it the tool records the `x-repo-commit` header Hugging Face sends and resumes from that commit. Gated repositories need `HF_TOKEN` in the environment (sent to `huggingface.co` only).
+- Licences: models with `licence.redistribution: 'no'` are never mirrored; `'verify'` (the Piper voices, RISK-002) only with `--include-verify` after the Operator has verified the dataset licence. The tool prints why each model is skipped.
+- Upload `m/` first and the two manifest files last, back to back: an app that checks between the two uploads sees a pair that does not verify, keeps its current list (EM-7111) and picks the new one up on its next check. Never delete an `m/<sha256>` object that a manifest still in use references; remove old objects only after every supported app version has moved on.
+- The upload credentials stay on the Operator's machine (rclone config); nothing in the repository or the binary can write to the bucket.
+
+### 16.3 Free-tier budget (registry sizes, decimal GB, estimates until pinned)
+
+| Model | Size | Mirrored by default |
+|---|---|---|
+| whisper-small | 0.49 GB | yes |
+| whisper-medium | 1.53 GB | yes |
+| whisper-large-v3-turbo | 1.62 GB | yes |
+| whisper-large-v3 | 3.10 GB | yes |
+| kokoro-82m-v1.0 | 0.09 GB | yes |
+| sd15-emaonly | 4.30 GB | yes |
+| flux1-schnell-q4 (4 files) | 12.25 GB | yes |
+| piper-id-news-medium, piper-en-lessac-medium | 0.06 GB each | only with `--include-verify` |
+| ace-step-v1-3.5b (≈ 7 GB), loop-library-cc0 (≈ 0.15 GB) | — | no file list in the registry yet |
+| stable-audio-open-1.0 | — | never (`redistribution: 'no'`, evaluate only) |
+
+Everything mirrorable comes to ≈ 23.4 GB (23.5 GB with the Piper voices), so the full set does **not** fit the 10 GB free tier: FLUX.1-schnell alone (12.25 GB) exceeds it, and whisper-large-v3 + sd15-emaonly + the three smaller Whisper models already reach ≈ 11 GB. A free-tier set is, for example, `--only whisper-small,whisper-medium,whisper-large-v3-turbo,kokoro-82m-v1.0,sd15-emaonly` plus the Piper voices once verified (≈ 8.2 GB); `prepare` warns when the total exceeds 10 GB. Storage above 10 GB and the per-month operation allowances are billed by Cloudflare; check the current R2 pricing page before adding FLUX or whisper-large-v3 (not verified here). Egress has no fee.
+
+### 16.4 Release build
+
+Set `EM_MODEL_CDN_URL=https://models.<your-domain>` (no trailing path needed; a path prefix such as `/v1` is allowed) in the environment of `npm run release:win`. `scripts/release-check.mjs` stops while it is unset, the placeholder, `http://`, an example host or `r2.dev`. With it set, `TO_PIN` lines in `packages/models/src/registry.ts` are reported as a note only: the signed CDN manifest pins every file, and the built-in Hugging Face URLs are outside the allow-list. Upload a signed `models.json` before shipping, otherwise every model stays "not available yet" (EM-7110).
 
 ## Appendix A. macOS and Linux (P2, PRD-055)
 

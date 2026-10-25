@@ -9,7 +9,7 @@ export interface ServiceConfig {
   version: string; mediaGrantTtlMs: number;
 }
 export const VERSION = '0.1.0';
-export const PROD_PORT_RANGE = [47600, 47699] as const;
+export const PROD_PORT_RANGE = [42300, 42399] as const;
 
 export function devConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig {
   const dataDir = path.resolve(env['EM_DATA_DIR'] ?? path.join(process.cwd(), '.em-dev-data'));

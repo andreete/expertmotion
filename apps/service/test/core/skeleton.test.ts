@@ -89,6 +89,16 @@ describe('database', () => {
     expect(fs.readdirSync(dir).some((f) => f.includes('.corrupt-'))).toBe(true);
     r.db.close();
   });
+  it('migration 32 maps the old Trial Mode licence states (no Trial Mode any more)', () => {
+    const dir = tempDir(); const db = openRaw(path.join(dir, 'm.db'), key);
+    const all = listMigrations();
+    migrate(db, undefined, all.filter((m) => m.version < 32));
+    db.prepare("INSERT INTO license(id, token_enc, status, last_seen_at, fingerprint_hash, updated_at) VALUES (1, NULL, 'trial', 'now', 'fp', 'now')").run();
+    expect(migrate(db, undefined, all)).toContain(32);
+    expect(db.prepare('SELECT status FROM license WHERE id = 1').get()).toEqual({ status: 'unlicensed' });
+    expect(() => db.prepare("UPDATE license SET status = 'trial' WHERE id = 1").run()).toThrow();
+    db.close();
+  });
   it('rejects duplicate migration versions', () => {
     expect(() => listMigrations([{ version: 1, name: 'a', sql: '' }, { version: 1, name: 'b', sql: '' }])).toThrow(/Duplicate/);
   });
