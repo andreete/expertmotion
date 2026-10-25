@@ -141,6 +141,8 @@ Everything under `%LOCALAPPDATA%\Programs\Expertmotion` is replaced by updates a
 
 ## 6. Per-user install (decision)
 
+**Install-folder ACL (found on a Windows 11 ThinkPad, 2026-10-25):** Electron's sandboxed processes read the install folder with an AppContainer token. When the inherited ACL of `%LOCALAPPDATA%\Programs` carries an AppContainer package SID but no `ALL APPLICATION PACKAGES` (S-1-15-2-1) entry, Windows denies the sandbox and Electron exits before any window or log (`install_dir_access.cc ... Grant it with icacls`). The installer (`apps/desktop/installer/expertmotion.nsi`) therefore runs `icacls "$INSTDIR" /grant *S-1-15-2-1:(OI)(CI)(RX)` on its own folder (read/execute only, no administrator rights). Manual fix on an already installed PC: `icacls "%LOCALAPPDATA%\Programs\Expertmotion" /grant "*S-1-15-2-1:(OI)(CI)(RX)"`.
+
 | Criterion | Per-user (`perMachine: false`) — **selected** | Per-machine |
 |---|---|---|
 | Admin prompt | none; standard users can install (SEC-069) | UAC at install and at every update (electron-updater does not auto-install per-machine builds without elevation) |

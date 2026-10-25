@@ -59,6 +59,12 @@ Section "Install"
   File /r "${SRC_DIR}\*.*"
   WriteUninstaller "$INSTDIR\Uninstall ${APP_NAME}.exe"
 
+  ; Electron's sandboxed processes read the install folder with an AppContainer token. On some PCs the parent folder's ACL
+  ; carries an AppContainer package SID but no ALL APPLICATION PACKAGES entry (S-1-15-2-1), so Windows denies the sandbox and
+  ; Electron exits before any window or log ("install_dir_access.cc ... Grant it with icacls"). Grant read/execute on our
+  ; own folder only; a per-user folder needs no administrator rights.
+  nsExec::Exec 'icacls "$INSTDIR" /grant *S-1-15-2-1:(OI)(CI)(RX) /Q'
+
   CreateShortCut "$SMPROGRAMS\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
   CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
 
