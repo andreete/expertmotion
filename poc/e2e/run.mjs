@@ -27,6 +27,20 @@ const api = async (p, init = {}) => { const r = await fetch(`http://127.0.0.1:41
 for (let i = 0; i < 60; i++) { try { if ((await fetch('http://127.0.0.1:4110/api/v1/health')).ok) break; } catch { /* starting */ } await new Promise((r) => setTimeout(r, 250)); }
 check('service healthy', (await fetch('http://127.0.0.1:4110/api/v1/health')).ok);
 
+// 1b. Licence gate (no Trial Mode): locked until a key issued for this Machine Code is activated. The service must be built
+//     with EM_LICENSE_PUBLIC_KEY_A1_HEX and E2E_LICENSE_KEY_FILE / E2E_LICENSE_PASSPHRASE_FILE point at the matching sealed key.
+{
+  const lic = await api('/license');
+  check('unlicensed at first start', lic.body.status === 'unlicensed', { status: lic.body.status });
+  check('product locked before activation', (await api('/projects')).status === 403);
+  const { execFileSync } = await import('node:child_process');
+  const issued = JSON.parse(execFileSync(process.execPath, [path.join(root, 'tools/license-cli/src/cli.mjs'), 'issue', '--name', 'E2E', '--email', 'e2e@example.com', '--fingerprint', lic.body.machineCode,
+    '--key-file', process.env.E2E_LICENSE_KEY_FILE, '--audit', path.join(dataDir, 'audit.csv'), '--out-dir', path.join(dataDir, 'lic'), '--dev-allow-network', '--json'],
+    { env: { ...process.env, EXPERTMOTION_LICENSE_PASSPHRASE: fs.readFileSync(process.env.E2E_LICENSE_PASSPHRASE_FILE, 'utf8') }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+  const act = await api('/license/activate', { method: 'POST', body: JSON.stringify({ key: issued.key }) });
+  check('licence activated', act.status === 200 && act.body.status === 'licensed', { status: act.status });
+}
+
 // 2. Static UI server on 4120 (stands in for app://)
 const ui = path.join(dir, 'ui');
 // Stage the catalogue loops next to the Editor, as scripts/stage-desktop.mjs does for the installer.
