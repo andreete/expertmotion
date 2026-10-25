@@ -641,7 +641,13 @@ function boot(): void {
 
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) { app.quit(); return; }
-  app.on('second-instance', () => { if (mainWindow !== null) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.focus(); } });
+  // Opening Expertmotion again always shows a window: restore/focus the existing one, or create it when the first instance
+  // has none (closed window still shutting down, or a hidden window) — otherwise the second launch looks like "nothing happens".
+  app.on('second-instance', () => {
+    if (mainWindow === null || mainWindow.isDestroyed()) { if (app.isReady()) createWindow(); return; }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show(); mainWindow.focus();
+  });
 
   layout = dataLayout(app.getPath('appData'), process.platform === 'win32' ? '\\' : '/');
   for (const dir of directoriesToCreate(layout)) mkdirSync(dir, { recursive: true });
@@ -675,7 +681,12 @@ function boot(): void {
   });
 
   app.on('window-all-closed', () => {
-    void (async () => { if ((await shutdownService('window-closed')) === 'stopped') app.quit(); })();
+    // Never linger without a window: if the graceful path stalls, exit anyway (the Service is killed by its own deadline).
+    const hardExit = setTimeout(() => { logLine('warn', 'shutdown stalled; exiting'); app.exit(0); }, 20_000);
+    void (async () => {
+      const r = await shutdownService('window-closed').catch(() => 'stopped' as const);
+      if (r === 'stopped') app.quit(); else clearTimeout(hardExit);
+    })();
   });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 }
