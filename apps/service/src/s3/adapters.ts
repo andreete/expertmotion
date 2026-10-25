@@ -122,6 +122,14 @@ export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof 
 const usageOf = (model: string, inputTokens: unknown, outputTokens: unknown) => ({ model, inputTokens: Math.max(0, Math.trunc(num(inputTokens) ?? 0)), outputTokens: Math.max(0, Math.trunc(num(outputTokens) ?? 0)), costUsd: null, approximate: true });
 
 /** Chat adapter for a Model Assignment. The key is passed per provider instance and never logged. */
+/** Models that refused sampling settings this session (`provider:model`); their requests omit temperature. */
+const NO_SAMPLING = new Set<string>();
+/** An EM-4105 refusal whose provider reason names a sampling parameter (temperature / top_p / top_k). */
+export function isSamplingRefusal(e: unknown): boolean {
+  const x = e as { code?: unknown; details?: { reason?: unknown } };
+  return x?.code === 'EM-4105' && /temperature|top[_ ]?p|top[_ ]?k|sampling/i.test(String(x.details?.reason ?? ''));
+}
+
 export function chatProviderFor(p: ProviderKindT, key: string, model: string, fetchFn: typeof fetch): ChatProvider {
   if (p === 'openrouter') return openRouterProvider({ apiKey: key, model, fetch: fetchFn });
   const call = async (req: ChatRequest, url: string, body: unknown): Promise<unknown> =>
@@ -130,16 +138,26 @@ export function chatProviderFor(p: ProviderKindT, key: string, model: string, fe
   // Sampling temperature only when the caller set a real number: `Math.min(1, undefined)` is NaN and was sent as
   // "temperature": null, which Anthropic rejects with HTTP 400 (shown as EM-4003 before). Omitted = provider default.
   const temp = (t: number | undefined, max: number): { temperature?: number } => (typeof t === 'number' && Number.isFinite(t) ? { temperature: Math.min(max, Math.max(0, t)) } : {});
+  // Some models refuse sampling settings (newest Claude models, OpenAI reasoning models): HTTP 400 naming the parameter.
+  // Retry that request once without temperature and remember the model, so later calls omit it from the start.
+  const key2 = `${p}:${model}`;
+  const send = async (req: ChatRequest, url: string, build: (withTemp: boolean) => unknown): Promise<unknown> => {
+    const withTemp = !NO_SAMPLING.has(key2);
+    try { return await call(req, url, build(withTemp)); } catch (e) {
+      if (withTemp && isSamplingRefusal(e)) { NO_SAMPLING.add(key2); return call(req, url, build(false)); }
+      throw e;
+    }
+  };
   switch (p) {
     case 'openai': return { id: 'openai', model, async complete(req) {
-      const j = await call(req, `${OPENAI}/chat/completions`, { model, messages: [{ role: 'system', content: req.system }, ...msgs(req.messages)], max_completion_tokens: req.maxTokens, ...temp(req.temperature, 2) }) as
+      const j = await send(req, `${OPENAI}/chat/completions`, (w) => ({ model, messages: [{ role: 'system', content: req.system }, ...msgs(req.messages)], max_completion_tokens: req.maxTokens, ...(w ? temp(req.temperature, 2) : {}) })) as
         { choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } };
       const c = j.choices?.[0];
       if (c?.finish_reason === 'content_filter') throw new EmError('EM-4104', 'The provider declined to answer this request.');
       return { text: str(c?.message?.content), usage: usageOf(model, j.usage?.prompt_tokens, j.usage?.completion_tokens) };
     } };
     case 'anthropic': return { id: 'anthropic', model, async complete(req) {
-      const j = await call(req, `${ANTHROPIC}/messages`, { model, system: req.system, messages: msgs(req.messages), max_tokens: req.maxTokens, ...temp(req.temperature, 1) }) as
+      const j = await send(req, `${ANTHROPIC}/messages`, (w) => ({ model, system: req.system, messages: msgs(req.messages), max_tokens: req.maxTokens, ...(w ? temp(req.temperature, 1) : {}) })) as
         { content?: Array<{ type?: unknown; text?: unknown }>; stop_reason?: unknown; usage?: { input_tokens?: unknown; output_tokens?: unknown } };
       if (j.stop_reason === 'refusal') throw new EmError('EM-4104', 'The provider declined to answer this request.');
       const text = (j.content ?? []).filter((b) => b.type === 'text').map((b) => str(b.text)).join('');
@@ -148,9 +166,9 @@ export function chatProviderFor(p: ProviderKindT, key: string, model: string, fe
     case 'google': return { id: 'google', model, async complete(req) {
       const id = model.replace(/^models\//, '');
       if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new EmError('EM-4004', 'This model is not available from the provider.');
-      const j = await call(req, `${GEMINI}/models/${id}:generateContent`, { systemInstruction: { parts: [{ text: req.system }] },
+      const j = await send(req, `${GEMINI}/models/${id}:generateContent`, (w) => ({ systemInstruction: { parts: [{ text: req.system }] },
         contents: req.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-        generationConfig: { maxOutputTokens: req.maxTokens, ...temp(req.temperature, 2) } }) as
+        generationConfig: { maxOutputTokens: req.maxTokens, ...(w ? temp(req.temperature, 2) : {}) } })) as
         { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> }; finishReason?: unknown }>; promptFeedback?: { blockReason?: unknown }; usageMetadata?: { promptTokenCount?: unknown; candidatesTokenCount?: unknown } };
       if (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason === 'SAFETY') throw new EmError('EM-4104', 'The provider declined to answer this request.');
       const text = (j.candidates?.[0]?.content?.parts ?? []).map((x) => str(x.text)).join('');

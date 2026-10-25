@@ -240,6 +240,20 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
     await expect(chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-x', bad.f).complete(req))
       .rejects.toMatchObject({ code: 'EM-4105', details: { status: 400, reason: 'temperature: Input should be a valid number' } });
   });
+  it('a model that refuses temperature is retried once without it and remembered (newest Claude / OpenAI reasoning models)', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const { f } = mk((c) => {
+      const b = JSON.parse(String(c.init.body)) as Record<string, unknown>; bodies.push(b);
+      return 'temperature' in b ? json(400, { type: 'error', error: { type: 'invalid_request_error', message: '`temperature` is not supported for this model.' } })
+        : json(200, { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 3, output_tokens: 1 } });
+    });
+    const prov = chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-sampling-free', f);
+    expect((await prov.complete({ ...req, temperature: 0 })).text).toBe('ok');
+    expect(bodies.map((b) => 'temperature' in b)).toEqual([true, false]);
+    await prov.complete({ ...req, temperature: 0.2 });
+    expect('temperature' in bodies.at(-1)!).toBe(false);            // remembered: no second refusal
+    expect(bodies).toHaveLength(3);
+  });
   it('Gemini: generateContent with roles user/model, key in header (never the URL)', async () => {
     const { f, seen } = mk((c) => (c.url.includes(':generateContent') ? json(200, { candidates: [{ content: { parts: [{ text: 'hai' }] } }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1 } })
       : json(200, { models: [{ name: 'models/gemini-2.5-flash', displayName: 'Flash', inputTokenLimit: 1048576, supportedGenerationMethods: ['generateContent'] }, { name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] }] })));
