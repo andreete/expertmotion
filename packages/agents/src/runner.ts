@@ -1,6 +1,6 @@
 // Editor Agent and Brainstorming Agent runs (AI_WORKFLOW §7, §9–§12; AGENT_DESIGN §2–§5; SYSTEM_PROMPT P-1/P-2).
 import { conflictsWithLocked, deriveTiming, propertyKeysOf, type OperationT } from '@expertmotion/composition-model';
-import { EmError, type Issue } from '@expertmotion/shared';
+import { EmError, extractReplyText, type Issue } from '@expertmotion/shared';
 import { prompts } from './prompt-store.js';
 import { parseModelReply, validatePlan, extractJson, type PlanContext } from './plan.js';
 import { BrainstormTurn, type EditPlanT } from './schemas.js';
@@ -155,11 +155,38 @@ export async function runBrainstorm(history: ChatMessage[], contextBlock: unknow
         messages.push({ role: 'assistant', content: text }, toolResultMessage(rec));
         continue;
       }
-      const parsed = json === undefined || req ? undefined : BrainstormTurn.safeParse(json);
-      const turn = parsed?.success ? parsed.data : { reply: req ? '…' : text.slice(0, 4000) };
+      const turn = req ? { reply: '…' } : parseBrainstormReply(text);
       return { ok: true, turn, usage, toolCalls, summary: w.summary };
     }
   } catch (e) { return { ok: false, error: e as EmError, usage, toolCalls }; }
+}
+
+type BrainstormTurnT = ReturnType<typeof BrainstormTurn.parse>;
+/**
+ * QA 2026-10-25 #16: the BrainstormTurn from any model answer. A schema-valid object is taken as is (its reply unwrapped
+ * when the model nested JSON inside it); otherwise the reply text is extracted tolerantly (fences, prose around the JSON,
+ * truncated or double-encoded strings, literal escapes; extractReplyText) and the valid parts of the object are kept
+ * (questions, each valid proposed intent, suggestedNextStep). The JSON wrapper never reaches the chat.
+ */
+export function parseBrainstormReply(text: string): BrainstormTurnT {
+  const r = extractReplyText(text);
+  const json = r.json ?? (() => { const j = extractJson(text); return j && typeof j === 'object' && !Array.isArray(j) ? j as Record<string, unknown> : undefined; })();
+  const reply = (r.text || (json ? '' : text.trim())).slice(0, 4000);
+  const whole = json ? BrainstormTurn.safeParse({ ...json, reply }) : undefined;
+  const turn: BrainstormTurnT = whole?.success ? whole.data : { reply };
+  if (json && !whole?.success) {
+    const shape = BrainstormTurn.shape;
+    const q = shape.questions.safeParse(Array.isArray(json['questions']) ? json['questions'].filter((x) => typeof x === 'string').slice(0, 2) : undefined);
+    if (q.success && q.data?.length) turn.questions = q.data;
+    if (Array.isArray(json['proposedIntents'])) {
+      const items = json['proposedIntents'].flatMap((p) => { const v = shape.proposedIntents.unwrap().element.safeParse(p); return v.success ? [v.data] : []; }).slice(0, 12);
+      if (items.length) turn.proposedIntents = items;
+    }
+    const n = shape.suggestedNextStep.safeParse(json['suggestedNextStep']);
+    if (n.success && n.data) turn.suggestedNextStep = n.data;
+  }
+  if (!turn.reply && !turn.proposedIntents?.length && !turn.questions?.length) turn.reply = '…';
+  return turn;
 }
 
 /** windowMessages plus the deterministic summary of what fell out of the window (AI_WORKFLOW §10 `threadSummary`). */

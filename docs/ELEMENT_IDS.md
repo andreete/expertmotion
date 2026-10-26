@@ -65,7 +65,8 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 |---|---|---|
 | `hdr.logo` | "Remason Editor" wordmark (replace) | Expertmotion wordmark. Click → About. |
 | `hdr.menu.file` | File | Opens the File menu (`hdr.menu.file.*` items below). |
-| `hdr.menu.file.new` | New Video | New Project dialog (`scr.project.new`). |
+| `hdr.menu.file.new` | New Video | "New Project" (Ctrl+N): creates a Project with the default settings at once and opens it (FR-009; the unsaved prompt `scr.unsaved` comes first when the open Project has unsaved changes). Changed 2026-10-26 (QA #5): it no longer opens the dialog. |
+| `hdr.menu.file.newcustom` | (added 2026-10-26) | "New Project with Settings…": the New Project dialog (`scr.project.new`) with name, fps, ratio, resolution, duration policy and output folder. |
 | `hdr.menu.file.open` | Open | Open Project dialog (`scr.project.open`). |
 | `hdr.menu.file.recent` | (added per brief) | Recent projects submenu. |
 | `hdr.menu.file.save` | Save | Save Project. |
@@ -288,6 +289,9 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `agent.editor.intentqueue.group` | "Applied in v5 (3)" row | Collapsed group of the items executed in one older version; `aria-expanded` toggles. |
 | `stage.player.state.error.reload` / `stage.player.state.error.recovery` | Player error card actions | FR-062: "Reload preview" re-issues the media grant and remounts the Player; "Open Recovery" opens `scr.project.recover`. |
 | `stage.player.state.loading` (overlay) | Player loading overlay | FR-061: covers the frame while a newer Composition Version is fetched (`composition.updated`) or media buffers; no older frame is shown as current. |
+| `stage.player.state.loading.retry` | Retry under "This is taking longer than usual" | QA 2026-10-25: shown when no composition arrived after 8 s; fetches the head version and a new media grant again. The wait cause (`no-project`, `head-loading`, `head-missing`, `head-without-model`, `metadata`) is logged as an `[em]` console warning, which the Desktop Shell writes to its log. |
+| `stage.player.state.empty` / `stage.player.state.empty.import` | Player empty state | QA 2026-10-25: a Composition Version with nothing in it (no clips, texts, overlays, captions, audio or background) shows "Nothing to preview yet" with Import… instead of a spinner; a hover preview of a preset still plays. |
+| `stage.player.state.noproject` / `stage.player.state.noproject.new` / `stage.player.state.noproject.open` | Player without a Project | No Project open: "No project open" with New Project (same as `hdr.menu.file.new`) and Open… (`scr.project.open`). |
 | `stage.timeline.element.generated` | "generated" badge on a bar | FR-064: the element's Asset came from a generator job (voice, music, thumbnail). |
 | `agent.brainstorm.message.copy` / `agent.editor.message.copy` | copy icon under a message | FR-077: copies the message text to the clipboard. |
 | `agent.brainstorm.message.retry` / `agent.editor.message.retry` | "Try again" on a saved failure | FR-077: a persisted system message keeps its EM code and inline recovery after a restart. |

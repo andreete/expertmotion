@@ -35,6 +35,7 @@ import { initialRestartState, onFailure, onReady, type RestartState } from './li
 import { buildCsp } from './lib/csp.js';
 import { resolveAppUrl } from './lib/protocol.js';
 import { isTrustedSender } from './lib/ipc.js';
+import { appMenuTemplate, rendererLogLine, showMenuBar } from './lib/window-chrome.js';
 import { buildServiceEnv } from './lib/child-env.js';
 import { IpcPath, OpenUrlArg, parseIpc, PickFilesArgs, PickFolderArgs, PickSaveArgs, UpdateActionArg } from './lib/ipc-schemas.js';
 import { crashFileName, dataLayout, directoriesToCreate, type DataLayout } from './lib/data-dir.js';
@@ -364,6 +365,10 @@ function createWindow(): void {
     },
   });
   mainWindow = win;
+  // QA 2026-10-25: no native menu bar inside the window on Windows / Linux (the Editor header is the menu). The Edit-roles
+  // menu stays attached (Menu.setApplicationMenu in whenReady), so its accelerators keep working while hidden.
+  if (!showMenuBar(process.platform)) win.setMenuBarVisibility(false);
+  win.webContents.on('console-message', (e) => { const l = rendererLogLine(e.level, e.message); if (l) logLine(l.level, 'renderer', { message: l.msg }); });
 
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(`${APP_ORIGIN}/`) && !devRules.devOrigins.some((o) => url.startsWith(o))) e.preventDefault(); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -674,6 +679,7 @@ function boot(): void {
 
 
   void app.whenReady().then(() => {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform)));   // Edit roles only (window-chrome.ts)
     hardenSession();
     registerAppProtocol();
     registerIpc();

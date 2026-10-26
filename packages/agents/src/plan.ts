@@ -1,6 +1,6 @@
 // Step 8 (AI_WORKFLOW §2): deterministic validation of any Edit Plan (compiled or model-authored) before Execute is enabled.
 import { applyOperations, conflictsWithLocked, hashModel, propertyKeysOf, validate, type ApplyContext, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT, type Tier } from '@expertmotion/composition-model';
-import { issue, type Issue } from '@expertmotion/shared';
+import { issue, parseLooseJson, type Issue } from '@expertmotion/shared';
 import { EditPlan, ModelPlanReply, type EditPlanT } from './schemas.js';
 
 export interface PlanContext { model: CompositionModelT; baseVersion: string; assets: readonly AssetFacts[]; tier: Tier; lockedKeys: readonly string[]; newId: () => string; jobs?: ApplyContext['jobs'] }
@@ -52,14 +52,11 @@ export function parseModelReply(text: string, meta: { id: string; projectId: str
   if (!r.success) return { problem: `The JSON does not match the EditPlan schema: ${r.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')}. Reply with corrected JSON only.` };
   return { plan: EditPlan.parse({ ...r.data, id: meta.id, projectId: meta.projectId, origin: 'editor-agent', status: 'draft' }) };
 }
-/** Accepts raw JSON, JSON inside a ```json fence, or the first balanced {...} object in the text. */
+/**
+ * Accepts raw JSON, JSON inside a ```json fence, or the first balanced {...} object in the text; raw newlines inside strings
+ * are repaired and double-encoded JSON is unwrapped (parseLooseJson, QA 2026-10-25 #16).
+ */
 export function extractJson(text: string): unknown {
-  const t = text.trim();
-  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
-  const candidates = [t, fence?.[1]?.trim()];
-  const first = t.indexOf('{');
-  if (first >= 0) { let depth = 0, inStr = false, esc = false; for (let i = first; i < t.length; i++) { const c = t[i]!; if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; } if (c === '"') inStr = true; else if (c === '{') depth++; else if (c === '}' && --depth === 0) { candidates.push(t.slice(first, i + 1)); break; } } }
-  for (const c of candidates) { if (!c) continue; try { return JSON.parse(c); } catch { /* try next */ } }
-  return undefined;
+  return parseLooseJson(text);
 }
 export { hashModel };

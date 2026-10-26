@@ -8,6 +8,7 @@ import { ModelPicker, qualityOf } from '../components/ModelPicker.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
 import { useModelNames } from '../state/use-model-names.js';
 import { copyText } from '../api/client.js';
+import { ModelText, modelReplyText } from './ModelText.js';
 
 /** FR-072: largest image the composer attaches from disk (EM-1002 above it). */
 export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
@@ -59,7 +60,8 @@ export function useAgentAvailability(agent: AgentKind): { reason: string | null;
 
 export function Bubble({ m, agent, children, onRetry }: { m: MessageDto; agent: AgentKind; children?: ReactNode; onRetry?: (() => void) | undefined }) {
   const { t, lang, actions } = useStore();
-  const text = m.blocks.filter((b) => b.type === 'text').map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+  // QA #16: assistant text is model output: unwrap any JSON wrapper per block (also for messages stored before the fix).
+  const text = m.blocks.filter((b) => b.type === 'text').map((b) => (b.type === 'text' ? (m.role === 'assistant' ? modelReplyText(b.text) : b.text) : '')).filter((x) => m.role !== 'assistant' || x).join('\n');
   const attachments = m.blocks.filter((b) => b.type === 'attachment');
   const time = new Date(m.createdAt);
   const stamp = Number.isNaN(time.getTime()) ? '' : time.toLocaleTimeString(lang === 'id' ? 'id-ID' : 'en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -80,7 +82,9 @@ export function Bubble({ m, agent, children, onRetry }: { m: MessageDto; agent: 
   const user = m.role === 'user';
   return (
     <div data-el={`agent.${agent}.message`} data-role={m.role} className={cx('group flex flex-col gap-1', user ? 'items-end' : 'items-start')}>
-      {text && <div className={cx('max-w-[92%] whitespace-pre-wrap rounded-[8px] px-2.5 py-1.5', user ? 'border-l-2 border-em-accent bg-em-panel-2' : 'bg-em-panel-2')}>{text}</div>}
+      {text && (user
+        ? <div className="max-w-[92%] whitespace-pre-wrap rounded-[8px] border-l-2 border-em-accent bg-em-panel-2 px-2.5 py-1.5">{text}</div>
+        : <div className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={text} raw /></div>)}
       {text && <span className="flex items-center gap-1.5 text-[10px] text-em-muted">{stamp}<CopyButton agent={agent} text={text} /></span>}
       {attachments.map((a, i) => a.type === 'attachment' && <span key={i} className="rounded-[4px] border border-em-line px-1 text-[11px] text-em-muted">📎 {a.name}</span>)}
       {children}
@@ -105,24 +109,36 @@ export function StreamingBubble({ agent }: { agent: AgentKind }) {
   const names = useModelNames();
   const s = state.streaming[agent];
   if (!s) return null;
+  const shown = s.text ? modelReplyText(s.text) : '';                          // QA #16: a streamed JSON wrapper is never shown either
   return (
     <div className="flex flex-col items-start gap-1">
       <div className="text-[12px] text-em-muted">{t('ui.agent.common.asking', { model: names.llm(s.modelId, agent) || t('ui.agent.common.model') })}
         <button type="button" className="ml-2 underline" onClick={() => { void runtime.api.cancelAgentRun(s.runId).catch(() => undefined); if (agent === 'editor') void actions.cancelPlan(); else actions.stopStreaming(agent); }}>{t('ui.common.cancel')}</button>
       </div>
-      {s.text && <div aria-hidden className="max-w-[92%] whitespace-pre-wrap rounded-[8px] bg-em-panel-2 px-2.5 py-1.5">{s.text}<span className="em-skeleton ml-0.5 inline-block h-3 w-1.5 align-middle" /></div>}
+      {shown && <div aria-hidden className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={shown} raw /><span className="em-skeleton ml-0.5 inline-block h-3 w-1.5 align-middle" /></div>}
     </div>
   );
 }
 
+/** The assigned provider / model names for error copy ({provider}, {model}); absent ones fall back in translate (err.*). */
+export function useAgentErrorVars(agent: AgentKind): Record<string, string> {
+  const { state, t } = useStore();
+  const names = useModelNames();
+  const a = state.assignments?.[agent];
+  const conn = a ? state.connections.find((c) => c.id === a.connectionId) : undefined;
+  const model = a ? names.llm(a.modelId, agent) : '';
+  return { ...(conn?.label ? { provider: conn.label, connection: conn.label } : {}), ...(model ? { model } : {}), agent: t(`ui.agent.${agent}.title`) };
+}
+
 export function AgentErrorBubble({ agent, onRetry }: { agent: AgentKind; onRetry: () => void }) {
   const { state, actions, t } = useStore();
+  const vars = useAgentErrorVars(agent);
   const code = state.agentError[agent];
   if (!code) return null;
   return (
     <div data-el={`agent.${agent}.message`} data-role="system" role="alert" className="rounded-[6px] border-l-2 border-em-danger bg-em-panel-2 px-2.5 py-1.5">
-      <div className="flex items-center gap-2"><span className="flex-1 font-semibold">{t(`err.${code}.title`)}</span><span className="t-mono text-em-muted">{code}</span></div>
-      <div className="text-em-text-2">{t(`err.${code}.body`)}</div>
+      <div className="flex items-center gap-2"><span className="flex-1 font-semibold">{t(`err.${code}.title`, vars)}</span><span className="t-mono text-em-muted">{code}</span></div>
+      <div className="text-em-text-2">{t(`err.${code}.body`, vars)}</div>
       <div className="mt-1.5 flex gap-2">
         <Button size={28} onClick={onRetry}>{t('ui.sys.toast.tryagain')}</Button>
         {code === 'EM-4201'   /* FR-117 / AI-016: Change budget opens Providers on the budget field */

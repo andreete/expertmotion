@@ -22,6 +22,8 @@ export interface Actions {
   /** R-025: create (or reuse) the tour's sample project and open it; resolves with its id, or null on error. */
   openSampleProject(language: Lang): Promise<string | null>;
   createProject(input: ProjectCreateInput): Promise<void>;
+  /** QA #5 / FR-009: File ▸ New Project (Ctrl+N): a Project with the default settings, opened at once; resolves with its id. */
+  newProject(): Promise<string | null>;
   renameProject(name: string): Promise<boolean>;
   refreshHead(): Promise<void>;
   save(): Promise<void>;
@@ -241,6 +243,22 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       openProject, openSampleProject, refreshHead, reloadState, error, toast, announce, undo, redo, setScreen,
       async createProject(input) {
         try { const p = await api.createProject(input); await openProject(p.id); } catch (e) { error(e); }
+      },
+      async newProject() {
+        // Default settings (FR-009): Settings defaults or 30 fps · 9:16 · 1080p, fit-content, default output folder. The name is
+        // "Untitled" ("Tanpa judul"), then "Untitled 2", … while a Project with that name exists (EM-6103, unique per data dir).
+        const s = stateRef.current;
+        const base = translate(s.settings?.uiLanguage ?? 'en', 'ui.hdr.title.untitled');
+        const { ratio, resolution } = outputDefaults(s);
+        for (let n = 1; n <= 99; n++) {
+          try {
+            const p = await api.createProject({ name: n === 1 ? base : `${base} ${n}`, settings: { fps: s.settings?.defaultFps ?? 30, ratio, resolution, autoRatio: false } });
+            await openProject(p.id);
+            toast('info', 'ui.sys.toast.project.created', { name: p.name });
+            return p.id;
+          } catch (e) { if (errCode(e) === 'EM-6103') continue; error(e); return null; }
+        }
+        return null;
       },
       async renameProject(name) {
         const id = pid(); if (!id) return false;

@@ -82,8 +82,26 @@ export function previewModel(model: CompositionModelT, presetId: string, state: 
   return r.ok ? r.value.model : null;
 }
 
+/** Nothing to show: no clips, texts, overlays, captions, audio or background (QA 2026-10-25: empty state, not a spinner). */
+export function isEmptyComposition(m: CompositionModelT): boolean {
+  const t = m.tracks;
+  return t.video.length === 0 && t.text.length === 0 && t.overlay.length === 0 && t.audio.length === 0 && t.caption.pages.length === 0 && !m.background;
+}
+
+/** Why the Player is still waiting for a composition (logged when it takes longer than usual). */
+export function previewWaitCause(state: Pick<AppState, 'project' | 'head' | 'headLoading' | 'grant'>): string {
+  if (!state.project) return 'no-project';
+  if (state.headLoading) return 'head-loading';
+  if (!state.head) return 'head-missing';
+  if (!state.head.model) return 'head-without-model';
+  return 'metadata';
+}
+export const SLOW_PREVIEW_MS = 8000;
+
 export function StagePlayer() {
   const { state, actions, runtime, t, lang, prefs, setPrefs, dispatch } = useStore();
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const ref = useRef<PlayerRef>(null);
   const box = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
@@ -139,7 +157,18 @@ export function StagePlayer() {
   };
   const fullRef = useRef(toggleFullscreen);
   fullRef.current = toggleFullscreen;
-  useEffect(() => { if (head) return; const h = setTimeout(() => setSlow(true), 8000); return () => clearTimeout(h); }, [head]);
+  // "Taking longer than usual" after 8 s without a composition: offer Retry and log the cause (Shell log via the [em] tag).
+  const [retryNonce, setRetryNonce] = useState(0);
+  useEffect(() => {
+    if (head || !pid) { setSlow(false); return; }
+    const h = setTimeout(() => {
+      setSlow(true);
+      console.warn(`[em] player: preview still loading after ${SLOW_PREVIEW_MS / 1000} s (${previewWaitCause(stateRef.current)})`, { projectId: stateRef.current.project?.id ?? null, headId: stateRef.current.head?.id ?? null });
+    }, SLOW_PREVIEW_MS);
+    return () => clearTimeout(h);
+  }, [head, pid, retryNonce]);
+  const retryLoad = () => { setSlow(false); setRetryNonce((n) => n + 1); void actions.refreshHead(); if (pid) void runtime.api.issueMediaGrant(pid).then((g) => dispatch({ type: 'grant', grant: g })).catch(() => undefined); };
+  const empty = !!head && !preview && isEmptyComposition(head);
 
   // Player events → local time + live bus; settled playhead → store.
   useEffect(() => {
@@ -157,7 +186,7 @@ export function StagePlayer() {
     p.addEventListener('pause', onPause);
     p.addEventListener('seeked', onSeek);
     return () => { p.removeEventListener('waiting', onWaiting); p.removeEventListener('resume', onResume); p.removeEventListener('frameupdate', onFrame); p.removeEventListener('play', onPlay); p.removeEventListener('pause', onPause); p.removeEventListener('seeked', onSeek); };
-  }, [fps, actions, meta?.durationInFrames, remountKey]);
+  }, [fps, actions, meta?.durationInFrames, remountKey, empty, !inputProps]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     playerBus.set({
@@ -170,7 +199,7 @@ export function StagePlayer() {
     return () => playerBus.set(null);
   }, [fps, meta?.durationInFrames, durationMs, actions]);
 
-  useEffect(() => { if (pp.muted) ref.current?.mute(); else ref.current?.unmute(); }, [pp.muted, remountKey]);
+  useEffect(() => { if (pp.muted) ref.current?.mute(); else ref.current?.unmute(); }, [pp.muted, remountKey, empty]);
 
   const fit = meta ? Math.min((size.w - 32) / meta.width, (size.h - 32) / meta.height) : 1;
   const w = meta ? Math.max(1, Math.floor(meta.width * fit)) : 0, h = meta ? Math.max(1, Math.floor(meta.height * fit)) : 0;
@@ -222,9 +251,25 @@ export function StagePlayer() {
       </div>
       <div ref={box} data-el="stage.player.canvas" role="region" aria-label={t('a11y.stage.player.canvas')} className="relative flex min-h-0 flex-1 items-center justify-center bg-em-bg"
         onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const files = [...e.dataTransfer.files]; if (files.length) void actions.upload(files); }}>
-        {!inputProps || !meta ? (
+        {!pid ? (
+          <div data-el="stage.player.state.noproject" role="status" className="flex max-w-[360px] flex-col items-center gap-2 p-4 text-center">
+            <span className="text-[14px] font-semibold">{t('ui.stage.player.noproject.title')}</span>
+            <span className="text-em-muted">{t('ui.stage.player.noproject.body')}</span>
+            <span className="flex gap-2">
+              <Button el="stage.player.state.noproject.new" size={28} variant="primary" onClick={() => { void actions.newProject(); }}>{t('ui.hdr.menu.file.new')}</Button>
+              <Button el="stage.player.state.noproject.open" size={28} onClick={() => actions.setScreen({ kind: 'project.open' })}>{t('ui.hdr.menu.file.open')}</Button>
+            </span>
+          </div>
+        ) : !inputProps || !meta ? (
           <div data-el="stage.player.state.loading" className="flex flex-col items-center gap-2 text-em-muted" role="status">
             <RefreshCw size={20} className="em-spin" aria-hidden />{t('ui.stage.player.loading')}{slow && <span>{t('ui.stage.player.slow')}</span>}
+            {slow && <Button el="stage.player.state.loading.retry" size={28} onClick={retryLoad}>{t('ui.sys.toast.tryagain')}</Button>}
+          </div>
+        ) : empty ? (
+          <div data-el="stage.player.state.empty" role="status" className="flex max-w-[360px] flex-col items-center gap-2 p-4 text-center">
+            <span className="text-[14px] font-semibold">{t('ui.stage.player.empty.title')}</span>
+            <span className="text-em-muted">{t('ui.stage.player.empty.body')}</span>
+            <Button el="stage.player.state.empty.import" size={28} onClick={() => window.dispatchEvent(new CustomEvent('em:import', { detail: {} }))}>{t('ui.hdr.menu.file.import')}</Button>
           </div>
         ) : (
           <div className="relative" style={{ width: w, height: h }}>

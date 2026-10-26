@@ -62,8 +62,10 @@ describe('Unsaved prompt (FR-174)', () => {
     fireEvent.click(el('hdr.menu.file.new')!);
     await until(() => el('scr.unsaved.save'));
     await act(async () => { fireEvent.click(el('scr.unsaved.save')!); });
-    await until(() => el('scr.project.new'), 'new dialog after save');
-    expect(el('hdr.title.dirty')).toBeNull();                           // Save cleared the dirty state first
+    // QA 2026-10-25 #5: New Project creates and opens the Project at once (no dialog) once the prompt is answered.
+    await until(() => el('hdr.title')?.textContent === 'Untitled', 'new project opened after save');
+    expect(el('scr.project.new')).toBeNull();
+    expect(el('hdr.title.dirty')).toBeNull();
   });
 
   it('closing the window with unsaved state prompts, then closes (Desktop Shell)', async () => {
@@ -101,10 +103,10 @@ describe('Unsaved prompt (FR-174)', () => {
 });
 
 describe('New and Settings: duration policy and output folder (FR-009, FR-015)', () => {
-  it('New offers duration policy (with seconds) and an output folder', async () => {
+  it('New Project with Settings… offers duration policy (with seconds) and an output folder', async () => {
     await renderEditor('sample');
     fireEvent.click(el('hdr.menu.file')!);
-    fireEvent.click(el('hdr.menu.file.new')!);
+    fireEvent.click(el('hdr.menu.file.newcustom')!);
     await until(() => el('scr.project.new.duration.policy'));
     expect(el('scr.project.new.output.folder')).not.toBeNull();
     expect((el('scr.project.new.name') as HTMLInputElement).value).toBe('Untitled');

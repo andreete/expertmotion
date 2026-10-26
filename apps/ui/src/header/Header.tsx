@@ -65,7 +65,8 @@ export function Header() {
           className="flex h-12 items-center gap-1 px-2.5 text-[13px] font-medium text-em-text-2 hover:text-em-text"><Folder size={16} aria-hidden />{t('ui.hdr.menu.file')}</button>
         {(menu === 'file' || menu === 'recent') && (
           <Popover onClose={close} role="menu" label={t('ui.hdr.menu.file')} width={280}>
-            <MenuItem el="hdr.menu.file.new" shortcut="Ctrl+N" onClick={() => { close(); guardUnsaved({ state, actions }, () => actions.setScreen({ kind: 'project.new' })); }}>{t('ui.hdr.menu.file.new')}</MenuItem>
+            <MenuItem el="hdr.menu.file.new" shortcut="Ctrl+N" onClick={() => { close(); guardUnsaved({ state, actions }, () => { void actions.newProject(); }); }}>{t('ui.hdr.menu.file.new')}</MenuItem>
+            <MenuItem el="hdr.menu.file.newcustom" onClick={() => { close(); guardUnsaved({ state, actions }, () => actions.setScreen({ kind: 'project.new' })); }}>{t('ui.hdr.menu.file.newcustom')}</MenuItem>
             <MenuItem el="hdr.menu.file.open" shortcut="Ctrl+O" onClick={() => { close(); actions.setScreen({ kind: 'project.open' }); }}>{t('ui.hdr.menu.file.open')}</MenuItem>
             <MenuItem el="hdr.menu.file.recent" onClick={() => setMenu(menu === 'recent' ? 'file' : 'recent')}>{t('ui.hdr.menu.file.recent')} ▸</MenuItem>
             {menu === 'recent' && <RecentList onPick={(id) => { close(); if (id !== p?.id) guardUnsaved({ state, actions }, () => { void actions.openProject(id); }); }} />}

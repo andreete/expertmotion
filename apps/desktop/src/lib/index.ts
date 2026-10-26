@@ -16,3 +16,4 @@ export * from './keysplit.js';
 export * from './updater-policy.js';
 export * from './close-flow.js';
 export * from './permissions.js';
+export * from './window-chrome.js';

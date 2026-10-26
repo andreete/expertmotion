@@ -63,7 +63,41 @@ function renderArg(inner: string, vars: Vars, lang: Lang): string {
 export function translate(lang: Lang, key: string, vars?: Vars): string {
   const s = LOCALES[lang][key] ?? LOCALES.en[key];
   if (s === undefined) return key;
-  return formatMessage(s, vars, lang);
+  return key.startsWith('err.') ? formatErrorMessage(s, vars ?? {}, lang) : formatMessage(s, vars, lang);
+}
+
+/** Placeholders in err.* copy that read naturally with a generic noun when the value is unknown (`ui.err.fallback.<name>`). */
+export const ERR_NOUN_FALLBACKS = ['provider', 'model', 'tool', 'agent', 'connection', 'preset', 'profile', 'scope'] as const;
+const capitalise = (s: string, lang: Lang) => s.replace(/^(\s*)(\p{Ll})/u, (_m, sp: string, c: string) => sp + c.toLocaleUpperCase(lang === 'id' ? 'id-ID' : 'en-US'));
+const simpleArgs = (s: string): string[] => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!);
+const missingIn = (s: string, vars: Vars) => simpleArgs(s).filter((n) => vars[n] === undefined || vars[n] === '');
+
+/**
+ * Error copy (QA 2026-10-25): a placeholder without a value never renders as "…". Known nouns get a localized fallback
+ * ("Expertmotion could not reach the AI provider."); a sentence whose other values are unknown (sizes, names, counts) is
+ * left out ("Trim or compress it, then import again."); if nothing would remain, every gap gets the generic fallback.
+ * Quotes around a filled-in fallback are dropped and a sentence that starts with one is capitalised.
+ */
+export function formatErrorMessage(template: string, vars: Vars, lang: Lang = 'en'): string {
+  const filled: Vars = Object.fromEntries(Object.entries(vars).filter(([, v]) => v !== undefined && v !== ''));
+  const fallback = new Set<string>();
+  for (const n of missingIn(template, filled)) {
+    if ((ERR_NOUN_FALLBACKS as readonly string[]).includes(n)) { filled[n] = translate(lang, `ui.err.fallback.${n}`); fallback.add(n); }
+  }
+  const render = (sentence: string, v: Vars) => {
+    let out = sentence;
+    for (const n of fallback) out = out.replace(new RegExp(`["“]\\{${n}\\}["”]`, 'g'), `{${n}}`);
+    const text = formatMessage(out, v, lang);
+    const lead = /^\s*["“]?\{(\w+)\}/.exec(sentence)?.[1];
+    return lead && fallback.has(lead) ? capitalise(text, lang) : text;
+  };
+  if (!missingIn(template, filled).length) return render(template, filled);
+  // Sentence split at ". " / "! " / "? " / "; " outside braces (error copy has no plural blocks).
+  const sentences = template.split(/(?<=[.!?;])\s+/);
+  const kept = sentences.filter((x) => !missingIn(x, filled).length).map((x) => render(x, filled).replace(/;$/, '.'));
+  if (kept.length) return capitalise(kept.join(' '), lang);
+  for (const n of missingIn(template, filled)) { filled[n] = translate(lang, 'ui.err.fallback.generic'); fallback.add(n); }
+  return render(template, filled);
 }
 export const hasKey = (key: string): boolean => key in LOCALES.en;
 

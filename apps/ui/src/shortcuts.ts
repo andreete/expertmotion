@@ -42,7 +42,7 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
         else if (l === 's' && e.shiftKey) { e.preventDefault(); if (state.project) actions.setScreen({ kind: 'project.new', saveAs: true }); }
         else if (l === 'e') { e.preventDefault(); if (state.head?.model?.tracks.video.length) actions.setScreen({ kind: 'export' }); else actions.toast('info', 'ui.hdr.export.disabled'); }
         else if (l === 'i') { e.preventDefault(); requestImport(); }
-        else if (l === 'n') { e.preventDefault(); guardUnsaved({ state, actions }, () => actions.setScreen({ kind: 'project.new' })); }
+        else if (l === 'n') { e.preventDefault(); guardUnsaved({ state, actions }, () => { void actions.newProject(); }); }   // QA #5: New Project at once
         else if (l === 'o') { e.preventDefault(); actions.setScreen({ kind: 'project.open' }); }
         else if (l === 'b') { e.preventDefault(); if (e.shiftKey) collapse.toggleAgent(); else collapse.toggleLibrary(); }
         return;
@@ -86,5 +86,5 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state.plan, state.screen, state.streaming.editor, state.selection, state.head, state.playheadMs, actions, collapse, t]);
+  }, [state.plan, state.screen, state.streaming.editor, state.selection, state.head, state.playheadMs, state.project, actions, collapse, t]);   // state.project: Ctrl+N / Ctrl+O see the current dirty flag
 }
