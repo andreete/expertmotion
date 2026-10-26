@@ -282,7 +282,13 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
   it('maps 401/429/5xx/timeouts and refusals to EM codes', async () => {
     const status = (n: number) => mk(() => json(n, { error: 'x' })).f;
     await expect(validateKey('openai', 'k', status(401))).rejects.toMatchObject({ code: 'EM-4002' });
-    await expect(chatProviderFor('openai', 'k', 'gpt-4o', status(429)).complete(req)).rejects.toMatchObject({ code: 'EM-4102' });
+    // AI_WORKFLOW §12: a 429 is retried twice with backoff (Retry-After honoured), then EM-4102 with details.retries.
+    const waits: number[] = []; const rl = mk(() => new Response(JSON.stringify({ error: 'x' }), { status: 429, headers: { 'retry-after': '2' } }));
+    await expect(chatProviderFor('openai', 'k', 'gpt-4o', rl.f, { sleep: async (ms) => { waits.push(ms); } }).complete(req)).rejects.toMatchObject({ code: 'EM-4102', details: { retries: 2, retryAfterMs: 2000 } });
+    expect(waits).toEqual([2000, 2000]);
+    let n = 0; const flaky = mk(() => (++n === 1 ? json(429, { error: 'x' }) : json(200, { choices: [{ message: { content: 'ok' } }] }))).f;
+    await expect(chatProviderFor('openai', 'k', 'gpt-4o', flaky, { sleep: async () => {} }).complete(req)).resolves.toMatchObject({ text: 'ok' });
+    await expect(chatProviderFor('openai', 'k', 'gpt-4o', status(429), { retries: 0 }).complete(req)).rejects.toMatchObject({ code: 'EM-4102' });
     await expect(chatProviderFor('anthropic', 'k', 'c', status(503)).complete(req)).rejects.toMatchObject({ code: 'EM-4103' });
     await expect(listModels('google', 'k', status(500))).rejects.toMatchObject({ code: 'EM-4006' });
     const hang = mk((c) => new Promise<Response>((_r, rej) => { c.init.signal?.addEventListener('abort', () => rej(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))); })).f;

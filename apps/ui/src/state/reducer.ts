@@ -26,7 +26,7 @@ export type Screen =
   /** FR-002: closing while a Render Job runs: "Cancel render and close" / "Keep rendering". */
   | { kind: 'close.render'; jobId: string; then: () => void };
 
-export interface Streaming { runId: string; text: string; modelId: string; /** agent.run.progress (QA 2026-10-26 #5) */ phase?: AgentPhase; attempt?: number; tool?: string }
+export interface Streaming { runId: string; text: string; modelId: string; /** agent.run.progress (QA 2026-10-26 #5) */ phase?: AgentPhase; attempt?: number; of?: number; tool?: string; /** when the run started (elapsed seconds in the progress line) */ since?: number }
 /** agent.run.failed `message` / `details` (QA 2026-10-26 #3/#5): the reason shown in the error bubble; `details.recentKey` = new key. */
 export interface AgentErrorDetail { message?: string; details?: Record<string, unknown> }
 
@@ -223,7 +223,7 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
       if (state.doneRuns.includes(ev.data.runId)) return state;
       const s = state.streaming[ev.data.agent];
       if (s && s.runId !== ev.data.runId) return state;
-      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.runId, text: s?.text ?? '', modelId: s?.modelId ?? '', phase: ev.data.phase, ...(ev.data.attempt !== undefined ? { attempt: ev.data.attempt } : {}), ...(ev.data.tool ? { tool: ev.data.tool } : {}) } } };
+      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.runId, text: s?.text ?? '', modelId: s?.modelId ?? '', phase: ev.data.phase, since: s?.since ?? Date.now(), ...(ev.data.attempt !== undefined ? { attempt: ev.data.attempt } : {}), ...(ev.data.of !== undefined ? { of: ev.data.of } : {}), ...(ev.data.tool ? { tool: ev.data.tool } : {}) } } };
     }
     case 'agent.run.failed': return { ...state, doneRuns: [ev.data.runId, ...state.doneRuns].slice(0, 20), streaming: { ...state.streaming, [ev.data.agent]: null }, agentError: { ...state.agentError, [ev.data.agent]: ev.data.code },
       agentErrorDetail: { ...state.agentErrorDetail, [ev.data.agent]: ev.data.message || ev.data.details ? { ...(ev.data.message ? { message: ev.data.message } : {}), ...(ev.data.details ? { details: ev.data.details } : {}) } : null } };

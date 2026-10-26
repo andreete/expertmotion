@@ -9,3 +9,4 @@ export * from './diff.js';
 export * from './validate.js';
 export * from './model.js';
 export * from './summarize.js';
+export * from './items.js';

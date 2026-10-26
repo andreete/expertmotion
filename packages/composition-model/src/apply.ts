@@ -9,6 +9,7 @@ import { frameInUnits } from './units.js';
 import { detectRatio } from './ratio.js';
 import { diffModels, type ElementDiff } from './diff.js';
 import { freeAudioLane, frontLayerFor, moveVisual, normalizeLanes, placeAudio, placeVisual, visualItems, visualSpan, type VisualItem } from './layers.js';
+import { CLIP_TIMING_OPS, followSceneAnchors, sceneAnchors } from './items.js';
 
 export interface GeneratedResult { kind: 'voice' | 'music' | 'thumbnail' | 'captions'; assetId?: string; pages?: CaptionPageT[] }
 export interface ApplyContext { assets: readonly AssetFacts[]; tier: Tier; newId: () => string; jobs?: Readonly<Record<string, GeneratedResult>> }
@@ -25,7 +26,9 @@ export function applyOperations(model: CompositionModelT, ops: readonly Operatio
   try {
     ops.forEach((op, i) => {
       const firstBefore = m.tracks.video[0]?.assetId;
+      const anchors = CLIP_TIMING_OPS.has(op.op) ? sceneAnchors(m) : [];          // ADR-031: scene texts move with their scene clip
       applyOne(m, op, ctx, `ops[${i}]`, warnings);
+      followSceneAnchors(m, anchors);
       normalizeLanes(m);                                                             // ADR-027: lanes stay dense after every op
       if (m.tracks.video[0]?.assetId !== firstBefore) followFirstClip(m, ctx);      // FR-088: Auto re-checks when the first Clip changes
     });

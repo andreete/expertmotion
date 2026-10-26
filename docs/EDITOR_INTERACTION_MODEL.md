@@ -246,6 +246,36 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 9 | `EM-2201` (nothing at the playhead, from a stale client), `EM-2203` (item gone). |
 | 10 | Ctrl+Z restores the previous version (every split of the press at once). |
 
+### IX-29 Delete Timeline items (Delete / Backspace, inspector, menu; ADR-031, FR-192)
+
+| # | Spec |
+|---|---|
+| 1 | Delete or Backspace with focus outside an input / textarea / contenteditable (and no dialog open), `stage.timeline.inspector.delete`, or `stage.itemmenu.delete`: deletes every selected clip (media or scene), text, image, shape, audio layer, transition (cut), clip effect, the project background and caption pages. |
+| 2 | No dialog (CapCut behaviour, Operator 2026-10-26; Undo is one key away). The selection is cleared at once after the version arrives, the inspector closes, and the selection chips and pointed chips of the deleted items leave the chat composer. A selection with nothing deletable (e.g. only the playhead) → info toast "This item can't be deleted here." / "Item ini tidak bisa dihapus di sini.". |
+| 3 | category by kind (asset when mixed) / `list:remove:<kind>:<id or index>:<unique>` per item (never supersedes, never a Locked Key) / list, `source: ui`, pick field `itemsEdit {action: 'remove', items}`; several items = one parent with one child per op (expansion rule). |
+| 4 | Compile (no LLM, `removalSteps`): `op:transition.clear`, `op:effect.remove`, `op:background.clear`, ONE `op:caption.setPages` without the selected pages, `op:text.remove` / `op:overlay.remove` / `op:shape.remove`, `op:audio.remove`, `op:clip.remove` last — all in ONE plan and ONE Composition Version. A deleted scene clip takes its own texts / images / shapes with it (items fully inside its window); later scenes and their items close the gap (scene anchoring, ADR-031). An effect of a clip deleted in the same pick is dropped with the clip. |
+| 5 | One Intent Queue item "Delete (2)" / "Hapus (2)", executed; toast "Deleted 2 items" / "2 item dihapus" with Undo. |
+| 6 | Player shows the new version. |
+| 7 | The bars disappear; later clips move left (the Sequence closes the gap; transitions next to a removed clip merge or drop as `op:clip.remove` defines). |
+| 8 | As IX-02. |
+| 9 | `EM-2203` (every item already gone, e.g. after an agent plan), `EM-2201` (nothing listed). |
+| 10 | Ctrl+Z restores every deleted item of the press at once. |
+
+### IX-30 Item context menu (right-click, Shift+F10, ContextMenu key; ADR-031, FR-193, FR-194)
+
+| # | Spec |
+|---|---|
+| 1 | Right-click a Timeline bar, or Shift+F10 / the ContextMenu key on a focused bar, or right-click the selected element's box on the Player (`stage.player.canvas.box`). An unselected bar becomes the selection first; a bar inside the selection acts on the whole selection. |
+| 2 | `stage.itemmenu` (role menu) at the pointer (at the bar for the keyboard): **Delete** / **Hapus** (Del), **Split at playhead** / **Belah di playhead** (S; disabled "Move the playhead onto the item first." / "Geser playhead ke item ini dulu." when the playhead is not ≥ 100 ms inside), **Duplicate** / **Duplikat** (disabled for audio, captions, transitions, effects and the background), **Ask Editor Agent** / **Tanya Editor Agent** (disabled in Private Mode). Focus goes to the first available entry; ↑ / ↓ / Home / End move; Enter / Space run; Esc, Tab or a click outside close it and return focus to the bar (Esc does not clear the selection). |
+| 3 | Delete = IX-29; Split = IX-28; Duplicate = `list:duplicate:<kind>:<id>:<unique>` per item, pick field `itemsEdit {action: 'duplicate', items}`; Ask = none (chips only). |
+| 4 | Duplicate: Compile (no LLM, `duplicationSteps`): a text / image / shape copy (`op:text.add` / `op:overlay.addImage` / `op:shape.add` with the content, variant, style, position, size, fill / stroke, motion preset, opacity) starts where the original ends (lane rule picks the lane); a media clip copy is `op:clip.insert {assetId, atIndex: i + 1, trimBeforeMs, durationMs}`; a scene clip copy is `op:scene.add {durationMs, background, backgroundParams, atIndex: i + 1}` plus copies of its own texts / images / shapes at the same offsets. One version. Not copied (no add op takes them): clip volume, fades, motion, effects, framing (transform); item zoom / rotation; text effects; audio layers cannot be duplicated (no op keeps trim / length / loop). Ask: the items become chips (`agent.chat.target`), the chat switches to Edit and the composer gets focus; the next Edit message carries them as `targets` (R-081). |
+| 5 | Duplicate: Intent Queue item "Duplicate (1)" / "Duplikat (1)", executed; toast "Duplicated 1 item" / "1 item diduplikat" with Undo. |
+| 6 | Player shows the new version. |
+| 7 | The copies appear after the originals; later scene clips and their items move right. |
+| 8 | As IX-02. |
+| 9 | `EM-2201` (nothing duplicable), `EM-2203` (item gone), `EM-2102` (a copied value outside the add op's range, e.g. a hand-made model). |
+| 10 | Ctrl+Z removes every copy of the action at once. |
+
 ## 3. Agent Panel actions
 
 ### IX-12 Brainstorm send
@@ -295,7 +325,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | Click `agent.editor.execute` or Ctrl+Enter while focus is outside a text field (inside a chat composer Ctrl+Enter sends the message, FR-153); enabled only when plan `valid` and `baseVersion` = head. |
+| 1 | Click `agent.editor.execute` or Ctrl+Enter while focus is outside a text field (inside a chat composer Ctrl+Enter sends the message, FR-153); applies only when plan `valid` and `baseVersion` = head. On a stale plan (the Creator or another pick changed the Timeline after it was made, FR-195) Execute stays enabled but never applies it: toast "Timeline changed — re-planning" / "Timeline berubah — rencana disusun ulang", a new plan is made on the current head (R-070 with the new `baseVersion`; the old plan stays `stale`) and needs its own Execute. |
 | 2 | Plan Card badge → "Executing…" / "Menjalankan…" (S3), Execute replaced by progress, `agent.editor.cancel` enabled; steps tick as they complete. |
 | 3 | none new; executes the plan's intents. |
 | 4 | Runtime only: `composition.applyOps` (not callable by the model); sub-agent steps (captions, tts) run as plan steps. |
@@ -303,7 +333,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 6 | Player reloads the new version; seeks to the first diff element. |
 | 7 | Elements in `ExecutionResult.diff` pulse (added = accent, modified = accent-2, removed = fade out 200 ms). |
 | 8 | Intents, plan, ops, result, usage in one transaction (AI_WORKFLOW.md §2 step 14). |
-| 9 | Mid-transaction failure → SQLite rollback, badge "Not applied · EM-2xxx" / "Tidak diterapkan · EM-2xxx" with Details; stale → 409, badge "Composition changed; re-plan" / "Komposisi berubah; susun ulang"; post-validation `block` → rollback with the rule named ("Video would be shorter than 1 second" / "Video akan kurang dari 1 detik"). |
+| 9 | Mid-transaction failure → SQLite rollback, badge "Not applied · EM-2xxx" / "Tidak diterapkan · EM-2xxx" with Details; stale → 409 EM-2301 (also when the head moved between the click and the transaction), badge "Composition changed; re-plan" / "Komposisi berubah; susun ulang" and the automatic re-plan of point 1 (FR-195; validation is not relaxed: the Service still refuses every plan whose `baseVersion` is not the head); post-validation `block` → rollback with the rule named ("Video would be shorter than 1 second" / "Video akan kurang dari 1 detik"). |
 | 10 | Toast "Applied: 3 changes · v13" / "Diterapkan: 3 perubahan · v13" with **Undo** (moves head to `fromVersion`); `hdr.action.undo` / Ctrl+Z; `hdr.action.redo` / Ctrl+Shift+Z (Ctrl+Y). |
 
 ### IX-16 Cancel (agent request or running plan)
@@ -460,7 +490,8 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | Multi selection | Shift+click range within one Track or lane; Ctrl+click toggles across Tracks; inspector shows "3 elements" with common fields; picks apply to "each selected" per Target Resolution. Cuts are selectable as thin handles between Clips (single only). |
 | Playhead as implicit target | With nothing selected, motion/effect picks target the Clip under the playhead; text picks target a Text Layer under the playhead if one exists ("apply to this text" / "terapkan ke teks ini" offered). |
 | Selection vs. playhead independence | Selecting does not move the playhead unless "Seek on select" is on in `stage.player.menu` (default on). |
-| Clearing | Esc, click on empty lane, or a Composition Version that removes the element. |
+| Clearing | Esc, click on empty lane, a Delete (IX-29), or a Composition Version that removes the element. |
+| Chips | Every selected element is a chip in the chat composer at once ("Klip 2", "Adegan 1", the text's first words, an asset name); Ctrl+click / Shift+click add more chips, a chip appears once per element, and a chip whose element is gone leaves the composer (FR-194). |
 | Persistence | Selection is not saved; playhead position is saved per project (restore on open). |
 | Asset selection | Independent of timeline selection; `lib.assets.card.select` checkboxes; Space toggles the focused card. |
 | Indicators | `stage.timeline.element.selected`; Library Panel chip "Picks apply to: …" / "Pilihan berlaku untuk: …"; inspector header. |
@@ -491,7 +522,8 @@ Windows keys; `Ctrl` = `Ctrl` (macOS build P2 maps to `Cmd`). Shortcuts are list
 | / | Focus Catalogue Search | Editor | `lib.search.input` |
 | 1 / 2 / 3 | Switch to Home / Design / Tools | Editor | `hdr.menu.*` |
 | Enter | Insert when Asset Panel focused and ≥ 1 selected | Library Panel | `lib.assets.insert` |
-| Delete | Remove selected Timeline Element (confirmation) | Stage | — |
+| Delete / Backspace | Delete every selected Timeline item as one undoable pick, no dialog (IX-29) | Stage (not in text fields) | `stage.timeline.inspector.delete` |
+| Shift+F10 / ContextMenu | Item menu of the focused Timeline bar (IX-30) | Timeline bar | `stage.itemmenu` |
 | A | Ask Editor Agent about the selection | Stage | inspector shortcut |
 | F | Fullscreen Player toggle | Editor | `stage.player.controls.fullscreen` |
 | Shift+? | Shortcut sheet | Global | — |

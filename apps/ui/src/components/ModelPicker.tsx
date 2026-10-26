@@ -187,7 +187,7 @@ export function ModelPicker({ el, rows, agent, value, onSelect, onRefresh, refre
       </div>
       {rows.length === 0 ? (
         <div data-el={`${el}.empty`} className="flex flex-col items-start gap-1.5 rounded-[6px] border border-em-line p-2 text-[12px] text-em-muted">
-          <span>{loading ? t('ui.common.loading') : t('ui.modelpicker.empty')}</span>
+          <span role={loading ? 'status' : undefined}>{loading ? t('ui.scr.providers.busy.models') : t('ui.modelpicker.empty')}</span>
           {onRefresh && !loading && <Button el={`${el}.fetch`} size={28} disabledReason={refreshDisabledReason ?? null} onClick={onRefresh}>{t('ui.modelpicker.fetch')}</Button>}
         </div>
       ) : (

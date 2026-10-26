@@ -121,6 +121,7 @@ export class Workflow {
       ...(b.assetId ? { assetId: b.assetId } : {}), ...(b.text ? { text: b.text } : {}),
       ...(b.elementEdit ? { elementEdit: Object.fromEntries(Object.entries(b.elementEdit).filter(([, v]) => v !== undefined)) as unknown as NonNullable<DesignPick['elementEdit']> } : {}),
       ...(b.splitEdit ? { splitEdit: { atMs: b.splitEdit.atMs, items: b.splitEdit.items.map((x) => ({ kind: x.kind, id: x.id })) } } : {}),
+      ...(b.itemsEdit ? { itemsEdit: { action: b.itemsEdit.action, items: b.itemsEdit.items.map((x) => ({ kind: x.kind, ...(x.id !== undefined ? { id: x.id } : {}), ...(x.index !== undefined ? { index: x.index } : {}) })) } } : {}),
       ...(b.transformEdit ? { transformEdit: Object.fromEntries(Object.entries(b.transformEdit).filter(([, v]) => v !== undefined)) as unknown as NonNullable<DesignPick['transformEdit']> } : {}),
       ...(b.clipEdit ? { clipEdit: { clipId: b.clipEdit.clipId, ...(b.clipEdit.toIndex !== undefined ? { toIndex: b.clipEdit.toIndex } : {}), ...(b.clipEdit.trimBeforeMs !== undefined ? { trimBeforeMs: b.clipEdit.trimBeforeMs } : {}), ...(b.clipEdit.durationMs !== undefined ? { durationMs: b.clipEdit.durationMs } : {}) } } : {}),
     };

@@ -113,7 +113,7 @@ export function TextPanel() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-2 border-b border-em-line pb-3">
-        <Button el="lib.text.add" variant="primary" icon={<Plus size={16} />} onClick={() => void addText()} disabledReason={state.project ? (model?.tracks.video.length ? null : t('err.EM-2202.title')) : t('ui.common.noproject')}>{t('ui.lib.text.add')}</Button>
+        <Button el="lib.text.add" variant="primary" icon={<Plus size={16} />} onClick={() => void addText()} disabledReason={state.project && model ? null : t('ui.common.noproject')}>{t('ui.lib.text.add')}</Button>
         {layer && (
           <div className="flex flex-col gap-1.5">
             <label className="t-label" htmlFor="lib-text-content">{t('ui.lib.text.content')}</label>

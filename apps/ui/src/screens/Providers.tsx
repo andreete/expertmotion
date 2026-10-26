@@ -2,7 +2,7 @@
 // Edit / Test / Set default / Remove), and the Add connection form whose sections unlock in order: provider + key →
 // Validate (R-101 dry run, nothing stored) → model table (ModelPicker, one pick per agent) → budget → Test (R-102 fixed probe) → Save.
 import { useEffect, useRef, useState } from 'react';
-import { Check, Eye, EyeOff, Trash2 } from 'lucide-react';
+import { Check, Eye, EyeOff, Loader, Trash2 } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import type { AgentKind, AssignmentDto, CapabilityRow, ConnectionDto, ProbeResultDto, ProviderKind, ProviderKindInfo } from '../api/types.js';
 import { Badge, Button, ErrorBox, Field, IconButton, Modal, cx, inputCls } from '../components/ui.js';
@@ -11,7 +11,35 @@ import { EmError, recommendedFor } from '@expertmotion/shared';
 import { ModelPicker, defaultModelFor, type PickerCategory } from '../components/ModelPicker.js';
 import type { BudgetFocus } from '../state/reducer.js';
 import { llmModelName } from '../state/model-names.js';
-import { keyRetryDelay, normalizeKey } from '../state/key-retry.js';
+import { KEY_RETRY_MAX, keyRetryDelay, normalizeKey } from '../state/key-retry.js';
+
+export type ProviderBusy = 'validate' | 'models' | 'test' | 'save';
+/**
+ * Entry 25b: what a provider action is doing right now (status line, never red): "Memeriksa kunci…", "Memuat daftar model…",
+ * "Menguji koneksi…", "Menyimpan…", "Mencoba lagi (2/3)…" during the automatic new-key retries. After 8 s it adds the waited
+ * seconds and that free models can be slow or rate limited (the Service retries a 429 by itself for up to 20 s).
+ */
+export function BusyLine({ busy, retry }: { busy: ProviderBusy | null; retry?: { n: number; of: number } | null }) {
+  const { t } = useStore();
+  const [since, setSince] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!busy) { setSince(null); return; }
+    setSince(Date.now()); setNow(Date.now());
+    const h = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(h);
+  }, [busy]);
+  if (!busy) return null;
+  const s = since ? Math.floor((now - since) / 1000) : 0;
+  const text = retry && busy === 'validate' ? t('ui.scr.providers.busy.retry', retry)
+    : busy === 'validate' ? t('ui.scr.providers.validating') : t(`ui.scr.providers.busy.${busy}`);
+  return (
+    <div data-el="scr.providers.busy" data-busy={busy} role="status" aria-live="polite" className="flex items-center gap-1.5 text-[12px] text-em-text-2">
+      <Loader size={12} className="em-spin" aria-hidden /><span>{text}</span>
+      {s >= 8 && <span className="text-em-muted">{t('ui.scr.providers.busy.slow', { s })}</span>}
+    </div>
+  );
+}
 
 const PROVIDERS: ProviderKind[] = ['openrouter', 'openai', 'anthropic', 'google', 'custom'];
 const AGENTS: AgentKind[] = ['brainstorm', 'editor'];
@@ -141,7 +169,8 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
         </Button>
         {result === 'ok' && <span className="flex items-center gap-1 text-em-success"><Check size={14} />{t('ui.scr.providers.valid')}</span>}
       </div>
-      {keyFail && <KeyRetryNote attempt={keyFail.attempt} onRetry={(auto) => void retryKey(auto)} />}
+      <BusyLine busy={busy ? 'validate' : null} retry={busy && keyFail ? { n: keyFail.attempt + 1, of: KEY_RETRY_MAX } : null} />
+      {!busy && keyFail && <KeyRetryNote attempt={keyFail.attempt} onRetry={(auto) => void retryKey(auto)} />}
     </div>
   );
 }
@@ -252,6 +281,7 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
   const [testing, setTesting] = useState(false);
   const [tested, setTested] = useState<ProbeResultDto[] | string | null>(null);
   const [fetching, setFetching] = useState(false);
+  const [saving, setSaving] = useState(false);
   useEffect(() => {                                                                                     // FR-117: prefill the project cap
     const p = state.project ? budget?.projects.find((x) => x.projectId === state.project!.id && x.connectionId === conn?.id) : undefined;
     if (p?.limitUsd != null) setProjectBudget((v) => v || String(p.limitUsd));
@@ -285,7 +315,10 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
   }, [rows.length]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!conn) return <p className="text-em-muted">{t('ui.scr.providers.none')}</p>;
   const save = async () => {
-    setError(null);
+    setError(null); setSaving(true);
+    try { await saveInner(); } finally { setSaving(false); }
+  };
+  const saveInner = async () => {
     const mk = (agent: AgentKind): AssignmentDto | null => (assign[agent] ? { agent, connectionId: conn.id, modelId: assign[agent], settings: {} } : null);
     try {
       const a = await runtime.api.putAssignments({ brainstorm: mk('brainstorm'), editor: mk('editor'), defaultConnectionId: state.assignments?.defaultConnectionId ?? conn.id });
@@ -316,10 +349,11 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
       {error && <ErrorBox code={error} />}
       {typeof tested === 'string' && <ErrorBox code={tested} />}
       {Array.isArray(tested) && <TestResults items={tested} />}
+      <BusyLine busy={saving ? 'save' : testing ? 'test' : fetching ? 'models' : null} />
       <div className="flex items-center gap-2">
         <Button el="scr.providers.test" loading={testing} disabledReason={state.settings?.privateMode ? t('err.EM-8202.title') : !assign.brainstorm && !assign.editor ? t('err.EM-4007.title', { agent: t('ui.scr.providers.agents') }) : null} onClick={() => void test()}>{t('ui.scr.providers.test')}</Button>
         <span className="flex-1" />
-        <Button el="scr.providers.save" variant="primary" onClick={() => void save()}>{t('ui.common.save')}</Button>
+        <Button el="scr.providers.save" variant="primary" loading={saving} onClick={() => void save()}>{t('ui.common.save')}</Button>
       </div>
     </div>
   );
@@ -401,7 +435,8 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
         </>
       ) : <p data-el="scr.providers.locked" className="text-[12px] text-em-muted">{t('ui.scr.providers.locked')}</p>}
       {error && <ErrorBox code={error} vars={{ provider: t(`ui.scr.providers.provider.${provider}`), action: t('ui.scr.providers.validate') }} />}
-      {error === 'EM-4002' && keyAttempt !== null && <KeyRetryNote attempt={keyAttempt} onRetry={(auto) => void validate({ auto })} />}
+      <BusyLine busy={busy} retry={busy === 'validate' && keyAttempt !== null ? { n: keyAttempt + 1, of: KEY_RETRY_MAX } : null} />
+      {!busy && error === 'EM-4002' && keyAttempt !== null && <KeyRetryNote attempt={keyAttempt} onRetry={(auto) => void validate({ auto })} />}
       <div className="flex items-center gap-2">
         <Button el="scr.providers.test" loading={busy === 'test'} disabledReason={!validated ? t('ui.scr.providers.locked') : !assign.brainstorm && !assign.editor ? t('err.EM-4007.title', { agent: t('ui.scr.providers.agents') }) : null} onClick={() => void test()}>{t('ui.scr.providers.test')}</Button>
         <span className="flex-1" />

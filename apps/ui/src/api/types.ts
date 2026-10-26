@@ -142,7 +142,7 @@ export type MessageBlock =
 /** QA 2026-10-26 #6 (pointing): an asset or Timeline element the Creator pointed the assistant at ("@Klip 2"). */
 export type ChatTargetKind = 'asset' | 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut';
 export interface ChatTarget { kind: ChatTargetKind; id?: string; index?: number; label: string }
-export type AgentPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool';
+export type AgentPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool' | 'waiting';
 export interface MessageDto { id: Id; role: 'user' | 'assistant' | 'system' | 'tool'; blocks: MessageBlock[]; agentRunId: Id | null; createdAt: Iso }
 export interface ConversationDto {
   conversationId: Id; agent: AgentKind; summary: unknown; assignment: AssignmentDto | null; contextUsage: { usedTokens: number; contextLength: number } | null; messages: Page<MessageDto>;
@@ -212,6 +212,8 @@ export interface HealthDto {
 export interface SplitEdit { atMs: number; items: Array<{ kind: 'clip' | 'text' | 'image' | 'shape' | 'audio'; id: Id }> }
 /** ADR-028 / FR-180: picture position / zoom / rotation (op:element.setTransform); x / y fractions of the frame, scale 1 = fit, degrees. */
 export interface TransformEdit { kind: 'clip' | 'image' | 'shape'; id: Id; x?: number; y?: number; scale?: number; rotation?: number }
+/** ADR-031 / FR-192 / FR-193: Delete or Duplicate Timeline items (R-060 `itemsEdit`; effect ids `<clipId>|<presetId>`). */
+export interface ItemsEdit { action: 'remove' | 'duplicate'; items: Array<{ kind: 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut' | 'effect' | 'background' | 'caption'; id?: string; index?: number }> }
 export interface ElementEdit { kind: 'text' | 'image' | 'shape' | 'audio'; id: Id; atMs?: number; durationMs?: number; trimBeforeMs?: number; layer?: number; move?: 'up' | 'down' | 'front' | 'back' }
 export interface DesignPickInput {
   source: 'ui' | 'chat'; category: IntentCategory; presetId?: string; params?: Record<string, unknown>; target: ElementRefT; selection?: ElementRefT[]; playheadMs?: number;
@@ -225,6 +227,7 @@ export interface DesignPickInput {
   /** ADR-028: Timeline scissors / S (FR-179) and Player handles / Inspector transform fields (FR-180). */
   splitEdit?: SplitEdit;
   transformEdit?: TransformEdit;
+  itemsEdit?: ItemsEdit;
   /** Deterministic Text Panel field pick (FR-020…FR-028; `content` edits the selected text, FR-027). */
   field?: string; value?: unknown;
   /** FR-027 Add Text content (with a `preset:text.*` variant). */
@@ -267,7 +270,7 @@ export interface EventMap {
   'agent.run.started': { run: AgentRunDto; agent: AgentKind; modelId: string; planId?: Id };
   'agent.run.delta': { runId: Id; agent: AgentKind; delta: string; toolCall?: { name: string; input: unknown } };
   'agent.run.done': { run: AgentRunDto; message: MessageDto; usage: UsageNumbers | null; contextUsage: { usedTokens: number; contextLength: number } | null };
-  'agent.run.progress': { runId: Id; agent: AgentKind; phase: AgentPhase; attempt?: number; tool?: string };
+  'agent.run.progress': { runId: Id; agent: AgentKind; phase: AgentPhase; attempt?: number; of?: number; waitMs?: number; tool?: string };
   'agent.run.failed': { runId: Id; agent: AgentKind; code: string; retryable: boolean; message?: string; details?: Record<string, unknown> };
   'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render' };
   'model.installed': { model: ModelStateDto };

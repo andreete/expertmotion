@@ -6,7 +6,7 @@ import type { ElementRefT, ProjectSettingsT } from '@expertmotion/composition-mo
 import { getPreset } from '@expertmotion/catalogue';
 import { createEventStream, type EventStream } from '../api/events.js';
 import type {
-  AgentKind, AssetDto, ChatTarget, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
+  AgentKind, AssetDto, ChatTarget, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, ItemsEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
 } from '../api/types.js';
 import { initialState, reducer, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
@@ -17,6 +17,7 @@ export const OPEN_HARDWARE_EVENT = 'expertmotion:open-hardware';
 import { translate, type Lang } from '../i18n/index.js';
 import { localModelByRef, localModelName } from './model-names.js';
 import { normalizeKey } from './key-retry.js';
+import { itemsCategory } from '../stage/items.js';
 
 export interface Actions {
   openProject(id: string): Promise<void>;
@@ -43,6 +44,8 @@ export interface Actions {
   /** ADR-028: one undoable pick per scissors press / S (all listed items in one Composition Version) and per Player gesture / Inspector field. */
   splitEdit(edit: SplitEdit, label: string): Promise<void>;
   transformEdit(edit: TransformEdit, label: string): Promise<void>;
+  /** ADR-031 / FR-192 / FR-193: Delete or Duplicate Timeline items as ONE pick (one version, one Undo); resolves true when applied. */
+  itemsEdit(edit: ItemsEdit, label: string): Promise<boolean>;
   updateProjectSettings(patch: Partial<ProjectSettingsT>): Promise<void>;
   upload(files: readonly File[]): Promise<AssetDto[]>;
   /** FR-014 / FR-041: packaged path import (picker or drag-and-drop): the cards appear at once (ingesting / failed) and follow ingest. */
@@ -65,7 +68,7 @@ export interface Actions {
   /** FR-067 / FR-080: the Editor message carries the inspector target (if any), the selection and the playhead. */
   send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null, targets?: ChatTarget[]): Promise<boolean>;
   /** QA 2026-10-26 #6: point the assistant at an asset or Timeline element (chip in the composer, composer focused). */
-  pointAt(target: ChatTarget): void;
+  pointAt(target: ChatTarget, mode?: AgentKind): void;
   setChatTargets(targets: ChatTarget[]): void;
   /** R-082: hands proposed intents to the Intent Queue; resolves true when the Service accepted the hand-off. */
   handoff(message: MessageDto, intentIds: string[]): Promise<boolean>;
@@ -244,6 +247,19 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       toast('info', 'err.EM-1006.title', { name: existing?.name ?? name ?? '' }, { code: 'EM-1006', ...(existingId ? { action: { labelKey: 'err.EM-1006.action', run: () => focusAssetCard(existingId) } } : {}) });
     };
     const setScreen = (screen: Screen | null) => dispatch({ type: 'screen', screen });
+    /** FR-195: a stale plan is never executed; "Timeline berubah — rencana disusun ulang" and a fresh plan on the current head. */
+    const replanStale = async (plan: PlanDto) => {
+      dispatch({ type: 'plan', plan: { ...plan, status: 'stale' } });
+      toast('info', 'ui.agent.plan.stale.replanning');
+      const id = pid(); if (!id) return;
+      try {
+        const c = await api.getComposition(id);                        // plan on the head the Creator sees now (not a cached hash)
+        if (pid() !== id) return;
+        dispatch({ type: 'head', head: c.head, canUndo: c.canUndo, canRedo: c.canRedo });
+        const res = await api.createPlan(id, { baseVersion: c.head.hash });
+        dispatch({ type: 'plan', plan: 'plan' in res ? res.plan : res });
+      } catch (e) { error(e); }
+    };
     const self: Actions = {
       openProject, openSampleProject, refreshHead, reloadState, error, toast, announce, undo, redo, setScreen,
       async createProject(input) {
@@ -318,6 +334,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       },
       async transformEdit(edit, label) {
         await createIntent({ source: 'ui', category: edit.kind === 'shape' ? 'shape' : 'asset', transformEdit: edit, target: { kind: edit.kind, id: edit.id }, plan: 'auto' }, label);
+      },
+      async itemsEdit(edit, label) {
+        const first = edit.items[0];
+        if (!first) return false;
+        const res = await createIntent({ source: 'ui', category: itemsCategory(edit.items), itemsEdit: edit, target: { kind: first.kind, ...(first.id !== undefined ? { id: first.id } : {}), ...(first.index !== undefined ? { index: first.index } : {}) }, plan: 'auto' }, label);
+        if (!res?.appliedVersion) return false;
+        // FR-192: the deleted items leave the selection (and with it their chat chips; AssistantChat drops pointed chips whose element is gone).
+        if (edit.action === 'remove') dispatch({ type: 'select', selection: [] });
+        return true;
       },
       // FR-088: Auto is `op:output.setAutoRatio` in the model (so it can be turned on again and Undo restores it).
       async setAutoRatio(on) {
@@ -434,7 +459,12 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       },
       async execute() {
         const plan = stateRef.current.plan;
-        if (!plan || plan.status !== 'valid') return;
+        if (!plan) return;
+        // FR-195 (collaboration safety): the Creator changed the Timeline after this plan was made. The Service would refuse it
+        // (EM-2301, AI-013), so the Editor says so and plans again on the current head; the new plan needs its own Execute.
+        const head = stateRef.current.head?.hash;
+        if (plan.status === 'stale' || (plan.status === 'valid' && head !== undefined && plan.baseVersion !== head)) { await replanStale(plan); return; }
+        if (plan.status !== 'valid') return;
         const destructive = plan.steps.some((s) => s.ops.some((o) => ['op:clip.remove', 'op:caption.clear', 'op:background.clear', 'op:text.remove', 'op:shape.remove', 'op:audio.remove'].includes(o.op)));
         const run = async () => {
           dispatch({ type: 'plan', plan: { ...plan, status: 'executing' } });
@@ -451,7 +481,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
               dispatch({ type: 'plan', plan: { ...plan, status: 'failed', errorCode: r.error?.code ?? 'EM-2307' } });
             }
           } catch (e) {
-            if (e instanceof EmError && e.code === 'EM-2301') { dispatch({ type: 'plan', plan: { ...plan, status: 'stale' } }); return; }
+            if (e instanceof EmError && e.code === 'EM-2301') { await replanStale(plan); return; }
             // FR-084: cancelled before the transaction started; the version is unchanged.
             if (e instanceof EmError && e.code === 'EM-4303') { dispatch({ type: 'plan', plan: { ...plan, status: 'cancelled' } }); toast('info', 'err.EM-4303.title', undefined, { code: 'EM-4303' }); return; }
             dispatch({ type: 'plan', plan: { ...plan, status: 'valid' } });
@@ -476,11 +506,11 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const plan = stateRef.current.plan; if (!plan) return;
         try { const p = await api.setPlanNotes(plan.id, notes); dispatch({ type: 'plan', plan: { ...plan, notes: p.notes ?? notes } }); } catch (e) { error(e); }
       },
-      pointAt(target) {
+      pointAt(target, mode) {
         const cur = stateRef.current.chatTargets;
         const k = (x: ChatTarget) => `${x.kind}:${x.id ?? `#${x.index ?? ''}`}`;
         if (!cur.some((x) => k(x) === k(target))) dispatch({ type: 'chatTargets', targets: [...cur, target].slice(0, 12) });
-        window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: {} }));
+        window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: mode ? { agent: mode } : {} }));   // FR-194: "Ask Editor Agent" also switches to Edit
       },
       setChatTargets(targets) { dispatch({ type: 'chatTargets', targets }); },
       async send(agent, text, attachments = [], target = null, targets = []) {

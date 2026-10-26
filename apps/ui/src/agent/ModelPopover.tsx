@@ -49,6 +49,7 @@ export function ModelPopover({ agent, onClose }: { agent: AgentKind; onClose: ()
   const [query, setQuery] = useState('');
   const [more, setMore] = useState<Record<ModelSection, number>>({ recommended: SECTION_PAGE, free: SECTION_PAGE, paid: SECTION_PAGE });
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [warned, setWarned] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -72,6 +73,7 @@ export function ModelPopover({ agent, onClose }: { agent: AgentKind; onClose: ()
   };
   const pick = async (modelId: string) => {
     if (!connId) return;
+    setSaving(true);
     try {
       const a = await runtime.api.putAssignments({ [agent]: { agent, connectionId: connId, modelId, settings: cur?.connectionId === connId ? cur.settings : {} } });
       dispatch({ type: 'providers', assignments: a });
@@ -79,6 +81,7 @@ export function ModelPopover({ agent, onClose }: { agent: AgentKind; onClose: ()
       const row = rows.find((r) => r.modelId === modelId);
       if (!row || qualityOf(row, agent).level === 'ok') onClose(); else setWarned(modelId);   // a warned pick keeps the popover open
     } catch (e) { actions.error(e); }
+    setSaving(false);
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -114,6 +117,7 @@ export function ModelPopover({ agent, onClose }: { agent: AgentKind; onClose: ()
             </div>
           )}
           <div ref={listRef} id="em-model-list" data-el="agent.chat.model.list" role="listbox" aria-label={t('ui.agent.chat.model.title', { agent: t(`ui.agent.mode.${agent}`) })} className="flex max-h-[340px] flex-col overflow-y-auto">
+            {(loading || saving) && <div data-el="agent.chat.model.loading" role="status" aria-live="polite" className="flex items-center gap-1.5 p-2 text-[12px] text-em-text-2"><RefreshCw size={12} className="em-spin" aria-hidden />{t(saving ? 'ui.scr.providers.busy.save' : 'ui.agent.chat.model.loading')}</div>}
             {rows.length === 0 && !loading && (
               <div data-el="agent.chat.model.empty" className="flex items-center gap-2 p-2 text-[12px] text-em-muted"><span className="flex-1">{t('ui.modelpicker.empty')}</span>
                 <button type="button" data-el="agent.chat.model.fetch" className="text-em-accent underline" disabled={Boolean(state.settings?.privateMode)} onClick={() => void refresh()}>{t('ui.modelpicker.fetch')}</button></div>

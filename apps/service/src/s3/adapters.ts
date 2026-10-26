@@ -2,7 +2,7 @@
 // OpenAI, Anthropic and Gemini are plain JSON fetch adapters (ADR-023: JSON-mode prompting, no tool calling, no streaming).
 // Every request goes through the injected `fetch`, which is the egress module (Private Mode → EM-8202, allow-list → EM-8203).
 import { EmError } from '@expertmotion/shared';
-import { mapProviderError, openRouterProvider, type ChatMessage, type ChatProvider, type ChatRequest } from '@expertmotion/agents';
+import { mapProviderError, openRouterProvider, withRateLimitRetry, type ChatMessage, type ChatProvider, type ChatRequest, type RateLimitRetry } from '@expertmotion/agents';
 import type { CapabilityRowT, ProviderKindT } from './dto.js';
 
 const OPENROUTER = 'https://openrouter.ai/api/v1';
@@ -15,8 +15,9 @@ export const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 
 const notYet = (p: string): never => { throw new EmError('EM-9004', `"${p} connections" is not available in this version of Expertmotion yet.`, { status: 422 }); };
 
-function httpError(status: number, body: string): Error {
-  return Object.assign(new Error(`provider HTTP ${status}${body ? `: ${body.slice(0, 200)}` : ''}`), { statusCode: status });
+function httpError(status: number, body: string, headers?: Headers): Error {
+  const ra = headers?.get('retry-after');
+  return Object.assign(new Error(`provider HTTP ${status}${body ? `: ${body.slice(0, 200)}` : ''}`), { statusCode: status, ...(ra ? { responseHeaders: { 'retry-after': ra } } : {}) });
 }
 
 function timeoutSignal(ms: number, outer?: AbortSignal): AbortSignal {
@@ -31,7 +32,7 @@ async function getJson(fetchFn: typeof fetch, url: string, headers: Record<strin
       ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}), signal: timeoutSignal(init.timeoutMs ?? VALIDATE_TIMEOUT_MS, init.signal) });
   } catch (e) { throw mapProviderError(e); }
   const text = await res.text().catch(() => '');
-  if (!res.ok) throw mapProviderError(httpError(res.status, text));
+  if (!res.ok) throw mapProviderError(httpError(res.status, text, res.headers));
   if (text.length > MAX_BODY) throw new EmError('EM-4103', 'The AI provider sent an answer that is too large.');
   try { return JSON.parse(text); } catch (e) { throw new EmError('EM-4103', 'The AI provider sent an answer Expertmotion could not read.', { cause: e }); }
 }
@@ -137,7 +138,14 @@ export function isSamplingRefusal(e: unknown): boolean {
   return x?.code === 'EM-4105' && /temperature|top[_ ]?p|top[_ ]?k|sampling/i.test(String(x.details?.reason ?? ''));
 }
 
-export function chatProviderFor(p: ProviderKindT, key: string, model: string, fetchFn: typeof fetch): ChatProvider {
+/**
+ * Chat adapter with the AI_WORKFLOW §12 rate-limit retry: HTTP 429 (EM-4102, e.g. a free model "rate-limited upstream") is retried
+ * up to 2 times within 20 s, honouring Retry-After. Used by agent runs and the provider test alike.
+ */
+export function chatProviderFor(p: ProviderKindT, key: string, model: string, fetchFn: typeof fetch, retry?: RateLimitRetry): ChatProvider {
+  return withRateLimitRetry(rawChatProviderFor(p, key, model, fetchFn), retry);
+}
+function rawChatProviderFor(p: ProviderKindT, key: string, model: string, fetchFn: typeof fetch): ChatProvider {
   if (p === 'openrouter') return openRouterProvider({ apiKey: key, model, fetch: fetchFn });
   const call = async (req: ChatRequest, url: string, body: unknown): Promise<unknown> =>
     getJson(fetchFn, url, authHeaders(p, key), { method: 'POST', body, timeoutMs: req.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS, ...(req.signal ? { signal: req.signal } : {}) });

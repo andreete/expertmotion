@@ -25,6 +25,10 @@ export const PROVIDER_MAX_BODY_BYTES = 4 * 1024 * 1024;
 export const PROVIDER_MODELS_MAX_BODY_BYTES = 8 * 1024 * 1024;
 export const PROVIDER_MAX_LINE_BYTES = 64 * 1024;
 export const PROVIDER_TOTAL_TIMEOUT_MS = 120_000;
+/** SEC-084 (Entry 25b): a streamed answer (text/event-stream) may take up to 6 min in total, but never 90 s without a chunk.
+ *  Reasoning models (free tiers especially) think for minutes while the stream stays alive. */
+export const PROVIDER_STREAM_TOTAL_TIMEOUT_MS = 360_000;
+export const PROVIDER_STREAM_IDLE_TIMEOUT_MS = 90_000;
 export const PROVIDER_MAX_REDIRECTS = 3;
 
 export interface Egress {
@@ -53,7 +57,7 @@ export const customBaseUrlHost = (raw: string): string | null => (customBaseUrlP
 const hostOk = (host: string, list: readonly string[]): boolean => list.some((h) => host === h || host.endsWith(`.${h}`));
 
 /** Wraps a body so it errors (and the transfer is cancelled) once it exceeds `maxBytes`, or a single line exceeds `maxLine`. */
-export function capBody(body: ReadableStream<Uint8Array>, maxBytes: number, maxLine: number | null): ReadableStream<Uint8Array> {
+export function capBody(body: ReadableStream<Uint8Array>, maxBytes: number, maxLine: number | null, onChunk?: () => void): ReadableStream<Uint8Array> {
   let total = 0; let line = 0;
   const reader = body.getReader();
   const tooLarge = (what: string) => new EmError('EM-4103', 'The AI provider sent an answer that is too large.', { details: { limit: what } });
@@ -61,6 +65,7 @@ export function capBody(body: ReadableStream<Uint8Array>, maxBytes: number, maxL
     async pull(controller) {
       const { done, value } = await reader.read();
       if (done) { controller.close(); return; }
+      onChunk?.();
       total += value.byteLength;
       if (total > maxBytes) { void reader.cancel().catch(() => undefined); controller.error(tooLarge(`${maxBytes} bytes`)); return; }
       if (maxLine !== null) {
@@ -109,7 +114,11 @@ export function createEgress(opts: {
       return impl(input, { ...(init ?? {}), redirect: 'manual' });           // the caller follows hops (each through here)
     }
     // provider: total timeout, manual redirects re-checked per hop, capped body
-    const signal = init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(PROVIDER_TOTAL_TIMEOUT_MS)]) : AbortSignal.timeout(PROVIDER_TOTAL_TIMEOUT_MS);
+    // Until the headers arrive: 120 s. A streamed answer then gets the stream bounds (total 6 min, 90 s idle) instead.
+    const limit = new AbortController();
+    const timeoutErr = () => Object.assign(new Error('The operation timed out'), { name: 'TimeoutError' });
+    let timer = setTimeout(() => limit.abort(timeoutErr()), PROVIDER_TOTAL_TIMEOUT_MS); timer.unref?.();
+    const signal = init?.signal ? AbortSignal.any([init.signal, limit.signal]) : limit.signal;
     let url = first; let res: Response;
     for (let hop = 0; ; hop++) {
       res = await impl(hop === 0 ? input : url, { ...(init ?? {}), redirect: 'manual', signal });
@@ -120,12 +129,22 @@ export function createEgress(opts: {
       url = new URL(loc, url).toString();
       check(purpose, url);                                                     // every hop is on the same allow-list
     }
-    if (!res.body) return res;
+    if (!res.body) { clearTimeout(timer); return res; }
     const max = purpose === 'provider-models' ? PROVIDER_MODELS_MAX_BODY_BYTES : PROVIDER_MAX_BODY_BYTES;
     const declared = Number(res.headers.get('content-length') ?? NaN);
     if (Number.isFinite(declared) && declared > max) { void res.body.cancel().catch(() => undefined); throw new EmError('EM-4103', 'The AI provider sent an answer that is too large.', { details: { limit: `${max} bytes` } }); }
     const streaming = (res.headers.get('content-type') ?? '').includes('text/event-stream');
-    return new Response(capBody(res.body, max, streaming ? PROVIDER_MAX_LINE_BYTES : null), { status: res.status, statusText: res.statusText, headers: res.headers });
+    let onChunk: (() => void) | undefined;
+    if (streaming) {
+      clearTimeout(timer);
+      const total = setTimeout(() => limit.abort(timeoutErr()), PROVIDER_STREAM_TOTAL_TIMEOUT_MS); total.unref?.();
+      const idle = () => { clearTimeout(timer); timer = setTimeout(() => limit.abort(timeoutErr()), PROVIDER_STREAM_IDLE_TIMEOUT_MS); timer.unref?.(); };
+      idle(); onChunk = idle;
+      limit.signal.addEventListener('abort', () => { clearTimeout(total); clearTimeout(timer); }, { once: true });
+      init?.signal?.addEventListener('abort', () => { clearTimeout(total); clearTimeout(timer); }, { once: true });
+    }
+    const body = capBody(res.body, max, streaming ? PROVIDER_MAX_LINE_BYTES : null, onChunk);
+    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
   };
   return { fetch: forPurpose('provider'), for: forPurpose, isPrivate: opts.isPrivate };
 }

@@ -72,6 +72,9 @@ export const DesignPickInput = z.object({
   /** ADR-028 / FR-180: Player handles / Inspector fields (op:element.setTransform). */
   transformEdit: z.object({ kind: z.enum(['clip', 'image', 'shape']), id: z.string().min(1).max(64), x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(),
     scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }).strict().optional(),
+  /** ADR-031 / FR-192 / FR-193: Delete or Duplicate Timeline items (one op per item, one Composition Version). Effect ids are `<clipId>|<presetId>`. */
+  itemsEdit: z.object({ action: z.enum(['remove', 'duplicate']), items: z.array(z.object({ kind: z.enum(['clip', 'text', 'image', 'shape', 'audio', 'cut', 'effect', 'background', 'caption']),
+    id: z.string().min(1).max(160).optional(), index: z.number().int().min(0).optional() }).strict()).min(1).max(200) }).strict().optional(),
 }).strict();
 export type DesignPickInputT = z.infer<typeof DesignPickInput>;
 /** R-065 (FR-095 / FR-097): fully specified picks applied as one unit (one Composition Version); each pick's own baseVersion is ignored. */

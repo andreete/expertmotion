@@ -5,6 +5,7 @@ import { playerBus } from './stage/playerBus.js';
 import { requestImport } from './header/Header.js';
 import { guardUnsaved } from './screens/Lifecycle.js';
 import { runSplit } from './stage/split.js';
+import { runDelete } from './stage/items.js';
 import { formatTimecode } from './i18n/index.js';
 
 export function isTyping(target: EventTarget | null): boolean {
@@ -12,6 +13,7 @@ export function isTyping(target: EventTarget | null): boolean {
   if (!el || !el.tagName) return false;
   const tag = el.tagName.toLowerCase();
   if (tag === 'textarea' || el.isContentEditable) return true;
+  if (el.closest?.('[contenteditable]:not([contenteditable="false"])')) return true;   // also where isContentEditable is missing (jsdom)
   if (tag === 'input') { const type = (el as HTMLInputElement).type; return !['checkbox', 'radio', 'range', 'button'].includes(type); }
   return tag === 'select';
 }
@@ -26,7 +28,7 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
       const k = e.key;
       if (ctrl && k.toLowerCase() === 's' && !e.shiftKey) { e.preventDefault(); void actions.save(); return; }
       // FR-153: Ctrl+Enter in a chat composer sends (Composer handles it); elsewhere it Executes a valid plan (EDITOR_INTERACTION_MODEL §7)
-      if (ctrl && k === 'Enter') { if (!typing && state.plan?.status === 'valid') { e.preventDefault(); void actions.execute(); } return; }
+      if (ctrl && k === 'Enter') { if (!typing && (state.plan?.status === 'valid' || state.plan?.status === 'stale')) { e.preventDefault(); void actions.execute(); } return; }   // FR-195: stale → re-plan
       if (k === 'Escape') {
         if (state.screen) return;                                         // modal handles its own Esc
         if (state.streaming.editor || state.plan?.status === 'draft') { void actions.cancelPlan(); return; }
@@ -80,7 +82,8 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
           runSplit({ model, selection: state.selection, playheadMs: state.playheadMs, fps, splitEdit: actions.splitEdit, toast: actions.toast, t, time: (v) => formatTimecode(v, fps) });
           break;
         }
-        case 'Delete': if (state.selection.length) actions.toast('info', 'ui.stage.timeline.delete.agent'); break;
+        // ADR-031 / FR-192: Delete / Backspace remove every selected Timeline item as ONE undoable pick (never inside text fields).
+        case 'Delete': case 'Backspace': if (state.selection.length) { e.preventDefault(); runDelete({ selection: state.selection, itemsEdit: actions.itemsEdit, toast: actions.toast, t }); } break;
         default: break;
       }
     };

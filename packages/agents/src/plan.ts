@@ -1,6 +1,6 @@
 // Step 8 (AI_WORKFLOW §2): deterministic validation of any Edit Plan (compiled or model-authored) before Execute is enabled.
 import { applyOperations, conflictsWithLocked, deriveTiming, hashModel, propertyKeysOf, validate, type ApplyContext, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT, type Tier } from '@expertmotion/composition-model';
-import { issue, parseLooseJson, type Issue } from '@expertmotion/shared';
+import { balancedObjects, issue, parseLooseJson, stripReasoning, type Issue } from '@expertmotion/shared';
 import { CaptionsStepArgs, EditPlan, ModelPlanReply, PLAN_STEP_TOOLS, TtsStepArgs, type EditPlanT } from './schemas.js';
 import { normalizeModelReply } from './plan-normalize.js';
 import { scriptPages } from './script-captions.js';
@@ -62,8 +62,17 @@ function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT;
       return { ...s, args: { ...a, status: !m || m.installed ? 'ready' : 'needs-model', ...(m ? { modelKey: m.modelKey, modelLabel: m.label } : {}) } };
     }
     const voice = [...s.dependsOn, ...(a.source === 'voice' ? [...tts.keys()] : [])].map((n) => tts.get(n)).find(Boolean);
-    const text = a.text ?? voice?.text;
-    if (!text) { issues.push(issue('EM-2102', `Step ${s.n} (captions.generate): give the script in args.text.`, 'block', `steps[${i}].args.text`)); return s; }
+    // No script and no voice-over: the on-screen texts this plan adds (scene titles / texts, in order) are the script —
+    // what the model meant by "captions from the scene texts" (live QA 2026-10-26). Nothing to caption → the step is left out
+    // with a warning instead of blocking the whole plan.
+    const sceneText = compOps.flatMap((o) => { const x = o.args as Record<string, unknown>; return o.op === 'op:scene.add' ? [x['title'], x['text']] : o.op === 'op:text.add' ? [x['text']] : []; })
+      .filter((t): t is string => typeof t === 'string' && t.trim().length > 0).join('\n').slice(0, 5000);
+    const text = a.text ?? voice?.text ?? (sceneText || undefined);
+    if (!text) {
+      const message = id ? `Langkah ${s.n} (teks layar) dilewati: tidak ada naskah atau suara untuk dijadikan teks.` : `Step ${s.n} (captions) was left out: there is no script or voice-over to caption.`;
+      risks.push({ code: 'step-dropped', message, severity: 'warn' });
+      return null;
+    }
     if (voice?.ready) return { ...s, args: { ...a, source: 'voice', text, status: 'ready' } };
     // Script captions (no model needed): pages over the window, set now in the same Composition Version.
     const from = a.atMs ?? 0, to = a.durationMs !== undefined ? from + a.durationMs : videoMs;
@@ -71,7 +80,7 @@ function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT;
     const style = a.presetId ?? (styled || compOps.some((o) => o.op === 'op:caption.setStyle') ? undefined : DEFAULT_CAPTION_STYLE);
     return { n: s.n, tool: 'composition.applyOps', args: {}, dependsOn: s.dependsOn, expectedDiff: s.expectedDiff || (id ? 'Teks layar dari naskah' : 'Captions from the script'),
       ops: [{ op: 'op:caption.setPages', target: { kind: 'project' as const }, args: { pages } }, ...(style ? [{ op: 'op:caption.setStyle', target: { kind: 'project' as const }, args: { presetId: style } }] : [])] };
-  });
+  }).filter((s): s is EditPlanT['steps'][number] => s !== null);
   return { plan: { ...plan, steps, risks }, issues };
 }
 
@@ -129,9 +138,13 @@ export function buildCompilePlan(ops: OperationT[], opts: { id: string; projectI
  * (the Editor Agent run), unambiguous slips are repaired first (plan-normalize.ts) and `fixes` lists what was repaired;
  * `intents` is set when the model returned intents instead of a plan.
  */
-export function parseModelReply(text: string, meta: { id: string; projectId: string }, normalize?: Parameters<typeof normalizeModelReply>[1]): { plan?: EditPlanT; problem?: string; fixes?: string[]; intents?: unknown[] } {
-  let json = extractJson(text);
-  if (json === undefined) return { problem: 'Your reply was not valid JSON. Reply with the EditPlan JSON object only: {"goal": "...", "steps": [{"n": 1, "tool": "composition.applyOps", "ops": [...], "expectedDiff": "..."}], "risks": []}.' };
+export function parseModelReply(text: string, meta: { id: string; projectId: string }, normalize?: Parameters<typeof normalizeModelReply>[1], o: { truncated?: boolean } = {}): { plan?: EditPlanT; problem?: string; fixes?: string[]; intents?: unknown[]; noJson?: boolean } {
+  let json = extractPlanJson(text);
+  if (json === undefined) {
+    // A reply cut off at the output limit (finish reason "length") is not "invalid JSON": ask for a shorter plan instead.
+    if (o.truncated) return { noJson: false, problem: 'Your reply was cut off at the output limit before the JSON was complete. Reply again with a SHORTER EditPlan: no prose, no reasoning, short goal / expectedDiff texts, only the ops that are needed (op:scene.add carries title and text, so one op per scene is enough).' };
+    return { noJson: !/[{[]/.test(stripReasoning(text)), problem: 'Your reply was not valid JSON. Reply with the EditPlan JSON object only: {"goal": "...", "steps": [{"n": 1, "tool": "composition.applyOps", "ops": [...], "expectedDiff": "..."}], "risks": []}.' };
+  }
   let fixes: string[] = [];
   if (normalize) {
     const n = normalizeModelReply(json, normalize);
@@ -150,5 +163,16 @@ export function parseModelReply(text: string, meta: { id: string; projectId: str
  */
 export function extractJson(text: string): unknown {
   return parseLooseJson(text);
+}
+const PLAN_KEYS = ['steps', 'ops', 'operations', 'intents', 'proposedIntents', 'plan', 'editPlan', 'EditPlan'];
+/**
+ * extractJson for an Edit Plan reply: when the text holds several JSON objects (a model that "thinks aloud" with JSON examples,
+ * or writes a tool call and the plan in one reply), the first object that looks like a plan wins; otherwise extractJson.
+ */
+export function extractPlanJson(text: string): unknown {
+  const t = stripReasoning(text);
+  const objs = balancedObjects(t);
+  if (objs.length > 1) for (const o of objs) { const v = parseLooseJson(o); if (v && typeof v === 'object' && !Array.isArray(v) && PLAN_KEYS.some((k) => k in (v as object))) return v; }
+  return parseLooseJson(t);
 }
 export { hashModel };

@@ -12,9 +12,11 @@ export type CanvasGesture = 'move' | 'scale' | 'rotate' | 'reset';
 const CORNERS: Corner[] = ['nw', 'ne', 'se', 'sw'];
 const CURSOR: Record<Corner, string> = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize' };
 
-export function CanvasHandles({ item, xf, screenW, label, hint, onLive, onCommit }: {
+export function CanvasHandles({ item, xf, screenW, label, hint, onLive, onCommit, onMenu }: {
   item: CanvasItem; xf: Xf; screenW: number; label: string; hint: string;
   onLive: (xf: Xf | null) => void; onCommit: (xf: Xf, gesture: CanvasGesture) => void;
+  /** ADR-031 / FR-193: right-click on the box opens the item menu at the pointer. */
+  onMenu?: (at: { x: number; y: number }) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [guides, setGuides] = useState<Guide[]>([]);
@@ -60,7 +62,8 @@ export function CanvasHandles({ item, xf, screenW, label, hint, onLive, onCommit
         data-x={xf.x.toFixed(4)} data-y={xf.y.toFixed(4)} data-scale={xf.scale.toFixed(4)} data-rotation={xf.rotation.toFixed(2)}
         className="pointer-events-auto absolute cursor-move touch-none border-2 border-em-accent shadow-[0_0_0_1px_rgba(0,0,0,0.6)]"
         style={{ left: (b.c.x - b.w / 2) * k, top: (b.c.y - b.h / 2) * k, width: b.w * k, height: b.h * k, transform: `rotate(${xf.rotation}deg)` }}
-        onPointerDown={(e) => begin('move', e)} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => { e.stopPropagation(); reset(); }}>
+        onPointerDown={(e) => begin('move', e)} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => { e.stopPropagation(); reset(); }}
+        onContextMenu={onMenu ? (e) => { e.preventDefault(); e.stopPropagation(); onMenu({ x: e.clientX, y: e.clientY }); } : undefined}>
         {CORNERS.map((c) => (
           <span key={c} data-el="stage.player.canvas.handle" data-handle={c} aria-hidden onPointerDown={(e) => begin(c, e)}
             className="absolute h-3 w-3 rounded-[2px] border border-black/60 bg-white"

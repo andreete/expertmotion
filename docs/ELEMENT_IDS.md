@@ -452,15 +452,25 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `agent.chat.targets` | chip strip above the composer | The pointed assets and Timeline elements ("@Klip 2", "@Reels 14.m4a"): explicit "Ask assistant" picks plus the current Timeline selection; sent as `targets` (ids + kind + label) with the next message in either mode; cleared after a successful send. |
 | `agent.chat.target` / `agent.chat.target.remove` | one chip / its × | `data-kind` = `asset` / `clip` / `text` / `image` / `shape` / `audio` / `cut`; × (or Backspace in an empty composer for the last chip) removes it. |
 | `agent.chat.message.targets` | chips on a sent message | Read-only copy of the targets a message was sent with (message block `targets`). |
-| `agent.chat.progress` | "Menyusun rencana…" | What the running agent is doing (`agent.run.progress`: `data-phase` = `reading` / `planning` / `checking` / `correcting` / `tool`), and "Menjalankan N perubahan…" while a plan executes. |
+| `agent.chat.progress` | "Menyusun rencana…" | What the running agent is doing (`agent.run.progress`: `data-phase` = `reading` / `planning` / `checking` / `correcting` ("Memperbaiki rencana (2/3)…") / `tool` / `waiting` (rate-limit retry, "Penyedia sibuk, mencoba lagi (1/2)…")); after 5 s it ends with the seconds since the run started ("· 42 dtk", `data-elapsed`), and "Menjalankan N perubahan…" while a plan executes. |
 | `agent.chat.error.action` / `agent.chat.error.reason` | next-action button and reason in an error bubble | The failure card (live `agent.run.failed` or a saved "EM-xxxx: reason" message) shows the reason and the recovery actions chosen by the EM code (`data-action` = `providers` / `rephrase` / `switchmodel`; "Try again" keeps `agent.chat.message.retry` (`data-action=retry`), the budget action keeps `agent.chat.budget`). |
 | `agent.chat.error.keyhint` | "Key baru kadang perlu 1–2 menit untuk aktif" | EM-4002 on a key added or replaced in the last 5 minutes: hint, automatic retry countdown (every ~20 s, at most 3 times) and "Coba lagi"; also on the Providers add / validate forms (`scr.providers.keyhint`). |
 | `scr.providers.keyhint` | same hint on the Providers form | See `agent.chat.error.keyhint`; the retry re-runs the validation. |
+| `scr.providers.busy` | "Memeriksa kunci…" / "Memuat daftar model…" / "Menguji koneksi…" / "Menyimpan…" / "Mencoba lagi (2/3)…" | Status line (never red) while a provider action runs (`data-busy` = `validate` / `models` / `test` / `save`); after 8 s the waited seconds and "free models can be slow or rate limited". Errors stay in the ErrorBox. |
+| `agent.chat.model.loading` | "Memuat daftar model…" | Model popover while the Capability Table loads / refreshes, or "Menyimpan…" while a pick is saved. |
 | `lib.assets.card.action.ask` | "Tanya asisten" in the Asset card menu | Points the assistant at this Asset: adds it as a chip and focuses the composer. |
 | `stage.timeline.inspector.ask` | "Tanya asisten" in the Timeline inspector | Points the assistant at the selected element (chip + composer focus; in Edit mode also the FR-067 target). |
 | `agent.editor.plancard.toolstep` | a generator step on the Plan Card | `tts.generate` ("Suara narasi: …") / `captions.generate` ("Teks layar dari naskah"); `data-status` = `ready` / `needs-model` (skipped until the model is installed). |
 | `agent.editor.plancard.models` | "Buka Model Manager" | Shown with a `model-missing` risk; opens `scr.models`. |
 | `agent.editor.plancard.toolnote` | "Suara sedang dibuat…" | After Execute, when a generator step started (`toolSteps`). |
+
+## Additions for manual Timeline edits and collaboration (ADR-031, FR-192 … FR-195, 2026-10-26)
+
+| ID | Mockup label / location | Notes |
+|---|---|---|
+| `stage.itemmenu` | context menu of a Timeline item or of the selected element on the Player | Opens on right-click, Shift+F10 or the ContextMenu key on a Timeline bar (an unselected bar becomes the selection first; a bar inside the selection acts on all of it) and on right-click of `stage.player.canvas.box`; `data-source="timeline|canvas"`; `role="menu"`, ↑ / ↓ / Home / End move, Enter / Space run, Esc / Tab / click outside close and return focus to the bar (FR-193, IX-30). |
+| `stage.itemmenu.delete` / `.split` / `.duplicate` / `.ask` | "Hapus" / "Belah di playhead" / "Duplikat" / "Tanya Editor Agent" | Delete = the Delete-key pick; Split = the S pick (`aria-disabled` with the reason when the playhead is not inside the item); Duplicate = one `itemsEdit {action: duplicate}` pick for clips, scene clips, texts, images and shapes (disabled for audio, captions, transitions, effects, the background); Ask = the items as chips, Edit mode, composer focused (FR-194). A disabled entry keeps its reason as `title`. |
+| `stage.timeline.inspector.delete` | "Hapus" next to "Tanya asisten" in the Timeline inspector | Deletes every selected item (same pick as the Delete key; Ctrl+Z restores; FR-192). |
 
 ## Additions for startup, recovery and busy feedback (FR-184 … FR-186, 2026-10-26)
 

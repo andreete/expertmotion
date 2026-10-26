@@ -11,6 +11,7 @@ import { chatModeFor, chatModePatch } from '../prefs.js';
 import type { AgentKind, ChatTarget, EditIntent, MessageDto, PlanDto } from '../api/types.js';
 import type { ElementRefT } from '@expertmotion/composition-model';
 import { elementTarget, mergeTargets, selectionTargets, targetKey } from './targets.js';
+import { refExists } from '../stage/items.js';
 import { AgentErrorBubble, Bubble, ChatHeader, Composer, ModeTag, StreamingBubble, Thread, messageText, type ChatLayoutProps } from './Chat.js';
 import { IntentQueue, targetText } from './IntentQueue.js';
 import { PlanCard, PlanSummary } from './PlanCard.js';
@@ -63,6 +64,12 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     setDismissed((d) => new Set([...d, k]));
     if (draftTarget && targetKey({ kind: draftTarget.kind as ChatTarget['kind'], ...(draftTarget.id !== undefined ? { id: draftTarget.id } : {}), ...(draftTarget.index !== undefined ? { index: draftTarget.index } : {}) }) === k) { setDraftTarget(null); dispatch({ type: 'editorDraft', draft: null }); }
   };
+  // ADR-031 / FR-192: a chip whose Timeline element is gone (deleted by the Creator, an Undo, a plan) leaves the composer.
+  useEffect(() => {
+    const model = state.head?.model; if (!model) return;
+    const kept = state.chatTargets.filter((x) => x.kind === 'asset' || refExists(model, x));
+    if (kept.length !== state.chatTargets.length) actions.setChatTargets(kept);
+  }, [state.head?.model]); // eslint-disable-line react-hooks/exhaustive-deps
   const draft = state.editorDraft;
   useEffect(() => {                                                  // FR-086: plans referenced by a restored thread
     if (!projectId) return;

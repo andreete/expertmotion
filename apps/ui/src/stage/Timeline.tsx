@@ -4,7 +4,7 @@
 // video Clips reorder and trim as before. Snapping to the playhead and other edges (Alt disables), a live ghost, keyboard
 // alternatives, and one undoable Compile pick per gesture (op:element.setTiming / op:element.setLayer; no LLM).
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { Bot, Minus, Plus, Scissors, Sparkles } from 'lucide-react';
+import { Bot, Minus, Plus, Scissors, Sparkles, Trash2 } from 'lucide-react';
 import { deriveTiming, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
 import { getPreset } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
@@ -16,6 +16,8 @@ import { QuickParams } from './QuickParams.js';
 import { TransformFields } from './TransformFields.js';
 import { isTransformKind } from './canvas-transform.js';
 import { runSplit } from './split.js';
+import { runDelete } from './items.js';
+import { ItemMenu, isMenuKey, type ItemMenuAnchor } from './ItemMenu.js';
 import { formatTimecode, translate } from '../i18n/index.js';
 
 type Track = 'video' | 'overlay' | 'text' | 'caption' | 'audio';
@@ -299,11 +301,24 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
     if (suppressClick.current) { suppressClick.current = false; return; }
     let next: ElementRefT[];
     if (e.ctrlKey || e.metaKey) next = isSelected(b) ? state.selection.filter((s) => !(s.kind === b.ref.kind && s.id === b.ref.id && s.index === b.ref.index)) : [...state.selection, b.ref];
-    else if (e.shiftKey && state.selection.length) next = [...state.selection, b.ref];
+    else if (e.shiftKey && state.selection.length) next = isSelected(b) ? state.selection : [...state.selection, b.ref];   // FR-194: no duplicate chips
     else next = [b.ref];
     actions.select(next);
     const out = liveMs < b.fromMs || liveMs >= b.toMs;
     if (prefs.seekOnSelect && out) playerBus.get()?.seekMs(b.fromMs);
+  };
+  // ADR-031 / FR-193: right-click, Shift+F10 or the ContextMenu key opens the item menu. An unselected bar becomes the selection
+  // first; a bar inside the selection acts on the whole selection (CapCut).
+  const [menu, setMenu] = useState<ItemMenuAnchor | null>(null);
+  const openMenu = (b: Bar, el: HTMLElement, at?: { x: number; y: number }) => {
+    const refs = isSelected(b) ? state.selection : [b.ref];
+    if (!isSelected(b)) actions.select([b.ref]);
+    const r = el.getBoundingClientRect();
+    setMenu({ x: at && (at.x || at.y) ? at.x : r.left, y: at && (at.x || at.y) ? at.y : r.bottom + 2, refs: [...refs], source: 'timeline', returnFocus: el });
+  };
+  const onBarKey = (b: Bar, e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (isMenuKey(e)) { e.preventDefault(); e.stopPropagation(); openMenu(b, e.currentTarget); return; }
+    if (isEditable(b)) onElementKey(b, e);
   };
   // FR-066: click or drag on the ruler scrubs the playhead (the Player scrubber follows through playerBus).
   const seekFromRuler = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -382,7 +397,8 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
                         aria-keyshortcuts={isEditable(b) ? 'ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Alt+ArrowUp Alt+ArrowDown' : undefined}
                         aria-label={t('a11y.stage.timeline.element', { kind: t(`ui.stage.timeline.kind.${b.kind}`), label: b.label, start: formatTimecode(b.fromMs, fps), end: formatTimecode(b.toMs, fps) })}
                         title={`${b.label} · ${formatTimecode(b.fromMs, fps)}–${formatTimecode(b.toMs, fps)}${isEditable(b) ? ` · ${t('ui.stage.timeline.element.keys')}` : ''}`}
-                        onClick={(e) => { e.stopPropagation(); select(b, e); }} onPointerDown={draggable ? (e) => startDrag(b, e) : undefined} onKeyDown={isEditable(b) ? (e) => onElementKey(b, e) : undefined} data-dragging={dragging ? drag?.mode : undefined}
+                        onClick={(e) => { e.stopPropagation(); select(b, e); }} onPointerDown={draggable ? (e) => startDrag(b, e) : undefined} onKeyDown={(e) => onBarKey(b, e)} data-dragging={dragging ? drag?.mode : undefined}
+                        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); openMenu(b, e.currentTarget, { x: e.clientX, y: e.clientY }); }} aria-haspopup="menu"
                         className={cx('absolute truncate rounded-[4px] border px-1 text-left text-[11px] em-trans', STRIP[b.kind] ? `${STRIP[b.kind]} rounded-[2px] px-0 text-[0px]` : b.kind === 'transition' ? 'top-1 h-7 z-10 bg-em-panel-2' : 'top-1 h-7 bg-em-panel-2',
                           draggable && 'touch-none', dragging && !clipDrag && 'opacity-40',
                           sel ? 'border-em-accent shadow-[0_0_0_2px_var(--em-accent)]' : missing ? 'border-dashed border-em-danger' : 'border-em-line hover:border-em-line-strong', pulse && 'em-pulse')}
@@ -420,6 +436,7 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
           </div>
         </div>
         </div>
+        {menu && <ItemMenu anchor={menu} onClose={() => setMenu(null)} />}
         {selectedBars.length > 0 && model && <Inspector bars={selectedBars} model={model} onAsk={(b) => {
           dispatch({ type: 'editorDraft', draft: { text: t('ui.stage.timeline.inspector.stem', { target: b.label }), target: b.ref, nonce: Date.now() } });
         }} />}
@@ -516,7 +533,12 @@ function Inspector({ bars, model, onAsk }: { bars: Bar[]; model: CompositionMode
       <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[12px]">
         {rows.map(([k, v]) => <div key={k} className="contents"><dt className="text-em-muted">{k}</dt><dd className="truncate" title={v}>{v}</dd></div>)}
       </dl>
-      <Button el="stage.timeline.inspector.ask" size={28} icon={<Bot size={14} />} onClick={() => onAsk(b)} disabledReason={state.settings?.privateMode ? t('err.EM-4401.title') : null}>{t('ui.stage.timeline.inspector.ask')}</Button>
+      <div className="flex gap-1">
+        <Button el="stage.timeline.inspector.ask" size={28} className="flex-1" icon={<Bot size={14} />} onClick={() => onAsk(b)} disabledReason={state.settings?.privateMode ? t('err.EM-4401.title') : null}>{t('ui.stage.timeline.inspector.ask')}</Button>
+        {/* ADR-031 / FR-192: delete every selected item (same pick as the Delete key; Ctrl+Z restores). */}
+        <Button el="stage.timeline.inspector.delete" size={28} variant="danger-ghost" icon={<Trash2 size={14} />} aria-keyshortcuts="Delete" title={t('ui.stage.timeline.inspector.delete.tip')}
+          onClick={() => runDelete({ selection: state.selection, itemsEdit: actions.itemsEdit, toast: actions.toast, t })}>{t('ui.stage.timeline.inspector.delete')}</Button>
+      </div>
       {missingAsset && (
         // FR-048: the element's Asset file is missing — the same Locate (re-link by hash) and Remove as on the Asset card.
         <div data-el="stage.timeline.inspector.missing" className="flex flex-col gap-1 rounded-[6px] border border-dashed border-em-danger p-1.5 text-[12px]">

@@ -4,7 +4,7 @@
 import type { Router } from 'express';
 import { z } from 'zod';
 import { EmError, type Issue } from '@expertmotion/shared';
-import { extractJson, mapProviderError, type ChatProvider } from '@expertmotion/agents';
+import { extractJson, mapProviderError, type ChatProvider, type ChatRequest, type ChatResult } from '@expertmotion/agents';
 import type { ServiceContext } from '../context.js';
 import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
@@ -12,6 +12,7 @@ import { customBaseUrlProblem } from '../services/egress.js';
 import { createSecretBox, secretHint, type SecretBox } from '../s3/crypto.js';
 import { keyIsRecent, markKeyChanged, normalizeKey } from '../s3/keys.js';
 import { chatProviderFor, DEFAULT_CALL_TIMEOUT_MS, listModels, VALIDATE_TIMEOUT_MS, validateKey } from '../s3/adapters.js';
+import { dumpAgentCall } from '../s3/agent-dump.js';
 import { Agent, AssignmentDto, AssignmentSettings, audit, emit, Id, monthOf, ProviderKind, requireProject, type AgentT, type AssignmentDtoT, type CapabilityRowT, type ProviderKindT } from '../s3/dto.js';
 import { budgetCheck, budgetState, cachedModels, connectionMonthSpend, projectConnectionMonthSpend, projectMonthSpend, recordUsage } from '../s3/usage-store.js';
 import { s3, track } from '../s3/state.js';
@@ -194,22 +195,28 @@ function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
   if (!conn) throw new EmError('EM-4001', 'Connect an AI provider to use the Brainstorming and Editor Agents.', { status: 503 });
   if (conn.provider === 'custom') throw new EmError('EM-9004', '"Custom provider connections" is not available in this version of Expertmotion yet.', { status: 422 });
   const st = s3(ctx);
-  return {
-    id: conn.provider, model: a.modelId,
-    async complete(req) {
-      if (ctx.egress.isPrivate()) throw new EmError('EM-8202', 'Private Mode is on, so the agent request was not sent to the internet.');
-      const ac = new AbortController(); st.providerCalls.add(ac);
-      const signal = req.signal ? AbortSignal.any([req.signal, ac.signal]) : ac.signal;
-      try {
-        const inner = chatProviderFor(conn.provider, keyOf(ctx, getConn(ctx, conn.id)), a.modelId, egressFetch(ctx));
-        return await inner.complete({ ...req, signal, timeoutMs: req.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS,
-          ...(a.settings.temperature !== undefined ? { temperature: a.settings.temperature } : {}), ...(a.settings.maxTokens !== undefined ? { maxTokens: a.settings.maxTokens } : {}) });
-      } catch (e) {
-        if (ac.signal.aborted && !req.signal?.aborted) throw new EmError('EM-8202', 'Private Mode is on, so the agent request was stopped.');
-        throw e;
-      } finally { st.providerCalls.delete(ac); }
-    },
+  // One call through the egress module; streaming when the adapter can (OpenRouter), so a reasoning model that thinks for minutes
+  // is limited by silence (no chunk), not by the whole answer time. Dev builds can dump each call (agent-dump.ts).
+  const send = async (req: ChatRequest, onDelta?: (d: string) => void): Promise<ChatResult> => {
+    if (ctx.egress.isPrivate()) throw new EmError('EM-8202', 'Private Mode is on, so the agent request was not sent to the internet.');
+    const ac = new AbortController(); st.providerCalls.add(ac);
+    const signal = req.signal ? AbortSignal.any([req.signal, ac.signal]) : ac.signal;
+    const meta = { agent, provider: conn.provider, model: a.modelId };
+    const full: ChatRequest = { ...req, signal, timeoutMs: req.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS,
+      ...(a.settings.temperature !== undefined ? { temperature: a.settings.temperature } : {}), ...(a.settings.maxTokens !== undefined ? { maxTokens: a.settings.maxTokens } : {}) };
+    const t0 = Date.now();
+    try {
+      const inner = chatProviderFor(conn.provider, keyOf(ctx, getConn(ctx, conn.id)), a.modelId, egressFetch(ctx));
+      const r = onDelta && inner.stream ? await inner.stream(full, onDelta) : await inner.complete(full);
+      dumpAgentCall(meta, full, { result: r, ms: Date.now() - t0 });
+      return r;
+    } catch (e) {
+      dumpAgentCall(meta, full, { error: e, ms: Date.now() - t0 });
+      if (ac.signal.aborted && !req.signal?.aborted) throw new EmError('EM-8202', 'Private Mode is on, so the agent request was stopped.');
+      throw e;
+    } finally { st.providerCalls.delete(ac); }
   };
+  return { id: conn.provider, model: a.modelId, complete: (req) => send(req), stream: (req, onDelta) => send(req, onDelta) };
 }
 
 function budgetView(ctx: ServiceContext, month = monthOf(ctx.now())) {

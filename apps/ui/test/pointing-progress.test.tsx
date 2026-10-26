@@ -64,7 +64,8 @@ describe('pure helpers', () => {
     expect(errorActions('EM-4301')).toEqual(['rephrase', 'switchmodel']);
     expect(errorActions('EM-4302')).toEqual(['rephrase', 'switchmodel']);
     expect(errorActions('EM-4201')).toEqual(['budget']);
-    for (const c of ['EM-4101', 'EM-4102', 'EM-4103', 'EM-4003', 'EM-4105', 'EM-9001']) expect(errorActions(c)).toEqual(['retry']);
+    for (const c of ['EM-4101', 'EM-4103', 'EM-4003', 'EM-4105', 'EM-9001']) expect(errorActions(c)).toEqual(['retry']);
+    expect(errorActions('EM-4102')).toEqual(['retry', 'switchmodel']);                 // Entry 25b: rate-limited free model
   });
   it('progress phases in words', () => {
     expect(progressText({ phase: 'reading' }, t)).toBe('Reading the project…');

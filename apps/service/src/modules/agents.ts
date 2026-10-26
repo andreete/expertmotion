@@ -10,6 +10,7 @@ import { EmError, errorMessage } from '@expertmotion/shared';
 import { ElementRef, hashModel, summarizeForAgent, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
 import { BrainstormTurn, createIntents, resolvePointedTargets, runBrainstorm, type PointedTarget, type RunProgress, type ChatImage, type ChatMessage, type ChatUsage, type DesignPick, type EditIntentT, type IntentCategory, type ToolHandlers } from '@expertmotion/agents';
 import { availableOnTier, searchPresets, type Category } from '@expertmotion/catalogue';
+const SEARCH_CATEGORIES: readonly Category[] = ['transition', 'caption', 'background', 'motion', 'shape', 'easing', 'effect', 'audio', 'text', 'texteffect', 'font', 'palette', 'fontpair'];
 import { renderServiceOf } from '../s2/render-service.js';
 import type { ServiceContext } from '../context.js';
 import type { ServiceModule } from './types.js';
@@ -73,7 +74,7 @@ function finishRun(ctx: ServiceContext, runId: string, status: 'done' | 'failed'
 function failureDetails(ctx: ServiceContext, run: RunRow, em: EmError): Record<string, unknown> {
   const d = (em.details ?? {}) as Record<string, unknown>;
   return { ...(typeof d['status'] === 'number' ? { providerStatus: d['status'] } : {}), ...(typeof d['reason'] === 'string' ? { reason: d['reason'] } : {}),
-    ...(em.code === 'EM-4002' ? { recentKey: keyIsRecent(ctx, run.connection_id) } : {}), ...(Array.isArray(d['lastIssues']) ? { lastIssues: d['lastIssues'] } : {}) };
+    ...(em.code === 'EM-4002' ? { recentKey: keyIsRecent(ctx, run.connection_id) } : {}), ...(Array.isArray(d['lastIssues']) ? { lastIssues: d['lastIssues'] } : {}), ...(d['daily'] === true ? { daily: true } : {}), ...(typeof d['retries'] === 'number' ? { retries: d['retries'] } : {}) };
 }
 /** FR-190: one log line per agent run outcome (never prompt text, Creator text or keys). The Editor's plan details come from S1. */
 export function logAgentRun(ctx: ServiceContext, run: RunRow, x: { status: 'done' | 'failed'; code?: string; details?: Record<string, unknown>; extra?: Record<string, unknown> }) {
@@ -156,7 +157,11 @@ export function brainstormTools(ctx: ServiceContext, projectId: string, language
     },
     'catalogue.search': (i) => {
       const tier = ctx.hooks.tier();
-      return searchPresets(String(i['query'] ?? ''), language, i['category'] as Category | undefined).filter((p) => p.priority !== 'p2' && availableOnTier(p, tier)).slice(0, 20)
+      // Live QA 2026-10-26: free models ask for "backgrounds" / "Transitions"; a plural or case slip names the same category,
+      // anything else searches every category (an empty result made the model call the tool again and again).
+      const raw = typeof i['category'] === 'string' ? i['category'].trim().toLowerCase() : '';
+      const cat = (SEARCH_CATEGORIES as readonly string[]).find((c) => c === raw || `${c}s` === raw || (c === 'text' && raw === 'texts') || (c === 'texteffect' && raw === 'text-effects')) as Category | undefined;
+      return searchPresets(String(i['query'] ?? ''), language, cat).filter((p) => p.priority !== 'p2' && availableOnTier(p, tier)).slice(0, 20)
         .map((p) => ({ id: p.id, category: p.category, label: p.label[language], tags: p.tags.slice(0, 6), ...(p.flags.includes('gpu') && tier === 'T0' ? { slowWithoutGpu: true } : {}) }));
     },
     'hardware.profile': () => {

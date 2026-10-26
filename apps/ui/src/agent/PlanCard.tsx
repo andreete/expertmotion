@@ -90,7 +90,9 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
   const stale = plan.status === 'stale' || (plan.status === 'valid' && headHash !== undefined && plan.baseVersion !== headHash);
   const status = stale ? 'stale' : plan.status;
   // QA 2026-10-26 #2: a plan may build a video from nothing (scene clips, texts), so an empty video track no longer blocks Execute.
-  const reason = executeDisabledReason(plan, headHash, t, { hasClip: (state.head?.model?.tracks.video.length ?? 1) > 0 || plan.steps.length > 0, running: Boolean(state.streaming.editor) });
+  // FR-195: a stale plan's Execute stays available — it re-plans on the current head ("Timeline berubah — rencana disusun ulang").
+  const reason = stale ? (state.streaming.editor ? t('ui.agent.editor.execute.running') : null)
+    : executeDisabledReason(plan, headHash, t, { hasClip: (state.head?.model?.tracks.video.length ?? 1) > 0 || plan.steps.length > 0, running: Boolean(state.streaming.editor) });
   const toolNote = plan.result?.toolSteps?.some((x) => x.tool === 'tts.generate' && x.status === 'started') ? t('ui.agent.plan.toolnote.tts')
     : plan.result?.toolSteps?.some((x) => x.status === 'started') ? t('ui.agent.plan.toolnote.other') : null;
   const modelMissing = plan.risks.some((r) => r.code === 'model-missing') || plan.steps.some((x) => isToolStep(x) && x.args?.['status'] === 'needs-model');
@@ -196,7 +198,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
         )}
         {status === 'executed' && <Button el="agent.editor.plancard.undo" size={32} onClick={() => void actions.undo()}>{t('ui.sys.toast.undo')}</Button>}
         {status !== 'executed' && status !== 'cancelled' && (   /* stale: shown disabled with its reason next to Re-plan */
-          <Button el="agent.editor.execute" variant="primary" size={36} disabledReason={reason} loading={status === 'executing'} title={t('ui.agent.editor.execute.tooltip')}
+          <Button el="agent.editor.execute" variant="primary" size={36} disabledReason={reason} loading={status === 'executing'} title={stale ? t('ui.agent.editor.execute.stale') : t('ui.agent.editor.execute.tooltip')}
             aria-label={t('a11y.agent.editor.execute')} onClick={() => void actions.execute()}>{t('ui.agent.editor.execute')} <span className="t-mono text-[10px] opacity-70">⌃↵</span></Button>
         )}
       </div>

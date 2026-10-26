@@ -51,6 +51,88 @@ function presetFix(v: unknown, cat: Category): unknown {
   return getPreset(prefixed) ? prefixed : v;
 }
 
+/**
+ * Where an op keeps a preset's params: [params arg, preset id arg, default preset id]. The preset's own schema (Design Catalogue)
+ * decides which params exist; apply merges some op args into the params (transition durationMs / timing, shape size / fill).
+ */
+const PARAMS_ARG: Record<string, [string, string, string?]> = {
+  'op:transition.set': ['params', 'presetId'], 'op:scene.add': ['backgroundParams', 'background', 'preset:background.gradient'], 'op:scene.setBackground': ['params', 'presetId'],
+  'op:background.set': ['params', 'presetId'], 'op:text.setEffect': ['params', 'presetId'], 'op:caption.setStyle': ['params', 'presetId'], 'op:motion.set': ['params', 'presetId'],
+  'op:effect.add': ['params', 'presetId'], 'op:effect.setParams': ['params', 'presetId'], 'op:shape.add': ['params', 'presetId'], 'op:audio.setDucking': ['params', 'presetId'],
+};
+type ZDef = { type: string; innerType?: unknown; entries?: Record<string, string>; checks?: Array<{ _zod: { def: { check: string; value?: unknown; format?: string; pattern?: RegExp } } }> };
+const zdef = (s: unknown): ZDef => (s as { def: ZDef }).def;
+const unwrap = (s: unknown): { inner: unknown; optional: boolean } => {
+  let cur = s, optional = false;
+  for (let i = 0; i < 5; i++) { const d = zdef(cur); if (d.type === 'optional' || d.type === 'default' || d.type === 'nullable') { optional = true; cur = d.innerType; } else break; }
+  return { inner: cur, optional };
+};
+const keyNorm = (k: string) => k.toLowerCase().replace(/colou?r/g, 'colour').replace(/[^a-z0-9]/g, '');
+/** The params shape of a preset (strict Zod object from the catalogue), or null. */
+export function presetParamShape(presetId: unknown): Record<string, unknown> | null {
+  const p = typeof presetId === 'string' ? getPreset(presetId) : undefined;
+  return (p?.params as unknown as { shape?: Record<string, unknown> } | undefined)?.shape ?? null;
+}
+/**
+ * Repairs one preset's params where the slip is unambiguous (AI_WORKFLOW §7.1): an unknown name that matches a known one up to
+ * case / separators / colour spelling is renamed, otherwise dropped; numbers sent as strings are converted and clamped into the
+ * allowed range; a near-miss enum value ("left" → "from-left", case) is mapped; #abc becomes #aabbcc. A value that still does
+ * not fit is dropped only when the param is optional (the preset default applies). Everything is reported in `fixes`.
+ */
+export function repairPresetParams(presetId: unknown, params: Obj, fixes: string[], n: string, keep: readonly string[] = []): Obj {
+  const shape = presetParamShape(presetId);
+  if (!shape) return params;
+  const known = Object.keys(shape);
+  const out: Obj = {};
+  // `color` / `colors: [a, b]` (live QA 2026-10-26, nemotron-3-ultra) where the preset has colourA / colourB: first and second colour.
+  const src: Obj = { ...params };
+  if (known.includes('colourA')) {
+    const list = src['colors'] ?? src['colours'];
+    if (Array.isArray(list) && src['colourA'] === undefined && src['colorA'] === undefined) {
+      delete src['colors']; delete src['colours'];
+      if (list[0] !== undefined) src['colourA'] = list[0];
+      if (list[1] !== undefined && known.includes('colourB') && src['colourB'] === undefined && src['colorB'] === undefined) src['colourB'] = list[1];
+      fixes.push(`${n}: param colors → colourA${list[1] !== undefined ? ', colourB' : ''}`);
+    }
+    for (const one of ['color', 'colour']) if (src[one] !== undefined && src['colourA'] === undefined) { src['colourA'] = src[one]; delete src[one]; fixes.push(`${n}: param ${one} → colourA`); }
+  }
+  for (const [k0, v0] of Object.entries(src)) {
+    let k = k0;
+    if (keep.includes(k)) { out[k] = v0; continue; }
+    if (!known.includes(k)) {
+      const m = known.find((x) => keyNorm(x) === keyNorm(k) || keyNorm(x) === keyNorm(k).replace(/1$/, 'a').replace(/2$/, 'b'));
+      if (!m) { fixes.push(`${n}: dropped unknown param ${k} (${String(presetId)})`); continue; }
+      fixes.push(`${n}: param ${k} → ${m}`); k = m;
+    }
+    const field = shape[k] as { safeParse: (v: unknown) => { success: boolean } };
+    let v = v0;
+    if (field.safeParse(v).success) { out[k] = v; continue; }
+    const { inner, optional } = unwrap(field);
+    const d = zdef(inner);
+    if (d.type === 'number') {
+      if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) v = Number(v);
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        let lo = -Infinity, hi = Infinity, int = false;
+        for (const c of d.checks ?? []) { const x = c._zod.def; if (x.check === 'greater_than') lo = Number(x.value); if (x.check === 'less_than') hi = Number(x.value); if (x.check === 'number_format') int = true; }
+        const c = Math.min(hi, Math.max(lo, int ? Math.round(v) : v));
+        if (c !== v0) fixes.push(`${n}: param ${k} ${String(v0)} → ${c}`);
+        v = c;
+      }
+    } else if (d.type === 'enum' && typeof v === 'string') {
+      const opts = Object.values(d.entries ?? {});
+      const w = v.trim().toLowerCase().replace(/[\s_]+/g, '-');
+      const hit = opts.find((o) => o === w) ?? opts.find((o) => o === `from-${w}`) ?? opts.find((o) => o.replace(/^from-/, '') === w.replace(/^(to|from)-/, ''));
+      if (hit) { if (hit !== v) fixes.push(`${n}: param ${k} ${v} → ${hit}`); v = hit; }
+    } else if (d.type === 'boolean' && (v === 'true' || v === 'false')) v = v === 'true';
+    else if (d.type === 'string' && typeof v === 'string' && /^#?[0-9a-f]{3}$/i.test(v.trim())) { const h = v.trim().replace('#', ''); v = `#${[...h].map((c) => c + c).join('')}`; }
+    else if (d.type === 'string' && typeof v === 'string' && /^[0-9a-f]{6}$/i.test(v.trim())) v = `#${v.trim()}`;
+    if (field.safeParse(v).success) { out[k] = v; continue; }
+    if (optional) { fixes.push(`${n}: dropped invalid param ${k}=${JSON.stringify(v0).slice(0, 40)} (${String(presetId)} default used)`); continue; }
+    out[k] = v0;                                                       // required and still wrong: validation reports it
+  }
+  return out;
+}
+
 /** Arg name aliases valid for every op (only applied when the op knows the target name and not the alias). */
 const COMMON_ARG_ALIASES: Record<string, string[]> = {
   atMs: ['startMs', 'start_ms', 'start', 'fromMs', 'at', 'timeMs', 'positionMs'], durationMs: ['duration', 'duration_ms', 'lengthMs', 'length'],
@@ -89,6 +171,21 @@ function normalizeArgs(opName: string, raw: Obj, fixes: string[], n: string): Ob
     if (typeof a['colour'] === 'string' && /^#[0-9a-f]{3}$/i.test(a['colour'] as string)) a['colour'] = `#${[...(a['colour'] as string).slice(1)].map((c) => c + c).join('')}`;
   }
   for (const [k, cat] of Object.entries(PRESET_ARG[opName] ?? {})) if (a[k] !== undefined) { const f = presetFix(a[k], cat); if (f !== a[k]) { fixes.push(`${n}: ${String(a[k])} → ${String(f)}`); a[k] = f; } }
+  // Preset params: params written at the op's top level move into the params object; then the params are repaired.
+  const pa = PARAMS_ARG[opName];
+  if (pa) {
+    const [pk, idk, dflt] = pa;
+    const pid = a[idk] ?? dflt;
+    const shape = presetParamShape(pid);
+    if (shape) {
+      const loose = Object.keys(a).filter((k) => !keys.includes(k) && Object.keys(shape).includes(k));
+      if (loose.length) { a[pk] = { ...(isObj(a[pk]) ? a[pk] as Obj : {}), ...Object.fromEntries(loose.map((k) => [k, a[k]])) }; loose.forEach((k) => delete a[k]); fixes.push(`${n}: ${loose.join(', ')} → ${pk}`); }
+      // Args that apply merges into the params themselves are not the model's params (kept as is).
+      const merged = opName === 'op:transition.set' ? ['durationMs', 'timing'] : opName === 'op:shape.add' ? ['size', 'fill', 'stroke', 'strokeWidth'] : [];
+      if (isObj(a[pk])) { a[pk] = repairPresetParams(pid, a[pk] as Obj, fixes, n, merged); if (!Object.keys(a[pk] as Obj).length && opName !== 'op:effect.setParams') delete a[pk]; }
+      else if (a[pk] !== undefined) { fixes.push(`${n}: dropped ${pk} (not an object)`); delete a[pk]; }
+    }
+  }
   // Unknown keys are dropped (the op schemas are strict); they are reported so a correction message can name them.
   for (const k of Object.keys(a)) if (!keys.includes(k)) { delete a[k]; fixes.push(`${n}: dropped unknown arg ${k}`); }
   return a;
@@ -141,6 +238,24 @@ function normalizeOp(raw: unknown, m: CompositionModelT, fixes: string[], n: str
   return { op: name, ...(target ? { target } : {}), args, ...(typeof raw['intentId'] === 'string' ? { intentId: raw['intentId'] } : {}) };
 }
 
+/** Step tool args (live QA 2026-10-26: captions.generate {stylePreset}): near-miss names renamed, unknown keys dropped. */
+const STEP_ARGS: Record<string, { keys: string[]; alias: Record<string, string[]> }> = {
+  'tts.generate': { keys: ['text', 'atMs', 'voiceId', 'language', 'speed'], alias: { text: ['script', 'content', 'narration', 'voiceover', 'voiceOver'], voiceId: ['voice'], atMs: ['startMs', 'start'], language: ['lang'], speed: ['rate'] } },
+  'captions.generate': { keys: ['source', 'text', 'atMs', 'durationMs', 'presetId', 'language'], alias: { presetId: ['stylePreset', 'style', 'styleId', 'captionStyle', 'preset', 'stylePresetId'], text: ['script', 'content', 'captionText'], atMs: ['startMs', 'start'], durationMs: ['duration'], language: ['lang'] } },
+};
+function normalizeStepArgs(tool: string, raw: Obj, fixes: string[], n: string): Obj {
+  const spec = STEP_ARGS[tool];
+  if (!spec) return raw;
+  const a: Obj = { ...raw };
+  for (const k of spec.keys) {
+    if (a[k] !== undefined) continue;
+    for (const al of spec.alias[k] ?? []) if (a[al] !== undefined) { a[k] = a[al]; delete a[al]; fixes.push(`${n}: ${al} → ${k}`); break; }
+  }
+  if (tool === 'captions.generate' && a['presetId'] !== undefined) { const f = presetFix(a['presetId'], 'caption'); if (f !== a['presetId']) { fixes.push(`${n}: ${String(a['presetId'])} → ${String(f)}`); a['presetId'] = f; } }
+  for (const k of Object.keys(a)) if (!spec.keys.includes(k) && !['status', 'modelKey', 'modelLabel'].includes(k)) { delete a[k]; fixes.push(`${n}: dropped unknown arg ${k}`); }
+  return a;
+}
+
 const clip = (v: unknown, max: number): string | undefined => (typeof v === 'string' ? (v.length > max ? `${v.slice(0, max - 1)}…` : v) : undefined);
 
 /** Deterministic repair of a parsed model reply into the ModelPlanReply shape (or the intents it returned instead). */
@@ -165,7 +280,7 @@ export function normalizeModelReply(json: unknown, c: NormalizeContext): Normali
     if (tool && !(PLAN_STEP_TOOLS as readonly string[]).includes(tool)) { const t = TOOL_ALIASES[tool.toLowerCase()]; if (t) { fixes.push(`${n}: tool ${tool} → ${t}`); tool = t; } }
     tool ??= 'composition.applyOps';
     const ops = Array.isArray(st['ops']) ? st['ops'].map((op, k) => normalizeOp(op, c.model, fixes, `${n} op ${k + 1}`)) : [];
-    const args = isObj(st['args']) ? st['args'] : isObj(st['input']) ? st['input'] : {};
+    const args = tool === 'composition.applyOps' ? {} : normalizeStepArgs(tool, isObj(st['args']) ? st['args'] : isObj(st['input']) ? st['input'] : {}, fixes, n);
     return [{ n: typeof st['n'] === 'number' && Number.isInteger(st['n']) && st['n'] >= 1 ? st['n'] : i + 1, tool, ops: tool === 'composition.applyOps' ? ops : [], args: tool === 'composition.applyOps' ? {} : args,
       expectedDiff: clip(st['expectedDiff'] ?? st['description'] ?? st['summary'], 200) ?? '', dependsOn: Array.isArray(st['dependsOn']) ? st['dependsOn'].filter((x) => Number.isInteger(x)) : [] }];
   });

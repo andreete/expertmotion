@@ -3,7 +3,7 @@
 // (Design Picks really change the model); Compile uses packages/catalogue compileDefaults. Agent runs are scripted (no LLM).
 // This is a development and test harness, not a specification: the Local Service (apps/service) is the source of truth.
 import {
-  applyOperations, createEmptyModel, deriveTiming, hashModel, topmostAt, DEFAULT_SETTINGS,
+  applyOperations, createEmptyModel, deriveTiming, duplicationSteps, hashModel, removalSteps, topmostAt, DEFAULT_SETTINGS,
   type AssetFacts, type CompositionModelT, type ElementRefT, type OperationT, type ProjectSettingsT,
 } from '@expertmotion/composition-model';
 import { compileDefaults, getPreset, listPresets, type Category } from '@expertmotion/catalogue';
@@ -246,6 +246,13 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     };
     const one = (target: ElementRefT, key: string, op: OperationT | null): Resolution => ({ leaves: [{ target, key, ops: op ? [op] : null }], parentKey: key, needsInterpretation: interp || op === null, notices });
 
+    if (body.itemsEdit) {                                                                 // ADR-031 Delete / Duplicate, as the Local Service
+      const e = body.itemsEdit;
+      const steps = e.action === 'remove' ? removalSteps(model, e.items) : duplicationSteps(model, e.items);
+      if (!steps.length) return { leaves: [], parentKey: '?', needsInterpretation: false, notices, reject: e.action === 'remove' ? { code: 'EM-2203', message: 'That item no longer exists.' } : { code: 'EM-2201', message: 'This item cannot be duplicated.' } };
+      const leaves = steps.map((st) => ({ target: st.target, key: `list:${e.action}:${st.target.kind}:${st.target.id ?? st.target.index ?? ''}:${newId()}`, ops: [st.op] }));
+      return { leaves, parentKey: leaves.length > 1 ? `group:${body.category}:` : leaves[0]!.key, needsInterpretation: false, notices };
+    }
     if (body.clipEdit) {                                                                  // FR-068 Timeline drag, as the Local Service
       const e = body.clipEdit; const clip: ElementRefT = { kind: 'clip', id: e.clipId };
       const c = model.tracks.video.find((x) => x.id === e.clipId);
@@ -353,7 +360,6 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
         const selText = sel.find((s) => s.kind === 'text' && s.id);
         if (!text && selText?.id) return one(selText, `text:${selText.id}.variant`, { op: 'op:text.setStyle', target: { kind: 'text', id: selText.id }, args: { variant: preset.id } });   // FR-025
         if (!text) return one(project, 'text:new', null);
-        if (model.tracks.video.length === 0) return { leaves: [], parentKey: '', needsInterpretation: false, reject: { code: 'EM-2202', message: 'Insert at least one clip before adding text.' }, notices };
         const { text: _t, ...styleParams } = body.params ?? {};
         return one(project, 'text:new', { op: cd.op, args: { ...cd.args, ...(Object.keys(styleParams).length ? { styleOverrides: { ...(cd.args['styleOverrides'] as object), ...styleParams } } : {}), text, atMs: playhead } });
       }
@@ -458,7 +464,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const preset = body.presetId ? getPreset(body.presetId) : undefined;
     const propertyClass = (preset?.propertyClass ?? (body.category === 'shape' ? 'list' : body.category === 'text' && body.presetId ? 'list' : 'scalar')) as EditIntent['propertyClass'];
     const base = {
-      projectId: p.dto.id, source, createdAt: nowIso(), category: body.category, params: { ...(body.params ?? {}), ...(body.output ? { __output: body.output } : {}), ...(body.elementEdit ? { __elementEdit: body.elementEdit } : {}), ...(body.splitEdit ? { __splitEdit: body.splitEdit } : {}), ...(body.transformEdit ? { __transformEdit: body.transformEdit } : {}) }, target: body.target, propertyClass: body.splitEdit ? 'list' as const : propertyClass,
+      projectId: p.dto.id, source, createdAt: nowIso(), category: body.category, params: { ...(body.params ?? {}), ...(body.output ? { __output: body.output } : {}), ...(body.elementEdit ? { __elementEdit: body.elementEdit } : {}), ...(body.splitEdit ? { __splitEdit: body.splitEdit } : {}), ...(body.transformEdit ? { __transformEdit: body.transformEdit } : {}), ...(body.itemsEdit ? { __itemsEdit: body.itemsEdit } : {}) }, target: body.target, propertyClass: body.splitEdit || body.itemsEdit ? 'list' as const : propertyClass,
       baseVersion: body.baseVersion, supersedes: [] as string[], ...(body.presetId ? { presetId: body.presetId } : {}), ...(body.instruction ? { instruction: body.instruction } : {}),
     };
     if (res.reject) {

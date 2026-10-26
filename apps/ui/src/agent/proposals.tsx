@@ -22,6 +22,8 @@ export function intentTitle(i: Pick<EditIntent, 'category' | 'presetId' | 'instr
   }
   const sp = i.params['__splitEdit'] as { atMs?: number; items?: unknown[] } | undefined;
   if (sp) return t('ui.agent.intent.element.split', { count: Math.max(1, sp.items?.length ?? 1) });   // ADR-028 cut at the playhead
+  const it = i.params['__itemsEdit'] as { action?: string; items?: unknown[] } | undefined;   // ADR-031 Delete / Duplicate
+  if (it) return t(it.action === 'duplicate' ? 'ui.agent.intent.element.duplicate' : 'ui.agent.intent.element.remove', { count: Math.max(1, it.items?.length ?? 1) });
   if (i.params['__transformEdit']) return t('ui.agent.intent.element.transform');                // ADR-028 Player handles / Inspector fields
   const el = i.params['__elementEdit'] as { atMs?: number; layer?: number; move?: string } | undefined;
   if (el) {                                                                     // ADR-027 Timeline drag / trim / lane / layer key

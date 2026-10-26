@@ -220,7 +220,7 @@ describe('agents with the real S1 composition and intents modules', () => {
       const th = await body<{ messages: { items: Msg[] } }>(await s.api(`/projects/${projectId}/conversations/editor`));
       expect(th.messages.items.map((m) => m.role)).toEqual(['user', 'system']);
       expect(th.messages.items[1]!.blocks[0]!.text).toContain('EM-4301');
-      expect(fake.calls).toHaveLength(3);                                         // first answer + 2 corrections
+      expect(fake.calls).toHaveLength(2);                                         // two replies without any JSON: no third try (Entry 25b)
     } finally { await s.close(); }
   });
 });

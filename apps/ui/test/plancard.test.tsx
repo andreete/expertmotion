@@ -62,7 +62,7 @@ describe('Plan Card', () => {
     await waitFor(() => { if (el('agent.editor.plancard')?.getAttribute('data-status') !== 'executed') throw new Error('not executed'); });
   }, 20_000);
 
-  it('turns stale when the composition changes: Execute disabled with reason, Re-plan offered', async () => {
+  it('turns stale when the composition changes: Re-plan offered, Execute re-plans instead of applying (FR-195)', async () => {
     const { runtime } = await renderEditor('sample');
     await connect(runtime);
     await askPlan();
@@ -71,7 +71,7 @@ describe('Plan Card', () => {
     expect(el('agent.editor.plancard.baseversion.stale')).not.toBeNull();
     expect(el('agent.editor.plancard.replan')).not.toBeNull();
     const exec = el('agent.editor.execute')!;
-    expect(exec.getAttribute('aria-disabled')).toBe('true');
+    expect(exec.getAttribute('aria-disabled')).toBeNull();                          // FR-195: Execute on a stale plan re-plans
     expect(exec.getAttribute('title')).toBe('Composition changed; re-plan');
     await act(async () => { fireEvent.click(el('agent.editor.plancard.replan')!); });
     const last = () => [...document.querySelectorAll('[data-el="agent.editor.plancard"]')].at(-1);   // the new plan comes last in the thread

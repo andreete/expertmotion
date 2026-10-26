@@ -118,6 +118,11 @@ describe('main editor element ids', () => {
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="stage.timeline.element"]')!); sweep();
     // ADR-028: a selected clip shows the canvas handles on the Player and the transform fields in the inspector
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="stage.timeline.element"][data-kind="clip"]')!); sweep();
+    // ADR-031: the item context menu (right-click on a bar) and the inspector Delete button
+    fireEvent.contextMenu(document.querySelector<HTMLElement>('[data-el="stage.timeline.element"][data-kind="clip"]')!, { clientX: 10, clientY: 10 }); sweep();
+    expect(el('stage.itemmenu')).not.toBeNull();
+    fireEvent.keyDown(el('stage.itemmenu')!, { key: 'Escape' });
+    expect(el('stage.itemmenu')).toBeNull();
     // FR-173: a pick creates a persisted Composition Version — no dirty dot
     await waitFor(() => { if (!document.querySelector('[data-el="lib.catalogue.tab"]')) throw new Error('no tabs'); });
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="transition"]')!);

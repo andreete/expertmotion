@@ -305,7 +305,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
             </div>
             <div className="flex items-center gap-2">
               <Button el={`${p}.saveoutput`} variant="primary" size={28} disabledReason={candidate ? null : t('ui.scr.generate.candidates')} onClick={() => void saveOutput()}>{t('ui.scr.generate.saveoutput')}</Button>
-              <Button el={`${p}.insert`} size={28} disabledReason={!candidate ? t('ui.scr.generate.candidates') : !(state.head?.model?.tracks.video.length ?? 0) ? t('err.EM-2202.title') : null}
+              <Button el={`${p}.insert`} size={28} disabledReason={!candidate ? t('ui.scr.generate.candidates') : null}
                 title={t('ui.scr.generate.thumbnail.insert.hint', { time: formatDuration(state.playheadMs) })}
                 onClick={() => { if (candidate) void insertJob(job, null, { assetId: candidate, atMs: Math.round(state.playheadMs) }); }}>{t('ui.scr.generate.thumbnail.insert')}</Button>
               <span className="text-[12px] text-em-muted">{saved ? t('ui.scr.generate.saved', { name: saved }) : t('ui.scr.generate.thumbnail.asset')}</span>

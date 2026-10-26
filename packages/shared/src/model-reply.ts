@@ -19,10 +19,44 @@ export function repairJsonStrings(s: string): string {
   return out;
 }
 
+/**
+ * Repairs closing brackets (live QA 2026-10-26, nemotron-3-ultra: `…]}]}` where `…]}}` was meant): a closer that does not match
+ * the innermost open bracket is replaced by the one that does, a stray closer after the outermost value ends the text, and up to
+ * two missing closers are appended when the text ends after a complete value (never inside a string, never for more).
+ * Returns null when nothing needed fixing or the text cannot be fixed this way.
+ */
+export function repairJsonClosers(s: string): string | null {
+  const stack: string[] = []; let out = ''; let inStr = false, esc = false, changed = false, started = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (inStr) { out += c; if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') { inStr = true; out += c; continue; }
+    if (c === '{' || c === '[') { stack.push(c === '{' ? '}' : ']'); started = true; out += c; continue; }
+    if (c === '}' || c === ']') {
+      if (!stack.length) { if (started) { changed = true; break; } out += c; continue; }
+      const want = stack.pop()!;
+      if (c !== want) changed = true;
+      out += want;
+      if (!stack.length) { if (s.slice(i + 1).trim()) changed = true; break; }
+      continue;
+    }
+    out += c;
+  }
+  if (inStr) return null;
+  if (stack.length) {
+    if (stack.length > 2 || !/[}\]"\d el]\s*$/.test(out)) return null;
+    out += stack.reverse().join(''); changed = true;
+  }
+  return changed ? out : null;
+}
+
 function tryParse(s: string | undefined): { ok: true; value: unknown } | { ok: false } {
   if (!s) return { ok: false };
   try { return { ok: true, value: JSON.parse(s) }; } catch { /* repaired below */ }
-  try { return { ok: true, value: JSON.parse(repairJsonStrings(s)) }; } catch { return { ok: false }; }
+  try { return { ok: true, value: JSON.parse(repairJsonStrings(s)) }; } catch { /* closers below */ }
+  const fixed = repairJsonClosers(repairJsonStrings(s));
+  if (fixed) { try { return { ok: true, value: JSON.parse(fixed) }; } catch { /* not repairable */ } }
+  return { ok: false };
 }
 
 /** The first balanced {...} object starting at or after `from` (string-aware), or null. */
@@ -43,8 +77,29 @@ function balancedObject(t: string, from = 0): string | null {
  * strings are repaired; a JSON string that itself holds JSON (double encoding) is unwrapped (up to 3 levels).
  * Returns undefined when no JSON value is found.
  */
+/**
+ * Removes reasoning that some models (and OpenRouter routes) put into the answer text: `<think>…</think>`, `<thinking>`,
+ * `<reasoning>`, `<reflection>` blocks, and an unclosed leading `<think>` (the answer starts after its last closing tag, or,
+ * when the reply was cut off inside it, nothing is left). JSON examples inside the reasoning are never taken as the reply.
+ */
+export function stripReasoning(text: string): string {
+  let t = text.replace(/<(think|thinking|reasoning|reflection)>[\s\S]*?<\/\1>/gi, '');
+  const close = /<\/(think|thinking|reasoning|reflection)>/gi;
+  let last = -1; for (const m of t.matchAll(close)) last = m.index! + m[0].length;
+  if (last >= 0) t = t.slice(last);                                      // "…reasoning</think> {json}" without an opening tag
+  if (/^\s*<(think|thinking|reasoning|reflection)>/i.test(t)) t = '';     // opened, never closed: reasoning only
+  return t;
+}
+
+/** Every top-level balanced {...} object in the text, in order (string-aware). */
+export function balancedObjects(t: string, max = 20): string[] {
+  const out: string[] = []; let from = 0;
+  while (out.length < max) { const o = balancedObject(t, from); if (!o) break; const at = t.indexOf(o, from); out.push(o); from = at + o.length; }
+  return out;
+}
+
 export function parseLooseJson(text: string): unknown {
-  const t = text.replace(/^﻿/, '').trim();
+  const t = stripReasoning(text.replace(/^﻿/, '')).trim();
   const candidates: Array<string | undefined> = [t];
   for (const m of t.matchAll(FENCE_RE)) candidates.push(m[2]?.trim());
   candidates.push(balancedObject(t) ?? undefined);

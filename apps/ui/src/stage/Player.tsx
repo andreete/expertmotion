@@ -12,6 +12,7 @@ import { Button, IconButton, MenuItem, Popover, cx } from '../components/ui.js';
 import { formatTimecode } from '../i18n/index.js';
 import { playerBus } from './playerBus.js';
 import { CanvasHandles, type CanvasGesture } from './CanvasHandles.js';
+import { ItemMenu, type ItemMenuAnchor } from './ItemMenu.js';
 import { canvasItemOf, transformEditOf, withLiveTransform, type Xf } from './canvas-transform.js';
 import { playerPrefsFor, playerPrefsPatch, type PlayerPrefs } from '../prefs.js';
 import type { AppState } from '../state/reducer.js';
@@ -124,6 +125,7 @@ export function StagePlayer() {
   const preview = useMemo(() => (head && state.previewPresetId ? previewModel(head, state.previewPresetId, state) : null), [head, state.previewPresetId]); // eslint-disable-line react-hooks/exhaustive-deps
   // ADR-028 / FR-180: canvas handles for the selected clip / image / shape; `live` is the optimistic transform of a running gesture.
   const [live, setLive] = useState<{ id: string; xf: Xf } | null>(null);
+  const [itemMenu, setItemMenu] = useState<ItemMenuAnchor | null>(null);   // ADR-031: right-click on the canvas box
   const canvasItem = useMemo(() => (head && !preview && state.selection.length === 1 ? canvasItemOf(head, state.selection[0], (id) => { const a = state.assets.find((x) => x.id === id); return a ? { width: a.width, height: a.height } : null; }) : null),
     [head, preview, state.selection, state.assets]);
   useEffect(() => { setLive(null); }, [state.head?.hash, canvasItem?.id]);
@@ -297,8 +299,10 @@ export function StagePlayer() {
             )}
             {showHandles && canvasItem && (
               <CanvasHandles item={canvasItem} xf={liveXf ?? canvasItem.xf} screenW={w} label={t('a11y.stage.player.canvas.box', { label: itemLabel })} hint={t('ui.stage.player.canvas.hint')}
-                onLive={(xf) => setLive(xf ? { id: canvasItem.id, xf } : null)} onCommit={commitTransform} />
+                onLive={(xf) => setLive(xf ? { id: canvasItem.id, xf } : null)} onCommit={commitTransform}
+                onMenu={(at) => setItemMenu({ ...at, refs: [{ kind: canvasItem.kind, id: canvasItem.id }], source: 'canvas', returnFocus: null })} />
             )}
+            {itemMenu && <ItemMenu anchor={itemMenu} onClose={() => setItemMenu(null)} />}
             {previewLabel && <span className="absolute left-2 top-2 rounded-[4px] bg-em-accent px-1.5 text-[11px] font-semibold text-em-accent-ink">{t('ui.stage.player.previewing', { preset: previewLabel })}</span>}
             {previewLabel && !hasClip && <span className="absolute bottom-2 left-2 right-2 rounded-[4px] bg-black/70 px-1.5 text-center text-[11px]">{t('ui.stage.player.sample')}</span>}
             {draft && <span className="absolute bottom-2 right-2 rounded-[4px] bg-black/70 px-1.5 text-[11px]">{t('ui.stage.player.draft')}</span>}

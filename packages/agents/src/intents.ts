@@ -1,7 +1,7 @@
 // Edit-intent pipeline steps 2–7 (docs/AI_WORKFLOW.md §2, §4, §6, §7): typed intents from Design Picks, Target Resolution,
 // multi-target expansion, the Intent Queue reducer (supersede / restore / remove) and the deterministic Compile path.
 import { compileDefaults, getPreset, type Category } from '@expertmotion/catalogue';
-import { deriveTiming, propertyKeysOf, topmostAt, type CompositionModelT, type ElementRefT, type LayerMove, type OperationT } from '@expertmotion/composition-model';
+import { deriveTiming, duplicationSteps, propertyKeysOf, removalSteps, stepFor, topmostAt, type CompositionModelT, type ElementRefT, type ItemRef, type LayerMove, type OperationT } from '@expertmotion/composition-model';
 import { fail, issue, ok, type Result } from '@expertmotion/shared';
 import type { EditIntentT, IntentCategory } from './schemas.js';
 
@@ -36,7 +36,13 @@ export interface DesignPick {
   splitEdit?: SplitEdit;
   /** ADR-028 / FR-180: Player handles / Inspector fields → op:element.setTransform on one clip, image or shape (one gesture = one pick). */
   transformEdit?: TransformEdit;
+  /**
+   * ADR-031 / FR-192 / FR-193: Delete or Duplicate the listed Timeline items (Delete key, context menu, inspector). Each item that
+   * still exists → one child intent with one op (removalSteps / duplicationSteps), all in ONE Composition Version (one Undo).
+   */
+  itemsEdit?: ItemsEdit;
 }
+export interface ItemsEdit { action: 'remove' | 'duplicate'; items: ItemRef[] }
 export type SplitKind = 'clip' | 'text' | 'image' | 'shape' | 'audio';
 export interface SplitEdit { atMs: number; items: Array<{ kind: SplitKind; id: string }> }
 export interface TransformEdit { kind: 'clip' | 'image' | 'shape'; id: string; x?: number; y?: number; scale?: number; rotation?: number }
@@ -72,6 +78,7 @@ function elementsAt(model: CompositionModelT, ms: number) {
 
 /** Builds the operation an intent stands for on one resolved target (used both for Compile and for the property key). */
 function opFor(pick: DesignPick, target: ElementRefT | undefined, model: CompositionModelT): { op: OperationT; complete: boolean } | null {
+  if (pick.itemsEdit) { const st = stepFor(itemSteps(model, pick.itemsEdit), target); return st ? { op: st.op, complete: true } : null; }
   if (pick.splitEdit) return target ? { op: { op: 'op:element.split', target, args: { atMs: Math.round(pick.splitEdit.atMs) } }, complete: true } : null;
   if (pick.transformEdit) {
     const e = pick.transformEdit;
@@ -123,9 +130,11 @@ function opFor(pick: DesignPick, target: ElementRefT | undefined, model: Composi
     // FR-025: a variant pick on a selected Text Layer re-applies the variant; otherwise FR-027 Add Text at the playhead,
     // default 3000 ms clamped to the Sequence end.
     if (target?.kind === 'text') return { op: { op: 'op:text.setStyle', target, args: { variant: p.id } }, complete: true };
+    // ADR-031: without clips (fit-content) the text itself sets the length of the video, so it keeps its 3000 ms.
     const atMs = Math.round(pick.playheadMs ?? 0), end = deriveTiming(model).durationMs;
+    const bounded = model.tracks.video.length > 0 || model.durationPolicy === 'fixed';
     const want = typeof args['durationMs'] === 'number' ? (args['durationMs'] as number) : 3000;
-    args = { ...args, text: pick.text, atMs, durationMs: end > atMs ? Math.max(100, Math.min(want, end - atMs)) : want };
+    args = { ...args, text: pick.text, atMs, durationMs: bounded && end > atMs ? Math.max(100, Math.min(want, end - atMs)) : want };
   }
   if (p.category === 'shape') {
     // size/fill/stroke/strokeWidth are first-class op:shape.add args; everything else stays in params.
@@ -156,12 +165,19 @@ function splitWindow(model: CompositionModelT, kind: SplitKind, id: string): { f
   return x ? { fromMs: x.timing.atMs, toMs: x.timing.atMs + x.timing.durationMs } : undefined;
 }
 const categoryOfKind = (kind: string): IntentCategory => (kind === 'audio' ? 'audio' : kind === 'text' ? 'text' : kind === 'shape' ? 'shape' : 'asset');
+/** ADR-031: the ops of a Delete / Duplicate pick on `model` (one per resolved target). */
+const itemSteps = (model: CompositionModelT, e: ItemsEdit) => (e.action === 'remove' ? removalSteps(model, e.items) : duplicationSteps(model, e.items));
+const ITEM_CATEGORY: Record<string, IntentCategory> = { cut: 'transition', effect: 'effect', background: 'background', caption: 'caption' };
+const categoryOfItems = (items: readonly ItemRef[]): IntentCategory => {
+  const cats = [...new Set(items.map((x) => ITEM_CATEGORY[x.kind] ?? categoryOfKind(x.kind)))];
+  return cats.length === 1 ? cats[0]! : 'asset';
+};
 
 /** Target Resolution table (AI_WORKFLOW §4). Returns the concrete targets, or an EM issue when the pick cannot be placed. */
 export function resolveTargets(pick: DesignPick, model: CompositionModelT): Result<{ targets: Array<ElementRefT | undefined>; label: string }> {
   const sel = pick.selection ?? [];
   const p = pick.presetId ? getPreset(pick.presetId) : undefined;
-  const cat: Category | 'field' | 'output' | 'clip' | 'element' | 'split' | 'transform' | 'instruction' = pick.splitEdit ? 'split' : pick.transformEdit ? 'transform' : pick.elementEdit ? 'element' : pick.clipEdit ? 'clip' : pick.output ? 'output' : pick.field ? 'field' : p ? p.category : 'instruction';
+  const cat: Category | 'field' | 'output' | 'clip' | 'element' | 'split' | 'transform' | 'items' | 'instruction' = pick.itemsEdit ? 'items' : pick.splitEdit ? 'split' : pick.transformEdit ? 'transform' : pick.elementEdit ? 'element' : pick.clipEdit ? 'clip' : pick.output ? 'output' : pick.field ? 'field' : p ? p.category : 'instruction';
   const v = model.tracks.video;
   const at = elementsAt(model, pick.playheadMs ?? 0);
   switch (cat) {
@@ -170,6 +186,14 @@ export function resolveTargets(pick: DesignPick, model: CompositionModelT): Resu
       const i = v.findIndex((c) => c.id === id);
       if (i < 0) return fail([issue('EM-2203', 'That clip no longer exists.', 'block', 'clipEdit.clipId')]);
       return ok({ targets: [{ kind: 'clip' as const, id }], label: `clip ${i + 1}` });
+    }
+    case 'items': {
+      // ADR-031: Delete / Duplicate — the listed items that still exist (a deleted scene clip takes its own texts with it).
+      const e = pick.itemsEdit!;
+      if (!e.items.length) return fail([issue('EM-2201', 'Select something on the Timeline first.', 'block', 'itemsEdit.items')]);
+      const steps = itemSteps(model, e);
+      if (!steps.length) return fail([issue(e.action === 'duplicate' ? 'EM-2201' : 'EM-2203', e.action === 'duplicate' ? 'This item cannot be duplicated.' : 'That item no longer exists.', 'block', 'itemsEdit.items')]);
+      return ok({ targets: steps.map((s) => s.target), label: `${e.action === 'remove' ? 'delete' : 'duplicate'} ${steps.length === 1 ? steps[0]!.target.kind : `${steps.length} items`}` });
     }
     case 'split': {
       // ADR-028: the listed items that contain the split point with ≥ 100 ms on each side; none listed → the clip at the split point.
@@ -223,7 +247,6 @@ export function resolveTargets(pick: DesignPick, model: CompositionModelT): Resu
       }
       if (cat === 'field' && pick.field === 'content' && !texts.length) return fail([issue('EM-2201', 'Select a text first.', 'block', 'target')]);
       if (cat === 'text' && pick.text === undefined && texts.length) return ok({ targets: texts.map((s) => ({ kind: 'text' as const, id: s.id! })), label: texts.length === 1 ? 'selected text' : `${texts.length} texts` });
-      if (cat === 'text' && pick.text !== undefined && v.length === 0) return fail([issue('EM-2202', 'Insert at least one clip before adding text.', 'block', 'target')]);
       if (cat !== 'text' && texts.length) return ok({ targets: texts.map((s) => ({ kind: 'text' as const, id: s.id! })), label: texts.length === 1 ? 'selected text' : `${texts.length} texts` });
       return ok({ targets: [undefined], label: cat === 'text' ? 'new text at the playhead' : 'new text (theme default)' });
     }
@@ -247,19 +270,19 @@ export function createIntents(pick: DesignPick, ctx: IntentContext): Result<Edit
   const now = ctx.now ?? (() => new Date().toISOString());
   const p = pick.presetId ? getPreset(pick.presetId) : undefined;
   if (pick.presetId && !p) return fail([issue('EM-2101', `Unknown design preset ${pick.presetId}.`, 'block', 'presetId')]);
-  const category: IntentCategory = pick.splitEdit ? (pick.splitEdit.items.length && pick.splitEdit.items.every((x) => x.kind === pick.splitEdit!.items[0]!.kind) ? categoryOfKind(pick.splitEdit.items[0]!.kind) : 'asset')
+  const category: IntentCategory = pick.itemsEdit ? categoryOfItems(pick.itemsEdit.items) : pick.splitEdit ? (pick.splitEdit.items.length && pick.splitEdit.items.every((x) => x.kind === pick.splitEdit!.items[0]!.kind) ? categoryOfKind(pick.splitEdit.items[0]!.kind) : 'asset')
     : pick.transformEdit ? categoryOfKind(pick.transformEdit.kind) : pick.elementEdit ? (pick.elementEdit.kind === 'audio' ? 'audio' : pick.elementEdit.kind === 'text' ? 'text' : pick.elementEdit.kind === 'shape' ? 'shape' : 'asset') : pick.clipEdit ? 'asset' : pick.output ? 'layout' : pick.field ? 'text' : p ? CATEGORY_OF[p.category] : (pick.category ?? 'layout');
-  const instructionOnly = !p && !pick.field && !pick.output && !pick.clipEdit && !pick.elementEdit && !pick.splitEdit && !pick.transformEdit;
+  const instructionOnly = !p && !pick.field && !pick.output && !pick.clipEdit && !pick.elementEdit && !pick.splitEdit && !pick.transformEdit && !pick.itemsEdit;
   // Persisted intents must be recompilable without the original pick: stash its deterministic inputs under `__` keys.
   const stash: Record<string, unknown> = { ...(pick.params ?? {}),
     ...(pick.field ? { __field: pick.field, __value: pick.value } : {}), ...(pick.output ? { __output: pick.output } : {}), ...(pick.clipEdit ? { __clipEdit: pick.clipEdit } : {}), ...(pick.elementEdit ? { __elementEdit: pick.elementEdit } : {}),
-    ...(pick.splitEdit ? { __splitEdit: pick.splitEdit } : {}), ...(pick.transformEdit ? { __transformEdit: pick.transformEdit } : {}),
+    ...(pick.splitEdit ? { __splitEdit: pick.splitEdit } : {}), ...(pick.transformEdit ? { __transformEdit: pick.transformEdit } : {}), ...(pick.itemsEdit ? { __itemsEdit: pick.itemsEdit } : {}),
     ...(pick.text !== undefined ? { __text: pick.text } : {}), ...(pick.assetId ? { __assetId: pick.assetId } : {}), ...(pick.playheadMs !== undefined ? { __playheadMs: pick.playheadMs } : {}) };
   const base = (over: Partial<EditIntentT>): EditIntentT => ({
     id: ctx.newId(), projectId: pick.projectId, source: pick.source, createdAt: now(), category,
     ...(pick.presetId ? { presetId: pick.presetId } : {}), params: stash,
     target: pick.selection?.[0] ?? (pick.playheadMs !== undefined ? { kind: 'playhead' } : { kind: 'project' }),
-    resolvedTargets: [], propertyKey: '', propertyClass: pick.splitEdit ? 'list' : p?.propertyClass ?? 'scalar', needsInterpretation: false,
+    resolvedTargets: [], propertyKey: '', propertyClass: pick.splitEdit || pick.itemsEdit ? 'list' : p?.propertyClass ?? 'scalar', needsInterpretation: false,
     ...(pick.instruction ? { instruction: pick.instruction } : {}), status: 'queued', supersedes: [], baseVersion: ctx.baseVersion, ...over,
   });
   if (instructionOnly) return ok([base({ propertyKey: `instruction:${ctx.newId()}`, propertyClass: 'list', needsInterpretation: true })]);
@@ -275,6 +298,8 @@ export function createIntents(pick: DesignPick, ctx: IntentContext): Result<Edit
     if (o?.op === 'op:clip.move') return `clip:${o.target?.id ?? ''}.order`;       // FR-068: lock the order of this clip, not every key of it
     // ADR-028: a split is an event, not a value: it never supersedes another pick and is not a Locked Key.
     if (o?.op === 'op:element.split') return `list:split:${o.target?.kind ?? ''}:${o.target?.id ?? ''}:${String(o.args['atMs'])}:${ctx.newId()}`;
+    // ADR-031: a Delete / Duplicate is an event too (never supersedes, never a Locked Key).
+    if (pick.itemsEdit) return `list:${pick.itemsEdit.action}:${t?.kind ?? ''}:${t?.id ?? t?.index ?? ''}:${ctx.newId()}`;
     const keys = o ? propertyKeysOf(o) : [];
     if (keys.length) return keys.join('|');
     return `list:${category}:${pick.presetId ?? pick.field ?? 'x'}:${t ? `${t.kind}:${t.id ?? t.index}` : 'project'}`;
@@ -364,10 +389,11 @@ export function pickFromIntent(i: EditIntentT, extra: Partial<DesignPick> = {}):
   const elementEdit = p['__elementEdit'] as DesignPick['elementEdit'] | undefined;
   const splitEdit = p['__splitEdit'] as DesignPick['splitEdit'] | undefined;
   const transformEdit = p['__transformEdit'] as DesignPick['transformEdit'] | undefined;
+  const itemsEdit = p['__itemsEdit'] as DesignPick['itemsEdit'] | undefined;
   const text = p['__text'] as string | undefined; const assetId = p['__assetId'] as string | undefined; const playheadMs = p['__playheadMs'] as number | undefined;
   for (const k of Object.keys(p)) if (k.startsWith('__')) delete p[k];
   return { projectId: i.projectId, source: i.source, ...(i.presetId ? { presetId: i.presetId } : {}), ...(field ? { field, value } : {}), ...(output ? { output } : {}), ...(clipEdit ? { clipEdit } : {}), ...(elementEdit ? { elementEdit } : {}),
-    ...(splitEdit ? { splitEdit } : {}), ...(transformEdit ? { transformEdit } : {}),
+    ...(splitEdit ? { splitEdit } : {}), ...(transformEdit ? { transformEdit } : {}), ...(itemsEdit ? { itemsEdit } : {}),
     ...(Object.keys(p).length ? { params: p } : {}), ...(text !== undefined ? { text } : {}), ...(assetId ? { assetId } : {}), ...(playheadMs !== undefined ? { playheadMs } : {}), ...extra };
 }
 

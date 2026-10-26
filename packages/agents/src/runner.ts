@@ -3,12 +3,13 @@ import { conflictsWithLocked, deriveTiming, propertyKeysOf, type ElementRefT, ty
 import { EmError, extractReplyText, type Issue } from '@expertmotion/shared';
 import { prompts } from './prompt-store.js';
 import { parseModelReply, validatePlan, extractJson, type PlanContext } from './plan.js';
-import { normalizeModelReply } from './plan-normalize.js';
+import { normalizeModelReply, presetParamShape } from './plan-normalize.js';
+import { listPresets } from '@expertmotion/catalogue';
 import { BrainstormTurn, type EditPlanT } from './schemas.js';
 import type { RewriteEnvelope } from './envelope.js';
 import type { ChatImage, ChatMessage, ChatProvider, ChatUsage } from './providers.js';
 import { compileIntents, createIntents, pickFromIntent } from './intents.js';
-import { opSignature } from './op-args.js';
+import { describeSchema, opSignature } from './op-args.js';
 import { isOpName, type OpName } from '@expertmotion/composition-model';
 import { MAX_TOOL_ROUNDS, ReplyStreamer, asToolRequest, runTool, summarizeThread, toolResultMessage, toolsPromptBlock, BRAINSTORM_TOOL_NAMES, EDITOR_TOOL_NAMES, type BrainstormToolName, type ThreadSummary, type ToolCallRecord, type ToolHandlers } from './tools.js';
 
@@ -19,13 +20,16 @@ export interface RunOptions {
   /** FR-190: what the run is doing now (chat shows "Membaca proyek…", "Menyusun rencana…", "Memeriksa rencana…"). */
   onProgress?: (p: RunProgress) => void;
 }
-export type RunPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool';
-export interface RunProgress { phase: RunPhase; attempt?: number; tool?: string }
+export type RunPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool' | 'waiting';
+/** `attempt` of `of` (correcting: reply n of the allowed replies; waiting: rate-limit retry n of m, `waitMs` before it). */
+export interface RunProgress { phase: RunPhase; attempt?: number; of?: number; tool?: string; waitMs?: number }
+/** Output budget of one Editor plan reply: reasoning models count their thinking here, and a 5-scene plan is ~2–3k tokens. */
+export const EDITOR_MAX_TOKENS = 8192;
 /**
  * FR-190 diagnostics of one Editor Agent run, for the service log (never prompt text, user text or keys): how many replies,
  * which repairs the lenient parser made, and the codes / paths of the last rejection.
  */
-export interface EditorRunDiagnostics { attempts: number; toolRounds: number; repairs: number; repairKinds: string[]; parseFailures: number; lastIssues: Array<{ code: string; path: string }>; intentsReturned: boolean; fallbackQuestion?: boolean }
+export interface EditorRunDiagnostics { attempts: number; toolRounds: number; repairs: number; repairKinds: string[]; parseFailures: number; truncated?: number; lastIssues: Array<{ code: string; path: string }>; intentsReturned: boolean; fallbackQuestion?: boolean }
 export interface EditorRunResult { ok: true; plan: EditPlanT; issues: Issue[]; attempts: number; usage: ChatUsage[]; droppedOps: number; toolCalls: ToolCallRecord[]; predicted?: ReturnType<typeof validatePlan>['predicted']; diagnostics: EditorRunDiagnostics }
 export interface EditorRunFailure { ok: false; error: EmError; attempts: number; usage: ChatUsage[]; toolCalls: ToolCallRecord[]; lastText?: string; diagnostics: EditorRunDiagnostics }
 export interface EditorRunOptions extends RunOptions {
@@ -49,19 +53,25 @@ const langName = (l: 'id' | 'en') => (l === 'id' ? 'Bahasa Indonesia' : 'English
 export const editorSystemPrompt = (env: RewriteEnvelope) => prompts().EDITOR_SYSTEM.replaceAll('{{language_name}}', langName(env.project.language)).replaceAll('{{base_version}}', env.baseVersion);
 
 async function call(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[]): Promise<string> {
+  return (await callFull(provider, system, messages, o, usage)).text;
+}
+async function callFull(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[]): Promise<{ text: string; finishReason?: string }> {
   o.budgetCheck?.();
   for (let attempt = 0; ; attempt++) {
     try {
-      const req = { system, messages, maxTokens: o.maxTokens ?? 4000, temperature: o.temperature ?? 0.2, ...(o.signal ? { signal: o.signal } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) };
+      const onRetry = o.onProgress ? (r: { n: number; of: number; waitMs: number }) => { try { o.onProgress!({ phase: 'waiting', attempt: r.n, of: r.of, waitMs: r.waitMs }); } catch { /* hint */ } } : undefined;
+      const req = { system, messages, maxTokens: o.maxTokens ?? 4000, temperature: o.temperature ?? 0.2, ...(o.signal ? { signal: o.signal } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}), ...(onRetry ? { onRetry } : {}) };
       let streamed = false;
       const r = o.onDelta && provider.stream ? await provider.stream(req, (d) => { streamed = true; o.onDelta!(d); }).catch((e: unknown) => { throw Object.assign(e as object, { streamed }); })
         : await provider.complete(req);
       usage.push(r.usage);
-      return r.text;
+      return { text: r.text, ...(r.finishReason ? { finishReason: r.finishReason } : {}) };
     } catch (e) {
       const em = e instanceof EmError ? e : new EmError('EM-4003', String(e));
       const partial = (e as { streamed?: boolean })?.streamed === true;                                       // text already shown: never replay it
-      if (attempt === 0 && !partial && (em.code === 'EM-4101' || em.code === 'EM-4102') && !o.signal?.aborted) continue;   // retry once (AI_WORKFLOW §12)
+      // Retry once (AI_WORKFLOW §12); a rate limit the adapter already retried with backoff (details.retries) is not retried again.
+      const retried = typeof (em.details as { retries?: unknown } | undefined)?.retries === 'number';
+      if (attempt === 0 && !partial && (em.code === 'EM-4101' || (em.code === 'EM-4102' && !retried)) && !o.signal?.aborted) continue;
       throw em;
     }
   }
@@ -74,10 +84,37 @@ export function correctionMessage(plan: EditPlanT, blocking: readonly Issue[], f
     const op = m ? plan.steps[Number(m[1])]?.ops[Number(m[2])] : undefined;
     const where = m ? `step ${plan.steps[Number(m[1])]?.n ?? Number(m[1]) + 1}, op ${Number(m[2]) + 1}${op ? ` (${op.op})` : ''}` : i.path || 'plan';
     const sig = op && isOpName(op.op) ? ` Expected: ${op.op} ${opSignature(op.op as OpName)}.` : '';
-    return `- ${where}: [${i.code}] ${i.message}${sig}`;
+    return `- ${where}: [${i.code}] ${i.message}${sig}${op ? presetHint(op, i) : ''}`;
   });
   const dropped = fixes.filter((f) => f.includes('dropped unknown arg')).slice(0, 5);
   return `The plan was rejected by validation:\n${lines.join('\n')}${dropped.length ? `\nIgnored argument names (not in the op's args): ${dropped.map((d) => d.replace(/^.*dropped unknown arg /, '')).join(', ')}.` : ''}\nFix only these problems, keep the rest of the plan, and reply with the whole EditPlan JSON only.`;
+}
+
+const PRESET_FIELDS: Record<string, Array<[string, string, string]>> = {          // [preset id arg, params arg, category]
+  'op:scene.add': [['background', 'backgroundParams', 'background'], ['transition', '', 'transition'], ['motionId', '', 'motion'], ['titleVariant', '', 'text'], ['textVariant', '', 'text']],
+  'op:transition.set': [['presetId', 'params', 'transition']], 'op:background.set': [['presetId', 'params', 'background']], 'op:scene.setBackground': [['presetId', 'params', 'background']],
+  'op:motion.set': [['presetId', 'params', 'motion']], 'op:caption.setStyle': [['presetId', 'params', 'caption']], 'op:text.setEffect': [['presetId', 'params', 'texteffect']],
+  'op:effect.add': [['presetId', 'params', 'effect']], 'op:shape.add': [['presetId', 'params', 'shape'], ['motionId', '', 'motion']], 'op:text.add': [['variant', '', 'text']],
+};
+/**
+ * For a rejected preset id or preset params: the valid ids of that category (EM-2101) or the preset's params with their
+ * types / values (EM-2102 on …params…), so the model can fix the value instead of guessing again.
+ */
+function presetHint(op: OperationT, i: Issue): string {
+  const args = (op.args ?? {}) as Record<string, unknown>;
+  for (const [idArg, pArg, cat] of PRESET_FIELDS[op.op] ?? []) {
+    const onId = i.path.endsWith(`.args.${idArg}`) || (i.code === 'EM-2101' && typeof args[idArg] === 'string' && i.message.includes(String(args[idArg])));
+    if (onId) {
+      const ids = listPresets({ category: cat as never }).filter((p) => !p.flags.includes('licence:paid') && !p.flags.includes('webgpu')).map((p) => p.id).slice(0, 24);
+      return ` Valid ${idArg} values: ${ids.join(', ')}.`;
+    }
+    if (pArg && (i.path.includes(`.args.${pArg}`) || (pArg === 'backgroundParams' && i.path.includes('.args.params')))) {
+      const pid = args[idArg] ?? (op.op === 'op:scene.add' ? 'preset:background.gradient' : undefined);
+      const shape = presetParamShape(pid);
+      if (shape) return ` Allowed ${pArg} for ${String(pid)}: {${Object.entries(shape).map(([k, v]) => `${k}?: ${describeSchema(v as never)}`).join(', ')}} (or leave ${pArg} out for the defaults).`;
+    }
+  }
+  return '';
 }
 
 /** A short question instead of a failure when the Creator pointed at elements but the request was too vague (FR-189). */
@@ -116,19 +153,25 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
   const system = editorSystemPrompt(env) + toolsPromptBlock(names, 'reply with the EditPlan JSON only');
   const messages: ChatMessage[] = [{ role: 'user', content: JSON.stringify(env), ...(o.images?.length ? { images: o.images } : {}) }];
   const maxCorrections = o.maxCorrections ?? 2;
+  const replies = maxCorrections + 1;
+  let noJsonInARow = 0; let used = 0;
   const norm = { model: ctx.model, baseVersion: ctx.baseVersion, assets: ctx.assets, language: env.project.language };
   let lockedRetryUsed = false; let lastText: string | undefined; let toolRounds = 0;
   const fail = (error: EmError, attempts: number, text?: string): EditorRunFailure => ({ ok: false, error, attempts, usage, toolCalls, ...(text ? { lastText: text } : {}), diagnostics: { ...diag, attempts, toolRounds } });
   progress({ phase: 'reading' });
   for (let attempt = 0; attempt <= maxCorrections + 1; attempt++) {
     let text: string;
-    progress(attempt === 0 ? { phase: 'planning' } : { phase: 'correcting', attempt });
+    progress(attempt === 0 ? { phase: 'planning' } : { phase: 'correcting', attempt: attempt + 1, of: replies });
     // FR-084: the plan's goal streams while the model writes it (first attempt only, so a correction never repeats it).
+    // Later attempts still stream (a silent stream is the timeout, not the whole answer time) but show nothing.
     const streamer = o.onDelta && attempt === 0 ? new ReplyStreamer('goal') : null;
-    const co: RunOptions = { ...o }; delete co.onDelta; delete co.onProgress;
+    const co: RunOptions = { maxTokens: EDITOR_MAX_TOKENS, ...o }; delete co.onDelta;
+    co.onProgress = (p) => progress(p.phase === 'waiting' ? p : { phase: attempt === 0 ? 'planning' : 'correcting', attempt: attempt + 1, of: replies });
     if (streamer) co.onDelta = (d: string) => { const v = streamer.push(d); if (v) o.onDelta!(v); };
-    try { text = await call(provider, system, [...messages], co, usage); } catch (e) { return fail(e as EmError, attempt + 1); }
-    lastText = text;
+    else if (o.onDelta) co.onDelta = () => { /* streamed for liveness only */ };
+    let finishReason: string | undefined;
+    try { const r = await callFull(provider, system, [...messages], co, usage); text = r.text; finishReason = r.finishReason; } catch (e) { return fail(e as EmError, attempt + 1); }
+    lastText = text; used = attempt + 1;
     const req = names.length ? asToolRequest(extractJson(text)) : null;
     if (req) {
       messages.push({ role: 'assistant', content: text });
@@ -141,7 +184,9 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
       messages.push({ role: 'user', content: 'No more tool calls. Reply with the EditPlan JSON only.' }); continue;
     }
     progress({ phase: 'checking' });
-    const parsed = parseModelReply(text, { id: ctx.planId, projectId: ctx.projectId }, norm);
+    const truncated = finishReason === 'length';
+    if (truncated) diag.truncated = (diag.truncated ?? 0) + 1;
+    const parsed = parseModelReply(text, { id: ctx.planId, projectId: ctx.projectId }, norm, { truncated });
     if (parsed.fixes?.length) { diag.repairs += parsed.fixes.length; diag.repairKinds = [...new Set([...diag.repairKinds, ...parsed.fixes.map((f) => f.replace(/^step \d+( op \d+)?: /, '').replace(/ .*$/, ''))])].slice(0, 20); }
     let planIn = parsed.plan;
     if (parsed.intents) {
@@ -156,7 +201,9 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
     }
     if (!planIn) {
       diag.parseFailures++;
-      if (attempt >= maxCorrections) break;
+      noJsonInARow = parsed.noJson ? noJsonInARow + 1 : 0;
+      // Two replies in a row without any JSON: this model does not follow the JSON contract; a third try only costs time.
+      if (attempt >= maxCorrections || noJsonInARow >= 2) break;
       messages.push({ role: 'assistant', content: text }, { role: 'user', content: parsed.problem! }); continue;
     }
     let plan = planIn; let dropped = 0;
@@ -188,8 +235,8 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
     messages.push({ role: 'assistant', content: text }, { role: 'user', content: correctionMessage(v.plan, v.issues.filter((i) => i.severity === 'block'), parsed.fixes) });
   }
   // FR-189: the Creator pointed at elements but no plan came out — ask what to change instead of failing.
-  if (env.targets?.length) { diag.fallbackQuestion = true; return { ok: true, plan: askPlan(env, ctx), issues: [], attempts: maxCorrections + 1, usage, droppedOps: 0, toolCalls, diagnostics: { ...diag, attempts: maxCorrections + 1, toolRounds } }; }
-  return fail(new EmError('EM-4301', 'The model could not produce a valid plan.', { details: { lastIssues: diag.lastIssues.slice(0, 5) } }), maxCorrections + 1, lastText);
+  if (env.targets?.length) { diag.fallbackQuestion = true; return { ok: true, plan: askPlan(env, ctx), issues: [], attempts: used, usage, droppedOps: 0, toolCalls, diagnostics: { ...diag, attempts: used, toolRounds } }; }
+  return fail(new EmError('EM-4301', 'The model could not produce a valid plan.', { details: { lastIssues: diag.lastIssues.slice(0, 5), ...(diag.truncated ? { truncated: diag.truncated } : {}) } }), used, lastText);
 }
 
 export interface BrainstormResult { ok: true; turn: ReturnType<typeof BrainstormTurn.parse>; usage: ChatUsage[]; toolCalls: ToolCallRecord[]; summary: ThreadSummary | null }
@@ -230,6 +277,11 @@ export async function runBrainstorm(history: ChatMessage[], contextBlock: unknow
         const rec = await runTool(req.name, req.input, o.tools ?? {});
         toolCalls.push(rec);
         messages.push({ role: 'assistant', content: text }, toolResultMessage(rec));
+        continue;
+      }
+      // Tool rounds used up and the model still asks for a tool: one last call that must answer (never a bare "…" reply).
+      if (req && names.length && round === MAX_TOOL_ROUNDS) {
+        messages.push({ role: 'assistant', content: text }, { role: 'user', content: 'No more tool calls. Answer the Creator now with the BrainstormTurn JSON only (reply, optional proposedIntents / questions).' });
         continue;
       }
       const turn = req ? { reply: '…' } : parseBrainstormReply(text);

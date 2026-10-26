@@ -512,6 +512,7 @@ export const DesignPickInput = z.object({
   elementEdit: z.object({ kind: z.enum(['text','image','shape','audio']), id, atMs?, durationMs?, trimBeforeMs?, layer?: 0..999, move?: z.enum(['up','down','front','back']) }).optional(),   // ADR-027 Timeline drag / trim / lane / layer key → op:element.setTiming (timing ± layer) or op:element.setLayer; EM-2203 when gone
   splitEdit: z.object({ atMs: int ≥ 0, items: z.array({ kind: z.enum(['clip','text','image','shape','audio']), id }).max(50) }).optional(),   // ADR-028 scissors / S → op:element.split per listed item that contains atMs (≥ 100 ms from its edges; empty list = the clip at atMs), one child intent per item, one Composition Version; EM-2201 when none does, EM-2203 when gone
   transformEdit: z.object({ kind: z.enum(['clip','image','shape']), id, x?: -2..2, y?: -2..2, scale?: 0.05..20, rotation?: -360..360 }).optional(),   // ADR-028 Player handles / Inspector fields → op:element.setTransform (x / y fractions of the frame, scale 1 = fit / stored size); EM-2203 when gone, EM-2102 when no field
+  itemsEdit: z.object({ action: z.enum(['remove','duplicate']), items: z.array({ kind: z.enum(['clip','text','image','shape','audio','cut','effect','background','caption']), id?: ≤ 160 chars, index?: int ≥ 0 }).min(1).max(200) }).optional(),   // ADR-031 Delete / Duplicate: one child intent per op (removalSteps / duplicationSteps), ONE Composition Version; effect id `<clipId>|<presetId>`, cut / caption by index; 422 EM-2201 nothing listed or duplicable, EM-2203 all gone
 });
 ```
 

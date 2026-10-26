@@ -114,6 +114,15 @@ export function Thread({ label, children, empty }: { label: string; children: Re
   );
 }
 
+/** Seconds since the run started, after 5 s, so a long reasoning model never looks frozen (Entry 25b). */
+function Elapsed({ since }: { since?: number | undefined }) {
+  const { t } = useStore();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { if (!since) return; const h = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(h); }, [since]);
+  const s = since ? Math.floor((now - since) / 1000) : 0;
+  return s >= 5 ? <span data-elapsed={s} className="t-mono text-em-muted"> · {t('ui.agent.progress.elapsed', { s })}</span> : null;
+}
+
 export function StreamingBubble({ agent }: { agent: AgentKind }) {
   const { state, actions, t, runtime } = useStore();
   const names = useModelNames();
@@ -124,7 +133,7 @@ export function StreamingBubble({ agent }: { agent: AgentKind }) {
     <div data-el="agent.chat.streaming" data-agent={agent} className="flex flex-col items-start gap-1">
       <ModeTag agent={agent} />
       <div className="text-[12px] text-em-muted">{s.phase
-        ? <span data-el="agent.chat.progress" data-phase={s.phase} role="status" className="inline-flex items-center gap-1"><Loader size={12} className="em-spin" aria-hidden />{progressText(s, t)}</span>
+        ? <span data-el="agent.chat.progress" data-phase={s.phase} role="status" className="inline-flex items-center gap-1"><Loader size={12} className="em-spin" aria-hidden />{progressText(s, t)}<Elapsed since={s.since} /></span>
         : t('ui.agent.common.asking', { model: names.llm(s.modelId, agent) || t('ui.agent.common.model') })}
         <button type="button" className="ml-2 underline" onClick={() => { void runtime.api.cancelAgentRun(s.runId).catch(() => undefined); if (agent === 'editor') void actions.cancelPlan(); else actions.stopStreaming(agent); }}>{t('ui.common.cancel')}</button>
       </div>
@@ -144,12 +153,13 @@ export function useAgentErrorVars(agent: AgentKind): Record<string, string> {
 }
 
 /** QA 2026-10-26 #5: what the running agent is doing (agent.run.progress), in the Creator's words. */
-export function progressText(p: { phase?: string | undefined; attempt?: number | undefined; tool?: string | undefined }, t: (k: string, v?: Record<string, string | number>) => string): string {
+export function progressText(p: { phase?: string | undefined; attempt?: number | undefined; of?: number | undefined; tool?: string | undefined }, t: (k: string, v?: Record<string, string | number>) => string): string {
   switch (p.phase) {
     case 'reading': return t('ui.agent.progress.reading');
     case 'planning': return t('ui.agent.progress.planning');
     case 'checking': return t('ui.agent.progress.checking');
-    case 'correcting': return t('ui.agent.progress.correcting', { n: p.attempt ?? 2 });
+    case 'correcting': return p.of ? t('ui.agent.progress.correcting.of', { n: p.attempt ?? 2, of: p.of }) : t('ui.agent.progress.correcting', { n: p.attempt ?? 2 });
+    case 'waiting': return t('ui.agent.progress.waiting', { n: p.attempt ?? 1, of: p.of ?? 2 });
     case 'tool': return t('ui.agent.progress.tool', { tool: p.tool ?? '…' });
     default: return t('ui.agent.progress.planning');
   }
@@ -160,6 +170,7 @@ export function errorActions(code: string): ErrorAction[] {
   if (code === 'EM-4002') return ['retry', 'providers'];
   if (code === 'EM-4001' || code === 'EM-4007') return ['providers'];
   if (code === 'EM-4301' || code === 'EM-4302') return ['rephrase', 'switchmodel'];
+  if (code === 'EM-4102') return ['retry', 'switchmodel'];
   if (code === 'EM-4201') return ['budget'];
   if (code === 'EM-4401' || code === 'EM-8202') return [];
   return ['retry'];
@@ -171,7 +182,7 @@ export function errorActions(code: string): ErrorAction[] {
  * a minute" hint with an automatic retry every ~20 s (at most 3) and "Coba lagi" (live failures only).
  */
 export function ErrorCard({ agent, code, detail, stamp, onRetry, onRephrase, saved }: { agent: AgentKind; code: string; detail: AgentErrorDetail | null; stamp?: string; onRetry?: (() => void) | undefined; onRephrase?: (() => void) | undefined; saved?: boolean }) {
-  const { actions, t } = useStore();
+  const { actions, state, t } = useStore();
   const vars = useAgentErrorVars(agent);
   const recent = !saved && code === 'EM-4002' && isRecentKey(detail?.details);
   const [auto, setAuto] = useState(0);
@@ -186,7 +197,10 @@ export function ErrorCard({ agent, code, detail, stamp, onRetry, onRephrase, sav
     return () => { clearInterval(tick); clearTimeout(fire); };
   }, [delay, code]); // eslint-disable-line react-hooks/exhaustive-deps
   const title = t(`err.${code}.title`, vars);
-  const reason = detail?.message && detail.message !== title ? detail.message : t(`err.${code}.body`, vars);
+  // EM-4102 after the automatic retries: the Service's text is English provider wording; a free model gets its own copy.
+  const free = code === 'EM-4102' && /:free$/.test(state.assignments?.[agent]?.modelId ?? '');
+  const daily = code === 'EM-4102' && detail?.details?.['daily'] === true;
+  const reason = code === 'EM-4102' ? t(daily ? 'err.EM-4102.daily.body' : free ? 'err.EM-4102.free.body' : 'err.EM-4102.body', vars) : detail?.message && detail.message !== title ? detail.message : t(`err.${code}.body`, vars);
   const list = errorActions(code).filter((a) => a !== 'retry' || onRetry).filter((a) => a !== 'rephrase' || onRephrase || true);
   const run = (a: ErrorAction) => {
     if (a === 'retry') onRetry?.();

@@ -82,4 +82,33 @@ describe('FR-068 clip edits', () => {
     expect((await post({ category: 'asset', transformEdit: { kind: 'clip', id: clip.id, scale: 99 } })).status).toBe(400);
     expect((await post({ category: 'asset', transformEdit: { kind: 'image', id: '01JAZK0000000000000000000C', x: 0 } })).body.error.code).toBe('EM-2203');
   });
+
+  it('ADR-031: Delete of a clip + a text and Duplicate of a text are one executed pick each; one undo restores the delete; a text without clips works', async () => {
+    const p = await newProject(s, 'Hapus');
+    insertClips(s, p.id, ['a1', 'a2']);
+    const model = async () => (await s.json(`/projects/${p.id}/composition`)).body.head.model;
+    const post = async (body: Record<string, unknown>) => s.json(`/projects/${p.id}/intents`, { method: 'POST', json: { source: 'ui', target: { kind: 'playhead' }, ...body, baseVersion: await headHash(s, p.id) } });
+    expect((await post({ category: 'text', presetId: 'preset:text.title', text: 'Judul', playheadMs: 0 })).body.intent.status).toBe('executed');
+    const m0 = await model();
+    const clip = m0.tracks.video[0] as { id: string }, text = m0.tracks.text[0] as { id: string };
+    const before = await headHash(s, p.id);
+    const del = await post({ category: 'asset', target: { kind: 'clip', id: clip.id }, itemsEdit: { action: 'remove', items: [{ kind: 'clip', id: clip.id }, { kind: 'text', id: text.id }] } });
+    expect([del.status, del.body.intent.status]).toEqual([201, 'executed']);
+    const m1 = await model();
+    expect([m1.tracks.video.length, m1.tracks.text.length]).toEqual([1, 0]);
+    const kids = ((await s.json(`/projects/${p.id}/intents`)).body.items as Array<{ parentIntentId?: string; propertyKey: string; status: string }>).filter((i) => i.parentIntentId === del.body.intent.id);
+    expect(kids.map((k) => [k.propertyKey.split(':').slice(0, 3).join(':'), k.status]).sort()).toEqual([['list:remove:clip', 'executed'], ['list:remove:text', 'executed']]);
+    await s.json(`/projects/${p.id}/composition/undo`, { method: 'POST' });
+    expect(await headHash(s, p.id)).toBe(before);                                      // one undo brings both back
+    const dup = await post({ category: 'text', target: { kind: 'text', id: text.id }, itemsEdit: { action: 'duplicate', items: [{ kind: 'text', id: text.id }] } });
+    expect(dup.body.intent.status).toBe('executed');
+    expect((await model()).tracks.text.map((x: { text: string }) => x.text)).toEqual(['Judul', 'Judul']);
+    expect((await post({ category: 'asset', itemsEdit: { action: 'remove', items: [{ kind: 'text', id: '01JAZK0000000000000000000D' }] } })).body.error.code).toBe('EM-2203');
+    expect((await post({ category: 'asset', itemsEdit: { action: 'explode', items: [{ kind: 'text', id: text.id }] } })).status).toBe(400);
+    // FR-027 / ADR-031: Add Text in a project with zero clips (faceless) is applied, 3 s long
+    const empty = await newProject(s, 'Kosong');
+    const add = await s.json(`/projects/${empty.id}/intents`, { method: 'POST', json: { source: 'ui', category: 'text', presetId: 'preset:text.title', text: 'Halo', target: { kind: 'playhead' }, playheadMs: 0, baseVersion: empty.headHash } });
+    expect([add.status, add.body.intent.status]).toEqual([201, 'executed']);
+    expect((await s.json(`/projects/${empty.id}/composition`)).body.head.model.tracks.text[0].timing).toEqual({ atMs: 0, durationMs: 3000 });
+  });
 });

@@ -38,11 +38,14 @@ describe('Text Panel picks', () => {
     expect(none.intents[0]).toMatchObject({ needsInterpretation: true, params: { targetLabel: 'needs the Editor Agent' } });
     expect(run(m, { presetId: 'preset:texteffect.highlight', selection: [t] }).ops[0]).toMatchObject({ op: 'op:text.setEffect', target: t });
   });
-  it('FR-027 Add Text at the playhead: 3000 ms clamped to the Sequence end; no clips → EM-2202', () => {
+  it('FR-027 Add Text at the playhead: 3000 ms clamped to the Sequence end; no clips (ADR-031) → 3000 ms, no EM-2202', () => {
     const m = model();
     expect(run(m, { presetId: 'preset:text.title', text: 'Your text', playheadMs: 1000 }).ops[0]).toMatchObject({ op: 'op:text.add', args: { text: 'Your text', atMs: 1000, durationMs: 3000 } });
     expect(run(m, { presetId: 'preset:text.title', text: 'Your text', playheadMs: 4000 }).ops[0]).toMatchObject({ args: { atMs: 4000, durationMs: 1000 } });
-    expect(run(createEmptyModel('p1'), { presetId: 'preset:text.title', text: 'Your text' }).issues[0]).toMatchObject({ code: 'EM-2202' });
+    // ADR-031: a faceless project (no clips, fit-content) gets the text at the playhead with its full length; the text sets the video length.
+    const empty = run(createEmptyModel('p1'), { presetId: 'preset:text.title', text: 'Your text', playheadMs: 0 });
+    expect(empty.issues).toEqual([]);
+    expect(empty.ops).toMatchObject([{ op: 'op:text.add', args: { text: 'Your text', atMs: 0, durationMs: 3000 } }]);
   });
   it('FR-027 content edits the selected layer (op:text.setContent)', () => {
     const m = model(); const t = { kind: 'text' as const, id: m.tracks.text[0]!.id };
