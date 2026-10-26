@@ -255,6 +255,20 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
     expect('temperature' in bodies.at(-1)!).toBe(false);            // remembered: no second refusal
     expect(bodies).toHaveLength(3);
   });
+  it('OpenAI reasoning models get no temperature and a max_completion_tokens floor; Gemini skips thought parts and keeps the default temperature', async () => {
+    const seenBodies: Array<Record<string, unknown>> = [];
+    const oa = mk((c) => { seenBodies.push(JSON.parse(String(c.init.body)) as Record<string, unknown>); return json(200, { choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }); });
+    await chatProviderFor('openai', 'sk-test-openai-key-123456789', 'gpt-5.1', oa.f).complete({ ...req, temperature: 0.2, maxTokens: 20 });
+    expect(seenBodies[0]).toMatchObject({ max_completion_tokens: 2048 }); expect(seenBodies[0]).not.toHaveProperty('temperature');
+    await chatProviderFor('openai', 'sk-test-openai-key-123456789', 'gpt-4.1-mini', oa.f).complete({ ...req, temperature: 0.2, maxTokens: 20 });
+    expect(seenBodies[1]).toMatchObject({ max_completion_tokens: 20, temperature: 0.2 });
+    const gBodies: Array<Record<string, unknown>> = [];
+    const ge = mk((c) => { gBodies.push(JSON.parse(String(c.init.body)) as Record<string, unknown>);
+      return json(200, { candidates: [{ content: { parts: [{ text: 'thinking about it', thought: true }, { text: 'jawaban' }] } }], usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 1 } }); });
+    const r = await chatProviderFor('google', 'AIzaTESTKEY', 'gemini-3-flash', ge.f).complete({ ...req, temperature: 0.2, maxTokens: 20 });
+    expect(r.text).toBe('jawaban');
+    expect(gBodies[0]!['generationConfig']).toEqual({ maxOutputTokens: 2048 });
+  });
   it('Gemini: generateContent with roles user/model, key in header (never the URL)', async () => {
     const { f, seen } = mk((c) => (c.url.includes(':generateContent') ? json(200, { candidates: [{ content: { parts: [{ text: 'hai' }] } }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1 } })
       : json(200, { models: [{ name: 'models/gemini-2.5-flash', displayName: 'Flash', inputTokenLimit: 1048576, supportedGenerationMethods: ['generateContent'] }, { name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] }] })));

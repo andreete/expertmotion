@@ -122,6 +122,11 @@ export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof 
 const usageOf = (model: string, inputTokens: unknown, outputTokens: unknown) => ({ model, inputTokens: Math.max(0, Math.trunc(num(inputTokens) ?? 0)), outputTokens: Math.max(0, Math.trunc(num(outputTokens) ?? 0)), costUsd: null, approximate: true });
 
 /** Chat adapter for a Model Assignment. The key is passed per provider instance and never logged. */
+/** OpenAI reasoning models (o1/o3/o4…, GPT-5 family and later): no temperature, reasoning counts toward max_completion_tokens. */
+export const OPENAI_REASONING = /^(o\d|gpt-(5|6|7|8|9)|gpt-oss)/i;
+export const REASONING_MIN_MAX_TOKENS = 2048;
+/** Floor for Gemini maxOutputTokens (thinking tokens count toward it). */
+export const GEMINI_MIN_MAX_TOKENS = 2048;
 /** Floor for Anthropic max_tokens (room for model-default thinking before the text answer). */
 export const ANTHROPIC_MIN_MAX_TOKENS = 1024;
 /** Models that refused sampling settings this session (`provider:model`); their requests omit temperature. */
@@ -152,7 +157,11 @@ export function chatProviderFor(p: ProviderKindT, key: string, model: string, fe
   };
   switch (p) {
     case 'openai': return { id: 'openai', model, async complete(req) {
-      const j = await send(req, `${OPENAI}/chat/completions`, (w) => ({ model, messages: [{ role: 'system', content: req.system }, ...msgs(req.messages)], max_completion_tokens: req.maxTokens, ...(w ? temp(req.temperature, 2) : {}) })) as
+      // OpenAI (Chat Completions): reasoning models (o-series, GPT-5 family) take max_completion_tokens, which also counts
+      // reasoning tokens, and reject temperature/top_p; other models keep the caller's temperature (retry-without on refusal).
+      const reasoning = OPENAI_REASONING.test(model);
+      const j = await send(req, `${OPENAI}/chat/completions`, (w) => ({ model, messages: [{ role: 'system', content: req.system }, ...msgs(req.messages)],
+        max_completion_tokens: reasoning ? Math.max(req.maxTokens, REASONING_MIN_MAX_TOKENS) : req.maxTokens, ...(w && !reasoning ? temp(req.temperature, 2) : {}) })) as
         { choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>; usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } };
       const c = j.choices?.[0];
       if (c?.finish_reason === 'content_filter') throw new EmError('EM-4104', 'The provider declined to answer this request.');
@@ -173,10 +182,12 @@ export function chatProviderFor(p: ProviderKindT, key: string, model: string, fe
       if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new EmError('EM-4004', 'This model is not available from the provider.');
       const j = await send(req, `${GEMINI}/models/${id}:generateContent`, (w) => ({ systemInstruction: { parts: [{ text: req.system }] },
         contents: req.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-        generationConfig: { maxOutputTokens: req.maxTokens, ...(w ? temp(req.temperature, 2) : {}) } })) as
-        { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> }; finishReason?: unknown }>; promptFeedback?: { blockReason?: unknown }; usageMetadata?: { promptTokenCount?: unknown; candidatesTokenCount?: unknown } };
+        // Gemini: maxOutputTokens includes thinking tokens and many models think by default (some cannot turn it off), so the
+        // budget has a floor; temperature is left at the model default (newer models are tuned for it); thought parts are skipped.
+        generationConfig: { maxOutputTokens: Math.max(req.maxTokens, GEMINI_MIN_MAX_TOKENS) } })) as
+        { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown; thought?: unknown }> }; finishReason?: unknown }>; promptFeedback?: { blockReason?: unknown }; usageMetadata?: { promptTokenCount?: unknown; candidatesTokenCount?: unknown } };
       if (j.promptFeedback?.blockReason || j.candidates?.[0]?.finishReason === 'SAFETY') throw new EmError('EM-4104', 'The provider declined to answer this request.');
-      const text = (j.candidates?.[0]?.content?.parts ?? []).map((x) => str(x.text)).join('');
+      const text = (j.candidates?.[0]?.content?.parts ?? []).filter((x) => x.thought !== true).map((x) => str(x.text)).join('');
       return { text, usage: usageOf(model, j.usageMetadata?.promptTokenCount, j.usageMetadata?.candidatesTokenCount) };
     } };
     default: return notYet(p);

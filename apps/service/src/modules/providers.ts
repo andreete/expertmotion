@@ -50,7 +50,7 @@ function requireEnabled(enabled: readonly ProviderKindT[], p: ProviderKindT): vo
 }
 
 /** FR-116 fixed probe (not a creative run): one tiny request per agent through the same ChatProvider adapters the chats use. */
-export const TEST_PROBE = { system: 'You are a connection test for Expertmotion. Answer with one JSON object only.', user: 'Reply with the word OK as JSON: {"reply":"OK"}', maxTokens: 20 } as const;
+export const TEST_PROBE = { system: 'You are a connection test for Expertmotion. Answer with one JSON object only.', user: 'Reply with the word OK as JSON: {"reply":"OK"}', maxTokens: 1024 } as const;   // reasoning/thinking models spend tokens before answering (OpenRouter, OpenAI, Gemini, Anthropic)
 /** fetch() failing below HTTP (DNS, refused, reset) = offline → EM-8201, as the chats show it (FR-116). */
 const isOffline = (e: unknown): boolean => {
   let c: unknown = e;
