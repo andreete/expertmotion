@@ -42,14 +42,26 @@ export function defaultKillTree(child: ChildLike, opts: { platform?: NodeJS.Plat
   child.kill('SIGKILL');
 }
 
-/** SEC-065 / LOCAL_AI_MODELS §3.2 `minimalEnv`. Nothing else from the parent environment is inherited. */
-export function buildChildEnv(opts: { engineDir: string; jobDir: string; parentEnv?: Readonly<Record<string, string | undefined>>; extra?: Record<string, string> }): Record<string, string> {
+/**
+ * SEC-065 / LOCAL_AI_MODELS §3.2 `minimalEnv`. Nothing else from the parent environment is inherited.
+ * Per platform (DEPLOYMENT_AND_PACKAGING §17): Windows finds the engine DLLs through PATH (= the engine folder) and needs SYSTEMROOT;
+ * Linux gets LD_LIBRARY_PATH = the engine folder (the shipped binaries also carry RUNPATH $ORIGIN, this covers a library loaded
+ * by name with dlopen) and TMPDIR = the job folder; macOS relies on the binaries' LC_RPATH @loader_path / @executable_path and
+ * gets no DYLD_* variable (the hardened runtime strips them, and they would let a planted library in) — only TMPDIR.
+ */
+export function buildChildEnv(opts: { engineDir: string; jobDir: string; parentEnv?: Readonly<Record<string, string | undefined>>; extra?: Record<string, string>; platform?: NodeJS.Platform }): Record<string, string> {
   const parent = opts.parentEnv ?? process.env;
+  const platform = opts.platform ?? process.platform;
   const env: Record<string, string> = {
     TEMP: opts.jobDir, TMP: opts.jobDir, PATH: opts.engineDir, NO_PROXY: '*', HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1',
   };
-  const systemRoot = parent.SYSTEMROOT ?? parent.SystemRoot;
-  if (systemRoot) env.SYSTEMROOT = systemRoot;
+  if (platform === 'win32') {
+    const systemRoot = parent.SYSTEMROOT ?? parent.SystemRoot;
+    if (systemRoot) env.SYSTEMROOT = systemRoot;
+  } else {
+    env.TMPDIR = opts.jobDir;
+    if (platform === 'linux') env.LD_LIBRARY_PATH = opts.engineDir;
+  }
   if (parent.LANG) env.LANG = parent.LANG;
   return { ...env, ...(opts.extra ?? {}) };
 }

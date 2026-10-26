@@ -66,7 +66,7 @@ export async function generateImage(input: ImageInput, ctx: EngineContext): Prom
   const onLine = (line: string): void => { const p = parseSdProgress(line); if (p !== null) report(p * 0.98); };
   await runProcess({
     engine: 'stable-diffusion.cpp', exe: join(ctx.engineDir, exeName('sd-cli', ctx.platform)), args: sdArgs(input, outPath),
-    cwd: ctx.jobDir, env: buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}) }),
+    cwd: ctx.jobDir, env: buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}), ...(ctx.platform ? { platform: ctx.platform } : {}) }),
     timeoutMs: ctx.timeoutMs ?? ENGINE_TIMEOUTS.thumbnail(input.tier), onStdoutLine: onLine, onStderrLine: onLine,
     ...(ctx.signal ? { signal: ctx.signal } : {}), ...(ctx.spawn ? { spawn: ctx.spawn } : {}), ...(ctx.killTree ? { killTree: ctx.killTree } : {}),
   });

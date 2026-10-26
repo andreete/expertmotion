@@ -6,7 +6,9 @@ BASE_OPTS="$(printf '%s' "${NODE_OPTIONS:-}" | sed -E 's/--max-old-space-size=[0
 export NODE_OPTIONS="$(printf '%s --max-old-space-size=%s' "${BASE_OPTS}" "${HEAP}" | sed -E 's/^ +//')"
 # Serialise heavy work across parallel agents (one capped job at a time on the 1.9 GB server).
 if [ -z "${EM_LOCK_HELD:-}" ] && command -v flock >/dev/null 2>&1; then export EM_LOCK_HELD=1; exec flock /tmp/expertmotion-heavy.lock "$0" "$@"; fi
-if command -v systemd-run >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
+# "degraded" (some unrelated user unit failed) still runs scopes; `is-system-running` exits non-zero for it, so test the state text.
+STATE="$(systemctl --user is-system-running 2>/dev/null || true)"
+if command -v systemd-run >/dev/null 2>&1 && { [ "$STATE" = running ] || [ "$STATE" = degraded ]; }; then
   exec systemd-run --user --scope --quiet -p MemoryMax="$MAX" -p MemoryHigh="$HIGH" -p MemorySwapMax="$SWAP" "$@"
 else
   echo "warning: no systemd user scope; running uncapped" >&2; exec "$@"

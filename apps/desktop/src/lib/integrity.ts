@@ -76,10 +76,15 @@ export function verifyManifest(
 }
 
 /**
+ * Extension-less executables of Linux and macOS (DEPLOYMENT_AND_PACKAGING §17): Chrome Headless Shell and its crash handler, the
+ * compositor, FFmpeg/ffprobe and the Generator Engine Binaries. Versioned shared objects (`libwhisper.so.1`) match the `.so` rule.
+ */
+const ENGINE_EXECUTABLE_NAMES = /^(chrome-headless-shell|chrome_crashpad_handler|remotion|ffmpeg|ffprobe|whisper-cli|sherpa-onnx-offline-tts|sd-cli|python3?)$/;
+/**
  * SEC-061: which files under resources/engine/chrome and resources/engine/compositor are executables the Service spawns or
  * loads (hashed in the signed integrity manifest). Same rule as apps/service/src/s2/engine-check.ts `isEngineExecutable`.
  */
 export function isEngineExecutable(file: string): boolean {
   const name = file.split(/[\\/]/).pop() ?? '';
-  return /\.(exe|dll|node|so|dylib)$/i.test(name) || /^(chrome-headless-shell|remotion|ffmpeg|ffprobe)$/.test(name);
+  return /\.(exe|dll|node|dylib)$/i.test(name) || /\.so(\.\d+)*$/.test(name) || ENGINE_EXECUTABLE_NAMES.test(name);
 }

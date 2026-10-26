@@ -68,4 +68,12 @@ describe('SEC-061 engine executables in the integrity manifest', () => {
     for (const f of ['engine/chrome/resources.pak', 'engine/chrome/locales/en-US.pak', 'engine/compositor/package.json', 'engine/chrome/LICENSE'])
       expect(isEngineExecutable(f), f).toBe(false);
   });
+  it('selects the extension-less Linux / macOS executables and versioned shared objects (DEPLOYMENT §17)', () => {
+    for (const f of ['engines/whisper.cpp/1.9.5-b5454/whisper-cli', 'engines/whisper.cpp/1.9.5-b5454/libwhisper.so.1', 'engines/whisper.cpp/1.9.5-b5454/libggml-cpu-haswell.so',
+      'engines/sherpa-onnx/1.13.8/sherpa-onnx-offline-tts', 'engines/sherpa-onnx/1.13.8/libonnxruntime.dylib', 'engines/stable-diffusion.cpp/x/sd-cli',
+      'engine/chrome/chrome_crashpad_handler', 'engine/chrome/libvulkan.so.1', 'bin/ffprobe'])
+      expect(isEngineExecutable(f), f).toBe(true);
+    for (const f of ['engines/sherpa-onnx/1.13.8/espeak-ng-data/so_dict', 'engines/whisper.cpp/x/LICENSES/whisper.cpp-LICENSE.txt', 'engines/x/PLATFORM.json', 'engine/chrome/libfoo.so.txt'])
+      expect(isEngineExecutable(f), f).toBe(false);
+  });
 });

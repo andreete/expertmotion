@@ -24,7 +24,9 @@
     "pack:admin:win": "npm run pack:win -w @expertmotion/admin",
     "release:check": "node scripts/release-check.mjs",
     "prepare:engines": "node scripts/prepare-engines.mjs",
-    "release:win": "node scripts/release-check.mjs && node scripts/prepare-engines.mjs && npm run build:all && npm run build:release -w @expertmotion/service && npm run build:main -w @expertmotion/desktop && npm run stage:desktop && npm run harden -w @expertmotion/desktop && npm run pack:win -w @expertmotion/desktop"
+    "release:win": "node scripts/release-check.mjs && node scripts/prepare-engines.mjs --platform=win32 --arch=x64 && npm run build:all && npm run build:release -w @expertmotion/service && npm run build:main -w @expertmotion/desktop && node scripts/stage-desktop.mjs --platform=win32 --arch=x64 && npm run harden -w @expertmotion/desktop && npm run pack:win -w @expertmotion/desktop",
+    "build:linux": "bash scripts/build-linux.sh",
+    "build:mac": "bash scripts/build-mac.sh"
   },
   "devDependencies": {
     "@remotion/player": "4.0.535",

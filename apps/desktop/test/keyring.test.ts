@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateKeyring, isValidDbKeyHex, quarantineTargets, unwrapDbKey } from '../src/lib/keyring.js';
+import { STORAGE_LOCKED_DIALOG, evaluateKeyring, isValidDbKeyHex, keyringRefusalMessage, quarantineTargets, storageLockedDialog, unwrapDbKey } from '../src/lib/keyring.js';
 
 describe('keyring gate (SEC-040)', () => {
   it('refuses when safeStorage is unavailable (EM-6001)', () => {
@@ -19,6 +19,26 @@ describe('keyring gate (SEC-040)', () => {
 
   it('allows a real secret backend on Linux', () => {
     expect(evaluateKeyring({ available: true, backend: 'gnome_libsecret', platform: 'linux' }).ok).toBe(true);
+    for (const b of ['kwallet', 'kwallet5', 'kwallet6'] as const) expect(evaluateKeyring({ available: true, backend: b, platform: 'linux' }).ok).toBe(true);
+  });
+
+  it('basic_text on Linux: EM-6001 with a Creator-facing fix (install gnome-keyring), in English and Indonesian', () => {
+    const facts = { available: true, backend: 'basic_text' as const, platform: 'linux' as const };
+    const g = evaluateKeyring(facts);
+    if (g.ok) throw new Error('expected refusal');
+    expect(g.code).toBe('EM-6001');
+    const msg = keyringRefusalMessage(g, facts);
+    expect(msg).toContain('sudo apt install gnome-keyring');
+    expect(msg).toContain('basic_text');
+    expect(msg).toContain('Expertmotion melindungi penyimpanan proyek');
+    expect(msg).not.toContain('Windows');
+  });
+
+  it('the locked-storage dialog names the platform\'s own account store', () => {
+    expect(storageLockedDialog('win32')).toBe(STORAGE_LOCKED_DIALOG);
+    expect(storageLockedDialog('linux').detail).toContain('GNOME Keyring or KWallet');
+    expect(storageLockedDialog('darwin').detail).toContain('macOS Keychain');
+    for (const p of ['linux', 'darwin'] as const) { expect(storageLockedDialog(p).detail).not.toContain('Windows'); expect(storageLockedDialog(p).buttons).toEqual(STORAGE_LOCKED_DIALOG.buttons); }
   });
 
   it('validates the Database Key hex', () => {

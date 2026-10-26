@@ -85,7 +85,7 @@ Expertmotion lets a person with no editing team and no technical skills turn raw
 | PRD-052 | Advanced thumbnail generation (stable-diffusion.cpp + composition of title/still) |
 | PRD-053 | Expanded local model support and Model Manager features (custom voices) |
 | PRD-054 | More sophisticated editing (keyframes, multi-sequence projects) |
-| PRD-055 | macOS and Linux builds |
+| PRD-055 | macOS and Linux builds (Linux AppImage + deb x64 delivered 2026-10-26, macOS prepared: ADR-029, DEPLOYMENT_AND_PACKAGING.md §17) |
 | PRD-056 | Plugin/preset marketplace; MCP façade for external assistants |
 
 ### 4.4 Out of scope (explicit)

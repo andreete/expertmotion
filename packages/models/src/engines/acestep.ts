@@ -54,7 +54,7 @@ export async function generateMusic(input: MusicInput, ctx: EngineContext): Prom
   try {
     await runProcess({
       engine: 'ace-step', exe: input.pythonExe, args: aceStepArgs(input, outPath), cwd: ctx.jobDir,
-      env: buildChildEnv({ engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}), extra: { PYTHONNOUSERSITE: '1' } }),
+      env: buildChildEnv({ engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}), ...(ctx.platform ? { platform: ctx.platform } : {}), extra: { PYTHONNOUSERSITE: '1' } }),
       timeoutMs: ctx.timeoutMs ?? ENGINE_TIMEOUTS.music, onStdoutLine: (l) => { const p = parseMusicProgress(l); if (p !== null) report(p * 0.98); },
       ...(ctx.signal ? { signal: ctx.signal } : {}), ...(ctx.spawn ? { spawn: ctx.spawn } : {}), ...(ctx.killTree ? { killTree: ctx.killTree } : {}),
     });

@@ -3,8 +3,8 @@
  *
  * Responsibilities (all orchestration; no business logic — that is the Local Service's job):
  *   - single-instance lock (DEPLOYMENT §8 task 1)
- *   - Database Key keyring: generate 32 random bytes on first run, wrap with safeStorage (DPAPI)
- *     into data/keyring.bin, unwrap on start; refuse with EM-6001 if unavailable (SEC-040)
+ *   - Database Key keyring: generate 32 random bytes on first run, wrap with safeStorage (DPAPI / Keychain / Secret Service)
+ *     into data/keyring.bin, unwrap on start; refuse with EM-6001 if unavailable or, on Linux, basic_text (SEC-040)
  *   - per-launch 256-bit Service Token (SEC-001)
  *   - free loopback port 42300–42399 (SEC-008)
  *   - start the Local Service with utilityProcess.fork and postMessage bootstrap (SEC-002)
@@ -42,7 +42,7 @@ import { crashFileName, dataLayout, directoriesToCreate, type DataLayout } from 
 import { createRotatingLog, pruneOldLogs, type RotatingLog } from './lib/log-file.js';
 import { editorEntryUrl, resolveDevRules, type DevRules } from './lib/dev-mode.js';
 import { buildBootstrap, buildMetrics, parseServiceMessage, shutdownMessage } from './lib/bootstrap.js';
-import { evaluateKeyring, quarantineTargets, STORAGE_LOCKED_DIALOG, unwrapDbKey } from './lib/keyring.js';
+import { evaluateKeyring, keyringRefusalMessage, quarantineTargets, storageLockedDialog, unwrapDbKey } from './lib/keyring.js';
 import { DOWNLOAD_RETRY_MS, downloadDecision, installDecision, nextUpdateState, parsePendingUpdate, pendingUpdateOutcome, shouldCheckForUpdates, updaterConfig, UPDATE_TICK_MS, type UpdateEvent, type UpdateState } from './lib/updater-policy.js';
 import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, remainingMs, type ShutdownAnswer } from './lib/close-flow.js';
 import { verifyManifest, type SignedManifest } from './lib/integrity.js';
@@ -111,15 +111,16 @@ function createDbKey(): string {
  * Resolves null when the Creator chose Quit.
  */
 async function acquireDbKey(): Promise<{ keyHex: string; restoreBackup: boolean } | null> {
-  const gate = evaluateKeyring({
+  const facts = {
     available: safeStorage.isEncryptionAvailable(),
     backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : null,
     platform: process.platform,
-  });
+  };
+  const gate = evaluateKeyring(facts);
   if (!gate.ok) {
-    logLine('error', 'keyring unavailable', { code: gate.code, reason: gate.reason });
+    logLine('error', 'keyring unavailable', { code: gate.code, reason: gate.reason, backend: facts.backend });
     pushServiceState({ status: 'failed', code: gate.code, logsDir: layout.logs });
-    fatalDialog(gate.code, `Project storage cannot be opened: ${gate.reason}`);
+    fatalDialog(gate.code, keyringRefusalMessage(gate, facts));
     app.exit(1);
     return null;
   }
@@ -128,7 +129,8 @@ async function acquireDbKey(): Promise<{ keyHex: string; restoreBackup: boolean 
   if (unwrapped.ok) return { keyHex: unwrapped.keyHex, restoreBackup: false };
   logLine('error', 'keyring unwrap failed', { code: unwrapped.code, reason: unwrapped.reason });
   pushServiceState({ status: 'failed', code: unwrapped.code, logsDir: layout.logs });
-  const opts = { type: 'error' as const, ...STORAGE_LOCKED_DIALOG, buttons: [...STORAGE_LOCKED_DIALOG.buttons] };
+  const locked = storageLockedDialog(process.platform);
+  const opts = { type: 'error' as const, ...locked, buttons: [...locked.buttons] };
   const { response } = mainWindow !== null ? await dialog.showMessageBox(mainWindow, opts) : await dialog.showMessageBox(opts);
   if (response !== 0) { app.quit(); return null; }
   const ts = timestamp();

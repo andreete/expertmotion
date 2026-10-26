@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for every nested executable electron-builder signs (Electron helpers, Chrome Headless Shell, the compositor's
+  remotion / ffmpeg / ffprobe, whisper-cli, sherpa-onnx-offline-tts, sd-cli, ingestion ffmpeg / ffprobe). Same set as the app:
+  Chrome Headless Shell needs JIT; the engines load their own dylibs. DEPLOYMENT_AND_PACKAGING §17.4.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict>
+</plist>

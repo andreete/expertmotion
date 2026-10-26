@@ -16,7 +16,7 @@ const FUSE_CONFIG = {
   [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
 };
 
-/** Executable name per platform, used by afterPack to locate the binary to flip. */
+/** Executable path per platform, used by afterPack to locate the binary to flip (`name`: product name, or the Linux executableName). */
 function packagedExecutable(appOutDir, electronPlatformName, productName) {
   if (electronPlatformName === 'win32') return path.join(appOutDir, `${productName}.exe`);
   if (electronPlatformName === 'darwin') return path.join(appOutDir, `${productName}.app`, 'Contents', 'MacOS', productName);

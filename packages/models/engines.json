@@ -1,9 +1,13 @@
 {
-  "$comment": "Generator Engine Binaries shipped in the installer (LOCAL_AI_MODELS.md §3.1). Official upstream Windows x64 releases, pinned by sha256 (the GitHub release digest). scripts/prepare-engines.mjs downloads, verifies and lays them out in resources/engines/<engine>/<version>/; the Creator installs nothing. Checked 2026-10-25.",
+  "$comment": "Generator Engine Binaries shipped in the installer (LOCAL_AI_MODELS.md §3.1). Official upstream releases, pinned by sha256 (the GitHub release digest), one entry per platform: `platform` (win32 | linux | darwin, or a list for platform-neutral data) and `arch`. scripts/prepare-engines.mjs --platform=<p> picks only that platform's entries and lays them out in resources/engines-<platform>-<arch>/<engine>/<version>/ (a separate tree per platform, so a Windows build never picks Linux files and vice versa); the Creator installs nothing. Windows entries checked 2026-10-25; Linux and macOS entries 2026-10-26.",
   "engines": [
     {
       "engine": "whisper.cpp",
       "version": "1.9.5-b5454",
+      "platform": "win32",
+      "arch": [
+        "x64"
+      ],
       "licence": "MIT",
       "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip",
       "sha256": "6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb",
@@ -25,6 +29,10 @@
     {
       "engine": "sherpa-onnx",
       "version": "1.13.8",
+      "platform": "win32",
+      "arch": [
+        "x64"
+      ],
       "licence": "Apache-2.0",
       "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release.tar.bz2",
       "sha256": "6dffdc715a4465b989446a6105265d2cb345e7101591a17d35534b6758f6e8df",
@@ -51,6 +59,15 @@
     {
       "engine": "sherpa-onnx",
       "version": "1.13.8",
+      "platform": [
+        "win32",
+        "linux",
+        "darwin"
+      ],
+      "arch": [
+        "x64",
+        "arm64"
+      ],
       "licence": "GPL-3.0-or-later (espeak-ng data, separate data files read by the engine)",
       "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/espeak-ng-data.zip",
       "sha256": "bc4525eafe31b4e3f5e43aea495f3169e97dd2544f1bbfe95514ce8a61baee39",
@@ -71,6 +88,10 @@
     {
       "engine": "stable-diffusion.cpp",
       "version": "master-1006-0886f11",
+      "platform": "win32",
+      "arch": [
+        "x64"
+      ],
       "licence": "MIT",
       "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1006-0886f11/sd-master-0886f11-bin-win-vulkan-x64.zip",
       "sha256": "09f1aaf89d3bdd78488aa39961dbdb126a292a2c1dd38f9f5f463f6fd3ed3773",
@@ -92,10 +113,244 @@
           "sha256": "b53fa08f515cb5a6fff7b9fd8fcd0961a4b80df29d74372d25e1f9171aa042ee"
         }
       ]
+    },
+    {
+      "engine": "whisper.cpp",
+      "version": "1.9.5-b5454",
+      "platform": "linux",
+      "arch": [
+        "x64"
+      ],
+      "licence": "MIT",
+      "url": "https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-ubuntu-x64.tar.gz",
+      "sha256": "a72becf15d7917f990f6313867a52638b82b7f9ef237fb0c980dac56a135781c",
+      "strip": "whisper-bin-ubuntu-x64/",
+      "keep": [
+        "whisper-cli",
+        "libwhisper.so.1",
+        "libggml.so.0",
+        "libggml-base.so.0",
+        "libggml-cpu-*.so"
+      ],
+      "executables": [
+        "whisper-cli"
+      ],
+      "$note": "Built on Ubuntu 22.04 (needs glibc >= 2.34). The archive's sonames are symlinks; prepare-engines copies the real file under the soname (libwhisper.so.1, libggml.so.0, libggml-base.so.0). RUNPATH $ORIGIN; ggml loads the best libggml-cpu-<isa>.so from the executable's folder.",
+      "licences": [
+        {
+          "file": "whisper.cpp-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/b5454/LICENSE",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+        }
+      ]
+    },
+    {
+      "engine": "sherpa-onnx",
+      "version": "1.13.8",
+      "platform": "linux",
+      "arch": [
+        "x64"
+      ],
+      "licence": "Apache-2.0",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-x64-shared.tar.bz2",
+      "sha256": "c0bdb7907d3a74bba1d55d22bf4d9fa75586cf1530614ebe88a27b9118e015c4",
+      "strip": "sherpa-onnx-v1.13.8-linux-x64-shared/",
+      "flatten": true,
+      "keep": [
+        "bin/sherpa-onnx-offline-tts",
+        "lib/libonnxruntime.so"
+      ],
+      "executables": [
+        "sherpa-onnx-offline-tts"
+      ],
+      "$note": "bin/ and lib/ are flattened into one folder; the executable's RPATH starts with $ORIGIN, so libonnxruntime.so is found next to it. glibc >= 2.16.",
+      "licences": [
+        {
+          "file": "sherpa-onnx-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.8/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "file": "onnxruntime-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.17.1/LICENSE",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        }
+      ]
+    },
+    {
+      "engine": "stable-diffusion.cpp",
+      "version": "master-1006-0886f11",
+      "platform": "linux",
+      "arch": [
+        "x64"
+      ],
+      "licence": "MIT",
+      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1006-0886f11/sd-master-0886f11-bin-Linux-Ubuntu-24.04-x86_64.zip",
+      "sha256": "3d33be5e3e9b5244cf904c537b8dc51c9582920b11d16539c8b35c12ab0f20a8",
+      "strip": "",
+      "keep": [
+        "sd-cli",
+        "libstable-diffusion.so",
+        "libggml.so.0",
+        "libggml-base.so.0",
+        "libggml-cpu-*.so",
+        "libwebp.so.7",
+        "libwebpmux.so.3",
+        "libwebm.so",
+        "libsharpyuv.so.0"
+      ],
+      "executables": [
+        "sd-cli"
+      ],
+      "$note": "CPU build, not the Vulkan one: it needs no GPU driver or libvulkan1, so it runs on any Ubuntu 24.04 x64 (built on Ubuntu 24.04: glibc >= 2.38, libstdc++ GLIBCXX_3.4.32). The Vulkan build loads libggml-vulkan.so (NEEDED libvulkan.so.1) dynamically and would fall back to CPU, but on a desktop with Mesa's software Vulkan (lavapipe) it may pick a slower emulated device; revisit with a GPU test. RUNPATH $ORIGIN.",
+      "licences": [
+        {
+          "file": "stable-diffusion.cpp-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/leejet/stable-diffusion.cpp/0886f11/LICENSE",
+          "sha256": "b53fa08f515cb5a6fff7b9fd8fcd0961a4b80df29d74372d25e1f9171aa042ee"
+        }
+      ]
+    },
+    {
+      "engine": "whisper.cpp",
+      "version": "1.9.5-b5454",
+      "platform": "darwin",
+      "arch": [
+        "arm64",
+        "x64"
+      ],
+      "licence": "MIT",
+      "source": {
+        "repo": "https://github.com/ggml-org/whisper.cpp.git",
+        "tag": "b5454",
+        "commit": "d1be6fde11ac6e0407606b4e42fe72d34add8037",
+        "cmake": [
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DBUILD_SHARED_LIBS=OFF",
+          "-DGGML_NATIVE=OFF",
+          "-DGGML_METAL=ON",
+          "-DGGML_METAL_EMBED_LIBRARY=ON",
+          "-DWHISPER_BUILD_TESTS=OFF",
+          "-DWHISPER_BUILD_SERVER=OFF",
+          "-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0"
+        ],
+        "target": "whisper-cli",
+        "outputs": [
+          "bin/whisper-cli"
+        ]
+      },
+      "keep": [
+        "whisper-cli"
+      ],
+      "executables": [
+        "whisper-cli"
+      ],
+      "$note": "GAP: the b5454 release has no macOS command-line build (only an iOS/macOS xcframework library). prepare-engines builds whisper-cli from the pinned tag + commit with CMake on a Mac (Xcode command-line tools + cmake), statically linked, Metal embedded, one architecture per --arch. Not built or run on the Linux server.",
+      "licences": [
+        {
+          "file": "whisper.cpp-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/b5454/LICENSE",
+          "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+        }
+      ]
+    },
+    {
+      "engine": "sherpa-onnx",
+      "version": "1.13.8",
+      "platform": "darwin",
+      "arch": [
+        "arm64"
+      ],
+      "licence": "Apache-2.0",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared.tar.bz2",
+      "sha256": "b10e5c7e2c30ea03de9c442655d14860d9edc475c6251d58a8f5f06e913a1d56",
+      "strip": "sherpa-onnx-v1.13.8-osx-arm64-shared/",
+      "flatten": true,
+      "keep": [
+        "bin/sherpa-onnx-offline-tts",
+        "lib/libonnxruntime.dylib"
+      ],
+      "executables": [
+        "sherpa-onnx-offline-tts"
+      ],
+      "$note": "minos 11.0. LC_RPATH @loader_path first, so the flattened libonnxruntime.dylib is found next to the executable (no DYLD_LIBRARY_PATH, which the hardened runtime strips anyway).",
+      "licences": [
+        {
+          "file": "sherpa-onnx-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.8/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "file": "onnxruntime-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.17.1/LICENSE",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        }
+      ]
+    },
+    {
+      "engine": "sherpa-onnx",
+      "version": "1.13.8",
+      "platform": "darwin",
+      "arch": [
+        "x64"
+      ],
+      "licence": "Apache-2.0",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-x64-shared.tar.bz2",
+      "sha256": "54aad64acee9d2d596535a6080d6f22602a720af5460e1d50461b1e1b06bee40",
+      "strip": "sherpa-onnx-v1.13.8-osx-x64-shared/",
+      "flatten": true,
+      "keep": [
+        "bin/sherpa-onnx-offline-tts",
+        "lib/libonnxruntime.dylib"
+      ],
+      "executables": [
+        "sherpa-onnx-offline-tts"
+      ],
+      "$note": "minos 10.14. LC_RPATH @loader_path first (see the arm64 entry).",
+      "licences": [
+        {
+          "file": "sherpa-onnx-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.8/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "file": "onnxruntime-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.17.1/LICENSE",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+        }
+      ]
+    },
+    {
+      "engine": "stable-diffusion.cpp",
+      "version": "master-1006-0886f11",
+      "platform": "darwin",
+      "arch": [
+        "arm64",
+        "x64"
+      ],
+      "licence": "MIT",
+      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1006-0886f11/sd-master-0886f11-bin-Darwin-macOS-26.6.2-arm64.zip",
+      "sha256": "3aae8059599148e437d572b4921422075a48440edd60183ae1d7712875302879",
+      "strip": "",
+      "keep": [
+        "sd-cli",
+        "libstable-diffusion.dylib"
+      ],
+      "executables": [
+        "sd-cli"
+      ],
+      "$note": "Despite the name the Mach-O files are universal (x86_64 + arm64), Metal backend. GAP: LC_BUILD_VERSION minos is 26.0, so this binary runs only on macOS 26 or later; on older macOS image generation fails with EM-7101. For older macOS build from source (tag master-1006-0886f11, commit 0886f11b6b8b4d1f6259e0f1337cae554284c37a) with CMAKE_OSX_DEPLOYMENT_TARGET set. LC_RPATH @executable_path / @loader_path.",
+      "licences": [
+        {
+          "file": "stable-diffusion.cpp-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/leejet/stable-diffusion.cpp/0886f11/LICENSE",
+          "sha256": "b53fa08f515cb5a6fff7b9fd8fcd0961a4b80df29d74372d25e1f9171aa042ee"
+        }
+      ]
     }
   ],
   "vcRuntime": {
-    "$comment": "App-local Visual C++ 2015-2022 runtime (Microsoft permits local deployment of these DLLs next to the executable). Carved from the official redistributable; no administrator rights, nothing installed system-wide.",
+    "$comment": "App-local Visual C++ 2015-2022 runtime (Microsoft permits local deployment of these DLLs next to the executable). Carved from the official redistributable; no administrator rights, nothing installed system-wide. Windows only (entries with \"vcRuntime\": true; prepare-engines refuses it for any other platform).",
     "url": "https://download.visualstudio.microsoft.com/download/pr/990c720a-46ce-4dc7-87b9-c2eb615d34b9/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
     "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
     "dlls": [

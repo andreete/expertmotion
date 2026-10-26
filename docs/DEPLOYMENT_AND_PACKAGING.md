@@ -2,10 +2,10 @@
 
 | Field | Value |
 |---|---|
-| Status | baseline (Windows x64; macOS/Linux in Appendix A are P2, PRD-055) |
+| Status | baseline (Windows x64; Linux AppImage + deb x64 and macOS preparation in §17, ADR-029) |
 | Owner | DevSecOps engineer / desktop packaging |
-| Last updated | 2026-10-25 |
-| Depends on | GLOSSARY.md, DECISIONS.md (ADR-004, 007, 008, 011, 013, 014, 017), ARCHITECTURE.md (§5, §7, §8), ASSESSMENT.md (§4, §5, §10), PERFORMANCE.md (§5 budgets), SECURITY.md, LICENSE_OPERATIONS.md, BLUEPRINT.md (repo layout) |
+| Last updated | 2026-10-26 |
+| Depends on | GLOSSARY.md, DECISIONS.md (ADR-004, 007, 008, 011, 013, 014, 017, 029), ARCHITECTURE.md (§5, §7, §8), ASSESSMENT.md (§4, §5, §10), PERFORMANCE.md (§5 budgets), SECURITY.md, LICENSE_OPERATIONS.md, BLUEPRINT.md (repo layout) |
 | Used by | ROADMAP.md, STAGE_MANAGEMENT.md, VULNERABILITY_CHECKLIST.md, POC_PLAN.md, TRD.md, DEVELOPMENT_WORKFLOW.md, QA_PROCESS.md |
 | Owner of | build pipeline, installer behaviour, update flow, release artefact naming, build-machine requirements, size budget |
 | ID range | steps are numbered B1 … B10; no requirement ids (controls live in SECURITY.md) |
@@ -244,6 +244,8 @@ Build steps on CI mirror §2; artefacts (`release/<version>/`) are uploaded with
 | SBOM | `sbom.json`, `sbom-binaries.json` |
 | Notices | `THIRD_PARTY_NOTICES.txt` (also inside the installer) |
 | Checklist and evidence | `VULNERABILITY_CHECKLIST.md`, `evidence/` (not published) |
+| Linux packages (§17.3) | `Expertmotion-<semver>-linux-x86_64.AppImage`, `Expertmotion-<semver>-linux-amd64.deb`; feed `latest-linux.yml` when `EM_FEED_URL_LINUX` is set |
+| macOS packages (§17.4) | `Expertmotion-<semver>-mac-arm64.dmg` / `.zip`, `…-mac-x64.dmg` / `.zip`; feed `latest-mac.yml` when `EM_FEED_URL_MAC` is set |
 | Git tag | `v<semver>` on `main`, signed |
 
 Version scheme: semver; `MAJOR` for Composition Model schema breaks (with migration), `MINOR` for features/presets, `PATCH` for fixes. Licence update-eligibility compares the release date in `latest.yml` (LICENSE_OPERATIONS.md).
@@ -278,6 +280,8 @@ Electron's `crashReporter` is either not started or started with `uploadToServer
 | Task | Why not | Where instead |
 |---|---|---|
 | Run or test Electron | no display, 1.9 GB RAM, shared tenant (ASSESSMENT §1) | Windows laptop / VM |
+| Build the Linux AppImage / deb | **can** be done here (§17.3, `scripts/build-linux.sh` under the memory cap); launching it cannot | Ubuntu 24.04 desktop for the smoke test |
+| Build macOS packages | needs macOS (codesign, notarytool, hdiutil, the whisper.cpp source build) | a Mac or a macOS CI runner (§17.4) |
 | Build the NSIS installer with signing | OV token/cloud signing is Windows tooling; electron-builder can cross-build NSIS under Wine but not sign with a token | Windows build machine or CI |
 | Compile bytecode for Windows Electron | bytecode is bound to V8 version **and CPU architecture**; cross-platform validity x64 Linux → x64 Windows is **[UNVERIFIED]**, so compile on Windows | Windows |
 | Stage Windows Engine Binaries | win64 downloads are possible, but execution/hash verification of behaviour is not | Windows |
@@ -349,7 +353,74 @@ Everything mirrorable comes to ≈ 23.4 GB (23.5 GB with the Piper voices), so t
 
 Set `EM_MODEL_CDN_URL=https://models.<your-domain>` (no trailing path needed; a path prefix such as `/v1` is allowed) in the environment of `npm run release:win`. `scripts/release-check.mjs` stops while it is unset, the placeholder, `http://`, an example host or `r2.dev`. With it set, `TO_PIN` lines in `packages/models/src/registry.ts` are reported as a note only: the signed CDN manifest pins every file, and the built-in Hugging Face URLs are outside the allow-list. Upload a signed `models.json` before shipping, otherwise every model stays "not available yet" (EM-7110).
 
-## Appendix A. macOS and Linux (P2, PRD-055)
+## 17. Linux and macOS packages (ADR-029, Operator 2026-10-26)
+
+Linux (Ubuntu, x64) ships now as **AppImage** and **deb**; macOS is prepared (config, scripts, entitlements) and is built, signed and notarised later on a Mac. The License Admin app (`apps/admin`) stays Windows-only. Rule: every build carries exactly one platform's binaries, and no code path builds another platform's file name or path ("jangan sampai salah alamat").
+
+### 17.1 One platform per build: inputs and guards
+
+| Input | Windows x64 | Linux x64 | macOS arm64 / x64 |
+|---|---|---|---|
+| Chrome Headless Shell | `node_modules/.remotion/chrome-headless-shell/win64/…` | `…/linux64/chrome-headless-shell-linux64/` | `…/mac-arm64/…`, `…/mac-x64/…` |
+| Remotion compositor | `@remotion/compositor-win32-x64-msvc` | `@remotion/compositor-linux-x64-gnu` (glibc; not `-musl`) | `@remotion/compositor-darwin-arm64` / `-darwin-x64` |
+| Ingestion FFmpeg (ADR-019) | `resources/bin-win32-x64/` or the legacy `resources/bin/`: BtbN n8.1 win64 LGPL shared (`ffmpeg.exe`, `ffprobe.exe`, DLLs) | `resources/bin-linux-x64/`: BtbN `ffmpeg-n8.1-latest-linux64-lgpl-8.1.tar.xz` (sha256 `6bc24b80…d1ca9` = the GitHub release digest on 2026-10-26; static, only glibc; `ffmpeg` + `ffprobe` ≈ 142 MB each; libopenh264 encoder) | `resources/bin-darwin-<arch>/`: **gap**, BtbN builds no macOS; the Operator supplies an LGPL build per architecture (e.g. built from the n8.1 tag with `--enable-libopenh264`, no `--enable-gpl`) |
+| Generator Engine Binaries | `resources/engines-win32-x64/` | `resources/engines-linux-x64/` | `resources/engines-darwin-<arch>/` |
+| Native modules in the asar | `better-sqlite3-multiple-ciphers/prebuilds/win32-x64.node` only | `linux-x64.node` only | `darwin-<arch>.node` |
+
+`scripts/prepare-engines.mjs --platform=<win32|linux|darwin> [--arch]` writes the engines tree with a `PLATFORM.json` marker. `scripts/stage-desktop.mjs --platform --arch` copies one platform into `apps/desktop/resources` (the `extraResources` paths are the same on every platform) and stops before copying when any input holds an executable image of another OS (PE / ELF / Mach-O magic) or CPU (ELF machine), a `.exe` / `.dll` off Windows, a missing `ffmpeg` / `ffprobe` under the target's file name, or a `PLATFORM.json` of another target. On Linux and macOS it sets the exec bit on every ELF / Mach-O image. Its build-path leak guard now also refuses the build machine's home folder. Source maps are not shipped, so stage-desktop also removes the `//# sourceMappingURL=` trailers from the staged Engine bundle and Editor files: Remotion's renderer reads `bundle.js.map` synchronously when it prepares the bundle server, and a trailer pointing at a missing map made every `renderStill` / `renderMedia` of a packaged build fail with ENOENT (found 2026-10-26 on Linux; the Windows test build from `cross-build-win.sh` has the same two trailers, because `EM_OBFUSCATE_MAX_BYTES` leaves `bundle.js` unobfuscated). electron-builder's per-platform `files` keep other platforms' prebuilds and compositors out of the asar. Tests: `apps/desktop/test/platform-packaging.test.ts`.
+
+### 17.2 Generator Engine Binaries per platform (same upstream versions, pinned by the GitHub release digest)
+
+| Engine | Linux x64 (verified here) | macOS |
+|---|---|---|
+| whisper.cpp b5454 (1.9.5) | `whisper-bin-ubuntu-x64.tar.gz`, sha256 `a72becf1…5781c`; keeps `whisper-cli`, `libwhisper.so.1`, `libggml.so.0`, `libggml-base.so.0`, `libggml-cpu-*.so` (the archive's soname symlinks are copied as real files); RUNPATH `$ORIGIN`; glibc ≥ 2.34 | **gap**: the release has only an xcframework library, no CLI. `prepare-engines` builds `whisper-cli` on a Mac from tag `b5454`, commit `d1be6fde…8037` (checked), CMake static, Metal embedded, one architecture per run, deployment target 12.0 |
+| sherpa-onnx v1.13.8 | `sherpa-onnx-v1.13.8-linux-x64-shared.tar.bz2`, sha256 `c0bdb790…15c4`; `bin/sherpa-onnx-offline-tts` + `lib/libonnxruntime.so` flattened (RPATH `$ORIGIN` first); glibc ≥ 2.16 | `osx-arm64-shared` (`b10e5c7e…1d56`, minos 11.0) and `osx-x64-shared` (`54aad64a…ee40`, minos 10.14); LC_RPATH `@loader_path` first, so the flattened `libonnxruntime.dylib` loads without `DYLD_*` |
+| espeak-ng-data | the same `espeak-ng-data.zip` (`bc4525ea…ee39`) on every platform | same |
+| stable-diffusion.cpp master-1006-0886f11 | **CPU** build `sd-master-0886f11-bin-Linux-Ubuntu-24.04-x86_64.zip`, sha256 `3d33be5e…20a8`: needs no GPU driver or libvulkan; built on Ubuntu 24.04 (glibc ≥ 2.38, GLIBCXX_3.4.32), RUNPATH `$ORIGIN`, ggml loads the best `libggml-cpu-<isa>.so` from its folder. The Vulkan zip (`b9df64d2…be93`) was inspected and not chosen: `libggml-vulkan.so` needs `libvulkan.so.1` and could pick Mesa's software device (lavapipe) on a desktop without a GPU | `sd-master-0886f11-bin-Darwin-macOS-26.6.2-arm64.zip` (`3aae8059…2879`): universal (x86_64 + arm64) Metal build, **minos 26.0**: image generation works only on macOS 26+; for older macOS build from commit `0886f11b…c37a` with a lower deployment target |
+| VC++ runtime | Windows only (`prepare-engines` refuses it for another platform) | — |
+
+Shared libraries at run time: the shipped Linux binaries resolve their libraries through RUNPATH `$ORIGIN`; the engine child environment additionally sets `LD_LIBRARY_PATH` = the engine folder and `TMPDIR` = the job folder (`buildChildEnv`, `packages/models`), and never inherits the parent's `LD_*`. macOS gets no `DYLD_*` (the hardened runtime strips them, and they would let a planted library in): the binaries' LC_RPATH already points at their own folder (checked with a Mach-O reader). FFmpeg / ffprobe for ingestion get the same rule (`toolEnv`, `apps/service/src/s2/proc.ts`). System libraries the Linux engines need: `libstdc++6`, `libgomp1` (OpenMP of whisper.cpp / sd.cpp), glibc. SEC-061 hashes the extension-less executables and `.so.N` files too.
+
+### 17.3 Linux build, layout and runtime
+
+| Topic | Linux |
+|---|---|
+| Build | `EM_NODE_HEAP=1100 bash scripts/run-capped.sh bash scripts/build-linux.sh` (release-check `--allow-placeholders`, Editor, `build:release` service, `build:main`, `prepare-engines --platform=linux`, `stage-desktop --platform=linux`, `harden`, `electron-builder --linux AppImage deb --x64 -c.npmRebuild=false`). Needs `EM_RELEASE_PRIVATE_KEY_PEM_FILE` and `EM_ENGINE_PUBLIC_KEY_B64` like the Windows cross-build. Runs on the shared server (no wine, no display needed); there the test build leaves JS chunks above 2 MB unobfuscated (`EM_OBFUSCATE_MAX_BYTES=2000000`: the 2.4 MB Editor chunk does not fit the obfuscator inside the 1.2 GB cap); electron-builder downloads the Electron linux-x64 zip, appimagetool and fpm once into `~/.cache/electron-builder`. |
+| Artefacts | `release/<version>/Expertmotion-<version>-linux-x86_64.AppImage`, `Expertmotion-<version>-linux-amd64.deb`, `linux-unpacked/` |
+| Installed layout (deb) | `/opt/Expertmotion/expertmotion` (+ `chrome-sandbox`, Electron runtime), `/opt/Expertmotion/resources/{app.asar, app.asar.unpacked, engine/, engines/, bin/, sample/, engine-manifest.json, integrity-manifest.json, THIRD_PARTY_NOTICES.txt, apparmor-profile}`, `/usr/bin/expertmotion` (update-alternatives), `/usr/share/applications/expertmotion.desktop`, `/usr/share/icons/hicolor/<n>x<n>/apps/expertmotion.png` (16…512 from `apps/desktop/scripts/make-tray-icon.mjs`) |
+| Data folder | `app.getPath('appData')` = `~/.config` → `~/.config/Expertmotion/{data/expertmotion.db, data/keyring.bin, media/, outputs/, models/, tmp/, logs/, settings.json}` (`dataLayout(…, '/')`) |
+| Import roots | home folder plus removable media under `/media/<user>` and `/run/media/<user>` (macOS: `/Volumes`) |
+| deb dependencies | electron-builder's defaults (`libgtk-3-0`, `libnotify4`, `libnss3`, `libxss1`, `libxtst6`, `xdg-utils`, `libatspi2.0-0`, `libuuid1`, `libsecret-1-0`) + `libgomp1`; recommends `gnome-keyring`. The deb's after-install script installs an AppArmor profile on Ubuntu 24.04+ (unprivileged user namespaces are restricted there) and sets `chrome-sandbox` SUID only where user namespaces are unavailable. |
+| AppImage | runs from any folder and is the updater-capable target. On Ubuntu 24.04 the AppArmor user-namespace restriction blocks the Chromium sandbox of an AppImage unless an AppArmor profile allows it (or the system setting `kernel.apparmor_restrict_unprivileged_userns=0`); `--no-sandbox` must not be used (Appendix A). Recommended package for Ubuntu 24.04: the deb. |
+| Minimum OS | Ubuntu 24.04 LTS x64 (glibc 2.39): stable-diffusion.cpp needs glibc 2.38. On 22.04 everything except image generation (EM-7101) is expected to work (whisper.cpp needs 2.34, FFmpeg 2.28, sherpa-onnx 2.16) — not tested. |
+| Keyring (SEC-040) | Electron `safeStorage` on Linux uses the Secret Service: `gnome_libsecret` (Ubuntu desktop with GNOME Keyring, unlocked at login) or `kwallet*` (KDE) are accepted. Without a keyring service Electron falls back to `basic_text`; the Shell then refuses with **EM-6001** and an EN/ID dialog: install `gnome-keyring` (`sudo apt install gnome-keyring`), sign out and in, start again. Acceptable on a stock Ubuntu desktop (GNOME Keyring is installed and unlocked by the login); headless or minimal window-manager sessions hit EM-6001 by design. |
+| Hardening | obfuscation, encrypted prompts, signed integrity manifest, fuses (`afterPack` uses the Linux `executableName`). No V8 bytecode (the bytenode step runs on Windows only) and no ASAR integrity (Electron supports it on Windows and macOS only). |
+| Updates | `linux.publish` only when `EM_FEED_URL_LINUX` is set (a test build has no `app-update.yml`, so no update checks). AppImage updates in place; the deb through electron-updater's deb path (needs the admin password). |
+| Signing | none (optional detached GPG signature of the AppImage / a signed apt repository later) |
+
+### 17.4 macOS preparation (not built here)
+
+What exists: `electron-builder.config.cjs` `mac` (dmg + zip, `arm64` and `x64`, `hardenedRuntime: true`, `entitlements` / `entitlementsInherit` = `apps/desktop/build/entitlements.mac*.plist` with `allow-jit`, `allow-unsigned-executable-memory`, `disable-library-validation`; `notarize` only when `EM_MAC_NOTARIZE=1`; `minimumSystemVersion` 12.0; icon `build/icon.png` 1024 px), `scripts/build-mac.sh` (refuses to run off macOS; per architecture: `prepare-engines --platform=darwin --arch`, `stage-desktop`, `harden`, `electron-builder --mac --<arch>` with `EM_MAC_ARCH`), `afterPack` resetting the ad-hoc signature after the fuse flip so electron-builder's codesign pass re-signs everything (Chrome Headless Shell, compositor, FFmpeg, engines, dylibs) with the Developer ID.
+
+What the Operator needs:
+
+| Item | Detail |
+|---|---|
+| Apple Developer Program membership | USD 99 / year, organisation or individual; gives the **Developer ID Application** certificate (create it in Xcode or developer.apple.com; export a `.p12` for CI: `CSC_LINK` + `CSC_KEY_PASSWORD`, or keep it in the login keychain and set `CSC_NAME`) |
+| Notarisation credentials | preferred: an App Store Connect API key (`APPLE_API_KEY` = path to `AuthKey_<id>.p8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`); alternative: `APPLE_ID` + app-specific password `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`. Then `EM_MAC_NOTARIZE=1` |
+| A Mac | Apple silicon recommended (builds both architectures; the x64 engines can be smoke-tested under Rosetta), macOS 14+, Xcode command-line tools, `cmake`, `git`, Node 22, `npm ci`; or a macOS CI runner (GitHub Actions `macos-14` / `macos-15`) with the certificate and API key as environment secrets |
+| Inputs per architecture | Chrome Headless Shell `mac-<arch>` (`npx remotion browser ensure`), `@remotion/compositor-darwin-<arch>` (the other architecture via `npm pack` of the pinned 4.0.535), an LGPL FFmpeg + ffprobe in `resources/bin-darwin-<arch>/` |
+| Checks on the Mac | `codesign --verify --deep --strict --verbose=2 release/<v>/mac-arm64/Expertmotion.app`, `spctl -a -vv` (accepted, Notarized Developer ID), `xcrun stapler validate` on the dmg; then the §2 B10 smoke test, including Generate Voice / Captions (engines spawned from `Contents/Resources/engines`) and an Export |
+| Known gaps | whisper.cpp source build and the whole mac pipeline never ran (no Mac here); stable-diffusion.cpp needs macOS 26+; macOS ingestion FFmpeg not chosen; Gatekeeper behaviour for the engine children to be confirmed after notarisation |
+
+### 17.5 Verified on the Linux server (2026-10-26)
+
+See `process.md` Entry 22 for the commands and outputs: the three engines run from the staged package layout with the product argv; the staged `service.cjs` boots with `process.resourcesPath` = the staged resources and the Linux Shell environment (licence gate, ingest proxy, engine check, engine calls); the AppImage and deb are inspected for foreign binaries, exec bits and build-machine paths. Electron itself cannot be launched here (no display): the Shell, keyring, tray, window and the AppArmor / sandbox behaviour are untested until an Ubuntu 24.04 desktop smoke test.
+
+## Appendix A. macOS and Linux (P2, PRD-055; superseded in part by §17)
+
+The table below is the original P2 analysis. What was decided and built on 2026-10-26 is in §17 (ADR-029); where they differ, §17 wins.
+
 
 | Topic | macOS | Linux |
 |---|---|---|

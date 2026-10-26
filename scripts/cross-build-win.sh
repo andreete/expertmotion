@@ -6,7 +6,7 @@
 # Inputs placed beforehand (outside git, see poc/WINDOWS_RUNBOOK.md §7):
 #   node_modules/.remotion/chrome-headless-shell/win64/chrome-headless-shell-win64/  (Chrome for Testing)
 #   node_modules/@remotion/compositor-win32-x64-msvc/                                (npm pack of the pinned version)
-#   resources/bin/ffmpeg.exe, ffprobe.exe (+ DLLs)                                   (LGPL build, ADR-019)
+#   resources/bin-win32-x64/ (or resources/bin/) ffmpeg.exe, ffprobe.exe (+ DLLs)    (LGPL build, ADR-019)
 #   EM_RELEASE_PRIVATE_KEY_PEM_FILE  path to the Ed25519 release key (PEM, never in the repo)
 #   EM_ENGINE_PUBLIC_KEY_B64         matching public key (SPKI DER, base64)
 # Usage: EM_RELEASE_PRIVATE_KEY_PEM_FILE=... EM_ENGINE_PUBLIC_KEY_B64=... bash scripts/cross-build-win.sh
@@ -22,9 +22,9 @@ node scripts/release-check.mjs --allow-placeholders
 npm run build -w @expertmotion/ui                       # Editor (dist/ui is staged as-is)
 npm run build:release -w @expertmotion/service         # prompts → dist/assets.enc (half A in service, half B for main)
 npm run build:main -w @expertmotion/desktop             # embeds the integrity public key and prompt key half B
-node scripts/prepare-engines.mjs                         # whisper.cpp, sherpa-onnx, stable-diffusion.cpp (pinned, cached)
-node scripts/stage-desktop.mjs --platform=win32 --check
-node scripts/stage-desktop.mjs --platform=win32
+node scripts/prepare-engines.mjs --platform=win32 --arch=x64   # → resources/engines-win32-x64 (whisper.cpp, sherpa-onnx, sd.cpp; pinned, cached)
+node scripts/stage-desktop.mjs --platform=win32 --arch=x64 --check
+node scripts/stage-desktop.mjs --platform=win32 --arch=x64
 EM_OBFUSCATE_MAX_BYTES="${EM_OBFUSCATE_MAX_BYTES:-2500000}" node apps/desktop/scripts/harden.mjs   # bytecode steps are skipped off Windows
 cd apps/desktop
 # Portable ZIP: the NSIS target needs wine on Linux (uninstaller generation), so the installer is built on Windows.

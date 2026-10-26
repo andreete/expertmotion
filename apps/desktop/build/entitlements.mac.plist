@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Expertmotion macOS entitlements (hardened runtime; DEPLOYMENT_AND_PACKAGING §17.4). Main app and Electron helpers.
+  allow-jit / allow-unsigned-executable-memory: V8 (Electron, the Local Service utility process, Chrome Headless Shell).
+  disable-library-validation: the Engine Binaries and the compositor load their own dylibs (libonnxruntime, libstable-diffusion,
+  libav*); they are re-signed with the same Developer ID, but library validation would also refuse a dylib signed by upstream.
+  No network-server, camera, microphone or file-access entitlements: the app is not sandboxed (Mac App Store is out of scope).
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict>
+</plist>

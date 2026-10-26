@@ -4,6 +4,8 @@
 //   build/tray.png          32×32 tray icon
 //   build/icon.ico          app / installer icon: PNG-in-ICO with 16, 24, 32, 48 and 256 px entries
 //   build/expertmotion-mark.svg   the same design as SVG (the Editor header logo, its favicon and the admin header copy it)
+//   build/icons/<n>x<n>.png  Linux icon set (16 … 512 px; electron-builder `linux.icon`, desktop entry and AppImage)
+//   build/icon.png           1024 px macOS icon source (electron-builder `mac.icon` converts it to .icns on the Mac)
 // No image dependency: shapes are rasterised procedurally (signed-distance tests, 8×8 / 4×4 supersampling) and encoded
 // with a minimal RGBA PNG writer over node:zlib. Run once (`node apps/desktop/scripts/make-tray-icon.mjs`); outputs are committed.
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -80,6 +82,9 @@ export function rasterise(N) {
   return rows;
 }
 
+/** Linux icon sizes (freedesktop hicolor theme sizes up to 512). */
+export const LINUX_ICON_SIZES = [16, 32, 48, 64, 128, 256, 512];
+
 // ---- PNG / ICO -------------------------------------------------------------------------------------------------
 const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let i = 0; i < 8; i++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc = (b) => { let c = 0xffffffff; for (const v of b) c = crcTable[(c ^ v) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
@@ -109,10 +114,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   writeFileSync(join(build, 'tray.png'), png(32));
   writeFileSync(join(build, 'icon.ico'), ico([16, 24, 32, 48, 256]));
   writeFileSync(join(build, 'expertmotion-mark.svg'), markSvg());
+  mkdirSync(join(build, 'icons'), { recursive: true });
+  for (const n of LINUX_ICON_SIZES) writeFileSync(join(build, 'icons', `${n}x${n}.png`), png(n));
+  writeFileSync(join(build, 'icon.png'), png(1024));
   if (process.argv.includes('--previews')) {                                  // optional size previews for a visual check
     const out = process.argv[process.argv.indexOf('--previews') + 1];
     mkdirSync(out, { recursive: true });
     for (const n of [16, 24, 32, 48, 256]) writeFileSync(join(out, `mark-${n}.png`), png(n));
   }
-  console.log(`wrote ${build}/tray.png, icon.ico and expertmotion-mark.svg`);
+  console.log(`wrote ${build}/tray.png, icon.ico, expertmotion-mark.svg, icons/{${LINUX_ICON_SIZES.join(',')}} and icon.png (1024)`);
 }

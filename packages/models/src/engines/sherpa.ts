@@ -137,7 +137,7 @@ export async function synthesize(input: TtsInput, ctx: EngineContext): Promise<T
   const report = reporter(ctx);
   const chunks = splitTtsText(text, input.chunkChars ?? TTS_CHUNK_CHARS).filter(speakable);
   const outPath = jobFile(ctx, 'out.wav');
-  const env = buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}) });
+  const env = buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}), ...(ctx.platform ? { platform: ctx.platform } : {}) });
   const parts: string[] = [];
   report(0);
   for (const [i, chunk] of chunks.entries()) {

@@ -110,6 +110,9 @@ describe('redact', () => {
       ['open C:\\Users\\andre\\AppData\\Roaming\\Expertmotion', 'andre', 'C:\\Users\\%USER%\\AppData'],
       [JSON.stringify({ p: 'C:\\Users\\Budi Santoso\\Videos\\a.mp4' }), 'Budi', 'C:\\\\Users\\\\%USER%\\\\Videos'],
       ['c:/users/siti/x.mp4', 'siti', 'c:/users/%USER%/x.mp4'],
+      ['open /home/budi/.config/Expertmotion/logs', 'budi', '/home/%USER%/.config/Expertmotion'],
+      [JSON.stringify({ p: '/home/siti/Videos/a.mp4' }), 'siti', '"/home/%USER%'],
+      ['src=/Users/andre/Movies/a.mov', 'andre', '/Users/%USER%/Movies'],
       ['key sk-12345678', 'sk-12345678', '[REDACTED]'],
     ];
     for (const [line, secret, expected] of cases) {
@@ -119,7 +122,7 @@ describe('redact', () => {
     }
   });
   it('SEC-100: leaves ordinary text alone', () => {
-    for (const s of ['task-runner-abcdefgh started', 'risk-assessment-document', 'render 1080p done in 12 s', 'D:\\Media\\clip.mp4', 'key: short']) expect(redact(s)).toBe(s);
+    for (const s of ['task-runner-abcdefgh started', 'risk-assessment-document', 'render 1080p done in 12 s', 'D:\\Media\\clip.mp4', 'key: short', '/opt/Expertmotion/resources/engines', 'GET /api/v1/home/feed']) expect(redact(s)).toBe(s);
   });
 });
 

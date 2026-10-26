@@ -30,10 +30,15 @@ function sha256(file: string): Promise<string> {
   });
 }
 
+/**
+ * Extension-less executables of Linux and macOS (DEPLOYMENT_AND_PACKAGING §17): Chrome Headless Shell and its crash handler, the
+ * compositor, FFmpeg/ffprobe and the Generator Engine Binaries. Versioned shared objects (`libwhisper.so.1`) match the `.so` rule.
+ */
+const ENGINE_EXECUTABLE_NAMES = /^(chrome-headless-shell|chrome_crashpad_handler|remotion|ffmpeg|ffprobe|whisper-cli|sherpa-onnx-offline-tts|sd-cli|python3?)$/;
 /** SEC-061: executables under engine/chrome and engine/compositor (same rule as apps/desktop/src/lib/integrity.ts). */
 export function isEngineExecutable(file: string): boolean {
   const name = file.split(/[\\/]/).pop() ?? '';
-  return /\.(exe|dll|node|so|dylib)$/i.test(name) || /^(chrome-headless-shell|remotion|ffmpeg|ffprobe)$/.test(name);
+  return /\.(exe|dll|node|dylib)$/i.test(name) || /\.so(\.\d+)*$/.test(name) || ENGINE_EXECUTABLE_NAMES.test(name);
 }
 const checkedByEngineCheck = (p: string): boolean => p.startsWith('engine/bundle/') || ((p.startsWith('engine/chrome/') || p.startsWith('engine/compositor/')) && isEngineExecutable(p));
 

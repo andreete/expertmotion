@@ -21,10 +21,16 @@ export class ToolError extends Error {
   constructor(readonly reason: 'spawn' | 'exit' | 'timeout' | 'cancelled', message: string, readonly code: number | null = null, readonly stderrTail: string[] = []) { super(message); this.name = 'ToolError'; }
 }
 
-/** SEC-065 minimal environment: PATH reduced to the binary's own folder (or the parent PATH in development when the binary is a bare name). */
-export function toolEnv(exe: string, tmp?: string): Record<string, string> {
-  const env: Record<string, string> = { PATH: path.isAbsolute(exe) ? path.dirname(exe) : (process.env['PATH'] ?? '') };
-  for (const k of ['SYSTEMROOT', 'LANG']) { const v = process.env[k]; if (v) env[k] = v; }
+/**
+ * SEC-065 minimal environment: PATH reduced to the binary's own folder (or the parent PATH in development when the binary is a bare
+ * name). Windows keeps SYSTEMROOT; Linux gets LD_LIBRARY_PATH = the binary's folder (a shared-library FFmpeg build next to it), never
+ * the parent's; macOS gets no DYLD_* (LC_RPATH, hardened runtime). DEPLOYMENT_AND_PACKAGING §17.
+ */
+export function toolEnv(exe: string, tmp?: string, platform: NodeJS.Platform = process.platform, parent: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {
+  const abs = path.isAbsolute(exe);
+  const env: Record<string, string> = { PATH: abs ? path.dirname(exe) : (parent['PATH'] ?? '') };
+  for (const k of platform === 'win32' ? ['SYSTEMROOT', 'LANG'] : ['LANG']) { const v = parent[k]; if (v) env[k] = v; }
+  if (platform === 'linux' && abs) env['LD_LIBRARY_PATH'] = path.dirname(exe);
   if (tmp) { env['TEMP'] = tmp; env['TMP'] = tmp; env['TMPDIR'] = tmp; }
   return env;
 }

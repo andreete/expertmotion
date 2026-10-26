@@ -31,9 +31,25 @@ const WHISPER_JSON = JSON.stringify({
 
 describe('process sandbox (SEC-060…065)', () => {
   it('buildChildEnv keeps only the allow-listed keys', () => {
-    const env = buildChildEnv({ engineDir, jobDir, parentEnv: PARENT_ENV });
+    const env = buildChildEnv({ engineDir, jobDir, parentEnv: PARENT_ENV, platform: 'win32' });
     expect(env).toEqual({ SYSTEMROOT: 'C:\\Windows', TEMP: jobDir, TMP: jobDir, PATH: engineDir, NO_PROXY: '*', HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', LANG: 'id_ID.UTF-8' });
-    expect(buildChildEnv({ engineDir, jobDir, parentEnv: {} })).not.toHaveProperty('SYSTEMROOT');
+    expect(buildChildEnv({ engineDir, jobDir, parentEnv: {}, platform: 'win32' })).not.toHaveProperty('SYSTEMROOT');
+  });
+  it('buildChildEnv per platform: LD_LIBRARY_PATH on Linux, no DYLD_* on macOS, no SYSTEMROOT off Windows (DEPLOYMENT §17)', () => {
+    const base = { TEMP: jobDir, TMP: jobDir, TMPDIR: jobDir, PATH: engineDir, NO_PROXY: '*', HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', LANG: 'id_ID.UTF-8' };
+    expect(buildChildEnv({ engineDir, jobDir, parentEnv: PARENT_ENV, platform: 'linux' })).toEqual({ ...base, LD_LIBRARY_PATH: engineDir });
+    const mac = buildChildEnv({ engineDir, jobDir, parentEnv: { ...PARENT_ENV, DYLD_LIBRARY_PATH: '/evil', DYLD_INSERT_LIBRARIES: '/evil.dylib', LD_LIBRARY_PATH: '/evil' }, platform: 'darwin' });
+    expect(mac).toEqual(base);
+    // the parent's own loader paths never leak into an engine (a planted library on the Creator's machine)
+    expect(buildChildEnv({ engineDir, jobDir, parentEnv: { LD_LIBRARY_PATH: '/home/x/lib', LD_PRELOAD: '/x.so' }, platform: 'linux' }).LD_LIBRARY_PATH).toBe(engineDir);
+    expect(buildChildEnv({ engineDir, jobDir, parentEnv: { LD_PRELOAD: '/x.so' }, platform: 'linux' })).not.toHaveProperty('LD_PRELOAD');
+  });
+  it('engine adapters pass the platform through: a Linux sherpa run gets LD_LIBRARY_PATH = its engine folder', async () => {
+    const f = fakeSpawn(({ child, args }) => { const o = args.find((a) => a.startsWith('--output-filename='))!.slice('--output-filename='.length); void writeFile(o, makeWav(100)).then(() => child.exit(0)); });
+    await synthesize({ voice: { kind: 'vits', modelPath: '/m/v.onnx', tokensPath: '/m/tokens.txt' }, text: 'Halo', threads: 1 }, ctx(f.spawn, { platform: 'linux' }));
+    expect(f.calls[0]!.command).toBe(join(engineDir, 'sherpa-onnx-offline-tts'));
+    expect(f.calls[0]!.options.env.LD_LIBRARY_PATH).toBe(engineDir);
+    expect(f.calls[0]!.options.env.TMPDIR).toBe(jobDir);
   });
   it('threads, timeouts, helpers', () => {
     expect(defaultThreads(2)).toBe(1); expect(defaultThreads(6)).toBe(4); expect(defaultThreads(32)).toBe(8);

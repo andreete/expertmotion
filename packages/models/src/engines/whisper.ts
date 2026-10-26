@@ -72,7 +72,7 @@ export async function transcribe(input: TranscribeInput, ctx: EngineContext): Pr
   await runProcess({
     engine: 'whisper.cpp', exe: join(ctx.engineDir, exeName('whisper-cli', ctx.platform)),
     args: whisperArgs({ modelPath: input.modelPath, wavPath, language: input.language, threads, outBase }),
-    cwd: ctx.jobDir, env: buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}) }),
+    cwd: ctx.jobDir, env: buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}), ...(ctx.platform ? { platform: ctx.platform } : {}) }),
     timeoutMs: ctx.timeoutMs ?? ENGINE_TIMEOUTS.captions(input.audioDurationMs),
     onStderrLine: onLine, onStdoutLine: onLine,
     ...(ctx.signal ? { signal: ctx.signal } : {}), ...(ctx.spawn ? { spawn: ctx.spawn } : {}), ...(ctx.killTree ? { killTree: ctx.killTree } : {}),

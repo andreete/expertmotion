@@ -28,7 +28,17 @@ export interface AssetsOptions {
   /** Folders imports may come from (TR-081: user profile, removable drives, drop sources). Default: home + EM_IMPORT_ROOTS. */
   importRoots?: () => string[];
 }
-const defaultRoots = (): string[] => [os.homedir(), ...(process.env['EM_IMPORT_ROOTS'] ?? '').split(path.delimiter).filter(Boolean)];
+/**
+ * Mount points of removable media per platform (TR-081): Linux udisks2 mounts USB drives and SD cards under /media/<user> (Ubuntu,
+ * Debian) or /run/media/<user> (Fedora, Arch); macOS under /Volumes. Windows drive letters are not listed here (unchanged).
+ */
+export function removableMediaRoots(platform: NodeJS.Platform = process.platform, user: string = safeUser()): string[] {
+  if (platform === 'linux') return user ? [`/media/${user}`, `/run/media/${user}`] : [];
+  if (platform === 'darwin') return ['/Volumes'];
+  return [];
+}
+function safeUser(): string { try { return os.userInfo().username; } catch { return ''; } }
+const defaultRoots = (): string[] => [os.homedir(), ...removableMediaRoots(), ...(process.env['EM_IMPORT_ROOTS'] ?? '').split(path.delimiter).filter(Boolean)];
 
 /** Canonical path inside an allowed root, else EM-1007 (403). UNC/device paths refused; traversal neutralised by realpath. */
 export function canonicalImportPath(p: string, roots: readonly string[]): string {
