@@ -51,6 +51,25 @@ export function splitTtsText(text: string, max = TTS_CHUNK_CHARS): string[] {
   return chunks;
 }
 
+const TYPOGRAPHY: ReadonlyArray<readonly [RegExp, string]> = [
+  [/[\u2018\u2019\u201A\u201B\u2032]/g, "'"], [/[\u201C\u201D\u201E\u201F\u2033]/g, '"'], [/[\u2010-\u2015\u2212]/g, '-'],
+  [/\u2026/g, '...'], [/[\u00A0\u2007\u202F\u200B]/g, ' '],
+];
+/**
+ * Text as it is handed to sherpa-onnx on the command line. Typographic quotes, dashes and the ellipsis become ASCII. On Windows the
+ * engine reads its arguments through the ANSI code page (sherpa-onnx-offline-tts.exe has a narrow `main` and no UTF-8
+ * activeCodePage manifest), so anything outside printable ASCII would reach espeak-ng as invalid UTF-8: diacritics are folded
+ * (é → e) and other characters become spaces. Indonesian and English text is ASCII apart from these.
+ */
+export function ttsArgText(text: string, platform: NodeJS.Platform = process.platform): string {
+  let s = text;
+  for (const [re, to] of TYPOGRAPHY) s = s.replace(re, to);
+  if (platform === 'win32') s = s.normalize('NFKD').replace(/\p{M}+/gu, '').replace(/[^\x20-\x7E\n]/g, ' ');
+  return s.replace(/[ \t]+/g, ' ').trim();
+}
+/** A chunk with no letter or digit (e.g. "..." alone) yields no audio in sherpa-onnx; such chunks are skipped. */
+const speakable = (chunk: string): boolean => /[\p{L}\p{N}]/u.test(chunk);
+
 export function sherpaTtsArgs(voice: TtsVoice, opts: { engineDir: string; threads: number; outPath: string; text: string; speed?: number }): string[] {
   const dataDir = voice.dataDir ?? join(opts.engineDir, 'espeak-ng-data');
   const scale = opts.speed !== undefined && opts.speed !== 1 ? (1 / opts.speed).toFixed(3) : null;
@@ -108,14 +127,15 @@ export function concatWavs(wavs: readonly Uint8Array[], silenceMs = TTS_CHUNK_SI
 
 /** One sherpa-onnx process per chunk (60 s timeout each), then `<jobDir>/out.wav`. EM-7106 > 2 000 chars; EM-9002 empty. */
 export async function synthesize(input: TtsInput, ctx: EngineContext): Promise<TtsResult> {
-  const text = input.text.trim();
-  if (text === '') throw emError('EM-9002', 'Text is empty', { tool: 'tts.generate' });
-  if ([...text].length > TTS_MAX_CHARS) throw emError('EM-7106', 'Text too long', { chars: [...text].length, limit: TTS_MAX_CHARS });
+  const text = ttsArgText(input.text, ctx.platform);
+  if (text === '' || !speakable(text)) throw emError('EM-9002', 'Text is empty', { tool: 'tts.generate' });
+  const chars = [...input.text.trim()].length;
+  if (chars > TTS_MAX_CHARS) throw emError('EM-7106', 'Text too long', { chars, limit: TTS_MAX_CHARS });
   if (input.speed !== undefined && !(input.speed >= 0.8 && input.speed <= 1.2)) throw emError('EM-9002', 'speed must be 0.8..1.2', { speed: input.speed });
   assertAbsolute(input.voice.modelPath, 'voice model'); assertAbsolute(input.voice.tokensPath, 'voice tokens');
   const fs = ctx.fs ?? nodeFs;
   const report = reporter(ctx);
-  const chunks = splitTtsText(text, input.chunkChars ?? TTS_CHUNK_CHARS);
+  const chunks = splitTtsText(text, input.chunkChars ?? TTS_CHUNK_CHARS).filter(speakable);
   const outPath = jobFile(ctx, 'out.wav');
   const env = buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}) });
   const parts: string[] = [];

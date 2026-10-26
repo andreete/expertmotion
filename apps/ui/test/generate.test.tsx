@@ -81,4 +81,23 @@ describe('generator Insert', () => {
     await waitFor(() => { if (!g2.mock.calls.length) throw new Error('not sent'); });
     expect(g2.mock.calls[0]![2]).toMatchObject({ source: 'asset', assetId: src.options[1]!.value });
   });
+
+  it('QA 14: the thumbnail picker shows and selects "Thumbnail from a Frame" when no image model is installed; a not-installed model blocks Generate', { timeout: 20_000 }, async () => {
+    await renderEditor('sample');
+    await act(async () => { fireEvent.click(el('hdr.menu.tools')!); });
+    await act(async () => { fireEvent.click(el('lib.generator.card.thumbnail')!); });
+    await waitFor(() => { if (!el('scr.generate.thumbnail')) throw new Error('no sheet'); });
+    const pick = await waitFor(() => { const s = document.getElementById('em-gen-model') as HTMLSelectElement | null; if (!s || s.value !== 'frame-composite') throw new Error(`picker ${s?.value}`); return s; });
+    expect(pick.selectedOptions[0]!.textContent).toBe('Thumbnail from a Frame');
+    expect(el('scr.generate.thumbnail.prompt')).toBeNull();                           // no diffusion prompt for a frame still
+    cleanup();
+    await renderEditor('sample');
+    await act(async () => { fireEvent.click(el('hdr.menu.tools')!); });
+    await act(async () => { fireEvent.click(el('lib.generator.card.voice')!); });
+    await waitFor(() => { if (!el('scr.generate.voice')) throw new Error('no sheet'); });
+    fireEvent.change(el('scr.generate.voice.input')!, { target: { value: 'Halo' } });
+    const run = el('scr.generate.voice.run')!;
+    expect(run.getAttribute('aria-disabled')).toBe('true');
+    expect(run.getAttribute('title')).toBe('Install the model first');
+  });
 });

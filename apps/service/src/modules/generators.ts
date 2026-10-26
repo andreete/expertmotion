@@ -14,7 +14,7 @@ const BODIES: Record<GeneratorKind, z.ZodType<Record<string, unknown>>> = {
   music: z.object({ prompt: z.string().min(1).max(300), durationMs: z.number().int().min(5000).max(300_000), style: z.string().max(100).optional(), instrumental: z.boolean().optional(), language: Lang.optional(),
     modelKey: z.string().max(64).optional(), ...insert }),
   thumbnail: z.object({ frameMs: z.number().int().min(0).optional(), titleText: z.string().max(500).optional(), prompt: z.string().min(1).max(1000).optional(), count: z.number().int().min(1).max(4).optional(),
-    style: z.enum(THUMBNAIL_STYLES).optional(), language: Lang.optional(), size: z.object({ w: z.number().int().min(256).max(2048), h: z.number().int().min(256).max(2048) }).optional() }),
+    style: z.enum(THUMBNAIL_STYLES).optional(), language: Lang.optional(), modelKey: z.string().max(64).optional(), size: z.object({ w: z.number().int().min(256).max(2048), h: z.number().int().min(256).max(2048) }).optional() }),
   hashtags: z.object({ language: Lang, platform: z.enum(['tiktok', 'instagram', 'youtube']), tone: z.enum(HASHTAG_TONES).optional(), count: z.number().int().min(5).max(30) }),
 };
 

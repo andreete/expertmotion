@@ -9,15 +9,16 @@ import path from 'node:path';
 import { applyOperations, deriveTiming, type CompositionModelT, type GeneratedResult, type OperationT } from '@expertmotion/composition-model';
 import { compileDefaults } from '@expertmotion/catalogue';
 import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
-import { JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, removeJobDir, synthesize, transcribeToPages,
+import { CancelledError, JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, preparePiperVoice, removeJobDir, synthesize, transcribeToPages,
   displayNameOf, type JobContext, type JobEvent, type ModelDef } from '@expertmotion/models';
 import type { ServiceContext } from '../context.js';
 import { em, emit } from './common.js';
 import { getAsset, listAssets, toFacts } from './assets-repo.js';
 import { ingestOf, inspectSource } from './ingest.js';
 import { modelsServiceOf } from './models-service.js';
-import { runTool } from './proc.js';
+import { ToolError, getEngineLog, runTool } from './proc.js';
 import { defaultRemotionPort, type RendererLike } from './render-service.js';
+import { engineBrowserOf, type BrowserLike } from '../services/engine-browser.js';
 import { getOutput, outputRelPath, toOutputDto } from './render-repo.js';
 import { s2, useModel } from './state.js';
 import { assertEngineSpawnAllowed } from './spawn-gate.js';
@@ -50,6 +51,34 @@ export function shiftPages(pages: unknown[], w: { fromMs: number; toMs: number; 
   }
   return out;
 }
+/** FR-104: one place where an Asset's audio is heard on the Sequence: the element's visible window, its source trim and rate. */
+export interface AudioPlacement { elementId: string; assetId: string; fromMs: number; toMs: number; trimBeforeMs: number; playbackRate: number }
+/**
+ * Where audio plays on the Sequence: video Clips (by their derived window) and audio layers (atMs, limited to the source length
+ * after the trim unless the layer loops, and to the Sequence end). With `assetId`, every placement of that Asset (muted or not:
+ * the Creator chose it); without, the audible ones: unmuted Clips and non-bed layers with volume > 0.
+ */
+export function audioPlacements(model: CompositionModelT, sourceMs: (assetId: string) => number | null, opts: { assetId?: string } = {}): AudioPlacement[] {
+  const timing = deriveTiming(model); const out: AudioPlacement[] = [];
+  for (const c of model.tracks.video) {
+    if (opts.assetId ? c.assetId !== opts.assetId : c.muted || c.volume === 0) continue;
+    const w = timing.elementWindows[c.id]; if (!w || w.toMs <= w.fromMs) continue;
+    out.push({ elementId: c.id, assetId: c.assetId, fromMs: w.fromMs, toMs: w.toMs, trimBeforeMs: c.trimBeforeMs, playbackRate: c.playbackRate });
+  }
+  for (const a of model.tracks.audio) {
+    if (opts.assetId ? a.assetId !== opts.assetId : a.role === 'bed' || a.volume === 0) continue;
+    const w = timing.elementWindows[a.id]; if (!w) continue;
+    const src = sourceMs(a.assetId);
+    const toMs = src !== null && !a.loop ? Math.min(w.toMs, a.atMs + Math.max(0, src - a.trimBeforeMs)) : w.toMs;
+    if (toMs <= w.fromMs) continue;
+    out.push({ elementId: a.id, assetId: a.assetId, fromMs: w.fromMs, toMs, trimBeforeMs: a.trimBeforeMs, playbackRate: 1 });
+  }
+  return out.sort((x, y) => x.fromMs - y.fromMs);
+}
+/** Pages of one transcription placed at every placement of its source, in timeline order (FR-104). */
+export function placePages(pages: unknown[], placements: readonly AudioPlacement[]): unknown[] {
+  return placements.flatMap((pl) => shiftPages(pages, pl)).sort((a, b) => (a as { startMs: number }).startMs - (b as { startMs: number }).startMs);
+}
 export type GeneratorKind = (typeof GENERATOR_KINDS)[number];
 /** ADR-016 priority tag per Generator Card (FR-100). */
 export const GENERATOR_PRIORITY: Record<GeneratorKind, 'P1' | 'P2'> = { voice: 'P1', captions: 'P1', hashtags: 'P1', music: 'P2', thumbnail: 'P2' };
@@ -76,6 +105,24 @@ export interface GeneratorsOptions {
 }
 
 const threads = () => defaultThreads(os.cpus().length);
+/**
+ * SEC-101 / DEPLOYMENT §14: every Generator engine failure (non-zero exit, crash, timeout, unreadable output) goes to the engine
+ * log with the engine name, exit code and the last stderr lines (already argument-redacted by the adapters; the logger removes
+ * secrets and the Windows user name), so a QA log shows the cause without a debugger.
+ */
+export function logEngineFailure(ctx: ServiceContext, where: { jobId: string; kind: string; engine: string; stage: string }, e: unknown): void {
+  const d = (e instanceof EmError && e.details && typeof e.details === 'object' ? e.details : {}) as Record<string, unknown>;
+  const tool = e instanceof ToolError ? { reason: e.reason, exitCode: e.code, stderrTail: e.stderrTail } : {};
+  const entry = {
+    ...where, code: e instanceof EmError ? e.code : 'EM-7101', message: (e instanceof Error ? e.message : String(e)).slice(0, 500),
+    ...(d['engine'] !== undefined ? { binary: d['engine'] } : {}), ...(d['cause'] !== undefined ? { cause: d['cause'] } : {}),
+    ...(d['exitCode'] !== undefined ? { exitCode: d['exitCode'] } : {}), ...(d['signal'] ? { signal: d['signal'] } : {}), ...(d['timeoutMs'] !== undefined ? { timeoutMs: d['timeoutMs'] } : {}),
+    ...(Array.isArray(d['stderrTail']) ? { stderrTail: (d['stderrTail'] as unknown[]).slice(-20).map((l) => String(l).slice(0, 400)) } : {}),
+    ...(typeof d['message'] === 'string' ? { detail: d['message'].slice(0, 2000) } : {}), ...tool,
+  };
+  getEngineLog()?.error(entry, 'generator engine failed');
+  ctx.log.warn({ jobId: where.jobId, kind: where.kind, engine: where.engine, code: entry.code, exitCode: entry.exitCode ?? null }, 'generator engine failed');
+}
 const firstWith = (dir: string, re: RegExp): string => { const f = fs.readdirSync(dir).find((n) => re.test(n)); if (!f) throw em('EM-7108', 'The installed model file is damaged.'); return path.join(dir, f); };
 function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
   const ectx = (c: EngineStepCtx) => ({ engineDir: c.engineDir, jobDir: c.jobDir, signal: c.signal, onProgress: c.onProgress });
@@ -88,7 +135,8 @@ function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
       const voice = kokoro
         ? { kind: 'kokoro' as const, modelPath: path.join(i.modelDir, 'model.onnx'), voicesPath: path.join(i.modelDir, 'voices.bin'), tokensPath: path.join(i.modelDir, 'tokens.txt'),
             ...(fs.existsSync(lexicon) ? { lexiconPath: lexicon } : {}) }
-        : { kind: 'vits' as const, modelPath: firstWith(i.modelDir, /\.onnx$/), tokensPath: path.join(i.modelDir, 'tokens.txt') };
+        // Piper: sherpa-onnx needs tokens.txt and the voice metadata inside the .onnx (prepared once; repairs older installs)
+        : { kind: 'vits' as const, ...(await preparePiperVoice(i.modelDir).then(({ modelPath, tokensPath }) => ({ modelPath, tokensPath }))) };
       return synthesize({ voice, text: i.text, threads: threads(), ...(i.speed !== undefined ? { speed: i.speed } : {}) }, ectx(c));
     },
     music: async (i, c) => {
@@ -108,19 +156,36 @@ function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
       const port = await defaultRemotionPort(ctx);
       const origins = [`http://localhost:${port}`, `http://127.0.0.1:${port}`];
       for (const o of origins) ctx.mediaOrigins.add(o);
+      let warm: BrowserLike | null = null; let ok = false;
       try {
         const base = `http://127.0.0.1:${ctx.cfg.port}/media/${grant.token}`;
         const assets: Record<string, unknown> = {};
-        for (const id of i.assetIds) { const a = getAsset(ctx, id); if (a) assets[id] = { kind: a.kind === 'subtitle' ? 'image' : a.kind, playable: `${base}/${id}/playable`, ...(a.duration_ms !== null ? { durationMs: a.duration_ms } : {}) }; }
+        // the same asset facts and Engine options as an Export still (render-service), so a thumbnail renders whatever exports
+        for (const id of i.assetIds) {
+          const a = getAsset(ctx, id); if (!a) continue;
+          assets[id] = { kind: a.kind === 'subtitle' ? 'image' : a.kind, playable: `${base}/${id}/playable`, ...(a.proxy_path ? { proxy: `${base}/${id}/proxy` } : {}),
+            ...(a.duration_ms !== null ? { durationMs: a.duration_ms } : {}), ...(a.width !== null ? { width: a.width } : {}), ...(a.height !== null ? { height: a.height } : {}), hasAudio: a.has_audio === 1 };
+        }
         const { cancelSignal, cancel } = R.makeCancelSignal();
         c.signal.addEventListener('abort', () => cancel(), { once: true });
-        const common = { serveUrl: ctx.resources.engineBundle, inputProps: { model: i.model, assets, quality: 'full' }, port, logLevel: 'error',
+        const common: Record<string, unknown> = { serveUrl: ctx.resources.engineBundle, inputProps: { model: i.model, assets, quality: 'full' }, port, logLevel: 'error', timeoutInMilliseconds: 60_000,
           chromiumOptions: { gl: ctx.hooks.tier() === 'T0' ? 'swangle' : 'angle' }, ...(ctx.resources.browserExecutable ? { browserExecutable: ctx.resources.browserExecutable } : {}),
           ...(ctx.resources.binariesDirectory ? { binariesDirectory: ctx.resources.binariesDirectory } : {}) };
+        // borrow the warmed Engine browser like renders do: no second Chrome on an 8 GB PC (NFR memory budget)
+        warm = opts.renderer ? null : await (engineBrowserOf(ctx)?.acquire() ?? Promise.resolve(null));
+        if (warm) common['puppeteerInstance'] = warm;
         const composition = await R.selectComposition({ ...common, id: 'ExpertmotionTimeline' });
         const frame = Math.max(0, Math.min(composition.durationInFrames - 1, Math.round((i.frameMs / 1000) * composition.fps)));
         await R.renderStill({ ...common, composition, frame, output: i.outPath, imageFormat: 'png', cancelSignal });
-      } finally { for (const o of origins) ctx.mediaOrigins.delete(o); ctx.grants.revokeJob(c.jobId); }
+        ok = true;
+      } catch (e) {
+        if (c.signal.aborted) throw new CancelledError();
+        // a still that cannot be rendered is a thumbnail failure with the Engine's own message in the engine log (EM-7101 {tool})
+        throw new EmError('EM-7101', 'The thumbnail frame could not be rendered.', { details: { engine: 'remotion', cause: 'still', message: (e instanceof Error ? e.message : String(e)).slice(0, 2000) }, cause: e });
+      } finally {
+        if (warm) engineBrowserOf(ctx)?.release(ok);
+        for (const o of origins) ctx.mediaOrigins.delete(o); ctx.grants.revokeJob(c.jobId);
+      }
     },
   };
 }
@@ -173,9 +238,12 @@ export class GeneratorsService {
       const list = await Promise.all(models.defs().filter((d) => MODEL_TASKS[kind].includes(d.task)).map(async (d) => ({
         key: d.key, label: d.label, displayName: displayNameOf(d), bytes: d.bytes, installed: await models.isInstalled(d.key), languages: d.languages, minTier: d.minTier, belowTier: TIER_RANK[tier] < TIER_RANK[d.minTier],
         cc0: d.engine === 'loops' })));
-      const def = list.find((m) => m.key === defKey) ?? null;
-      // frame-composite (T0 thumbnails) needs no model: a still of the current frame plus the title (LOCAL_AI_MODELS §5)
-      const model = def ?? (defKey === 'frame-composite' ? { key: defKey, label: 'Frame + title', displayName: displayNameOf({ key: defKey, label: 'Frame + title' }), bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: false } : null);
+      // frame-composite (thumbnails) needs no model: a still of the current frame plus the title (LOCAL_AI_MODELS §5). It is always
+      // one of the options, so the sheet's model picker can show and select it (QA 14: it showed an uninstalled image model instead)
+      if (kind === 'thumbnail') list.push({ key: 'frame-composite', label: 'Frame + title', displayName: displayNameOf({ key: 'frame-composite', label: 'Frame + title' }), bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: false });
+      let model = list.find((m) => m.key === defKey) ?? null;
+      // a thumbnail never waits for a download: when the tier's image model is not installed, the frame still is the default
+      if (kind === 'thumbnail' && (!model || !model.installed)) model = list.find((m) => m.key === 'frame-composite')!;
       out.push({ ...base, model, models: list, llm: false, tierHint: model?.belowTier ? 'slow' : 'ok', tier });
     }
     return out;
@@ -302,7 +370,12 @@ export class GeneratorsService {
       if (j.signal.aborted) throw new EmError('EM-7101', 'cancelled');
       await assertEngineSpawnAllowed(this.ctx, engine, this.engineDir(engine));   // SEC-066 Private Mode / network need, SEC-061 hashes
       j.progress(0.05, stage);
-      return fn({ engineDir: this.engineDir(engine), jobDir: path.join(this.ctx.paths.tmp, 'jobs', j.jobId), signal: j.signal, onProgress: (f) => j.progress(0.05 + f * 0.8, stage) });
+      try {
+        return await fn({ engineDir: this.engineDir(engine), jobDir: path.join(this.ctx.paths.tmp, 'jobs', j.jobId), signal: j.signal, onProgress: (f) => j.progress(0.05 + f * 0.8, stage) });
+      } catch (e) {
+        if (!j.signal.aborted && !(e instanceof CancelledError)) logEngineFailure(this.ctx, { jobId: j.jobId, kind: this.get(j.jobId)?.kind ?? 'unknown', engine, stage }, e);
+        throw e;
+      }
     });
   }
   /** Copies an engine output into the project as an Asset (ingest pipeline) and waits for it. */
@@ -325,10 +398,11 @@ export class GeneratorsService {
     const ctx = this.ctx; const models = modelsServiceOf(ctx);
     const head = ctx.hooks.composition(projectId).model;
     const timing = deriveTiming(head);
-    const segs = head.tracks.video.flatMap((c) => {
-      const a = getAsset(ctx, c.assetId, projectId); const w = timing.elementWindows[c.id];
-      if (!a || !w || a.kind !== 'video' || a.status !== 'ready' || a.has_audio !== 1 || c.muted) return [];
-      return [{ src: path.resolve(ctx.paths.media, a.playable_path ?? a.original_path), trimBeforeMs: c.trimBeforeMs, playbackRate: c.playbackRate, fromMs: w.fromMs, toMs: w.toMs }];
+    // video Clips and audio layers (e.g. a voice-over placed later on the timeline), each at its own window
+    const segs = audioPlacements(head, (id) => getAsset(ctx, id, projectId)?.duration_ms ?? null).flatMap((pl) => {
+      const a = getAsset(ctx, pl.assetId, projectId);
+      if (!a || (a.kind !== 'video' && a.kind !== 'audio') || a.status !== 'ready' || a.has_audio !== 1) return [];
+      return [{ ...pl, src: path.resolve(ctx.paths.media, a.playable_path ?? a.original_path) }];
     });
     if (!segs.length) throw em('EM-7103', 'The Sequence has no audio to transcribe.', { details: { tool: 'captions.generate', reason: 'no-audio' } });
     if (timing.durationMs > 1_800_000) throw em('EM-1011', 'This Sequence is longer than 30 minutes.', { details: { reason: 'duration' } });
@@ -348,6 +422,7 @@ export class GeneratorsService {
         // the extracted segment starts at the clip's trim point: page times are relative to it
         pages.push(...shiftPages(r.pages, { fromMs: sg.fromMs, toMs: sg.toMs, trimBeforeMs: 0, playbackRate: sg.playbackRate }));
       }
+      pages.sort((a, b) => (a as { startMs: number }).startMs - (b as { startMs: number }).startMs);
       return { result: { pages, language: detected, modelId: def.key, durationMs: timing.durationMs, source: 'sequence' }, ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT] };
     }) };
   }
@@ -373,7 +448,12 @@ export class GeneratorsService {
           cwd: path.dirname(wav), timeoutMs: Math.max(60_000, asset.duration_ms ?? 0), signal: j.signal }));
         const modelPath = firstWith(models.dirOf(def), /\.bin$/);
         const r = await this.engineStep(j, 'whisper.cpp', 'transcribe', (c) => this.engines.captions({ modelPath, wavPath: wav, language: String(lang ?? 'id'), audioDurationMs: asset.duration_ms ?? 0 }, c));
-        return { result: { pages: r.pages, language: r.language, modelId: def.key, durationMs: asset.duration_ms }, ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages: r.pages } }] };
+        // FR-104: page times are source times; move them to where this Asset is heard on the Sequence (its Clip / audio layer
+        // start minus its trim, over its playback rate, limited to its visible window). An Asset not on the timeline keeps them.
+        let placements: AudioPlacement[] = [];
+        try { placements = audioPlacements(ctx.hooks.composition(projectId).model, (id) => getAsset(ctx, id, projectId)?.duration_ms ?? null, { assetId: asset.id }); } catch { /* no head yet */ }
+        const pages = placements.length ? placePages(r.pages, placements) : r.pages;
+        return { result: { pages, language: r.language, modelId: def.key, durationMs: asset.duration_ms, placements: placements.length }, ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } }] };
       }) };
     }
     if (kind === 'voice') {
@@ -416,19 +496,28 @@ export class GeneratorsService {
       }) };
     }
     if (kind === 'thumbnail') {
-      const prompt = typeof b['prompt'] === 'string' ? b['prompt'] : undefined;
+      const prompt = typeof b['prompt'] === 'string' && b['prompt'].trim() ? b['prompt'].trim() : undefined;
       const size = (b['size'] as { w?: number; h?: number } | undefined) ?? {};
       const count = Math.max(1, Math.min(4, typeof b['count'] === 'number' ? Math.round(b['count']) : 1));   // FR-103: 1–4 candidates
       const style = (THUMBNAIL_STYLES as readonly string[]).includes(String(b['style'])) ? b['style'] as ThumbnailStyle : 'bold';
       const title = typeof b['titleText'] === 'string' && b['titleText'].trim() ? b['titleText'].trim().slice(0, 500) : '';
       const atMs = typeof b['frameMs'] === 'number' ? b['frameMs'] : 0;
       const overlay = (assetId: string): OperationT[] => [{ op: 'op:overlay.addImage', args: { assetId, atMs } } as OperationT];
-      if (prompt) {
+      // Which path: an explicit modelKey wins ('frame-composite' = still of a frame, never sd-cli; an image model = diffusion and
+      // must be installed, EM-7001). Without one, a prompt uses the tier's image model when it is installed (else the first
+      // installed one) and falls back to the frame still, so a T0 PC without a model always gets a thumbnail.
+      const asked = typeof b['modelKey'] === 'string' ? b['modelKey'] : null;
+      if (asked !== null && asked !== 'frame-composite' && models.def(asked)?.task !== 'image') throw em('EM-9002', 'Invalid request: modelKey is not an image model.', { status: 400, path: 'body.modelKey' });
+      let imageKey: string | null = asked === 'frame-composite' ? null : asked;
+      if (asked === null && prompt) {
+        const preferred = defaultModelFor('image', tier);
+        const candidates = [preferred, ...models.defs().filter((d) => d.task === 'image' && d.availability !== 'virtual').map((d) => d.key)].filter((k) => k !== 'frame-composite');
+        for (const k of candidates) if (await models.isInstalled(k)) { imageKey = k; break; }
+      }
+      if (imageKey !== null) {
         // FR-103: style wording and the title text go into the diffusion prompt (prompt mode has no separate overlay pass)
-        const fullPrompt = [prompt, THUMB_PROMPT[style], ...(title ? [`thumbnail with the title text "${title}"`] : [])].join(', ');
-        let key = defaultModelFor('image', tier);
-        if (key === 'frame-composite') key = 'sd15-emaonly';
-        const def = await this.requireInstalled(key, 'Generate Thumbnail');
+        const fullPrompt = [prompt ?? (title || 'video thumbnail'), THUMB_PROMPT[style], ...(title ? [`thumbnail with the title text "${title}"`] : [])].join(', ');
+        const def = await this.requireInstalled(imageKey, 'Generate Thumbnail');
         return { modelKey: def.key, run: (j) => this.withJobDir(j, async () => {
           const candidates: Array<{ assetId: string; seed: number }> = [];
           for (let i = 0; i < count; i++) {

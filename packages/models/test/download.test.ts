@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EmError } from '@expertmotion/shared';
 import {
+  PIPER_SHERPA_MODEL,
   CancelledError, assertAllowedUrl, downloadFile, installModel, modelDir, modelFilePath, partPath, quickCheckInstalled, readInstallState, readManifest,
   registry, removeModel, requiredInstallBytes, sizeCap, verifyInstalled, type DownloadOptions, type ModelDef, type ReadableStreamLike,
 } from '../src/index.js';
@@ -202,7 +203,7 @@ describe('downloadFile', () => {
 });
 
 describe('installModel / verify / remove', () => {
-  const piperCfg = JSON.stringify({ audio: { sample_rate: 22050 }, phoneme_id_map: { _: [0], '^': [1], $: [2], ' ': [3], a: [14] } });
+  const piperCfg = JSON.stringify({ audio: { sample_rate: 22050 }, espeak: { voice: 'id' }, num_speakers: 1, language: { name_english: 'Indonesian' }, phoneme_id_map: { _: [0], '^': [1], $: [2], ' ': [3], a: [14] } });
   const onnx = body(6_000);
   const def = (): ModelDef => {
     const base = registry['piper-id-news-medium']!;
@@ -222,6 +223,12 @@ describe('installModel / verify / remove', () => {
     expect(m.installedAt).toBe('2026-10-24T10:00:00.000Z');
     expect(m.files.map((f) => f.name)).toEqual(['id_ID-news_tts-medium.onnx', 'id_ID-news_tts-medium.onnx.json']);
     expect(await readFile(join(modelDir(tmp.dir, def()), 'tokens.txt'), 'utf8')).toBe('_ 0\n^ 1\n$ 2\n  3\na 14\n');
+    // sherpa-onnx needs the voice metadata inside the model: a derived copy, the upstream file stays verifiable
+    const prepared = await readFile(join(modelDir(tmp.dir, def()), PIPER_SHERPA_MODEL));
+    expect(prepared.subarray(0, onnx.length).equals(Buffer.from(onnx))).toBe(true);
+    expect(prepared.length).toBeGreaterThan(onnx.length);
+    expect(prepared.subarray(onnx.length).toString('latin1')).toContain('sample_rate');
+    expect(m.sizeOnDiskBytes).toBeGreaterThan(2 * onnx.length);
     expect((await readManifest(modelDir(tmp.dir, def())))?.id).toBe('piper-id-news-medium');
     expect(events.at(-1)).toBe(onnx.length + Buffer.byteLength(piperCfg));
     expect(await quickCheckInstalled(def(), tmp.dir)).toBe(true);

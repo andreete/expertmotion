@@ -1250,7 +1250,10 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('GET', '/generators', () => {                                                                                 // R-135: the mock build enables P1 generators only
     const card = (kind: GeneratorJobDto['kind'], task: string | null, def: string | null) => {
       const list = task ? models.filter((x) => x.task === task).map((x) => ({ key: x.key, label: x.label, ...(x.displayName ? { displayName: x.displayName } : {}), bytes: x.bytesTotal, installed: x.status === 'installed', languages: [], minTier: x.tiers[0] ?? 'T0', belowTier: !x.tiers.includes(hardware.tier), cc0: false })) : [];
-      const model = list.find((x) => x.key === def) ?? list[0] ?? null;
+      // like the Service: thumbnails always offer the no-download frame still and default to it while no image model is installed
+      if (kind === 'thumbnail') list.push({ key: 'frame-composite', label: 'Frame + title', displayName: { en: 'Thumbnail from a Frame', id: 'Thumbnail dari Frame' }, bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: false });
+      const fallback = kind === 'thumbnail' ? list.find((x) => x.installed) ?? null : list[0] ?? null;
+      const model = list.find((x) => x.key === def && (kind !== 'thumbnail' || x.installed)) ?? fallback;
       return { kind, enabled: kind !== 'music' && kind !== 'thumbnail', priority: kind === 'music' || kind === 'thumbnail' ? 'P2' : 'P1', llm: kind === 'hashtags', tierHint: model?.belowTier ? 'slow' : 'ok', model, models: list, tier: hardware.tier };
     };
     return { items: [card('voice', 'tts', 'piper-id-news'), card('music', 'music', null), card('thumbnail', 'image', null), card('captions', 'stt', 'whisper-small'), card('hashtags', null, null)] };

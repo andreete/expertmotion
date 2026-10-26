@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CancelledError, ENGINE_TIMEOUTS, aceStepArgs, buildChildEnv, concatWavs, createJobDir, defaultKillTree, defaultThreads, exeName, generateImage, generateMusic,
   isInside, jobDirPath, lastLines, parseMusicProgress, parseSdProgress, parseWav, parseWhisperJson, removeJobDir, runProcess, safeArgValue, sdArgs,
-  sherpaTtsAdapter, sherpaTtsArgs, splitTtsText, sweepJobDirs, synthesize, transcribe, transcribeToPages, wavDurationMs, whisperAdapter, whisperArgs,
+  redactEngineLines, sherpaTtsAdapter, sherpaTtsArgs, splitTtsText, ttsArgText, sweepJobDirs, synthesize, transcribe, transcribeToPages, wavDurationMs, whisperAdapter, whisperArgs,
   withJobDir, type EngineContext, type ImageInput,
 } from '../src/index.js';
 import { FakeChild, expectEm, fakeSpawn, makeWav, tempDir } from './helpers.js';
@@ -225,6 +225,48 @@ describe('sherpa-onnx TTS adapter', () => {
     await expectEm(synthesize({ voice, text: 'x', threads: 1 }, ctx(none.spawn)), 'EM-7103');
     const junk = fakeSpawn(async ({ child }) => { await writeFile(join(jobDir, 'out.wav'), Buffer.alloc(100, 7)); child.exit(0); });
     await expectEm(synthesize({ voice, text: 'x', threads: 1 }, ctx(junk.spawn)), 'EM-7101');
+  });
+  it('text on the command line: ASCII typography everywhere; on Windows only printable ASCII (ANSI argv)', () => {
+    expect(ttsArgText('“Halo” — kata dia… ‘ya’', 'linux')).toBe('"Halo" - kata dia... \'ya\'');
+    expect(ttsArgText('Café résumé naïve', 'linux')).toBe('Café résumé naïve');
+    expect(ttsArgText('Café résumé naïve 😀 ok', 'win32')).toBe('Cafe resume naive ok');
+    expect(ttsArgText('Harga Rp 15.000, naik 3,5%!', 'win32')).toBe('Harga Rp 15.000, naik 3,5%!');
+  });
+  it('QA 10–12: Indonesian, English, and English text with the Indonesian voice run the same argv; Windows uses the .exe and the engine espeak-ng-data', async () => {
+    // node:path is the host's, so the paths are POSIX here; the Windows specifics under test are the .exe and the data-dir layout
+    const win = '/opt/Expertmotion/resources/engines/sherpa-onnx/1.13.8';
+    const winVoice = { kind: 'vits' as const, modelPath: '/data/models/sherpa-onnx/piper-id-news-medium/sherpa-model.onnx', tokensPath: '/data/models/sherpa-onnx/piper-id-news-medium/tokens.txt' };
+    const texts = ['Halo semuanya, selamat datang.', 'Hello everyone, welcome.', 'This is English text with the Indonesian voice…'];
+    const f = fakeSpawn(async ({ args, child }) => { await writeFile(join(jobDir, 'out.wav'), makeWav(2205)); child.exit(0); void args; });
+    for (const text of texts) await synthesize({ voice: winVoice, text, threads: 2 }, ctx(f.spawn, { platform: 'win32', engineDir: win }));
+    expect(f.calls).toHaveLength(3);
+    for (const c of f.calls) {
+      expect(c.command).toBe(join(win, 'sherpa-onnx-offline-tts.exe'));
+      expect(c.args).toContain(`--vits-data-dir=${join(win, 'espeak-ng-data')}`);
+      expect(c.args[0]).toBe(`--vits-model=${winVoice.modelPath}`);
+    }
+    expect(f.calls[2]!.args.at(-1)).toBe('This is English text with the Indonesian voice...');
+  });
+  it('chunks without a letter or digit are not sent to the engine (no empty-audio failure)', async () => {
+    const f = fakeSpawn(async ({ args, child }) => { const out = args.find((a) => a.startsWith('--output-filename='))!.slice(18); await writeFile(out, makeWav(2205)); child.exit(0); });
+    const r = await synthesize({ voice, text: 'Satu dua tiga. … … … Empat lima.', threads: 1, chunkChars: 16 }, ctx(f.spawn));
+    expect(f.calls.map((c) => c.args.at(-1))).toEqual(['Satu dua tiga.', 'Empat lima.']);
+    expect(r.chunks).toBe(2);
+    await expectEm(synthesize({ voice, text: '… !!', threads: 1 }, ctx(f.spawn)), 'EM-9002');
+  });
+  it('a failing engine reports exit code and a stderr tail without the spoken text', async () => {
+    const f = fakeSpawn(({ args, child }) => {
+      child.err(`parse-options.cc:Read:374 sherpa-onnx-offline-tts --vits-model=/m/x.onnx '${args.at(-1)}'\n`);
+      child.err("offline-tts-vits-model.cc:Init:169 'sample_rate' does not exist in the metadata\n"); child.exit(255);
+    });
+    const d = await expectEm(synthesize({ voice, text: 'Rahasia pribadi saya', threads: 1 }, ctx(f.spawn)), 'EM-7101');
+    expect(d).toMatchObject({ engine: 'sherpa-onnx', exitCode: 255, cause: 'exit' });
+    const tail = d.stderrTail as string[];
+    expect(tail.at(-1)).toContain("'sample_rate' does not exist in the metadata");
+    expect(tail.join('\n')).not.toContain('Rahasia pribadi saya');
+    expect(tail[0]).toContain('--vits-model=/m/x.onnx');
+    expect(redactEngineLines(['x'.repeat(500)], [])[0]!.length).toBe(401);
+    expect(redactEngineLines(['in 12 /a/b.wav'], ['-t', '12', '/a/b.wav'])).toEqual(['in 12 /a/b.wav']);
   });
   it('WAV helpers', () => {
     const w = parseWav(makeWav(441, 44100));

@@ -122,6 +122,20 @@ export interface RunSpec {
 export interface RunResult { exitCode: number; stdout: string; stderr: string }
 
 export const lastLines = (s: string, n: number): string[] => s.split(/\r?\n/).filter((l) => l.trim() !== '').slice(-n);
+/**
+ * Engine stderr lines as they go into error details and the engine log: positional argument values that are not paths (the text
+ * to speak, a prompt) are replaced by `<arg>` because some engines echo their command line; lines are cut at 400 characters.
+ * Secrets and the Windows user name are removed later by the logger's redaction (SEC-100).
+ */
+export function redactEngineLines(lines: readonly string[], args: readonly string[]): string[] {
+  const values = args.filter((a) => !/^-[A-Za-z-]/.test(a)).map((a) => a.trim()).filter((a) => a.length >= 3 && !isAbsolute(a) && !/^[\d.,:x-]+$/.test(a))
+    .sort((a, b) => b.length - a.length);
+  return lines.map((l) => {
+    let s = l;
+    for (const v of values) s = s.split(v).join('<arg>');
+    return s.length > 400 ? `${s.slice(0, 400)}…` : s;
+  });
+}
 
 /** Spawns one Engine Binary. Errors: EM-7101 (spawn failure / non-zero exit), EM-7102 (timeout), CancelledError (abort). */
 export function runProcess(spec: RunSpec): Promise<RunResult> {
@@ -131,6 +145,7 @@ export function runProcess(spec: RunSpec): Promise<RunResult> {
     const max = spec.maxOutputBytes ?? MAX_OUTPUT_BYTES;
     const out = new TailBuffer(max, spec.onStdoutLine);
     const err = new TailBuffer(max, spec.onStderrLine);
+    const tail = (): string[] => redactEngineLines(lastLines(err.text(), 20), spec.args);
     let child: ChildLike;
     try {
       child = (spec.spawn ?? nodeSpawn)(spec.exe, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true });
@@ -146,7 +161,7 @@ export function runProcess(spec: RunSpec): Promise<RunResult> {
       fn();
     };
     const failKilled = (): void => {
-      if (killedFor === 'timeout') finish(() => reject(emError('EM-7102', `${spec.engine} did not finish in time and was stopped`, { engine: spec.engine, timeoutMs: spec.timeoutMs, stderrTail: lastLines(err.text(), 20) })));
+      if (killedFor === 'timeout') finish(() => reject(emError('EM-7102', `${spec.engine} did not finish in time and was stopped`, { engine: spec.engine, cause: 'timeout', timeoutMs: spec.timeoutMs, stderrTail: tail() })));
       else finish(() => reject(new CancelledError()));
     };
     const kill = (why: 'timeout' | 'abort'): void => {
@@ -168,7 +183,7 @@ export function runProcess(spec: RunSpec): Promise<RunResult> {
       out.flush(); err.flush();
       if (killedFor) { failKilled(); return; }
       if (code === 0) finish(() => resolvePromise({ exitCode: 0, stdout: out.text(), stderr: err.text() }));
-      else finish(() => reject(emError('EM-7101', `${spec.engine} stopped unexpectedly`, { engine: spec.engine, exitCode: code, signal, stderrTail: lastLines(err.text(), 20) })));
+      else finish(() => reject(emError('EM-7101', `${spec.engine} stopped unexpectedly`, { engine: spec.engine, cause: signal ? 'crash' : 'exit', exitCode: code, signal, stderrTail: tail() })));
     });
   });
 }

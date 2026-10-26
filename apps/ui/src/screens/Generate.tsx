@@ -49,7 +49,8 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const options = card ? card.models : fallback;
   const defaultKey = card?.model?.key ?? GENERATOR_MODEL[kind] ?? options[0]?.key ?? '';
   const [model, setModel] = useState<string>('');
-  const chosenKey = model || (options.find((m) => m.installed)?.key ?? defaultKey);
+  // the tier default when it is installed (frame-composite for T0 thumbnails), else the first installed option, else the default
+  const chosenKey = model || (options.find((m) => m.key === defaultKey && m.installed)?.key ?? options.find((m) => m.installed)?.key ?? defaultKey);
   const chosen = options.find((m) => m.key === chosenKey) ?? (card?.model?.key === chosenKey ? card.model : null);
   const live = state.models.find((m) => m.key === chosenKey);
   const installed = kind === 'hashtags' || chosenKey === 'frame-composite' || Boolean(live ? live.status === 'installed' : chosen?.installed);
@@ -108,10 +109,11 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
     if (!state.project) return;
     setError(null); setSaved(null); setPages(null);
     const modelKey = chosenKey && chosenKey !== 'frame-composite' ? { modelKey: chosenKey } : {};
+    const frameOnly = chosenKey === 'frame-composite';
     const body: Record<string, unknown> = kind === 'captions' ? { ...(captionSource === 'sequence' ? { source: 'sequence' } : { source: 'asset', assetId: captionSource }), language, ...modelKey }
       : kind === 'voice' ? { text: input, voiceId: chosenKey, language, speed, atMs: state.playheadMs }
         : kind === 'music' ? { prompt: input, durationMs: durationS * 1000, instrumental, language, ...modelKey }
-          : kind === 'thumbnail' ? { frameMs: state.playheadMs, ...(input.trim() ? { titleText: input } : {}), ...(prompt.trim() ? { prompt } : {}), count, style, language }
+          : kind === 'thumbnail' ? { frameMs: Math.round(state.playheadMs), ...(input.trim() ? { titleText: input } : {}), ...(!frameOnly && prompt.trim() ? { prompt } : {}), count, style, language, ...(chosenKey ? { modelKey: chosenKey } : {}) }
             : { language, platform, tone, count };
     try { const j = await runtime.api.createGeneratorJob(state.project.id, kind, body); setJob(j); return j; } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); return null; }
   };
@@ -147,8 +149,9 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const candidates = (job?.result?.['candidates'] as Array<{ assetId: string; frameMs?: number }> | undefined) ?? (kind === 'thumbnail' && job?.resultAssetId ? [{ assetId: job.resultAssetId }] : []);
   const running = job?.status === 'running' || job?.status === 'queued';
   const textMissing = (kind === 'voice' || kind === 'music') && !input.trim();
-  const noAudio = kind === 'captions' && captionSource === 'sequence' && !(state.head?.model?.tracks.video.length ?? 0);
-  const runReason = notEnabled ? t('err.EM-9004.title') : !installed ? t('ui.lib.generator.needsmodel') : kind === 'hashtags' && priv ? t('err.EM-8202.title')
+  const tracks = state.head?.model?.tracks;
+  const noAudio = kind === 'captions' && captionSource === 'sequence' && !(tracks?.video.length ?? 0) && !(tracks?.audio.some((a) => a.role !== 'bed') ?? false);
+  const runReason = notEnabled ? t('err.EM-9004.title') : !installed ? t('ui.scr.generate.installfirst') : kind === 'hashtags' && priv ? t('err.EM-8202.title')
     : textMissing ? t('ui.scr.generate.input.required') : noAudio ? t('err.EM-7103.title') : kind === 'voice' && [...input].length > 2000 ? t('err.EM-7106.title') : null;
   const generated = generatedList(history).filter((j) => j.id !== job?.id);
 
@@ -227,9 +230,9 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
           <label className="flex items-center gap-2 self-end pb-2"><input data-el={`${p}.instrumental`} type="checkbox" checked={instrumental} onChange={(e) => setInstrumental(e.target.checked)} />{t('ui.scr.generate.instrumental')}</label>
         </>}
         {kind === 'thumbnail' && <>
-          <Field label={t('ui.scr.generate.thumbnail.prompt')} htmlFor="em-gen-prompt" hint={t('ui.scr.generate.thumbnail.prompt.hint', { time: formatDuration(state.playheadMs) })}>
+          {chosenKey !== 'frame-composite' && <Field label={t('ui.scr.generate.thumbnail.prompt')} htmlFor="em-gen-prompt" hint={t('ui.scr.generate.thumbnail.prompt.hint', { time: formatDuration(state.playheadMs) })}>
             <input id="em-gen-prompt" data-el={`${p}.prompt`} className={inputCls} value={prompt} maxLength={1000} onChange={(e) => setPrompt(e.target.value)} />
-          </Field>
+          </Field>}
           <Field label={t('ui.scr.generate.thumbnail.style')} htmlFor="em-gen-style">
             <select id="em-gen-style" data-el={`${p}.style`} className={inputCls} value={style} onChange={(e) => setStyle(e.target.value as typeof style)}>
               {THUMBNAIL_STYLES.map((x) => <option key={x} value={x}>{t(`ui.scr.generate.thumbnail.style.${x}`)}</option>)}
@@ -256,7 +259,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
       </div>
 
       {job && running && <div data-el={`${p}.progress`} className="mt-2"><Progress value={job.progress} label={t('ui.scr.generate.running')} /><span className="text-[12px] text-em-muted">{t('ui.scr.generate.keeprunning')}</span></div>}
-      {error && <div className="mt-2"><ErrorBox code={error} /></div>}
+      {error && <div className="mt-2"><ErrorBox code={error} vars={{ tool: t(`ui.scr.generate.tool.${kind}`), model: chosen ? names.local(chosen) : t(`ui.scr.generate.tool.${kind}`) }} /></div>}
 
       {job?.status === 'done' && (
         <div data-el={`${p}.result`} className="mt-3 flex flex-col gap-2 rounded-[8px] border border-em-line p-2">
