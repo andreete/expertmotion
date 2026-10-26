@@ -131,7 +131,7 @@ describe('issue → verify round trip (service verifier)', () => {
   it('issues a key the Local Service accepts on the bound machine only; email EN+ID; audit appended; key never in settings', async () => {
     const { admin, key } = await unlockedAdmin('issue');
     const r = await ok<{ lid: string; rev: number; key: string; keyGrouped: string; emailText: string; file: string; updatesUntil: string }>(admin, 'licence.issue', {
-      name: 'Septi Rahayu', email: 'septi@example.com', orderId: 'ORD-10231', updatesMonths: 12, machineCode: fpA.machineCode,
+      name: 'Test Buyer', email: 'buyer@example.com', orderId: 'ORD-10231', updatesMonths: 12, machineCode: fpA.machineCode,
     });
     expect(r.key).toMatch(/^EM1-Z9-[A-Z2-7]+-[A-Z2-7]{103}$/);
     expect(r.rev).toBe(0);
@@ -143,15 +143,15 @@ describe('issue → verify round trip (service verifier)', () => {
     expect(r.emailText).toContain('Subjek: Kunci lisensi Expertmotion Anda');
     expect(r.emailText).toContain(r.keyGrouped);
     expect(r.emailText).toContain(fpA.machineCode);
-    const list = await ok<{ licences: { lid: string; status: string; orderRef: string }[] }>(admin, 'licence.list', { query: 'septi' });
+    const list = await ok<{ licences: { lid: string; status: string; orderRef: string }[] }>(admin, 'licence.list', { query: 'buyer' });
     expect(list.licences).toHaveLength(1);
     expect(list.licences[0]).toMatchObject({ lid: r.lid, status: 'active', orderRef: 'ORD-10231' });
     expect((await ok<{ licences: unknown[] }>(admin, 'licence.list', { query: 'nobody' })).licences).toHaveLength(0);
     // duplicate order refused unless an override reason is given (same policy as the CLI)
-    const dup = await err(admin, 'licence.issue', { name: 'Septi', email: 'septi@example.com', orderId: 'ORD-10231', updatesMonths: 12, machineCode: fpA.machineCode });
+    const dup = await err(admin, 'licence.issue', { name: 'Test Buyer', email: 'buyer@example.com', orderId: 'ORD-10231', updatesMonths: 12, machineCode: fpA.machineCode });
     expect(dup).toMatchObject({ code: 'POLICY' });
     expect(dup.message).toMatch(/already has a licence/);
-    await ok(admin, 'licence.issue', { name: 'Septi', email: 'septi@example.com', orderId: 'ORD-10231', updatesMonths: 12, machineCode: fpA.machineCode, override: 'second seat' });
+    await ok(admin, 'licence.issue', { name: 'Test Buyer', email: 'buyer@example.com', orderId: 'ORD-10231', updatesMonths: 12, machineCode: fpA.machineCode, override: 'second seat' });
     // admin verify agrees with the service
     const v = await ok<{ valid: boolean; code: string | null; payload: { lid: string } }>(admin, 'licence.verify', { key: r.key, machineCode: fpA.machineCode });
     expect(v).toMatchObject({ valid: true, code: null });

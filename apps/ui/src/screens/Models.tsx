@@ -1,9 +1,9 @@
 // Model Manager (scr.models, FR-120…FR-126): Local Models grouped by purpose; the row shows the product name (displayName), size,
 // tier and used-by; the licence (name + link, engine notices) is in the expanded card;
 // expandable model card; filters; install (EM-7005 confirm above the Hardware Tier), pause / resume / cancel, remove with
-// confirmation; footer with disk use, free space and per-engine "open folder" (ADR-008, F11). SEC-072 refusals: EM-7111.
+// confirmation; footer with disk use and free space (the per-engine "open folder" buttons were removed, Operator 2026-10-26). SEC-072 refusals: EM-7111.
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, FolderOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import type { ModelRegistrySource, ModelStateDto } from '../api/types.js';
 import { Badge, Button, Modal, Progress, cx, inputCls } from '../components/ui.js';
@@ -15,26 +15,27 @@ type Purpose = (typeof PURPOSES)[number];
 type Summary = { totalInstalledBytes: number; diskFreeBytes: number; registry?: ModelRegistrySource };
 const busyStatus = (s: ModelStateDto['status']) => s === 'downloading' || s === 'verifying' || s === 'paused';
 
-/** FR-121 model card: description, languages, licence summary (no download source: Operator decision 2026-10-25) with commercial-use note, hash, disk path label. */
+/** Licence name of a bundled component without the engine / tool name (Operator 2026-10-26): SPDX id, else the text before "(". */
+export const noticeLicence = (n: { licence: string; spdx?: string | null }): string => n.spdx || n.licence.replace(/\s*\(.*\)\s*$/u, '').trim() || n.licence;
+
+/** FR-121 model card: languages and licence (link, use restrictions, commercial use) plus the licences of bundled
+ *  components. No engine names, paths, hashes or developer notes (Operator 2026-10-26; download source hidden since 2026-10-25). */
 function ModelCard({ m }: { m: ModelStateDto }) {
   const { t } = useStore();
   const commercial = m.commercialUse ?? 'yes';
+  const notices = [...new Map((m.engineNotices ?? []).map((n) => [noticeLicence(n), n.url])).entries()];
   return (
     <dl data-el="scr.models.row.card" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-[6px] bg-em-panel-2 p-2 text-[12px]">
-      {m.notes && m.notes.length > 0 && <><dt className="text-em-muted">{t('ui.scr.models.card.description')}</dt><dd>{m.notes.join(' · ')}</dd></>}
       <dt className="text-em-muted">{t('ui.scr.models.card.languages')}</dt><dd>{m.languages?.length ? m.languages.map((l) => t(`ui.common.lang.${l}`)).join(', ') : '—'}</dd>
       <dt className="text-em-muted">{t('ui.scr.models.card.licence')}</dt>
       <dd><a data-el="scr.models.row.licence" href={m.licence.url} target="_blank" rel="noreferrer" className="text-em-accent underline">{m.licence.name}</a>{m.licenceDetail?.useRestrictions ? ` · ${m.licenceDetail.useRestrictions}` : ''} · <span className={commercial === 'yes' ? 'text-em-success' : 'text-em-warn'}>{t(`ui.scr.models.card.commercial.${commercial}`)}</span>
         {m.licenceDetail?.redistribution === 'verify' && <> · <span className="text-em-warn">{t('ui.scr.models.card.verify')}</span></>}</dd>
-      {m.engineNotices?.map((n) => (
-        <Fragment key={n.label}>
+      {notices.map(([licence, url]) => (
+        <Fragment key={licence}>
           <dt className="text-em-muted">{t('ui.scr.models.card.engine')}</dt>
-          <dd data-el="scr.models.row.notice">{t('ui.scr.models.card.enginenotice', { label: n.label, licence: n.licence })} <a href={n.url} target="_blank" rel="noreferrer" className="text-em-accent underline">{t('ui.scr.providers.terms')}</a></dd>
+          <dd data-el="scr.models.row.notice">{licence} · <a href={url} target="_blank" rel="noreferrer" className="text-em-accent underline">{t('ui.scr.providers.terms')}</a></dd>
         </Fragment>
       ))}
-      <dt className="text-em-muted">{t('ui.scr.models.card.hash')}</dt>
-      <dd className="t-mono break-all">{m.hashes?.length ? m.hashes.map((h) => `${h.name}: ${h.sha256 ?? t('ui.scr.models.card.unpinned')}`).join(' · ') : '—'}</dd>
-      <dt className="text-em-muted">{t('ui.scr.models.card.path')}</dt><dd className="t-mono">{m.pathLabel ?? '—'}</dd>
     </dl>
   );
 }
@@ -63,7 +64,7 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
         {m.recommended && <Badge el="scr.models.row.recommended" tone="success">{t('ui.scr.models.recommended')}</Badge>}
         {m.priority === 'P2' && <Badge>{t('ui.scr.models.p2')}</Badge>}
         <span className="t-mono text-em-muted">{formatBytes(m.bytesTotal, lang)}</span>
-        <Badge el="scr.models.row.tier" tone={fits ? 'neutral' : 'warn'}>{fits ? t('ui.scr.models.mintier', { tier: m.tiers[0] ?? 'T0' }) : t('ui.scr.models.needsgpu', { tier: m.tiers[0] ?? 'T1' })}</Badge>
+        {(!fits || (m.tiers[0] ?? 'T0') !== 'T0') && <Badge el="scr.models.row.tier" tone={fits ? 'neutral' : 'warn'}>{fits ? t('ui.scr.models.mintier', { tier: m.tiers[0] ?? 'T0' }) : t('ui.scr.models.needsgpu', { tier: m.tiers[0] ?? 'T1' })}</Badge>}
       </div>
       {usedBy.length > 0 && <div className="text-[11px] text-em-muted">{t('ui.scr.models.usedby', { list: usedBy.join(', ') })}</div>}
       <div className="flex flex-wrap items-center gap-2">
@@ -111,7 +112,6 @@ export function ModelsScreen({ onClose, focus }: { onClose: () => void; focus?: 
   const [purpose, setPurpose] = useState<Purpose | 'all'>('all');
   const [installed, setInstalled] = useState<'all' | 'installed' | 'not'>('all');
   const [fitsOnly, setFitsOnly] = useState(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
   const reload = () => {
     void actions.loadModels();
     runtime.api.listModels().then((r) => setSummary({ totalInstalledBytes: r.totalInstalledBytes, diskFreeBytes: r.diskFreeBytes, ...(r.registry ? { registry: r.registry } : {}) })).catch(() => undefined);
@@ -126,14 +126,7 @@ export function ModelsScreen({ onClose, focus }: { onClose: () => void; focus?: 
   const tier = state.hardware?.tier ?? 'T0';
   const priv = Boolean(state.settings?.privateMode);
   const shown = state.models.filter((m) => (purpose === 'all' || m.task === purpose) && (installed === 'all' || (installed === 'installed') === (m.status === 'installed')) && (!fitsOnly || m.tiers.includes(tier)));
-  const engines = [...new Set(state.models.map((m) => m.engine))];
   const used = summary?.totalInstalledBytes ?? state.models.filter((m) => m.status === 'installed').reduce((a, m) => a + m.bytesTotal, 0);
-  const openFolder = async (engine: string) => {                                                    // FR-126; EM-8303 shows the path
-    setFolderError(null);
-    let p = '';
-    try { p = (await runtime.api.revealModelsFolder(engine)).path; if (!window.expertmotion?.openFolder) throw new Error('no shell'); await window.expertmotion.openFolder(p); }
-    catch (e) { if (!p) actions.error(e); else setFolderError(p); }
-  };
   return (
     <Modal el="scr.models" sheet width={680} title={t('ui.scr.models.title')} onClose={onClose}>
       <div data-el="scr.models.tier" className="mb-3 rounded-[8px] border border-em-line p-2">{t('ui.scr.models.tier', { tier, desc: t(`ui.scr.models.tier.${tier}`) })}</div>
@@ -167,10 +160,6 @@ export function ModelsScreen({ onClose, focus }: { onClose: () => void; focus?: 
       </div>
       <div data-el="scr.models.footer" className="mt-4 flex flex-col gap-1 border-t border-em-line pt-2 text-[12px]">
         <div>{t('ui.scr.models.footer', { used: formatBytes(used, lang), free: summary ? `${formatNumber(summary.diskFreeBytes / 1e9, lang, 0)} GB` : '…' })}</div>
-        <div className="flex flex-wrap gap-1">
-          {engines.map((e) => <Button key={e} el="scr.models.folder" size={28} variant="ghost" icon={<FolderOpen size={14} />} onClick={() => void openFolder(e)}>{t('ui.scr.models.openfolder', { engine: e })}</Button>)}
-        </div>
-        {folderError && <p role="alert" className="text-em-warn">{t('err.EM-8303.title')} · {t('err.EM-8303.body', { path: folderError })} <span className="t-mono text-em-muted">EM-8303</span></p>}
       </div>
     </Modal>
   );

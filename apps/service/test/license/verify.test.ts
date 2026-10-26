@@ -14,7 +14,7 @@ describe('LICENSE_OPERATIONS §15 L-cases (module level)', () => {
     const r = verifyLicense(validKey, ctxFor(key));
     expect(r).toMatchObject({ status: 'licensed', tier: 'standard', updatesUntil: '2027-11-01', warnings: [] });
     expect(r.code).toBeUndefined();
-    expect(r.licensee).toMatchObject({ lid: '01JB5X7K2QG6V9ZT3M4N8P0R1S', name: 'Septi Rahayu', kid: 'T1', rev: 0 });
+    expect(r.licensee).toMatchObject({ lid: '01JB5X7K2QG6V9ZT3M4N8P0R1S', name: 'Test Buyer', kid: 'T1', rev: 0 });
   });
 
   it('L-2 tampered key (one character inside the payload field) → EM-5002, state invalid (product locked), key kept for copying', () => {

@@ -6,7 +6,7 @@ import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { act, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { renderEditor, el } from './setup-dom.js';
-import { requestWindowClose, startCloseFlow } from '../src/screens/Lifecycle.js';
+import { startCloseFlow } from '../src/screens/Lifecycle.js';
 import type { AppState, Screen } from '../src/state/reducer.js';
 import type { Actions } from '../src/state/store.js';
 
@@ -54,7 +54,7 @@ describe('Unsaved prompt (FR-174)', () => {
     fireEvent.click(el('hdr.menu.file.new')!);
     await until(() => el('scr.unsaved'), 'unsaved prompt');
     for (const id of ['scr.unsaved.save', 'scr.unsaved.discard', 'scr.unsaved.cancel']) expect(el(id)).not.toBeNull();
-    expect(el('scr.unsaved')!.textContent).toContain('already stored as versions');
+    expect(el('scr.unsaved')!.textContent).toContain('already saved as versions');
     fireEvent.click(el('scr.unsaved.cancel')!);
     expect(el('scr.unsaved')).toBeNull();
     expect(el('scr.project.new')).toBeNull();
@@ -73,7 +73,8 @@ describe('Unsaved prompt (FR-174)', () => {
     const close = vi.spyOn(window, 'close').mockImplementation(() => undefined);
     await renderEditor('sample');
     await makeDirty();
-    act(() => { requestWindowClose(); });
+    // The native window frame's close (the header has no window buttons) arrives as beforeunload.
+    act(() => { window.dispatchEvent(new Event('beforeunload', { cancelable: true })); });
     await until(() => el('scr.unsaved'), 'close prompt');
     expect(el('scr.unsaved')!.textContent).toContain('before closing');
     expect(close).not.toHaveBeenCalled();
@@ -180,7 +181,7 @@ describe('Onboarding (FR-004…FR-008)', () => {
     fireEvent.click(byText('Get started')!);
     await until(() => el('scr.onboarding.provider'));                    // no Licence step: the key is activated before onboarding
     expect(el('scr.onboarding.license')).toBeNull();
-    expect(el('scr.onboarding.provider.consequence')!.textContent).toBe('Agents stay off until a provider is connected');
+    expect(el('scr.onboarding.provider.consequence')!.textContent).toBe('Agents stay off until connected');
     expect((document.querySelector('[data-el="scr.providers.add"] select') as HTMLSelectElement | null)?.value ?? 'openrouter').toBe('openrouter');
     fireEvent.click(byText('Skip for now')!);                            // provider + models skipped
     await until(() => el('scr.onboarding.hardware'));

@@ -75,7 +75,7 @@ describe('Output Settings (FR-087…FR-097)', () => {
     await waitFor(() => { if (!el('scr.help')) throw new Error('help not open'); });     // FR-091: Learn more → Help ▸ Performance profiles
     expect(document.querySelector('[data-help-section="performance"]')?.hasAttribute('open')).toBe(true);
     expect(el('scr.help.performance.table')?.textContent).toContain('70 % of RAM');
-    expect(el('agent.output.profile.help')?.getAttribute('title')).toBe('Profiles change how many frames render in parallel and how much memory Expertmotion may use. Faster profiles need more RAM and a GPU; the video itself is identical.');
+    expect(el('agent.output.profile.help')?.getAttribute('title')).toBe('How many frames render at once and how much memory is used. Faster needs more RAM and a GPU; the video is the same.');
   }, 20_000);
 
   it('FR-094: turning Private Mode on while an agent streams asks first, then cancels', async () => {

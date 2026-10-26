@@ -83,11 +83,11 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   const renders: RenderJobDto[] = [];
   const cancelledRenders = new Set<string>();
   let settings: SettingsDto = {
-    privateMode: false, outputFolder: 'C:\\Users\\septi\\Videos\\Expertmotion', autoPlan: false, uiLanguage: 'en', theme: 'dark', defaultPerformanceProfile: 'standard',
+    privateMode: false, outputFolder: 'C:\\Users\\User\\Videos\\Expertmotion', autoPlan: false, uiLanguage: 'en', theme: 'dark', defaultPerformanceProfile: 'standard',
     defaultRatio: '9:16', defaultResolution: '1080p', defaultFps: 30, checkUpdates: true, diagnosticsIncludeStructure: false,
   };
   const UNLICENSED: LicenseDto = { status: 'unlicensed', tier: null, licenseeHash: null, licenseeName: null, updatesUntil: null, updatesEligible: false, machineCode: 'MC1-7Q4K-2M9X-HV3T-8PZD', clockAnomaly: false };
-  const licensedDto = (): LicenseDto => ({ ...UNLICENSED, status: 'licensed', tier: 'standard', licenseeHash: 'a1b2c3', licenseeName: 'Septianus Angga', updatesUntil: new Date(Date.now() + 365 * 86400_000).toISOString(), updatesEligible: true });
+  const licensedDto = (): LicenseDto => ({ ...UNLICENSED, status: 'licensed', tier: 'standard', licenseeHash: 'a1b2c3', licenseeName: null, updatesUntil: new Date(Date.now() + 365 * 86400_000).toISOString(), updatesEligible: true });
   let license: LicenseDto = opts.licensed === false ? UNLICENSED : licensedDto();
   const hardware: HardwareProfileDto = { tier: 'T0', cpuModel: 'Intel Core i5-1135G7', cpuThreads: 8, ramTotalMb: 16_384, gpuVendor: 'Intel', gpuModel: 'Iris Xe (shared)', vramMb: null, nvenc: false, detectedAt: nowIso(), warnings: [] };
   const connections: ConnectionDto[] = [];
@@ -1281,7 +1281,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     return accepted(x);
   });
   r('POST', '/models/:key/cancel', (m, _b, q) => { const x = model(decodeURIComponent(m[1]!)); cancelledDownloads.add(x.key); if (x.status === 'downloading') x.status = 'not-installed'; if (q.get('discard') === 'true') x.bytesDone = 0; return x; });
-  r('POST', '/models/engines/:engine/reveal', (m) => ({ path: `C:\\Users\\septi\\AppData\\Roaming\\Expertmotion\\models\\${decodeURIComponent(m[1]!)}` }));   // R-146
+  r('POST', '/models/engines/:engine/reveal', (m) => ({ path: `C:\\Users\\User\\AppData\\Roaming\\Expertmotion\\models\\${decodeURIComponent(m[1]!)}` }));   // R-146
   r('DELETE', '/models/:key', (m) => { const x = model(decodeURIComponent(m[1]!)); x.status = 'not-installed'; x.bytesDone = 0; x.installedAt = null; return undefined; });
   // hardware, licence, settings, diagnostics
   r('GET', '/hardware/profile', () => hardware);
@@ -1308,7 +1308,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     return settings;
   });
   r('POST', '/settings/caches/clear', () => ({ freedBytes: 123_000_000 }));
-  r('POST', '/diagnostics/bundle', () => ({ path: 'C:\\Users\\septi\\AppData\\Roaming\\Expertmotion\\logs\\diagnostics-mock.zip', bytes: 182_000, contents: ['service.log', 'versions.json', 'hardware.json', 'settings.redacted.json'] }));
+  r('POST', '/diagnostics/bundle', () => ({ path: 'C:\\Users\\User\\AppData\\Roaming\\Expertmotion\\logs\\diagnostics-mock.zip', bytes: 182_000, contents: ['service.log', 'versions.json', 'hardware.json', 'settings.redacted.json'] }));
   r('GET', '/diagnostics/codes', () => ({ items: renders.filter((j) => j.errorCode).map((j) => ({ at: j.finishedAt ?? j.createdAt, code: j.errorCode!, source: 'render', ref: j.id })) }));   // R-182
   r('GET', '/diagnostics/logs', () => ({ lines: [`{"level":"info","msg":"mock service started","at":"${new Date(startedAt).toISOString()}"}`, '{"level":"warn","msg":"engine: browser download skipped in mock mode"}'] }));
 

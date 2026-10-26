@@ -39,8 +39,8 @@ export function payloadFor(fp: LocalFingerprint, over: Partial<LicensePayload> =
   return {
     v: 1,
     lid: '01JB5X7K2QG6V9ZT3M4N8P0R1S',
-    name: 'Septi Rahayu',
-    eh: createHash('sha256').update('septi@example.com').digest().subarray(0, 16).toString('base64url'),
+    name: 'Test Buyer',
+    eh: createHash('sha256').update('buyer@example.com').digest().subarray(0, 16).toString('base64url'),
     tier: 'standard',
     fp: fp.fpHex,
     fpc: [...fp.fpc],

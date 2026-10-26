@@ -1,5 +1,5 @@
 // Generator Cards (lib.generator.card.*, Tools mode; P1/P2 per ADR-016). Each opens its scr.generate.* sheet.
-// FR-100: the card shows the required model, its installed state and size, a hardware tier hint and the priority tag; "Coming soon"
+// FR-100: the card shows the required model, its installed state and size, a hardware tier hint (the internal P1/P2 tag is not shown, Operator 2026-10-26); "Coming soon"
 // only when the Local Service reports the kind as not enabled in this build (R-135), never from a hard-coded list.
 import { Captions, Hash, Image as ImageIcon, Mic, Music2 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -37,7 +37,6 @@ export function Generators() {
     <div className="grid grid-cols-1 gap-2">
       {ORDER.map((kind) => {
         const card = cards?.find((c) => c.kind === kind);
-        const priority = card?.priority ?? (kind === 'music' || kind === 'thumbnail' ? 'P2' : 'P1');
         const modelKey = card?.model?.key ?? GENERATOR_MODEL[kind];
         const installed = card ? (card.llm || Boolean(card.model?.installed) || card.models.some((m) => m.installed))
           : kind === 'hashtags' || !modelKey || state.models.some((m) => m.key === modelKey && m.status === 'installed');
@@ -58,7 +57,6 @@ export function Generators() {
               )}
               {card?.llm && <span className="text-[12px] text-em-text-2">{t('ui.lib.generator.llm', { model: names.agent('brainstorm') || t('ui.agent.footer.nomodel') })}</span>}
               <span className="flex flex-wrap gap-1">
-                <Badge>{priority}</Badge>
                 {comingSoon && <Badge>{t('ui.lib.catalogue.comingsoon')}</Badge>}
                 {!comingSoon && !installed && <Badge tone="info">{t('ui.lib.generator.needsmodel')}</Badge>}
                 {!comingSoon && installed && !card?.llm && <Badge tone="success">{t('ui.lib.generator.installed')}</Badge>}

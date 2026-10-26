@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (targets marked "to confirm" are re-measured in the Stage 2 PoC, PERFORMANCE.md §5) |
 | Owner | Requirements engineer + principal architect |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md, PRD.md, FRD.md, ARCHITECTURE.md, PERFORMANCE.md, AI_WORKFLOW.md, DECISIONS.md, ELEMENT_IDS.md, ERROR_CATALOGUE.md, SECURITY.md, DATABASE_SCHEMA.md, MASTER_PROJECT_PROMPT.md §4, §9, §11–§16, §19 |
 | Used by | TRD.md, API_SPECIFICATION.md, DATABASE_SCHEMA.md, SECURITY.md, TEST_PLAN.md, DEPLOYMENT_AND_PACKAGING.md, ACCESSIBILITY_AND_I18N.md, DEFINITION_OF_DONE.md |
 | Owner of | every `NFR-` id, its metric, target and measurement method |
@@ -132,7 +132,7 @@ The Editor is the only user interface. Every element is identified by an Element
 | Local Service SSE | Local Service → Editor | `/api/events` with the events owned by API_SPECIFICATION.md (events table): `intent.updated`, `plan.ready`, `plan.invalid`, `composition.updated`, `render.queued`, `render.progress`, `render.done`, `render.failed`, `render.cancelled`, `ingest.progress`, `ingest.done`, `ingest.failed`, `agent.run.started`, `agent.run.delta`, `agent.run.done`, `agent.run.failed`, `model.progress`, `model.installed`, `model.failed`, `hardware.tick`, `license.changed`, `settings.changed`, `service.notice`; 15 s heartbeat | token in query string (EventSource limitation), single-use per launch |
 | Media serving | Local Service → Editor Player and Engine Chrome | `/media/:assetId` (original or proxy) with unguessable ids, range requests | loopback only; ids are 128-bit random |
 | Shell ↔ Service control | Desktop Shell → Local Service | `{token, port, dataDir, dbKey}` over stdin at spawn; `ready` on stdout; SIGTERM for shutdown; checkpoint request before close | secrets never in argv or environment |
-| Shell ↔ Editor | preload `contextBridge` | `{port, token}`, native dialogs (file/folder pickers, open folder), window controls | `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` |
+| Shell ↔ Editor | preload `contextBridge` | `{port, token}`, native dialogs (file/folder pickers, open folder); window controls are the native frame (no in-app buttons since 2026-10-26) | `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` |
 | LLM providers | Local Service → provider | HTTPS JSON per provider (OpenRouter OpenAI-compatible chat completions with tools / JSON mode; others P1) via a provider adapter interface with a fake for tests | 30 s first-token / 120 s total timeout, one retry, `Retry-After` ≤ 20 s once (AI_WORKFLOW §12); responses Zod-validated (AI-005); single egress module |
 | Model weight hosts | Local Service → host | HTTPS GET with range resume; SHA-256 manifest | hash verified before use; paused in Private Mode |
 | Update feed | Desktop Shell → feed | electron-updater compatible feed; signed packages | signature verified before install; never during a render |

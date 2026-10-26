@@ -3,14 +3,15 @@ import { renderQueue } from '../state/workload.js';
 import { LicenceStatus } from '../screens/License.js';
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
-  Activity, Archive, ArchiveRestore, BadgeCheck, Boxes, ChevronDown, CircleHelp, Download, Folder, KeyRound, Minus, Redo2, Save, Sparkles, Square, Type, Undo2, Wrench, X,
+  Activity, Archive, ArchiveRestore, BadgeCheck, Boxes, ChevronDown, CircleHelp, Download, Folder, KeyRound, Redo2, Save, Sparkles, Type, Undo2, Wrench,
 } from 'lucide-react';
 import { OPEN_HARDWARE_EVENT, useStore } from '../state/store.js';
 import { Button, IconButton, MenuItem, Popover, Progress, cx } from '../components/ui.js';
 import { HardwarePopover } from '../screens/Hardware.js';
+import { AppMark } from '../components/AppMark.js';
 import type { LibMode } from '../state/reducer.js';
 import { formatDuration, translate } from '../i18n/index.js';
-import { guardUnsaved, requestWindowClose } from '../screens/Lifecycle.js';
+import { guardUnsaved } from '../screens/Lifecycle.js';
 
 /** Sample projects (R-025) carry a visible "Sample · " / "Contoh · " marker in the project's language; a name that already starts with it is not doubled. */
 export function sampleTitle(name: string, language: 'en' | 'id'): { marker: string; rest: string } {
@@ -52,13 +53,12 @@ export function Header() {
     if (e.key === 'Enter') void commitTitle();
     if (e.key === 'Escape') { e.stopPropagation(); setEditing(false); setTitleError(false); }
   };
-  const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
   const percent = rendering ? Math.round(rendering.progress * 100) : 0;
 
   return (
     <header className="relative z-20 flex h-12 shrink-0 items-center gap-1 border-b border-em-line bg-em-panel px-2">
-      <button type="button" data-el="hdr.logo" onClick={() => actions.setScreen({ kind: 'about' })} className="mr-2 flex items-center gap-1.5 px-1 text-[14px] font-bold tracking-tight hover:underline" aria-label={t('ui.hdr.logo.a11y')}>
-        <span className="inline-block h-4 w-4 rounded-[4px] bg-em-accent" aria-hidden />Expertmotion
+      <button type="button" data-el="hdr.logo" onClick={() => actions.setScreen({ kind: 'about' })} className="mr-2 flex items-center gap-2 rounded-[6px] px-1 text-[14px] font-bold tracking-tight hover:bg-em-panel-2" aria-label={t('ui.hdr.logo.a11y')}>
+        <AppMark size={22} />Expertmotion
       </button>
       <div className="relative">
         <button type="button" data-el="hdr.menu.file" data-popover-trigger="" aria-haspopup="menu" aria-expanded={menu === 'file' || menu === 'recent'} onClick={() => setMenu(menu === 'file' ? null : 'file')}
@@ -148,13 +148,6 @@ export function Header() {
           )}
         </div>
         <Button el="hdr.action.export" data-variant={exportReason ? 'disabled' : undefined} variant="primary" icon={<Download size={16} />} className="ml-1" disabledReason={exportReason} onClick={() => actions.setScreen({ kind: 'export' })}>{t('ui.hdr.action.export')}</Button>
-        {shell && (
-          <span className="ml-2 flex">
-            <IconButton el="hdr.win.minimize" label={t('ui.hdr.win.minimize')} icon={<Minus size={16} />} size={28} />
-            <IconButton el="hdr.win.maximize" label={t('ui.hdr.win.maximize')} icon={<Square size={14} />} size={28} />
-            <IconButton el="hdr.win.close" label={t('ui.hdr.win.close')} icon={<X size={16} />} size={28} onClick={requestWindowClose} />
-          </span>
-        )}
       </div>
       {prefs.libCollapsed && <span className="sr-only"><ChevronDown aria-hidden /></span>}
     </header>

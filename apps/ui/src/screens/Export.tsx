@@ -131,19 +131,33 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           </Field>
           <ul data-el="scr.export.preflight" aria-label={t('ui.scr.export.preflight')} className="flex flex-col gap-1">
             {!est && <li className="text-em-muted">{t('ui.scr.export.checking')}</li>}
-            {est?.checks.map((c) => {
-              const info = c.ok && c.code;
-              const r = recoveryFor(c, state.performanceProfile);
-              return (
-                <li key={c.check} data-check={c.check} data-ok={String(c.ok)} className="flex items-center gap-2">
-                  {!c.ok ? <TriangleAlert size={14} className="text-em-danger" /> : info ? <Info size={14} className="text-em-info" /> : <CheckCircle2 size={14} className="text-em-success" />}
-                  <span className="w-24 shrink-0">{t(`ui.scr.export.check.${c.check}`)}</span>
-                  <span className="flex-1 text-em-text-2" title={c.code ? t(`err.${c.code}.body`, { name: state.project?.name ?? '', folder: folder || '…', feature: '' }) : undefined}>{c.code ? t(`err.${c.code}.title`) : t('ui.scr.export.check.ok')}</span>
-                  {c.code && <span className="t-mono text-em-muted">{c.code}</span>}
-                  {r && <Button el="scr.export.preflight.fix" size={28} variant={c.ok ? 'ghost' : 'secondary'} onClick={() => fix(r)}>{t(RECOVERY_LABEL[r])}</Button>}
-                </li>
-              );
-            })}
+            {(() => {
+              // Operator 2026-10-26 (less wordy): passed checks without a note collapse into one "N checks passed" line.
+              const row = (c: NonNullable<typeof est>['checks'][number]) => {
+                const info = c.ok && c.code;
+                const r = recoveryFor(c, state.performanceProfile);
+                return (
+                  <li key={c.check} data-check={c.check} data-ok={String(c.ok)} className="flex items-center gap-2">
+                    {!c.ok ? <TriangleAlert size={14} className="text-em-danger" /> : info ? <Info size={14} className="text-em-info" /> : <CheckCircle2 size={14} className="text-em-success" />}
+                    <span className="w-24 shrink-0">{t(`ui.scr.export.check.${c.check}`)}</span>
+                    <span className="flex-1 text-em-text-2" title={c.code ? t(`err.${c.code}.body`, { name: state.project?.name ?? '', folder: folder || '…', feature: '' }) : undefined}>{c.code ? t(`err.${c.code}.title`) : t('ui.scr.export.check.ok')}</span>
+                    {c.code && <span className="t-mono text-em-muted">{c.code}</span>}
+                    {r && <Button el="scr.export.preflight.fix" size={28} variant={c.ok ? 'ghost' : 'secondary'} onClick={() => fix(r)}>{t(RECOVERY_LABEL[r])}</Button>}
+                  </li>
+                );
+              };
+              const checks = est?.checks ?? [];
+              const quiet = checks.filter((c) => c.ok && !c.code && !recoveryFor(c, state.performanceProfile));
+              return <>
+                {checks.filter((c) => !quiet.includes(c)).map(row)}
+                {quiet.length > 0 && (
+                  <li data-el="scr.export.preflight.passed"><details>
+                    <summary className="flex cursor-pointer items-center gap-2"><CheckCircle2 size={14} className="text-em-success" /><span className="text-em-text-2">{t('ui.scr.export.check.allok', { count: quiet.length })}</span></summary>
+                    <ul className="mt-1 flex flex-col gap-1 pl-5">{quiet.map(row)}</ul>
+                  </details></li>
+                )}
+              </>;
+            })()}
             {notices.map((code) => (
               <li key={code} className="flex items-center gap-2"><Info size={14} className="text-em-info" /><span className="w-24 shrink-0">{t('ui.scr.export.check.queue')}</span>
                 <span className="flex-1 text-em-text-2">{t(`err.${code}.title`)}</span><span className="t-mono text-em-muted">{code}</span>

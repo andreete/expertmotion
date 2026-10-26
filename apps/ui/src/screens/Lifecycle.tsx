@@ -7,10 +7,6 @@ import { useStore, type Store } from '../state/store.js';
 import type { Screen } from '../state/reducer.js';
 import { Button, Modal } from '../components/ui.js';
 
-/** Window event the header close button (hdr.win.close) fires; the close flow below decides what happens. */
-export const CLOSE_REQUEST_EVENT = 'em:close-request';
-export const requestWindowClose = (): void => { window.dispatchEvent(new CustomEvent(CLOSE_REQUEST_EVENT)); };
-
 /** FR-174: run `next` at once, or after Save / Don't save when the open Project has unsaved UI state. */
 export function guardUnsaved(store: Pick<Store, 'state' | 'actions'>, next: () => void, opts: { closing?: boolean } = {}): void {
   if (store.state.project?.dirty) store.actions.setScreen({ kind: 'unsaved', then: next, ...(opts.closing ? { closing: true } : {}) });
@@ -75,10 +71,8 @@ export function LifecycleEffects() {
       e.preventDefault(); e.returnValue = '';
       if (ref.current.state.screen?.kind !== 'unsaved' && ref.current.state.screen?.kind !== 'close.render') startCloseFlow(ref.current, closeNow);
     };
-    const onRequest = () => { if (needsPrompt()) startCloseFlow(ref.current, closeNow); else closeNow(); };
     window.addEventListener('beforeunload', onBeforeUnload);
-    window.addEventListener(CLOSE_REQUEST_EVENT, onRequest);
-    return () => { window.removeEventListener('beforeunload', onBeforeUnload); window.removeEventListener(CLOSE_REQUEST_EVENT, onRequest); };
+    return () => { window.removeEventListener('beforeunload', onBeforeUnload); };
   }, []);
 
   // FR-171 / FR-172: after the event stream (re)opens, ask what start-up recovery corrected and tell the Creator once per Service run.

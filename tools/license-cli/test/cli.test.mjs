@@ -74,7 +74,7 @@ describe('expertmotion-license CLI', () => {
   });
 
   it('issue refuses without the Creator\'s Machine Code (no unbound keys)', () => {
-    const r = run(['issue', '--name', 'Septi', '--email', 'septi@example.com']);
+    const r = run(['issue', '--name', 'Test Buyer', '--email', 'buyer@example.com']);
     assert.equal(r.status, 2);
     assert.match(r.stderr, /requires the Creator's Machine Code.*exactly one computer/);
     assert.equal(readAudit(path.join(dir, 'audit.csv')).length, 0);
@@ -83,11 +83,11 @@ describe('expertmotion-license CLI', () => {
   it('issue refuses a mistyped Machine Code (CRC) and a duplicate order', () => {
     const code = mc('a');
     const typo = code.slice(0, 20) + (code[20] === 'A' ? 'B' : 'A') + code.slice(21);
-    const bad = run(['issue', '--name', 'Septi', '--email', 'septi@example.com', '--fingerprint', typo]);
+    const bad = run(['issue', '--name', 'Test Buyer', '--email', 'buyer@example.com', '--fingerprint', typo]);
     assert.equal(bad.status, 3);
     assert.match(bad.stderr, /checksum/);
-    json(['issue', '--name', 'Septi', '--email', 'septi@example.com', '--fingerprint', code, '--order', 'ORD-1']);
-    assert.equal(run(['issue', '--name', 'Septi', '--email', 'septi@example.com', '--fingerprint', code, '--order', 'ORD-1']).status, 3);
+    json(['issue', '--name', 'Test Buyer', '--email', 'buyer@example.com', '--fingerprint', code, '--order', 'ORD-1']);
+    assert.equal(run(['issue', '--name', 'Test Buyer', '--email', 'buyer@example.com', '--fingerprint', code, '--order', 'ORD-1']).status, 3);
   });
 
   it('rebind: 3 per rolling 12 months, the 4th is refused with EM-5008 unless --override', () => {

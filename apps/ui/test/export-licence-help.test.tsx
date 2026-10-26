@@ -49,8 +49,9 @@ describe('pure rules', () => {
     expect(QUALITY_CRF).toEqual({ standard: 18, smaller: 23 });
   });
   it('FR-134: licence states (no Trial Mode), name/tier/date, clock-changed badge', () => {
-    const base: LicenseDto = { status: 'licensed', tier: 'standard', licenseeHash: 'h', licenseeName: 'Septi', updatesUntil: '2027-10-01T00:00:00.000Z', updatesEligible: true, machineCode: 'MC' };
-    expect(licenceView(base)).toMatchObject({ status: 'licensed', tone: 'success', vars: { name: 'Septi', tier: 'standard', date: '2027-10-01' }, clock: false });
+    const base: LicenseDto = { status: 'licensed', tier: 'standard', licenseeHash: 'h', licenseeName: 'Person Name', updatesUntil: '2027-10-01T00:00:00.000Z', updatesEligible: true, machineCode: 'MC1-7Q4K-2M9X-HV3T-8PZD' };
+    expect(licenceView(base)).toMatchObject({ status: 'licensed', tone: 'success', vars: { code: 'MC1-7Q4K…8PZD', tier: 'standard', date: '2027-10-01' }, clock: false });
+    expect(JSON.stringify(licenceView(base))).not.toContain('Person Name');   // Operator 2026-10-26: never show the licensee's name
     expect(licenceView({ ...base, status: 'invalid', code: 'EM-5005' })).toMatchObject({ code: 'EM-5005', bodyKey: 'ui.scr.license.expired.body' });
     expect(licenceView({ ...base, status: 'invalid', code: 'EM-5002' })).toMatchObject({ code: 'EM-5002', tone: 'danger' });
     expect(licenceView({ ...base, status: 'revoked' })).toMatchObject({ code: 'EM-5004', tone: 'danger' });
@@ -125,7 +126,8 @@ describe('Editor screens (mock mode)', () => {
     await act(async () => { fireEvent.click(el('hdr.action.license')!); });
     await act(async () => { fireEvent.click(document.querySelector<HTMLElement>('[data-licence-status] button')!); });
     await waitFor(() => { if (el('scr.license.status')?.getAttribute('data-status') !== 'licensed') throw new Error('not licensed'); });
-    expect(el('scr.license.status')?.textContent).toContain('Septianus Angga');
+    expect(el('scr.license.status')?.textContent).toContain('Licensed · standard');
+    expect(el('scr.license.status')?.textContent).toContain('MC1-7Q4K…8PZD');
     expect(el('scr.license.buy')).toBeNull();
     await act(async () => { await runtime.api.putSettings({ privateMode: true }); });
     fireEvent.click(el('scr.license.remove')!);
@@ -206,13 +208,13 @@ describe('Editor screens (mock mode)', () => {
     expect(el('scr.export.diagnostics')).not.toBeNull();
   });
 
-  it('FR-100: Generator Cards follow R-135 (priority, model, installed state; Coming soon only for kinds the service disables)', async () => {
+  it('FR-100: Generator Cards follow R-135 (model, installed state, no internal priority tag; Coming soon only for kinds the service disables)', async () => {
     await renderEditor('sample');
     await act(async () => { fireEvent.click(el('hdr.menu.tools')!); });
     await waitFor(() => { if (el('lib.generator.card.music')?.getAttribute('data-enabled') !== 'false') throw new Error('cards not loaded'); });
     expect(el('lib.generator.card.music')!.textContent).toContain(COMING_SOON);
     expect(el('lib.generator.card.voice')!.getAttribute('data-enabled')).toBe('true');
-    expect(el('lib.generator.card.voice')!.textContent).toMatch(/P1/);
+    expect(el('lib.generator.card.voice')!.textContent).not.toMatch(/\bP[012]\b/);                 // Operator 2026-10-26: no internal priority tag
     expect(el('lib.generator.card.voice')!.textContent).toMatch(/Indonesian Voice · 63/);          // product name (displayName), not the upstream label
     expect(el('lib.generator.card.voice')!.textContent).not.toMatch(/Piper/);
     expect(el('lib.generator.card.voice')!.getAttribute('data-installed')).toBe('false');

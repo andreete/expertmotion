@@ -4,7 +4,7 @@
 |---|---|
 | Status | draft (implementable specification; items marked `[Operator decision]` need confirmation before Stage 4) |
 | Owner | Security engineer |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md (Licence Key, Machine Fingerprint, Database Key, Service Token), DECISIONS.md (ADR-006, ADR-007, ADR-014), ARCHITECTURE.md (§4 `license` module, §5 lifecycle, §8 filesystem), PERFORMANCE.md (§3 pixel table, §7 preflight), ELEMENT_IDS.md (`hdr.action.purchase`, `hdr.action.license`, `scr.license`, `scr.onboarding.license`), BRD.md (§3 business model, BRD-001…BRD-008, BRD-023), RISKS_AND_ASSUMPTIONS.md (RISK-008, 019, 021, 022, 027) |
 | Used by | SECURITY.md, THREAT_MODEL.md, ERROR_CATALOGUE.md (EM-5xxx), TEST_PLAN.md (QA- licence cases), API_SPECIFICATION.md (`/license` routes), DATABASE_SCHEMA.md (`license_state` table), DEPLOYMENT_AND_PACKAGING.md (`revoked.json`, build date, public keys), UI_UX_SPECIFICATION.md (`scr.license` copy), ONBOARDING_TOUR.md |
 | Owner of | Licence Key token format and encoding, signing keys and rotation, Machine Fingerprint derivation and tolerance rule, offline verification algorithm, activation rules (no Trial Mode), re-bind policy, revocation list format, clock-tamper handling, issuance runbook, delivery email, refund/revoke procedure, support scripts, licence test-case descriptions |
@@ -464,7 +464,7 @@ Additional cases TEST_PLAN.md should derive: activation rate limit (6th wrong ke
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-While licensed, the same form is the "Manage licence" modal: status card "Licensed to {name}", Machine Code, key field (to replace the key), and `scr.license.remove` "Deactivate on this computer" (confirmation; the install locks again). All elements are defined in ELEMENT_IDS.md (`scr.license` row): `.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.help`, `.lang`, `.steps`, `.remove`, `.rebind`, `.error`. `{storeUrl}` is a build-time constant (`VITE_EM_STORE_URL`, placeholder until `[Operator decision D-2]`); the Desktop Shell opens it with `shell.openExternal` after validating it is `https:`; in Private Mode the link shows the URL to copy (EM-8202). The Editor never embeds a payment page.
+While licensed, the same form is the "Manage licence" modal: status card "Licensed · {tier} · updates until {date} · <short Machine Code>" (the licensee's name is never shown in the Editor, Operator 2026-10-26), Machine Code, key field (to replace the key), and `scr.license.remove` "Deactivate on this computer" (confirmation; the install locks again). All elements are defined in ELEMENT_IDS.md (`scr.license` row): `.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.help`, `.lang`, `.steps`, `.remove`, `.rebind`, `.error`. `{storeUrl}` is a build-time constant (`VITE_EM_STORE_URL`, placeholder until `[Operator decision D-2]`); the Desktop Shell opens it with `shell.openExternal` after validating it is `https:`; in Private Mode the link shows the URL to copy (EM-8202). The Editor never embeds a payment page.
 
 Flow "Activate": first launch → licence screen → Copy Machine Code → the Creator sends it (purchase / support) → the Operator issues a key bound to it (CLI or the admin app, §10) → §12 email → paste or drop the key → `scr.license.activate` → `POST /license/activate` → §6 → SSE `license.changed` → `sys.toast` "Licence activated" → onboarding (first run) or the Editor, without restart.
 

@@ -48,6 +48,17 @@ for (const [from, to] of plan) {
   console.log(`staged ${path.relative(root, from)} → ${path.relative(root, to)}`);
 }
 
+// The engine bundle's index.html records the build machine's absolute project path (Remotion's `remotion_cwd`, used only by
+// the development Studio). Ship a neutral value, and refuse to stage any build-machine path into the package.
+{
+  const html = path.join(desk, 'resources/engine/bundle/index.html');
+  if (fs.existsSync(html)) fs.writeFileSync(html, fs.readFileSync(html, 'utf8').replace(/(remotion_cwd\s*=\s*)(["'])[^"']*\2/, '$1"."'));
+  const leaks = [];
+  const scan = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) scan(f); else if (/\.(html|js|json|css|txt)$/.test(e.name) && fs.readFileSync(f, 'utf8').includes(root)) leaks.push(path.relative(desk, f)); } };
+  for (const d of ['dist', 'resources']) if (fs.existsSync(path.join(desk, d))) scan(path.join(desk, d));
+  if (leaks.length) { console.error(`stage-desktop: build-machine path ${root} found in ${leaks.slice(0, 5).join(', ')}`); process.exit(1); }
+}
+
 const files = [];
 const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else files.push(p); } };
 walk(path.join(desk, 'resources/engine')); walk(path.join(desk, 'resources/bin'));

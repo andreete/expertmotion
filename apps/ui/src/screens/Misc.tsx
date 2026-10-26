@@ -88,16 +88,17 @@ export function AboutScreen({ onClose }: { onClose: () => void }) {
         <div className="text-[24px] font-bold">Expertmotion</div>
         <div className="t-mono text-em-muted">{state.health?.version ?? '—'}</div>
         <div data-el="scr.about.builddate" className="t-mono text-[12px] text-em-muted">{t('ui.scr.about.builddate', { date: state.health?.buildDate ?? '—' })}</div>
-        <div>{t(`ui.scr.license.status.${lic.status}`)} · {t(lic.bodyKey, lic.vars)}</div>
+        <div>{lic.status === 'licensed' ? t(lic.bodyKey, lic.vars) : `${t(`ui.scr.license.status.${lic.status}`)} · ${t(lic.bodyKey, lic.vars)}`}</div>
         <p data-el="scr.about.remotion" className="text-[12px] text-em-text-2">{t('ui.scr.about.remotion')}</p>
-        <details open><summary className="cursor-pointer">{t('ui.scr.about.notices')}</summary>
+        {/* Operator 2026-10-26 (less wordy): the component list is collapsed; the GPL source offer below stays visible. */}
+        <details><summary className="cursor-pointer">{t('ui.scr.about.notices')}</summary>
           <p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.about.notices.body')}</p>
           <ul data-el="scr.about.notices.list" className="mt-1 flex flex-col gap-0.5 text-[12px]">
             {BUNDLED_NOTICES.map((n) => <li key={n.name} className="flex gap-2"><span className="flex-1">{n.name}</span><span className="t-mono text-em-muted">{n.licence}</span></li>)}
           </ul>
-          <p data-el="scr.about.gpl" className="mt-2 rounded-[6px] border border-em-line p-2 text-[12px] text-em-text-2">{t('ui.scr.about.gpl')}</p>
           <p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.about.notices.file')}</p>
         </details>
+        <p data-el="scr.about.gpl" className="rounded-[6px] border border-em-line p-2 text-[12px] text-em-text-2">{t('ui.scr.about.gpl')}</p>
         {/* FR-176 / ADR-006: the honest boundary statement (SECURITY.md §1) — never "unreadable" or "cannot be reverse-engineered" */}
         <p data-el="scr.about.security" className="rounded-[6px] border border-em-line p-2 text-[12px] text-em-text-2">{t('ui.scr.about.security')}</p>
         <details><summary className="cursor-pointer">{t('ui.scr.about.limitations')}</summary><p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.about.limitations.body')}</p></details>

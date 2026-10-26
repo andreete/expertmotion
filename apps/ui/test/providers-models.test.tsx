@@ -133,7 +133,9 @@ describe('Model Manager (FR-120…FR-126)', () => {
     expect(document.querySelector('[data-model-key="whisper-large-v3-turbo"] [data-el="scr.models.row.tier"]')!.textContent).toMatch(/Needs GPU tier T1/);
     fireEvent.click(document.querySelector('[data-model-key="piper-id-news"] [data-el="scr.models.row.expand"]')!);
     expect(el('scr.models.row.notice')!.textContent).toMatch(/GPL-3\.0-or-later/);
-    expect(el('scr.models.row.card')!.textContent).toMatch(/not pinned yet/);
+    // Operator 2026-10-26: licence names only; no engine / tool names, paths, checksums or developer notes in the card.
+    expect(el('scr.models.row.notice')!.textContent).not.toMatch(/espeak|sherpa|piper/i);
+    expect(el('scr.models.row.card')!.textContent).not.toMatch(/models\\|sherpa|whisper|Checksum|RISK-/i);
     fireEvent.change(el('scr.models.filter.purpose')!, { target: { value: 'stt' } });
     expect(els('scr.models.row').map((r) => r.getAttribute('data-model-key'))).toEqual(['whisper-small', 'whisper-large-v3-turbo']);
     fireEvent.click(el('scr.models.filter.fits')!);
@@ -143,7 +145,7 @@ describe('Model Manager (FR-120…FR-126)', () => {
     expect(el('scr.models.footer')!.textContent).toMatch(/Models use .* · 48 GB free/);
   });
 
-  it('EM-7005 confirm above the tier, pause keeps / cancel discards, remove asks first, open folder falls back to EM-8303', { timeout: 20_000 }, async () => {
+  it('EM-7005 confirm above the tier, pause keeps / cancel discards, remove asks first, no per-engine folder buttons', { timeout: 20_000 }, async () => {
     const { runtime } = await openModels();
     const install = vi.spyOn(runtime.api, 'installModel').mockImplementation(async (key) => runtime.api.getModel(key));   // mock downloads finish instantly
     const cancel = vi.spyOn(runtime.api, 'cancelModel'); const remove = vi.spyOn(runtime.api, 'removeModel');
@@ -177,9 +179,9 @@ describe('Model Manager (FR-120…FR-126)', () => {
     expect(remove).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(el('scr.models.row.remove.yes')!); });
     expect(remove).toHaveBeenCalledWith('piper-id-news');
-    await act(async () => { fireEvent.click(els('scr.models.folder')[0]!); });
-    await until(() => el('scr.models.footer')!.textContent?.includes('EM-8303'), 'EM-8303');
-    expect(el('scr.models.footer')!.textContent).toMatch(/models\\whisper\.cpp/);
+    await until(() => document.querySelector('[data-model-key="piper-id-news"] [data-el="scr.models.row.install"]'), 'removed');   // let the reload settle
+    expect(els('scr.models.folder')).toHaveLength(0);
+    expect(el('scr.models.footer')!.textContent).not.toMatch(/whisper|sherpa|folder/i);
   });
 });
 

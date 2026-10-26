@@ -146,7 +146,7 @@ describe('text', () => {
   it('add: variant default position and motion; named and explicit positions; style overrides', () => {
     const m = must(base(), [
       op('op:text.add', { text: 'Harga cabai naik lagi', variant: 'preset:text.title', atMs: 300, durationMs: 3000 }),
-      op('op:text.add', { text: 'Septi', variant: 'preset:text.lower-third', atMs: 0, durationMs: 2000, styleOverrides: { colour: '#FFFFFF' } }),
+      op('op:text.add', { text: 'Halo', variant: 'preset:text.lower-third', atMs: 0, durationMs: 2000, styleOverrides: { colour: '#FFFFFF' } }),
       op('op:text.add', { text: 'Pojok', variant: 'preset:text.callout', atMs: 0, durationMs: 2000, position: 'top-right' }),
       op('op:text.add', { text: 'Pas', variant: 'preset:text.subtitle', atMs: 0, durationMs: 2000, position: { x: 10, y: 20 } }),
     ]);

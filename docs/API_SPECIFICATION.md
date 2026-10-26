@@ -734,7 +734,7 @@ With an Operator model CDN in the build (LOCAL_AI_MODELS §4.5) R-140 first chec
 
 **R-147 `POST /models/registry/refresh`** — the same check without the 24 h interval (Model Manager Refresh). Response `{ registry, registryUpdate }` as in R-140; never fails because of the CDN (the outcome is in `registryUpdate`; Private Mode → `outcome: 'skipped', code: 'EM-8202'`, no request made).
 
-**R-146 `POST /models/engines/:engine/reveal`** (FR-126) — response `{ path }`: the absolute `<models>\<engine>\` folder (created if missing) for the Shell's `openFolder`; the Editor shows `EM-8303` with the path when the Shell cannot open it. Errors: `404 EM-9003` unknown engine.
+**R-146 `POST /models/engines/:engine/reveal`** (FR-126) — response `{ path }`: the absolute `<models>\<engine>\` folder (created if missing) for the Shell's `openFolder`; the Editor no longer calls it since 2026-10-26 (the Model Manager shows no engine folders; the route and the client method stay, unused by the Editor UI). Errors: `404 EM-9003` unknown engine.
 
 **R-144 `DELETE /models/:key`** — removes weights and partials. Response `204`. Errors: `409 EM-7104` in use.
 

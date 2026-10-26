@@ -38,7 +38,7 @@ function exportedList(): TrustedRevocationList {
   return r.trusted;
 }
 const issue = (mc: string, order: string) =>
-  cliJson('issue', '--name', 'Septi Rahayu', '--email', 'septi@example.com', '--tier', 'standard', '--fingerprint', mc, '--order', order);
+  cliJson('issue', '--name', 'Test Buyer', '--email', 'buyer@example.com', '--tier', 'standard', '--fingerprint', mc, '--order', order);
 
 beforeAll(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'em-license-rt-'));

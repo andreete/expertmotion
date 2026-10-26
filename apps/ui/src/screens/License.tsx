@@ -16,10 +16,17 @@ type Tone = 'success' | 'warn' | 'danger' | 'neutral';
 const STATUSES: readonly LicenseStatus[] = ['licensed', 'unlicensed', 'invalid', 'revoked', 'machine-mismatch'];
 export const isLicensed = (l: LicenseDto | null | undefined): boolean => l?.status === 'licensed';
 
+/** Short Machine Code for status lines ("MC1-7Q4K…8PZD"); the licensee's name is never shown (Operator 2026-10-26). */
+export function shortMachineCode(code: string | null | undefined): string {
+  if (!code) return '—';
+  const parts = code.split('-');
+  return parts.length > 3 ? `${parts[0]}-${parts[1]}…${parts[parts.length - 1]}` : code;
+}
+
 /** FR-134 popover/status line per licence state. */
 export function licenceView(l: LicenseDto | null): { status: LicenseStatus; tone: Tone; bodyKey: string; vars: Record<string, string>; code: string | null; clock: boolean } {
   const status: LicenseStatus = l && STATUSES.includes(l.status) ? l.status : 'unlicensed';
-  const vars = { name: l?.licenseeName ?? '—', tier: l?.tier ?? '—', date: l?.updatesUntil?.slice(0, 10) ?? '—' };
+  const vars = { code: shortMachineCode(l?.machineCode), tier: l?.tier ?? '—', date: l?.updatesUntil?.slice(0, 10) ?? '—' };
   const clock = Boolean(l?.clockAnomaly || l?.warnings?.includes('EM-5007'));
   switch (status) {
     case 'licensed': return { status, tone: 'success', bodyKey: 'ui.scr.license.active.full', vars, code: null, clock };

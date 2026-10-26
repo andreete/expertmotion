@@ -45,7 +45,7 @@ describe('locale files', () => {
 
 describe('formatter', () => {
   it('substitutes named arguments and plurals', () => {
-    expect(formatMessage('Hi {name}', { name: 'Septi' })).toBe('Hi Septi');
+    expect(formatMessage('Hi {name}', { name: 'clip.mp4' })).toBe('Hi clip.mp4');
     expect(translate('en', 'ui.sys.toast.applied', { count: 1, version: 'ab12' })).toBe('Applied: 1 change · vab12');
     expect(translate('en', 'ui.sys.toast.applied', { count: 3, version: 'ab12' })).toBe('Applied: 3 changes · vab12');
     expect(translate('id', 'ui.sys.toast.applied', { count: 3, version: 'ab12' })).toBe('Diterapkan: 3 perubahan · vab12');

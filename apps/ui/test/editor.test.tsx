@@ -11,8 +11,6 @@ afterEach(() => cleanup());
 
 /** Ids that cannot appear in a browser/mock session, with the reason (reported, not silently skipped). */
 const NOT_IN_MOCK: Record<string, string> = {
-  'hdr.win.minimize': 'Electron window controls (rendered only when the Desktop Shell bridge exists)',
-  'hdr.win.maximize': 'Electron window controls', 'hdr.win.close': 'Electron window controls',
   'sys.fatal': 'Desktop Shell push only (EM-8002 / EM-6001; covered in service-restart.test.tsx)', 'sys.fatal.diagnostics': 'Desktop Shell push only', 'sys.fatal.quit': 'Desktop Shell push only',
   'lib.catalogue.card.badge.model': 'no P0/P1 preset carries a model: flag in packages/catalogue',
   'lib.catalogue.card.selected': 'state variant: expressed as data-selected/aria-pressed on lib.catalogue.card',

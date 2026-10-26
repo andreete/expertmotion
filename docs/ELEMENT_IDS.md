@@ -29,7 +29,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 │ hdr.logo  hdr.menu.file hdr.menu.home hdr.menu.design hdr.menu.tools hdr.menu.help            │
 │                         hdr.title  [Untitled ✎]                                               │
 │   hdr.action.hardware  hdr.action.save  hdr.action.backup  hdr.action.restore                 │
-│   hdr.action.models  hdr.action.license  hdr.action.export  hdr.win.*                        │
+│   hdr.action.models  hdr.action.license  hdr.action.export  (native window frame buttons)    │
 ├────────────────────┬──────────────────────────────────────────────┬───────────────────────────┤
 │ lib.search.input   │ stage.player.frame                          │ agent.chat (one chat)     │
 │ lib.mode.header    │  stage.player.canvas                        │ .header .status .usage    │
@@ -87,9 +87,8 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.action.restore` | cloud-sync icon (repurposed) | Restore Project from a zip (`scr.backup.restore`). |
 | `hdr.action.undo` / `hdr.action.redo` | (added) | Move the project head between Composition Versions (Ctrl+Z / Ctrl+Shift+Z; Ctrl+Y also redoes). |
 | `hdr.action.models` | grid icon | Opens Model Manager (`scr.models`). |
-| `hdr.action.license` | avatar | Licence status popover (licensed to {name}, updates date) with "Manage licence" → `scr.license`. The Editor is only reachable while licensed (no Trial Mode). |
+| `hdr.action.license` | avatar | Licence status popover ("Licensed", updates date, short Machine Code; never the licensee's name, Operator 2026-10-26) with "Manage licence" → `scr.license`. The Editor is only reachable while licensed (no Trial Mode). |
 | `hdr.action.export` | Export | Opens Export dialog. `hdr.action.export.disabled` until a Composition Version with ≥ 1 Clip exists. |
-| `hdr.win.minimize` / `hdr.win.maximize` / `hdr.win.close` | window controls | Standard window controls. |
 
 ## Library Panel (`lib.*`)
 
@@ -215,7 +214,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `scr.onboarding` | First-run wizard (after activation): `.welcome`, `.provider`, `.models`, `.hardware`, `.tour`, `.done`. |
 | `scr.license` | Licence screen. Unlicensed: the whole window (`data-gate`), nothing else of the product; licensed: "Manage licence" modal. Parts: `.status`, `.machinecode`, `.machinecode.copy`, `.input`, `.activate`, `.buy`, `.help`, `.lang`, `.steps`, `.remove`, `.rebind`, `.error`. |
 | `scr.providers` | Provider Connections: `.list`, `.add`, `.provider.select`, `.key.input`, `.validate`, `.models.list`, `.budget.project`, `.budget.month`, `.test`, `.save`. FR-109…FR-119 additions: `.row` (one connection), `.row.usage`, `.row.isdefault`, `.row.edit`, `.row.test`, `.row.default` (Set default), `.row.remove`, `.row.remove.confirm`, `.row.remove.yes`, `.edit`, `.edit.save`, `.add.open`, `.cancel`, `.label.input`, `.provider.disclosure` (what is sent + terms link), `.key.toggle` (show/hide), `.key.shape`, `.locked`, `.models.search`, `.models.refresh`, `.assign.note` (EM-4005 / image-input note), `.budget.warn` (EM-4202), `.test.result`. 2026-10-25 model table (FR-114, FR-115; replaces the tier pickers): `.assign.agent` (two-option toggle "Brainstorming Agent \| Editor Agent", each option shows that agent's chosen model label), `.assign.agent.brainstorm` / `.assign.agent.editor` (one option; `data-model-id` = the chosen model id), `.assign.both` ("Also use for the … Agent": copies the shown agent's pick to the other agent); the ModelPicker parts under `.models`: `.models.search`, `.models.refresh`, `.models.filter.json` / `.models.filter.images` (chips, `aria-pressed`), `.models.category` (segmented All / Free / Paid radiogroup, added 2026-10-25) with `.models.category.all` / `.models.category.free` / `.models.category.paid` (`aria-checked`), `.models.count`, `.models.sort.name` / `.models.sort.context` / `.models.sort.price` (column headers, `aria-sort`), `.models.list` (listbox), `.models.row` (one model, `data-model-id`, `data-quality` = ok / weak / unsupported, `aria-selected`; never disabled), `.models.row.recommended` (badge on 1–3 rows), `.models.row.warn` (⚠ quality badge with the reason tooltip, `data-reasons`), `.models.row.price.unknown` ("price n/a"), `.models.warning` (inline warning under the table when the selected model carries a quality warning), `.models.warning.recommended` ("Use recommended instead"), `.models.more` ("Show N more"), `.models.nomatch`, `.models.empty` (no Capability Table yet), `.models.fetch` ("Fetch models"). |
-| `scr.models` | Model Manager: `.list`, `.row`, `.row.install`, `.row.remove`, `.row.progress`, `.tier`. FR-120…FR-126 additions: `.filter`, `.filter.purpose`, `.filter.installed`, `.filter.fits`, `.row.expand`, `.row.card`, `.row.notice` (engine licence notice), `.row.recommended`, `.row.tier`, `.row.status`, `.row.pause`, `.row.cancel`, `.row.install.confirm` (EM-7005), `.row.install.anyway`, `.row.remove.confirm`, `.row.remove.yes`, `.footer`, `.folder` (per-engine open folder), `.registry` (EM-7111). 2026-10-25: `.row.name` (product name in the row header), `.row.licence` (licence link in the card). |
+| `scr.models` | Model Manager: `.list`, `.row`, `.row.install`, `.row.remove`, `.row.progress`, `.tier`. FR-120…FR-126 additions: `.filter`, `.filter.purpose`, `.filter.installed`, `.filter.fits`, `.row.expand`, `.row.card`, `.row.notice` (engine licence notice), `.row.recommended`, `.row.tier`, `.row.status`, `.row.pause`, `.row.cancel`, `.row.install.confirm` (EM-7005), `.row.install.anyway`, `.row.remove.confirm`, `.row.remove.yes`, `.footer`, `.registry` (EM-7111). 2026-10-25: `.row.name` (product name in the row header), `.row.licence` (licence link in the card). 2026-10-26: the card shows languages, licence and component licences only (no engine names, paths, checksums or notes); `.row.tier` only when the model needs more than T0. |
 | `scr.hardware` | Hardware Monitor popover: `.cpu`, `.ram`, `.procmem`, `.disk`, `.gpu`, `.workload`. FR-127…FR-130 additions: `.output` (output drive), `.vram`, `.tier`, `.recheck`, `.workload.item`, `.workload.cancel`. |
 | `scr.project.new` / `.open` / `.settings` / `.recover` | Project dialogs; open has `.list`, `.delete` (confirmation); settings has `.name`, `.fps`, `.ratio`, `.resolution`, `.duration.policy`, `.output.folder`; recover has `.list`, `.restore`. |
 | `scr.ratio.custom` | Custom ratio dialog: `.width`, `.height`, `.preview`, `.apply` (clamped 1:3 … 3:1). |
@@ -323,7 +322,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 |---|---|---|
 | `hdr.menu.help.onboarding` | Help ▸ Resume onboarding | Reopens `scr.onboarding` at the last step reached (FR-004). |
 | `scr.onboarding.skip` | per-step "Skip" ("Lewati") | On Provider, Models, Hardware: records the step in the onboarding record and moves on. |
-| `scr.onboarding.provider.consequence` | Provider step note | "Agents stay off until a provider is connected" (FR-007). |
+| `scr.onboarding.provider.consequence` | Provider step note | "Agents stay off until connected" (FR-007). |
 | `scr.onboarding.hardware.disk` | Hardware step free disk | Free space on the data drive (FR-006). |
 | `scr.onboarding.hardware.recheck` | Hardware step "Check again" | Re-runs the hardware check (R-151) and a live reading (R-152). |
 | `scr.onboarding.done.open` | Done step "Open a new project" | Stores the onboarding record (settings) and opens `scr.project.new` prefilled "Untitled" (FR-008). |
@@ -355,6 +354,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.export.still.time` | PNG frame time (s) | Chosen time for the PNG still (`stillAtMs`), default the playhead; "Use playhead" resets it (FR-138, FR-147). |
 | `scr.export.preflight.fix` | Recovery button of a preflight row | Choose folder, Use Standard, Open Output Settings, Go to assets, Open Diagnostics, Enter licence key, View progress or Check again (FR-139). |
 | `scr.export.preflight.recheck` | "Check again" | Re-runs R-110. |
+| `scr.export.preflight.passed` | "N checks passed" disclosure | Passed checks without a note or action collapse into this one line (expand to see them); failed, noted or actionable checks stay as rows (Operator 2026-10-26). |
 | `scr.export.private` | "Private Mode on" row | Context only; exporting works unchanged (FR-163). |
 | `scr.export.elapsed` | Elapsed time | Time since the job started, next to `.eta` (FR-141). |
 | `scr.export.done.thumb` | Done thumbnail | Output thumbnail (R-041 `thumb`, PNG stills show the file) (FR-146). |
@@ -440,6 +440,8 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 6. Since 2026-10-26 one assistant chat replaces the two chats and the Model Bar: the chat header shows the current mode's model (per agent) and its context usage.
 
 ## Retired ids
+
+Removed on 2026-10-26 (Operator UI polish); the names are not reused: `hdr.win.minimize`, `hdr.win.maximize`, `hdr.win.close` (header window buttons that duplicated the native Windows frame; closing goes through the native frame and the same unsaved / render prompts), `scr.models.folder` (per-engine "Open <engine> folder" buttons in the Model Manager footer).
 
 Removed on 2026-10-26 with the two separate chats (Operator decision: ONE assistant chat with two modes, Diskusi / Edit; FR-073, FR-099); the names are not reused: `agent.modelbar`, `agent.modelbar.status`, `agent.modelbar.provider`, `agent.modelbar.model` (now `agent.chat.model` / `agent.chat.status` in the chat header), `agent.chats`, `agent.chat.divider` (no split any more), `agent.brainstorm.panel`, `agent.editor.panel` (now `agent.chat`), `agent.brainstorm.header`, `agent.editor.header` (now `agent.chat.header`), `agent.brainstorm.maximize`, `agent.editor.maximize` (now `agent.chat.maximize`), `agent.brainstorm.thread`, `agent.editor.thread` (now `agent.chat.thread`), `agent.brainstorm.message` / `agent.editor.message` with `.copy` / `.retry` (now `agent.chat.message` with `data-agent`), `agent.brainstorm.composer` / `.send` / `.attach` / `.attach.file` / `.attach.error` and the same under `agent.editor.` (now `agent.chat.composer` …), `agent.brainstorm.footer.model` / `.footer.ctx` / `.footer.model.popover` / `.footer.model.connection` / `.footer.model.picker.*` and the same under `agent.editor.` (now `agent.chat.model`, `agent.chat.usage`, `agent.chat.model.popover` …), `agent.brainstorm.budget`, `agent.editor.budget` (now `agent.chat.budget`).
 

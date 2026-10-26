@@ -10,7 +10,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--ink); }
 .top { display: flex; align-items: center; gap: 24px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
-.brand { font-weight: 700; font-size: 16px; white-space: nowrap; }
+.brand { font-weight: 700; font-size: 16px; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+.brand .mark { flex: none; }
 .brand span { font-weight: 400; color: var(--muted); }
 .tabs { display: flex; gap: 4px; flex: 1; }
 .tabs button { border: 0; background: none; color: var(--muted); padding: 8px 12px; border-radius: 6px; font: inherit; cursor: pointer; }
