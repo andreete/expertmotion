@@ -522,7 +522,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       plan.usage = { model: modelId, inputTokens: 1240, outputTokens: 310, costUsd: 0.004, approximate: true };
       plan.status = 'valid';
       p.usage.editor = { usedTokens: 1550, contextLength: 200_000 };
-      const msg: MessageDto = { id: newId(), role: 'assistant', blocks: [{ type: 'text', text: `I prepared a plan: ${plan.goal}. Nothing changes until you press Execute.` }], agentRunId: runId, createdAt: nowIso() };
+      const msg: MessageDto = { id: newId(), role: 'assistant', blocks: [{ type: 'text', text: `I prepared a plan: ${plan.goal}. Nothing changes until you press Execute.` }, { type: 'tool_result', name: 'plan', output: { planId: plan.id, status: 'valid', steps: plan.steps.length } }], agentRunId: runId, createdAt: nowIso() };
       p.messages.editor.push(msg);
       emit('agent.run.done', { projectId: p.dto.id, run: run(p, runId, 'editor', 'done', plan.id), message: msg, usage: { inputTokens: 1240, outputTokens: 310, costUsd: 0.004, approximate: true, contextLength: 200_000 }, contextUsage: p.usage.editor });
       emit('plan.ready', { projectId: p.dto.id, plan, runId });

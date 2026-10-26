@@ -179,7 +179,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | # | Spec |
 |---|---|
 | 1 | Click the shortcut in `stage.timeline.inspector` (or press `A` with an element selected). |
-| 2 | `agent.editor.composer` focuses with a target chip "clip 2 · beach.mp4" and a prefilled stem "Change clip 2: " / "Ubah klip 2: ". |
+| 2 | `agent.chat.composer` focuses with a target chip "clip 2 · beach.mp4" and a prefilled stem "Change clip 2: " / "Ubah klip 2: ". |
 | 3 | Created only on send: category inferred by the Rewrite step from the instruction, target `clip:<id>`, `needsInterpretation: true`. |
 | 4 | Editor Agent (IX-14). |
 | 5–8 | As IX-14. |
@@ -252,7 +252,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | Type in `agent.brainstorm.composer`, press Enter or `.send` (Shift+Enter = newline); optional `.attach` (Asset or image). |
+| 1 | Type in `agent.chat.composer`, press Enter or `.send` (Shift+Enter = newline); optional `.attach` (Asset or image). |
 | 2 | User bubble appended; composer clears but keeps the text in a recoverable buffer until the reply succeeds; status line "Asking <model>…" / "Bertanya ke <model>…" with Cancel; `.footer.ctx` updates after the reply. |
 | 3 | none directly. A handoff later produces intents with `source: brainstorm`. |
 | 4 | Brainstorming Agent (read-only tools only). |
@@ -266,7 +266,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | On `agent.brainstorm.handoff`: untick rows, click "Send to Editor Agent" / "Kirim ke Editor Agent" or "Dismiss" / "Abaikan". |
+| 1 | On `agent.brainstorm.handoff`: untick rows, click "Apply to video" / "Kerjakan di video" or "Dismiss" / "Abaikan". |
 | 2 | Card collapses to a one-line receipt "Sent 3 to Editor Agent" / "3 dikirim ke Editor Agent"; Editor Chat scrolls into view with a system bubble. |
 | 3 | One intent per ticked row, `source: brainstorm`; fully specified rows `needsInterpretation: false`. |
 | 4 | Compile for the specified rows; one Editor Agent run for the rest (batched into a single plan). |
@@ -280,7 +280,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 
 | # | Spec |
 |---|---|
-| 1 | Type in `agent.editor.composer`, Enter or `.send`; or click `agent.editor.plan` to plan the queued intents without a message; optional target chip (IX-10). |
+| 1 | Type in `agent.chat.composer`, Enter or `.send`; or click `agent.editor.plan` to plan the queued intents without a message; optional target chip (IX-10). |
 | 2 | User bubble; "Asking <model>…" with Cancel; Execute disabled while planning. |
 | 3 | `chat`-sourced intent: category inferred by Rewrite (or `layout`/`text`/… when the Creator used the inspector chip), `propertyKey` set by the plan validator per op, `needsInterpretation: true`. |
 | 4 | Editor Agent: Rewrite envelope with queued intents, Locked Keys, capabilities → `EditPlan` → validation → dry run. |
@@ -370,7 +370,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | # | Spec |
 |---|---|
 | 1 | Toggle `agent.output.private` (Space when focused). |
-| 2 | Toggle animates; `sys.privatemode.banner` slides in (200 ms); `agent.modelbar.status` icon; composers disable with inline note; Model Manager/Update controls disable. |
+| 2 | Toggle animates; `sys.privatemode.banner` slides in (200 ms); `agent.chat.status` icon; composers disable with inline note; Model Manager/Update controls disable. |
 | 3 | none (settings, not Composition). |
 | 4 | none; in-flight agent runs cancelled (IX-16 semantics). |
 | 5 | `settings.privateMode`; egress module flag; downloads paused. |
@@ -527,7 +527,7 @@ General: drag threshold 4 px; drop targets show a 2 px accent inset outline duri
 | Library Panel range | 240–420 px; collapses to a 48 px icon rail (mode icons + assets icon) below 240 or via Ctrl+B |
 | Agent Panel range | 320–900 px, the maximum capped so the Stage keeps its minimum width; collapses to a 48 px rail (brainstorm, editor, output icons with badges for pending plan / unread) via Ctrl+Shift+B |
 | Stage minimum | 640 px wide (FR-099); Player keeps aspect inside; Timeline View height 220 px min, resizable up to 50 % of the Stage height |
-| Agent Panel internal split | The two chats share the panel height (no outer scroll; threads scroll inside, composers stay visible). `agent.chat.divider` is draggable (↑/↓ 16 px, Home/End, double-click or Enter resets to 40 % / 60 %) with minimums Brainstorming 140 px, Editor 200 px (it also holds the Intent Queue). `agent.<agent>.maximize` gives one chat the whole chat area; the other keeps only its header bar, whose title restores the split. Output Settings is a collapsible section below the chats, collapsed by default with "16:9 · 1080p · 30 fps · Standard" in its header (`agent.output.toggle`); when open its body scrolls inside at most 55 % of the window height (FR-099) |
+| Agent Panel internal layout | Since 2026-10-26 one assistant chat (FR-181) takes the panel height above Output Settings (no outer scroll; the thread scrolls inside, the composer with the Diskusi / Edit switch stays visible; the "Your picks" strip sits above the composer in Edit mode). `agent.chat.maximize` gives the chat the whole panel (Output Settings hidden); the same toggle restores. The split with `agent.chat.divider` is retired. Output Settings is a collapsible section below the chat, collapsed by default with "16:9 · 1080p · 30 fps · Standard" in its header (`agent.output.toggle`); when open its body scrolls inside at most 55 % of the window height (FR-099) |
 | Dividers | 6 px hit area, 1 px line; double-click resets to default; keyboard: focus divider, ←/→ by 16 px |
 | Persistence | Widths per window size bucket (≤ 1279, 1280–1599, ≥ 1600), collapsed states, the chat split ratio, the maximized chat and the Output Settings collapsed state in settings.json (`layout`, FR-155) and the local prefs |
 | Collapsed rail behaviour | Clicking a rail icon opens that panel as an overlay (not pushing the Stage) until focus leaves; pinning re-expands |

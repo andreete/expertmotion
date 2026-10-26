@@ -5,5 +5,6 @@ export * from './envelope.js';
 export * from './providers.js';
 export * from './runner.js';
 export * from './tools.js';
+export * from './shared-context.js';
 export { PROMPT_SET_VERSION } from './prompts.generated.js';
 export { installPromptSet, prompts, PROMPT_SET_KEYS, type PromptSet } from './prompt-store.js';

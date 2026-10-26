@@ -18,6 +18,7 @@ import { Agent, emit, Id, ProjectParams, requireProject, type AgentT } from '../
 import { cachedModels, runUsage } from '../s3/usage-store.js';
 import { s3, track } from '../s3/state.js';
 import { getAssignment } from './providers.js';
+import { recentEditsFor } from '../s3/shared-context.js';
 
 /** Hook the intents module is asked to install (see report): enqueue already-validated intents, return the IntentQueueDto. */
 export interface HandoffHooks { enqueueIntents(projectId: string, intents: EditIntentT[]): { queue: unknown } }
@@ -100,10 +101,12 @@ function historyOf(ctx: ServiceContext, convId: string): ChatMessage[] {
   });
 }
 
-function brainstormContext(ctx: ServiceContext, project: { id: string; name: string; language: 'id' | 'en' }) {
+export function brainstormContext(ctx: ServiceContext, project: { id: string; name: string; language: 'id' | 'en' }) {
   let composition: unknown = null;
   try { const head = ctx.hooks.composition(project.id); composition = summarizeForAgent(head.model, ctx.hooks.assetFacts(project.id), 2000); } catch { /* no head yet */ }
-  return { project: { name: project.name, language: project.language }, tier: ctx.hooks.tier(), composition };
+  // AI_WORKFLOW §10.1: what the Editor changed in the same project chat (plan goals, applied / undone), token-budgeted.
+  const recentEdits = recentEditsFor(ctx, project.id);
+  return { project: { name: project.name, language: project.language }, tier: ctx.hooks.tier(), composition, ...(recentEdits ? { recentEdits } : {}) };
 }
 
 /**

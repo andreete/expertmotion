@@ -1,7 +1,9 @@
 // Intent Queue (agent.editor.intentqueue.*, CMP-15, UI_UX_SPECIFICATION.md §11.3): receipts for every pick; superseded
 // items stay visible struck through with Restore; parent/child expansion ("Fade → all 3 cuts"); IX-17 restore/remove/clear.
+// Since 2026-10-26 (one assistant chat) it is the compact "Your picks" strip above the composer in Edit mode: a toggle with a
+// count badge (`.toggle`, `.count`) expands the list and its Plan / Clear / Cancel actions (prefs.picksOpen).
 import { useState, type ReactNode } from 'react';
-import { Bookmark, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, DownloadCloud, History, Lightbulb, MessageCircle, OctagonAlert, Undo2, X } from 'lucide-react';
+import { Bookmark, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, DownloadCloud, History, Lightbulb, MessageCircle, OctagonAlert, Undo2, X } from 'lucide-react';
 import type { CompositionModelT } from '@expertmotion/composition-model';
 import { getPreset } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
@@ -10,7 +12,7 @@ import { visibleQueue } from '../state/reducer.js';
 import type { EditIntent } from '../api/types.js';
 import { Button, IconButton, cx } from '../components/ui.js';
 import { categoryIcon } from '../library/presetVisual.js';
-import { intentTitle } from './BrainstormChat.js';
+import { intentTitle } from './proposals.js';
 
 type T = (k: string, v?: Record<string, string | number>) => string;
 
@@ -53,8 +55,9 @@ export function groupQueue(top: EditIntent[], all: EditIntent[]): QueueRow[] {
   return rows;
 }
 
-export function IntentQueue() {
-  const { state, actions, t } = useStore();
+export function IntentQueue({ hidden }: { hidden?: boolean } = {}) {
+  const { state, actions, t, prefs, setPrefs } = useStore();
+  const expanded = prefs.picksOpen;
   const all = visibleQueue(state).filter((i) => i.source !== 'system' || i.params['__output'] !== undefined);   // FR-097: Output Settings changes (incl. Reset) stay visible
   const top = all.filter((i) => !i.parentIntentId);
   const queuedCount = top.filter((i) => i.status === 'queued' || i.status === 'superseded' || i.status === 'rejected').length;
@@ -63,15 +66,22 @@ export function IntentQueue() {
   const rows = groupQueue(top, all);
   const running = Boolean(state.streaming.editor) || state.plan?.status === 'draft' || state.plan?.status === 'executing';
   return (
-    <div className="flex max-h-[45%] min-h-[5.5rem] shrink-0 flex-col border-b border-em-line">
-      <div className="flex items-center gap-1.5 px-3 py-1.5">
-        <span className="t-label flex-1">{t('ui.agent.editor.intentqueue.title', { count: top.length })}</span>
+    <div data-el="agent.editor.picks" data-open={expanded ? 'true' : undefined} hidden={hidden} className={cx('flex shrink-0 flex-col border-t border-em-line', expanded && 'max-h-[40%]')}>
+      <div className="flex items-center gap-1.5 px-3 py-1">
+        <button type="button" data-el="agent.editor.intentqueue.toggle" aria-expanded={expanded} aria-controls="em-picks" onClick={() => setPrefs({ picksOpen: !expanded })}
+          className="flex flex-1 items-center gap-1.5 text-left text-[12px] text-em-text-2 hover:text-em-text">
+          {expanded ? <ChevronDown size={12} aria-hidden /> : <ChevronUp size={12} aria-hidden />}
+          <span className="t-label">{t('ui.agent.chat.picks')}</span>
+          <span data-el="agent.editor.intentqueue.count" className={cx('rounded-full px-1.5 text-[10px] font-semibold', queuedCount ? 'bg-em-accent text-white' : 'bg-em-panel-2 text-em-muted')}>{top.length}</span>
+        </button>
+        <span hidden={!expanded} className="contents">
         <Button el="agent.editor.plan" size={28} disabledReason={needsAgent ? null : t('ui.agent.editor.plan.disabled')} onClick={() => void actions.plan()}>{t('ui.agent.editor.plan')}</Button>
         <Button el="agent.editor.intentqueue.clear" size={28} variant="ghost" disabledReason={queuedCount ? null : t('ui.agent.editor.intentqueue.clear.disabled')}
           onClick={() => actions.setScreen({ kind: 'confirm', titleKey: 'ui.modal.clear.intents', vars: { count: queuedCount }, confirmKey: 'ui.agent.editor.intentqueue.clear', danger: true, onConfirm: () => { void actions.clearIntents(); } })}>{t('ui.agent.editor.intentqueue.clear')}</Button>
         <Button el="agent.editor.cancel" size={28} variant="ghost" disabledReason={running ? null : t('ui.agent.editor.cancel.disabled')} onClick={() => void actions.cancelPlan()}>{t('ui.common.cancel')}</Button>
+        </span>
       </div>
-      <ul data-el="agent.editor.intentqueue" aria-label={t('a11y.agent.editor.intentqueue', { count: top.length })} className="flex min-h-0 flex-col gap-1 overflow-y-auto px-3 pb-2">
+      <ul id="em-picks" hidden={!expanded} data-el="agent.editor.intentqueue" aria-label={t('a11y.agent.editor.intentqueue', { count: top.length })} className="flex min-h-0 flex-col gap-1 overflow-y-auto px-3 pb-2">
         {top.length === 0 && <li className="py-2 text-center text-[12px] text-em-muted">{t('ui.agent.editor.intentqueue.empty')}</li>}
         {rows.map((row) => {
           if (row.kind === 'group') {

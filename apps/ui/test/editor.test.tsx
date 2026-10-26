@@ -4,7 +4,7 @@
 import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { act, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import { renderEditor, el, present } from './setup-dom.js';
+import { renderEditor, el, present, chatComposer, openProvidersFromChat } from './setup-dom.js';
 import { parseElementIds } from './elementIds.js';
 
 afterEach(() => cleanup());
@@ -30,12 +30,12 @@ const NOT_IN_MOCK: Record<string, string> = {
   'stage.timeline.lane.audio': 'needs an audio layer (covered in timeline-lanes.test.tsx)',
   'stage.player.canvas.guide': 'shown only while a canvas drag snaps (canvas-split.test.tsx)',
   'stage.timeline.ghost': 'shown only while dragging a bar (timeline-lanes.test.tsx)', 'stage.timeline.snap': 'shown only while a drag snaps (timeline-lanes.test.tsx)',
-  'agent.brainstorm.message.copy': 'needs a brainstorm reply (stage-agent.test.tsx)', 'agent.editor.message.copy': 'needs an editor message (stage-agent.test.tsx)',
-  'agent.brainstorm.message.retry': 'saved failure only (stage-agent.test.tsx)', 'agent.editor.message.retry': 'saved failure only',
+  'agent.chat.message.copy': 'needs a reply with text (stage-agent.test.tsx)', 'agent.chat.streaming': 'transient while a reply streams (stage-agent.test.tsx)',
+  'agent.chat.message.retry': 'saved failure only (stage-agent.test.tsx)', 'agent.editor.plancard.undo': 'needs an executed plan that is the head (assistant-chat.test.tsx)',
   'agent.editor.message.applied': 'needs a compiled pick (stage-agent.test.tsx)',
   'lib.text.size.overflow': 'needs a selected Text Layer that does not keep its size (library.test.tsx, FR-021)',
-  'agent.brainstorm.attach.file': 'attach menu (stage-agent.test.tsx)', 'agent.editor.attach.file': 'attach menu',
-  'agent.brainstorm.attach.error': 'attachment notice (stage-agent.test.tsx)', 'agent.editor.attach.error': 'attachment notice',
+  'agent.chat.attach.file': 'attach menu (stage-agent.test.tsx)',
+  'agent.chat.attach.error': 'attachment notice (stage-agent.test.tsx)',
   'agent.editor.plancard.step.ops': 'needs a plan with steps (stage-agent.test.tsx)', 'agent.editor.plancard.model': 'needs plan usage', 'agent.editor.plancard.result': 'needs an executed plan',
   'agent.output.ratio.help.table': 'help popover (stage-agent.test.tsx)', 'agent.output.ratio.auto.hint': 'Auto on with no clip (stage-agent.test.tsx)',
   'stage.timeline.element.selected': 'state variant: aria-selected on stage.timeline.element',
@@ -45,7 +45,7 @@ const NOT_IN_MOCK: Record<string, string> = {
   'agent.brainstorm.handoff.item.reason': 'only for an invalid proposed change (covered in stage-agent.test.tsx, FR-076)',
   'sys.offline': 'only while the Local Service is unreachable', 'sys.update': 'only after an update notice', 'sys.update.download': 'update banner (export-licence-help.test.tsx)', 'sys.update.restart': 'update banner (export-licence-help.test.tsx)', 'sys.update.later': 'update banner (export-licence-help.test.tsx)', 'sys.render.progress': 'only while exporting (covered in plancard.test.tsx)',
   'sys.toast': 'transient (asserted in plancard.test.tsx)',
-  'sys.update.retry': 'only for EM-8104/EM-8102/EM-8101 (export-licence-help.test.tsx)', 'agent.brainstorm.budget': 'only for EM-4201 (providers-models.test.tsx)', 'agent.editor.budget': 'only for EM-4201 (providers-models.test.tsx)',
+  'sys.update.retry': 'only for EM-8104/EM-8102/EM-8101 (export-licence-help.test.tsx)', 'agent.chat.budget': 'only for EM-4201 (providers-models.test.tsx)',
   'hdr.title.sample': 'only on the R-025 sample project (covered in tour.test.tsx)',
   'sys.tour': 'only while the tour runs (covered in tour.test.tsx)', 'sys.tour.next': 'tour (tour.test.tsx)', 'sys.tour.back': 'tour (tour.test.tsx)', 'sys.tour.end': 'tour (tour.test.tsx)',
   'sys.tour.choice.current': 'tour re-run choice (tour.test.tsx)', 'sys.tour.choice.sample': 'tour re-run choice (tour.test.tsx)', 'sys.tour.sampleplan': 'TOUR-7 without a provider (tour.test.tsx)',
@@ -63,8 +63,8 @@ const NOT_IN_MOCK: Record<string, string> = {
   'lib.assets.empty': 'empty project only (asserted in the next test)', 'stage.timeline.empty': 'empty project only (asserted in the next test)',
 };
 const MAIN = /^(hdr|lib|stage|agent|sys)\./;
-/** The footer model popover (`agent.*.footer.model.popover` / `.connection` / `.picker.*`) opens only on click (stage-agent.test.tsx). */
-const IN_FOOTER_POPOVER = /^agent\.(brainstorm|editor)\.footer\.model\.(popover|connection|picker)/;
+/** The chat header model popover (`agent.chat.model.popover` and its parts) opens only on click (assistant-chat.test.tsx). */
+const IN_FOOTER_POPOVER = /^agent\.chat\.model\./;
 
 describe('main editor element ids', () => {
   it('renders every main-region id from ELEMENT_IDS.md', async () => {
@@ -123,14 +123,14 @@ describe('main editor element ids', () => {
       const c = await runtime.api.addConnection({ provider: 'openrouter', label: 'OpenRouter', secret: 'sk-or-v1-test-key', validateNow: true });
       await runtime.api.putAssignments({ brainstorm: { agent: 'brainstorm', connectionId: c.id, modelId: 'openai/gpt-4.1-mini', settings: {} }, editor: { agent: 'editor', connectionId: c.id, modelId: 'anthropic/claude-sonnet-4.5', settings: {} } });
     });
-    fireEvent.click(el('agent.modelbar')!);
+    await openProvidersFromChat();
     await waitFor(() => { if (!el('scr.providers')) throw new Error('no providers'); });
     fireEvent.keyDown(el('scr.providers')!, { key: 'Escape' });
-    fireEvent.change(el('agent.brainstorm.composer')!, { target: { value: 'judul pembuka yang energik' } });
-    await act(async () => { fireEvent.keyDown(el('agent.brainstorm.composer')!, { key: 'Enter' }); });
+    fireEvent.change(chatComposer('brainstorm'), { target: { value: 'judul pembuka yang energik' } });
+    await act(async () => { fireEvent.keyDown(chatComposer('brainstorm'), { key: 'Enter' }); });
     await waitFor(() => { if (!el('agent.brainstorm.handoff')) throw new Error('no handoff'); }); sweep();
-    fireEvent.change(el('agent.editor.composer')!, { target: { value: 'buat judul pembuka yang kuat' } });
-    await act(async () => { fireEvent.keyDown(el('agent.editor.composer')!, { key: 'Enter' }); });
+    fireEvent.change(chatComposer('editor'), { target: { value: 'buat judul pembuka yang kuat' } });
+    await act(async () => { fireEvent.keyDown(chatComposer('editor'), { key: 'Enter' }); });
     await waitFor(() => { if (!el('agent.editor.plancard')) throw new Error('no plan'); }); sweep();
     // Failed import → unsupported card + error banner
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;

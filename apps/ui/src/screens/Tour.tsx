@@ -7,6 +7,7 @@ import { useStore } from '../state/store.js';
 import type { AppState, LibMode } from '../state/reducer.js';
 import { Button, ErrorBox, Spinner } from '../components/ui.js';
 import { translate } from '../i18n/index.js';
+import { chatModePatch } from '../prefs.js';
 
 type Signal = (s: AppState) => string | number | null;
 export interface TourStep {
@@ -21,6 +22,8 @@ export interface TourStep {
   /** FR-099: the step points into Output Settings, which is collapsed by default. */
   output?: true;
   libMode?: LibMode;
+  /** The assistant chat mode the step needs ("Diskusi" = brainstorm, "Edit" = editor; 2026-10-26). */
+  mode?: 'brainstorm' | 'editor';
   /** i18n key suffix of the "Try it" hint (tour.<n>.try). */
   tryIt?: boolean;
 }
@@ -32,8 +35,8 @@ export const TOUR_STEPS: TourStep[] = [
   { targets: ['lib.catalogue.card'], panel: 'lib', libMode: 'design', tryIt: true,                                                              // TOUR-3 Library: a pick is applied (Compile)
     signal: (s) => picks(s).filter((i) => !i.parentIntentId && i.status !== 'rejected').length },
   { targets: ['stage.timeline'], tryIt: true, signal: (s) => s.selection.map((x) => `${x.kind}:${x.id ?? x.index ?? ''}`).join(',') || null },  // TOUR-4 Stage
-  { targets: ['agent.brainstorm.composer'], panel: 'agent', tryIt: true, signal: (s) => s.messages.brainstorm.length },                       // TOUR-5 Agent Panel
-  { targets: ['agent.editor.plancard', 'agent.editor.panel'], panel: 'agent', tryIt: true, signal: (s) => (s.plan?.status === 'executed' ? s.plan.id : null) }, // TOUR-6
+  { targets: ['agent.chat.composer'], panel: 'agent', mode: 'brainstorm', tryIt: true, signal: (s) => s.messages.brainstorm.length },                       // TOUR-5 Agent Panel
+  { targets: ['agent.editor.plancard', 'agent.chat'], panel: 'agent', mode: 'editor', tryIt: true, signal: (s) => (s.plan?.status === 'executed' ? s.plan.id : null) }, // TOUR-6
   { targets: ['agent.output', 'agent.output.ratio.9x16'], panel: 'agent', output: true, tryIt: true,                                                         // TOUR-7 Output Settings + Private Mode
     signal: (s) => { const st = s.head?.model?.settings; return st ? `${st.ratio}|${st.resolution}` : null; } },
   { targets: ['hdr.action.export'], tryIt: true, signal: (s) => (s.screen?.kind === 'export' ? 'export' : null) },                           // TOUR-8
@@ -115,7 +118,8 @@ export function Tour() {
     if (!step) return;
     if (step.panel === 'lib' && prefs.libCollapsed) setPrefs({ libCollapsed: false });
     if (step.panel === 'agent' && prefs.agentCollapsed) setPrefs({ agentCollapsed: false });
-    if (step.panel === 'agent' && prefs.chatMaximized) setPrefs({ chatMaximized: null });          // both chats visible (FR-099)
+    if (step.panel === 'agent' && step.output && prefs.chatMaximized) setPrefs({ chatMaximized: null });   // Output Settings visible (FR-099)
+    if (step.mode) setPrefs(chatModePatch(prefs, stateRef.current.project?.id, step.mode));
     if (step.output && prefs.outputCollapsed) setPrefs({ outputCollapsed: false });
     if (step.libMode && stateRef.current.libMode !== step.libMode) actions.setLibMode(step.libMode);
     base.current = step.signal ? step.signal(stateRef.current) : null;

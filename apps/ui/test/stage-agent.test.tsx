@@ -6,7 +6,7 @@ import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { createEmptyModel, applyOperations, type CompositionModelT } from '@expertmotion/composition-model';
-import { renderEditor, el, els } from './setup-dom.js';
+import { renderEditor, el, els, chatComposer, openProvidersFromChat } from './setup-dom.js';
 import { App } from '../src/App.js';
 import { StoreProvider } from '../src/state/store.js';
 import { createMockRuntime, type Runtime } from '../src/state/runtime.js';
@@ -14,7 +14,7 @@ import { initialState } from '../src/state/reducer.js';
 import { buildBars, clipDragEdit, provenanceOf } from '../src/stage/Timeline.js';
 import { executeDisabledReason, diffSummary } from '../src/agent/PlanCard.js';
 import { ctxTone, systemCode, MAX_ATTACH_BYTES } from '../src/agent/Chat.js';
-import { appliedDirectly } from '../src/agent/EditorChat.js';
+import { appliedDirectly } from '../src/agent/AssistantChat.js';
 import { playerPrefsFor, playerPrefsPatch, loadPrefs } from '../src/prefs.js';
 import { translate } from '../src/i18n/index.js';
 import type { EditIntent, PlanDto } from '../src/api/types.js';
@@ -29,10 +29,10 @@ async function connect(runtime: Runtime, editorModel = 'anthropic/claude-sonnet-
     const c = await runtime.api.addConnection({ provider: 'openrouter', label: 'OpenRouter', secret: 'sk-or-v1-test-key', validateNow: true });
     await runtime.api.putAssignments({ brainstorm: { agent: 'brainstorm', connectionId: c.id, modelId: 'openai/gpt-4.1-mini', settings: {} }, editor: { agent: 'editor', connectionId: c.id, modelId: editorModel, settings: {} } });
   });
-  fireEvent.click(el('agent.modelbar')!);
+  await openProvidersFromChat();
   await waitFor(() => { if (!el('scr.providers')?.textContent?.includes('OpenRouter')) throw new Error('providers'); });
   fireEvent.keyDown(el('scr.providers')!, { key: 'Escape' });
-  await waitFor(() => { if (el('agent.editor.composer')?.hasAttribute('readonly')) throw new Error('composer disabled'); });
+  await waitFor(() => { if (chatComposer('editor')?.hasAttribute('readonly')) throw new Error('composer disabled'); });
 }
 const queueTitles = () => els('agent.editor.intentqueue.item').map((n) => n.textContent ?? '');
 
@@ -83,8 +83,8 @@ describe('Output Settings (FR-087…FR-097)', () => {
     render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true, outputCollapsed: false }}><App /></StoreProvider>);
     await waitFor(() => { if (!document.querySelector('[data-el="agent.output.ratio.9x16"][aria-checked]')) throw new Error('no project'); }, { timeout: 8000 });
     await connect(runtime);
-    fireEvent.change(el('agent.brainstorm.composer')!, { target: { value: 'ide intro energik untuk video kopi' } });
-    await act(async () => { fireEvent.keyDown(el('agent.brainstorm.composer')!, { key: 'Enter' }); });
+    fireEvent.change(chatComposer('brainstorm'), { target: { value: 'ide intro energik untuk video kopi' } });
+    await act(async () => { fireEvent.keyDown(chatComposer('brainstorm'), { key: 'Enter' }); });
     await waitFor(() => { if (!document.body.textContent?.includes('Asking')) throw new Error('not streaming'); });
     await act(async () => { fireEvent.click(el('agent.output.private')!); });
     expect(el('scr.confirm')?.textContent).toContain('This stops the current request.');
@@ -198,61 +198,63 @@ describe('Agent Panel (FR-071…FR-086)', () => {
 
   it('FR-071: hollow dot when not connected', async () => {
     await renderEditor('sample');
-    expect(el('agent.modelbar.status')?.getAttribute('data-status')).toBe('none');
-    expect(el('agent.modelbar.status')?.querySelector('.border')).not.toBeNull();
+    expect(el('agent.chat.status')?.getAttribute('data-status')).toBe('none');
+    expect(el('agent.chat.status')?.querySelector('.border')).not.toBeNull();
   }, 20_000);
 
   it('FR-075/FR-077/FR-074: streamed reply, copy action, counter tooltip with summarisation and cost', async () => {
     const { runtime } = await renderEditor('sample');
     await connect(runtime);
-    fireEvent.change(el('agent.brainstorm.composer')!, { target: { value: 'ide intro energik untuk video kopi' } });
-    await act(async () => { fireEvent.keyDown(el('agent.brainstorm.composer')!, { key: 'Enter' }); });
-    await waitFor(() => { if (!el('agent.brainstorm.message.copy')) throw new Error('no reply'); });
-    const ctx = el('agent.brainstorm.footer.ctx')!;
+    fireEvent.change(chatComposer('brainstorm'), { target: { value: 'ide intro energik untuk video kopi' } });
+    await act(async () => { fireEvent.keyDown(chatComposer('brainstorm'), { key: 'Enter' }); });
+    await waitFor(() => { if (!el('agent.chat.message.copy')) throw new Error('no reply'); });
+    const ctx = el('agent.chat.usage')!;
     await waitFor(() => { if (!ctx.getAttribute('title')?.includes('$0.002')) throw new Error(String(ctx.getAttribute('title'))); });
     expect(ctx.getAttribute('title')).toContain('60 %');
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    await act(async () => { fireEvent.click(els('agent.brainstorm.message.copy').at(-1)!); });
+    await act(async () => { fireEvent.click(els('agent.chat.message.copy').at(-1)!); });
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('energetic title'));
   }, 20_000);
 
-  it('FR-073: the footer picker switches only the Editor model; FR-072 image attach is refused for a text-only model', async () => {
+  it('FR-073: the header model popover switches only the Editor model; FR-072 image attach is refused for a text-only model', async () => {
     const { runtime } = await renderEditor('sample');
     await connect(runtime);
-    expect(el('agent.editor.footer.model')?.textContent).toBe('Claude Sonnet 4.5 ▾');                // the model's label, never a tier name
-    fireEvent.click(el('agent.editor.footer.model')!);
-    await waitFor(() => { if (els('agent.editor.footer.model.picker.row').length < 2) throw new Error('no rows'); });
-    expect(el('agent.editor.footer.model.picker.filter.json')?.getAttribute('aria-pressed')).toBe('false'); // nothing is refused: JSON chip off
-    expect(el('agent.editor.footer.model.picker.category.all')?.getAttribute('aria-checked')).toBe('true');
-    expect(el('agent.editor.footer.model.picker')!.querySelector('[data-model-id="anthropic/claude-sonnet-4.5"]')?.getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(el('agent.editor.footer.model.picker.search'));
-    fireEvent.change(el('agent.editor.footer.model.picker.search')!, { target: { value: 'QWEN' } });
-    const rows = els('agent.editor.footer.model.picker.row');
+    chatComposer('editor');
+    expect(el('agent.chat.model')?.getAttribute('data-agent')).toBe('editor');
+    expect(el('agent.chat.model')?.textContent).toContain('Model: Claude Sonnet 4.5');              // the model's label, never a tier name
+    fireEvent.click(el('agent.chat.model')!);
+    await waitFor(() => { if (els('agent.chat.model.row').length < 2) throw new Error('no rows'); });
+    expect(el('agent.chat.model.popover')!.querySelector('[data-model-id="anthropic/claude-sonnet-4.5"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(el('agent.chat.model.search'));
+    fireEvent.change(el('agent.chat.model.search')!, { target: { value: 'QWEN' } });
+    const rows = els('agent.chat.model.row');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.textContent).toContain('Qwen 2.5 7B');
-    expect(rows[0]!.textContent).toContain('32K');                    // context column
-    expect(rows[0]!.querySelector('[data-cap="image"]')).toBeNull();  // no image input
-    await act(async () => { fireEvent.keyDown(el('agent.editor.footer.model.picker.search')!, { key: 'Enter' }); });
-    await waitFor(() => { if (!el('agent.editor.footer.model')?.querySelector('[title="qwen/qwen-2.5-7b-instruct"]')) throw new Error('editor not switched'); });
+    expect(rows[0]!.getAttribute('data-quality')).not.toBe('ok');                                  // ⚠ weak, still selectable
+    expect(rows[0]!.querySelector('[data-el="agent.chat.model.row.warn"]')).not.toBeNull();
+    await act(async () => { fireEvent.keyDown(el('agent.chat.model.search')!, { key: 'Enter' }); });
+    await waitFor(() => { if (!el('agent.chat.model')?.textContent?.includes('Qwen 2.5 7B')) throw new Error('editor not switched'); });
     // a 7B model is allowed but warned: the popover stays open with the warning and "Use recommended instead"
-    expect(el('agent.editor.footer.model.picker.warning')?.textContent).toMatch(/May give poor results/);
-    expect(el('agent.editor.footer.model.picker.warning.recommended')).not.toBeNull();
-    fireEvent.keyDown(el('agent.editor.footer.model.picker.search')!, { key: 'Escape' });
-    expect(el('agent.editor.footer.model.popover')).toBeNull();
-    expect(el('agent.editor.footer.model')?.textContent).toBe('Qwen 2.5 7B ▾');
-    expect(el('agent.brainstorm.footer.model')?.querySelector('[title]')?.getAttribute('title')).toBe('openai/gpt-4.1-mini');
-    expect(el('agent.brainstorm.footer.model')?.textContent).toBe('GPT-4.1 mini ▾');
+    expect(el('agent.chat.model.warning')?.textContent).toMatch(/may give weak results/);
+    expect(el('agent.chat.model.warning.recommended')).not.toBeNull();
+    fireEvent.keyDown(el('agent.chat.model.search')!, { key: 'Escape' });
+    expect(el('agent.chat.model.popover')).toBeNull();
+    expect((await runtime.api.getAssignments()).editor?.modelId).toBe('qwen/qwen-2.5-7b-instruct');
+    chatComposer('brainstorm');                                                                     // the other mode keeps its own model
+    expect(el('agent.chat.model')?.getAttribute('data-agent')).toBe('brainstorm');
+    expect(el('agent.chat.model')?.textContent).toContain('GPT-4.1 mini');
     expect((await runtime.api.getAssignments()).brainstorm?.modelId).toBe('openai/gpt-4.1-mini');
+    chatComposer('editor');
     // attach an image from disk: > 10 MB → EM-1002; a small PNG → EM-4307 for the text-only model
-    fireEvent.click(el('agent.editor.attach')!);
-    const input = el('agent.editor.panel')!.querySelector<HTMLInputElement>('input[type="file"]')!;
+    fireEvent.click(el('agent.chat.attach')!);
+    const input = el('agent.chat')!.querySelector<HTMLInputElement>('input[type="file"]')!;
     const big = new File(['x'], 'big.png', { type: 'image/png' }); Object.defineProperty(big, 'size', { value: 11 * 1024 * 1024 });
     await act(async () => { fireEvent.change(input, { target: { files: [big] } }); });
-    expect(el('agent.editor.attach.error')?.textContent).toContain('EM-1002');
+    expect(el('agent.chat.attach.error')?.textContent).toContain('EM-1002');
     await act(async () => { fireEvent.change(input, { target: { files: [new File(['png'], 'logo.png', { type: 'image/png' })] } }); });
-    await waitFor(() => { if (!el('agent.editor.attach.error')?.textContent?.includes('EM-4307')) throw new Error(String(el('agent.editor.attach.error')?.textContent)); });
-    expect(el('agent.editor.send')?.getAttribute('aria-disabled')).toBe('true');
+    await waitFor(() => { if (!el('agent.chat.attach.error')?.textContent?.includes('EM-4307')) throw new Error(String(el('agent.chat.attach.error')?.textContent)); });
+    expect(el('agent.chat.send')?.getAttribute('aria-disabled')).toBe('true');
   }, 20_000);
 
   it('FR-081/FR-085: plan steps show ops counts and the model; a direct pick appears as an "Applied directly" line', async () => {
@@ -263,8 +265,8 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     expect(el('agent.editor.message.applied')?.textContent).toMatch(/Applied directly: Ratio 1:1/);
     const hash = (await runtime.api.getComposition(runtime.seededProjectId!)).head.hash;
     expect(el('agent.editor.message.applied')?.textContent).toContain(`· ${hash.slice(0, 6)}`);       // FR-085: the short version hash, not v{n}
-    fireEvent.change(el('agent.editor.composer')!, { target: { value: 'buat judul pembuka yang kuat' } });
-    await act(async () => { fireEvent.keyDown(el('agent.editor.composer')!, { key: 'Enter' }); });
+    fireEvent.change(chatComposer('editor'), { target: { value: 'buat judul pembuka yang kuat' } });
+    await act(async () => { fireEvent.keyDown(chatComposer('editor'), { key: 'Enter' }); });
     await waitFor(() => { if (el('agent.editor.plancard')?.getAttribute('data-status') !== 'valid') throw new Error('no plan'); });
     expect(el('agent.editor.plancard.step.ops')?.textContent).toBe('1 op');
     expect(el('agent.editor.plancard.model')?.textContent).toBe('Claude Sonnet 4.5');                 // the model's label

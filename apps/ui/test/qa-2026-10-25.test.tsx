@@ -25,7 +25,7 @@ describe('#16 agent replies: no JSON wrapper, safe markdown subset', () => {
   const RAW = '{"reply": "Siap! Untuk kelas …\\n\\n**Hook (0-3 detik):** sapa penonton\\n- satu\\n- *dua*\\n1. `kode`\\n2. __tebal__"}';
   it('the Brainstorming bubble shows the decoded reply as formatted text (stored raw JSON too)', () => {
     const { container } = renderInStore(<Bubble m={msg('assistant', RAW, 'Untuk siapa videonya?')} agent="brainstorm" />);
-    const bubble = container.querySelector('[data-el="agent.brainstorm.message"]')!;
+    const bubble = container.querySelector('[data-el="agent.chat.message"][data-agent="brainstorm"]')!;
     expect(bubble.textContent).not.toMatch(/"reply"|\{|\\n|\*\*/);
     expect(bubble.querySelector('strong')?.textContent).toBe('Hook (0-3 detik):');
     expect([...bubble.querySelectorAll('ul > li')].map((li) => li.textContent)).toEqual(['satu', 'dua']);
@@ -37,7 +37,7 @@ describe('#16 agent replies: no JSON wrapper, safe markdown subset', () => {
   it('fenced, truncated and double-encoded replies render clean in the Editor bubble as well', () => {
     for (const raw of ['```json\n{"reply": "Rencana: **potong** klip 2"}\n```', '{"reply": "Rencana: **potong** klip 2', JSON.stringify(JSON.stringify({ reply: 'Rencana: **potong** klip 2' }))]) {
       const { container, unmount } = renderInStore(<Bubble m={msg('assistant', raw)} agent="editor" />);
-      const b = container.querySelector('[data-el="agent.editor.message"]')!;
+      const b = container.querySelector('[data-el="agent.chat.message"][data-agent="editor"]')!;
       expect(b.querySelector('[data-md]')?.textContent, raw).toBe('Rencana: potong klip 2');
       expect(b.querySelector('strong')?.textContent).toBe('potong');
       unmount();

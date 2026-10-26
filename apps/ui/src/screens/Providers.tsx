@@ -113,7 +113,8 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
  *  works without touching anything; the exact model id is what gets stored. Nothing is refused (Operator decision 2026-10-25):
  *  weak or no-JSON models carry the ModelPicker quality warning; unknown tool calling / structured output shows EM-4005; a
  *  model without image input gets a note. */
-function ModelAssign({ rows, assign, setAssign, onRefresh, loading }: { rows: CapabilityRow[]; assign: Record<AgentKind, string>; setAssign: (f: (a: Record<AgentKind, string>) => Record<AgentKind, string>) => void; onRefresh?: () => void; loading?: boolean }) {
+function ModelAssign({ rows, assign, setAssign, onRefresh, loading, collapsed }: { rows: CapabilityRow[]; assign: Record<AgentKind, string>; setAssign: (f: (a: Record<AgentKind, string>) => Record<AgentKind, string>) => void; onRefresh?: () => void; loading?: boolean;
+  /** 2026-10-26: on the Providers screen the table sits under "See all models" (models are picked in the chat header). */ collapsed?: boolean }) {
   const { state, t } = useStore();
   const [agent, setAgent] = useState<AgentKind>('brainstorm');
   const touched = useRef<Record<AgentKind, boolean>>({ brainstorm: false, editor: false });
@@ -127,7 +128,7 @@ function ModelAssign({ rows, assign, setAssign, onRefresh, loading }: { rows: Ca
   const cap = rows.find((r) => r.modelId === assign[agent]);
   const name = llmModelName(rows, assign[agent]);
   const canShare = !!assign[agent] && assign[other] !== assign[agent];
-  return (
+  const body = (
     <div className="flex flex-col gap-2">
       <div role="radiogroup" aria-label={t('ui.scr.providers.assign.for')} data-el="scr.providers.assign.agent" className="grid grid-cols-2 gap-1">
         {AGENTS.map((a) => {
@@ -149,6 +150,16 @@ function ModelAssign({ rows, assign, setAssign, onRefresh, loading }: { rows: Ca
       </div>
       {cap && agent === 'editor' && cap.structuredOutput !== false && (cap.toolCalling !== true || cap.structuredOutput !== true) && <Note el="scr.providers.assign.note" code="EM-4005" tone="info" vars={{ model: name }} />}
       {cap && cap.imageInput !== true && <p data-el="scr.providers.assign.note" className="text-[12px] text-em-muted">{t(cap.imageInput === false ? 'ui.scr.providers.assign.noimage' : 'ui.scr.providers.assign.imageunknown')}</p>}
+    </div>
+  );
+  if (!collapsed) return body;
+  return (
+    <div className="flex flex-col gap-1">
+      <p data-el="scr.providers.hint" className="text-[12px] text-em-text-2" title={t('ui.scr.providers.hint.tip')}>{t('ui.scr.providers.hint')}</p>
+      <details data-el="scr.providers.models.all" className="rounded-[6px] border border-em-line px-2 py-1">
+        <summary className="cursor-pointer text-[12px] text-em-accent">{t('ui.scr.providers.models.all')}</summary>
+        <div className="pt-2">{body}</div>
+      </details>
     </div>
   );
 }
@@ -190,7 +201,7 @@ function TestResults({ items }: { items: ProbeResultDto[] }) {
 }
 
 /** Assignments + budgets + Test for a stored connection (onboarding Models step and the Providers screen). */
-export function AssignForm({ onSaved, showBudgets = true, connectionId, focusField }: { onSaved?: () => void; showBudgets?: boolean; connectionId?: string; focusField?: BudgetFocus['field'] }) {
+export function AssignForm({ onSaved, showBudgets = true, connectionId, focusField, collapseModels }: { onSaved?: () => void; showBudgets?: boolean; connectionId?: string; focusField?: BudgetFocus['field']; collapseModels?: boolean }) {
   const { state, runtime, actions, dispatch, t } = useStore();
   const conn = state.connections.find((c) => c.id === (connectionId ?? state.assignments?.defaultConnectionId)) ?? state.connections[0];
   const rows: CapabilityRow[] = conn ? state.capabilities[conn.id] ?? [] : [];
@@ -261,7 +272,7 @@ export function AssignForm({ onSaved, showBudgets = true, connectionId, focusFie
   };
   return (
     <div className="flex flex-col gap-3">
-      <section aria-label={t('ui.scr.providers.section.assign')}><ModelAssign rows={rows} assign={assign} setAssign={setAssign} onRefresh={() => void refresh()} loading={fetching} /></section>
+      <section aria-label={t('ui.scr.providers.section.assign')}><ModelAssign rows={rows} assign={assign} setAssign={setAssign} onRefresh={() => void refresh()} loading={fetching} collapsed={Boolean(collapseModels)} /></section>
       {showBudgets && <BudgetFields connectionId={conn.id} month={month} setMonth={setMonth} project={projectBudget} setProject={setProjectBudget} budget={budget} />}
       {error && <ErrorBox code={error} />}
       {typeof tested === 'string' && <ErrorBox code={tested} />}
@@ -338,7 +349,7 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
       </section>
       {validated ? (
         <>
-          <section aria-label={t('ui.scr.providers.section.assign')}>{modelsCode && <Note code={modelsCode} vars={{ provider: t(`ui.scr.providers.provider.${provider}`) }} />}<ModelAssign rows={rows} assign={assign} setAssign={setAssign} /></section>
+          <section aria-label={t('ui.scr.providers.section.assign')}>{modelsCode && <Note code={modelsCode} vars={{ provider: t(`ui.scr.providers.provider.${provider}`) }} />}<ModelAssign rows={rows} assign={assign} setAssign={setAssign} collapsed /></section>
           <section aria-label={t('ui.scr.providers.section.budget')}><BudgetFields connectionId={null} month={month} setMonth={setMonth} project={project} setProject={setProject} budget={null} /></section>
           {tested && <TestResults items={tested} />}
         </>
@@ -454,7 +465,7 @@ export function ProvidersScreen({ onClose, focus }: { onClose: () => void; focus
         </ul>
         {showAdd ? <AddConnectionForm onDone={() => { setAdding(false); reloadBudget(); }} />
           : <div><Button el="scr.providers.add.open" onClick={() => setAdding(true)}>{t('ui.scr.providers.add')}</Button></div>}
-        {state.connections.length > 0 && !adding && <AssignForm key={focusConn ?? 'default'} {...(focusConn ? { connectionId: focusConn } : {})} {...(focus ? { focusField: focus.field } : {})} onSaved={() => { reloadBudget(); actions.toast('success', 'ui.scr.providers.saved'); }} />}
+        {state.connections.length > 0 && !adding && <AssignForm key={focusConn ?? 'default'} collapseModels {...(focusConn ? { connectionId: focusConn } : {})} {...(focus ? { focusField: focus.field } : {})} onSaved={() => { reloadBudget(); actions.toast('success', 'ui.scr.providers.saved'); }} />}
       </div>
     </Modal>
   );

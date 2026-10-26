@@ -4,7 +4,7 @@
 import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { cleanup, fireEvent, waitFor } from '@testing-library/react';
-import { renderEditor, el } from './setup-dom.js';
+import { renderEditor, el, chatComposer } from './setup-dom.js';
 import { LAYOUT, bucketFor, chatRatioFor, defaultSizes, resolveChatSplit, resolveColumns } from '../src/layout.js';
 import { loadPrefs } from '../src/prefs.js';
 
@@ -128,64 +128,27 @@ describe('FR-099 (2026-10-25): larger, resizable agent chats', () => {
     expect(chatRatioFor(5000, 606)).toBe(0.667);
   });
 
-  it('the chat divider resizes with the keyboard, persists the ratio (prefs + Settings.layout), survives a reload and resets', async () => {
+  it('one assistant chat (2026-10-26): no chat divider; maximize fills the panel (Output Settings hidden), persists and restores', async () => {
     const { runtime } = await renderEditor('sample');
-    const d = el('agent.chat.divider')!;
-    expect(d.getAttribute('role')).toBe('separator');
-    expect(d.getAttribute('aria-orientation')).toBe('horizontal');
-    expect(d.tabIndex).toBe(0);
-    expect(now('agent.chat.divider')).toBe(240);                                    // 0.4 × 600 (nominal height in jsdom)
-    fireEvent.keyDown(d, { key: 'ArrowDown' });
-    expect(now('agent.chat.divider')).toBe(256);
-    expect(stored().chatSplit).toBe(0.427);
-    await waitFor(async () => { if ((await runtime.api.getSettings()).layout?.chatSplit !== 0.427) throw new Error('not saved'); }, { timeout: 3000 });
-    fireEvent.keyDown(d, { key: 'Home' });
-    expect(now('agent.chat.divider')).toBe(140);
-    fireEvent.keyDown(d, { key: 'End' });
-    expect(now('agent.chat.divider')).toBe(400);
-    expect(el('agent.brainstorm.panel')!.style.flex).toMatch(/^0\.66+7? 1 0/);
-    cleanup();
-    await renderEditor('sample', { keepStorage: true });
-    expect(now('agent.chat.divider')).toBe(400);
-    fireEvent.doubleClick(el('agent.chat.divider')!);
-    expect(now('agent.chat.divider')).toBe(240);
-    expect(stored().chatSplit).toBe(0.4);
-  });
-
-  it('dragging the chat divider changes the split and commits on release', async () => {
-    await renderEditor('sample');
-    fireEvent.mouseDown(el('agent.chat.divider')!, { clientY: 300, button: 0 });
-    fireEvent.mouseMove(window, { clientY: 360 });
-    expect(now('agent.chat.divider')).toBe(300);
-    expect(stored().chatSplit).toBeUndefined();                                     // live only while dragging
-    fireEvent.mouseUp(window);
-    expect(stored().chatSplit).toBe(0.5);
-  });
-
-  it('maximize gives one chat the panel; the other keeps its header bar, which restores the split; persisted', async () => {
-    await renderEditor('sample');
-    const max = el('agent.editor.maximize')!;
-    expect(max.getAttribute('aria-pressed')).toBe('false');
-    fireEvent.click(max);
-    expect(el('agent.editor.panel')!.getAttribute('data-view')).toBe('max');
-    expect(el('agent.brainstorm.panel')!.getAttribute('data-view')).toBe('min');
-    expect(el('agent.editor.maximize')!.getAttribute('aria-pressed')).toBe('true');
     expect(el('agent.chat.divider')).toBeNull();
-    expect(el('agent.brainstorm.composer')!.closest('.hidden')).not.toBeNull();     // kept mounted (draft survives), not shown
-    expect(el('agent.editor.composer')!.closest('.hidden')).toBeNull();
-    expect(stored().chatMaximized).toBe('editor');
+    expect(document.querySelectorAll('[data-el="agent.chat.composer"]')).toHaveLength(1);           // one composer for both modes
+    const max = el('agent.chat.maximize')!;
+    expect(max.getAttribute('aria-pressed')).toBe('false');
+    expect(el('agent.output')).not.toBeNull();
+    fireEvent.click(max);
+    expect(el('agent.chat')!.getAttribute('data-maximized')).toBe('true');
+    expect(el('agent.chat.maximize')!.getAttribute('aria-pressed')).toBe('true');
+    expect(el('agent.output')!.closest('[hidden]')).not.toBeNull();                 // kept mounted, not shown
+    expect(stored().chatMaximized).toBe('brainstorm');                              // written as the mode it was maximized in
+    await waitFor(async () => { if (!(await runtime.api.getSettings()).layout?.chatMaximized) throw new Error('not saved'); }, { timeout: 3000 });
     cleanup();
     await renderEditor('sample', { keepStorage: true });
-    expect(el('agent.brainstorm.panel')!.getAttribute('data-view')).toBe('min');
-    fireEvent.click(el('agent.brainstorm.header')!.querySelector('button')!);       // the collapsed header bar restores
-    expect(el('agent.brainstorm.panel')!.getAttribute('data-view')).toBe('split');
-    expect(el('agent.editor.panel')!.getAttribute('data-view')).toBe('split');
-    expect(el('agent.chat.divider')).not.toBeNull();
+    expect(el('agent.chat')!.getAttribute('data-maximized')).toBe('true');
+    fireEvent.click(el('agent.chat.maximize')!);                                    // the same toggle restores
+    expect(el('agent.chat')!.getAttribute('data-maximized')).toBeNull();
+    expect(el('agent.output')!.closest('[hidden]')).toBeNull();
     expect(stored().chatMaximized).toBeNull();
-    fireEvent.click(el('agent.brainstorm.maximize')!);
-    expect(el('agent.editor.panel')!.getAttribute('data-view')).toBe('min');
-    fireEvent.click(el('agent.brainstorm.maximize')!);                               // the same toggle restores
-    expect(el('agent.brainstorm.panel')!.getAttribute('data-view')).toBe('split');
+    expect(chatComposer('editor').getAttribute('data-mode')).toBe('editor');
   });
 
   it('Output Settings is collapsed by default with "ratio · resolution · fps · profile" in its header; the toggle opens it and persists', async () => {

@@ -3,7 +3,7 @@
 import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
-import { el, els, renderEditor } from './setup-dom.js';
+import { el, els, renderEditor, openProvidersFromChat } from './setup-dom.js';
 import { App } from '../src/App.js';
 import { StoreProvider } from '../src/state/store.js';
 import { createMockRuntime } from '../src/state/runtime.js';
@@ -15,7 +15,7 @@ const until = async (f: () => unknown, what = 'condition') => waitFor(() => { if
 const KEY = 'sk-or-v1-abcdefghijklmnopqrstuvwxyz0123';
 
 async function openProviders() {
-  await act(async () => { fireEvent.click(el('agent.modelbar')!); });
+  await openProvidersFromChat();
   await until(() => el('scr.providers'), 'providers');
 }
 
@@ -107,9 +107,9 @@ describe('Budget used up (FR-117, AI-016)', () => {
     const c = await runtime.api.addConnection({ provider: 'openrouter', label: 'Utama', secret: KEY, validateNow: true });
     await runtime.api.putAssignments({ editor: { agent: 'editor', connectionId: c.id, modelId: 'anthropic/claude-sonnet-4.5', settings: {} }, defaultConnectionId: c.id });
     await act(async () => { bus.emit('agent.run.failed', { runId: 'r1', agent: 'editor', code: 'EM-4201', retryable: false }); });
-    await until(() => el('agent.editor.budget'), 'Change budget');
-    expect(el('agent.editor.budget')!.textContent).toBe('Change budget');
-    await act(async () => { fireEvent.click(el('agent.editor.budget')!); });
+    await until(() => el('agent.chat.budget'), 'Change budget');
+    expect(el('agent.chat.budget')!.textContent).toBe('Change budget');
+    await act(async () => { fireEvent.click(el('agent.chat.budget')!); });
     await until(() => el('scr.providers') && document.activeElement?.getAttribute('data-el') === 'scr.providers.budget.project', 'focused budget field');
     const put = vi.spyOn(runtime.api, 'putBudget');
     fireEvent.change(el('scr.providers.budget.project')!, { target: { value: '5' } });

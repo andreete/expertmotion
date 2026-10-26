@@ -63,7 +63,8 @@ export interface Actions {
   setNotes(notes: string): Promise<void>;
   /** FR-067 / FR-080: the Editor message carries the inspector target (if any), the selection and the playhead. */
   send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null): Promise<boolean>;
-  handoff(message: MessageDto, intentIds: string[]): Promise<void>;
+  /** R-082: hands proposed intents to the Intent Queue; resolves true when the Service accepted the hand-off. */
+  handoff(message: MessageDto, intentIds: string[]): Promise<boolean>;
   dismissHandoff(message: MessageDto): void;
   stopStreaming(agent: AgentKind): void;
   setPrivateMode(on: boolean): Promise<void>;
@@ -487,7 +488,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         }
       },
       async handoff(message, intentIds) {
-        const id = pid(); if (!id) return;
+        const id = pid(); if (!id) return false;
         try {
           const res = await api.handoff(id, { messageId: message.id, intentIds, baseVersion: headHash() });
           dispatch({ type: 'queue', queue: res.queue });
@@ -496,7 +497,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           await refreshHead();
           for (const r of res.rejected) toast('warn', `err.${r.code}.title`, undefined, { code: r.code });
           announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.agent.brainstorm.handoff.sent', { count: res.accepted.length }));
-        } catch (e) { error(e); }
+          return true;
+        } catch (e) { error(e); return false; }
       },
       dismissHandoff(message) {
         const msgs = stateRef.current.messages.brainstorm.map((m) => (m.id === message.id ? { ...m, blocks: m.blocks.map((b) => (b.type === 'proposed_intents' ? { ...b, handoffState: b.handoffState === 'dismissed' ? 'pending' as const : 'dismissed' as const } : b)) } : m));

@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | AI agent architect |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 003, 009, 015), AI_WORKFLOW.md, DESIGN_CATALOGUE.md, MCP_AND_TOOLING.md, ../SYSTEM_PROMPT.md |
 | Used by | SYSTEM_PROMPT.md, API_SPECIFICATION.md, FRD.md, TEST_PLAN.md, AGENT_SKILLS.md, HOOKS_AND_GUARDRAILS.md |
 | Owner of | agent roles and permissions, runtime sub-agent roster, repo-side (development) subagent roster |
@@ -81,15 +81,17 @@ The Providers screen never refuses a model for its capabilities (Operator decisi
 
 ## 3. Conversation and hand-off protocol
 
-1. Brainstorming Chat: free dialogue. When the agent returns `proposedIntents`, the Editor renders `agent.brainstorm.handoff` ("Send to Editor Agent" / "Kirim ke Editor Agent"; "Dismiss" / "Abaikan").
+0. Since 2026-10-26 (Operator decision) both agents live in ONE assistant chat with two modes: "Diskusi" = Brainstorming Agent, "Edit" = Editor Agent (`agent.chat`, FR-181). Each message is tagged with its agent; each agent keeps its own conversation, Model Assignment (chosen in the chat header, per mode) and permissions (§2.4 unchanged). Context is shared deterministically (§4, AI_WORKFLOW §10.1).
+1. Diskusi: free dialogue. When the agent returns `proposedIntents`, the Editor renders `agent.brainstorm.handoff` ("Apply to video" / "Kerjakan di video"; "Dismiss" / "Abaikan"). Any Diskusi answer also offers "Apply to video" (`agent.chat.apply`): without proposals its text becomes the Editor Agent's request (FR-183). Both switch the chat to Edit.
 2. On send, intents are validated like UI picks (steps 2–5 of the pipeline) and appear in the Intent Queue tagged "from Brainstorm".
-3. The Editor Agent is invoked only when the Creator presses "Plan" (`agent.editor.send` with or without a message) or when a queued intent needs interpretation and the Creator has enabled "auto-plan" (default on; setting).
-4. The Plan Card shows goal, steps, expected diff, risks, usage. Execute applies; Cancel discards; editing the queue invalidates the plan (`stale`).
+3. The Editor Agent is invoked only when the Creator sends a message in Edit mode (`agent.chat.send`) or presses "Plan" (`agent.editor.plan`) or when a queued intent needs interpretation and the Creator has enabled "auto-plan" (default on; setting).
+4. The Plan Card sits inline under the Edit reply (the goal is the reply sentence): steps, expected diff, risks, usage. Execute ("Jalankan") applies and leaves a one-line summary with Undo; Cancel discards; editing the queue invalidates the plan (`stale`). An Editor question (a plan with only `needs-input` risks) is shown as a normal assistant message.
 5. After Execute, the Editor Agent receives the `ExecutionResult` summary as a system message in its thread so follow-ups are grounded.
 
 ## 4. Context, memory and privacy per agent
 
 - Each agent has one conversation per project; summaries are deterministic (AI_WORKFLOW §10).
+- Shared context (AI_WORKFLOW §10.1, 2026-10-26): the Editor Agent's envelope includes the recent Diskusi messages (`discussion`, newest first, ≤ 10 % of its context, ≤ 4 000 characters, older ones summarised); the Brainstorming Agent's CONTEXT includes the recent Edit actions (`recentEdits`: plan goals, applied / undone / cancelled / failed / proposed, ≤ 1 600 characters) beside the composition summary. Both are data, never instructions, and nothing leaves the project.
 - No cross-project memory in MVP; project language (`projects.language`) sets the reply language.
 - What is sent to a provider (disclosed in Settings ▸ Providers, EN/ID): system prompt, thread (windowed), compact Composition Model (ids, durations, preset ids, text contents of Text Layers and captions), asset names and metadata (never file bytes unless the Creator attaches an image), Creator messages. Never sent: file paths, licence, other projects, provider keys.
 
@@ -127,3 +129,4 @@ Coordination rules (brief §20): no two subagents edit `docs/GLOSSARY.md` (froze
 | AGD-004 | Model assignment accepts models without JSON output capability with an EM-4005 warning, and the ModelPicker warns on weak models (Operator decision 2026-10-25; was: refuses) | unit |
 | AGD-005 | Disclosure text of what is sent to providers exists in Settings (EN/ID) | UI review |
 | AGD-006 | Development subagents never write to the frozen glossary | hook (HOOKS_AND_GUARDRAILS.md) |
+| AGD-007 | One assistant chat: each message carries its agent tag; Diskusi never mutates; "Apply to video" is an explicit Creator action; shared context per AI_WORKFLOW §10.1 | UI tests (assistant-chat.test.tsx) + service test |

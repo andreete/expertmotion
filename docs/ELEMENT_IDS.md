@@ -31,25 +31,25 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 │   hdr.action.hardware  hdr.action.save  hdr.action.backup  hdr.action.restore                 │
 │   hdr.action.models  hdr.action.license  hdr.action.export  hdr.win.*                        │
 ├────────────────────┬──────────────────────────────────────────────┬───────────────────────────┤
-│ lib.search.input   │ stage.player.frame                          │ agent.modelbar            │
-│ lib.mode.header    │  stage.player.canvas                        │  agent.modelbar.provider  │
-│  (Design mode)     │  stage.player.controls                      │  agent.modelbar.model     │
-│ lib.catalogue      │   .play .pause .time .duration .ratio .res  │ agent.brainstorm.panel    │
-│  lib.catalogue.tab │   .scrubber .fullscreen .menu               │  .thread .message         │
-│  lib.catalogue.card│  stage.player.state.loading/.error          │  .composer .send .attach  │
-│   .thumb .label    │  stage.player.canvas.box .handle .guide     │  .footer.model .footer.ctx│
-│   .badge.model     │ stage.timeline                              │  .handoff (→ Editor)      │
-│   .badge.gpu       │  stage.timeline.ruler  stage.timeline.head  │ agent.editor.panel        │
-│  (Home mode)       │  stage.timeline.track.caption               │  .thread .message         │
-│ lib.text.*         │  stage.timeline.lane.new / .lane.layer (×n) │  .intentqueue             │
-│  (Tools mode)      │   (top row = front-most layer)              │   .item .item.superseded  │
-│ lib.generator.card │  stage.timeline.track.video                 │   .item.restore .clear    │
-│                    │  stage.timeline.lane.audio (×n) / .lane.new │  .plancard                │
-│ lib.assets.panel   │  stage.timeline.element                     │   .goal .step .risk .notes│
-│  lib.assets.drop   │   .clip .text .image .caption .audio .trans.│   .baseversion.stale      │
-│  lib.assets.card   │   .effect .background .shape .generated     │  .execute  .cancel        │
-│   .thumb .meta     │  stage.timeline.inspector                   │  .composer .send .attach  │
-│   .badge.sequence  │  stage.timeline.empty                       │  .footer.model .footer.ctx│
+│ lib.search.input   │ stage.player.frame                          │ agent.chat (one chat)     │
+│ lib.mode.header    │  stage.player.canvas                        │ .header .status .usage    │
+│  (Design mode)     │  stage.player.controls                      │ .model ▾ → .model.popover │
+│ lib.catalogue      │   .play .pause .time .duration .ratio .res  │ .thread                   │
+│  lib.catalogue.tab │   .scrubber .fullscreen .menu               │  .message (💡 / ✂️ tag)    │
+│  lib.catalogue.card│  stage.player.state.loading/.error          │  .apply (Kerjakan di      │
+│   .thumb .label    │  stage.player.canvas.box .handle .guide     │   video)                  │
+│   .badge.model     │ stage.timeline                              │ agent.brainstorm.handoff  │
+│   .badge.gpu       │  stage.timeline.ruler  stage.timeline.head  │ agent.editor.plancard     │
+│  (Home mode)       │  stage.timeline.track.caption               │  .goal .step .risk .notes │
+│ lib.text.*         │  stage.timeline.lane.new / .lane.layer (×n) │  .baseversion.stale .undo │
+│  (Tools mode)      │   (top row = front-most layer)              │ agent.editor.execute      │
+│ lib.generator.card │  stage.timeline.track.video                 │  .cancel                  │
+│                    │  stage.timeline.lane.audio (×n) / .lane.new │ agent.editor.picks        │
+│ lib.assets.panel   │  stage.timeline.element                     │  .intentqueue.toggle      │
+│  lib.assets.drop   │   .clip .text .image .caption .audio .trans.│  .intentqueue .item …     │
+│  lib.assets.card   │   .effect .background .shape .generated     │ .composer .send .attach   │
+│   .thumb .meta     │  stage.timeline.inspector                   │ .mode (Diskusi | Edit)    │
+│   .badge.sequence  │  stage.timeline.empty                       │                           │
 │   .select          │                                             │ agent.output              │
 │  lib.assets.insert │                                             │  .ratio.* .auto           │
 │  lib.assets.empty  │                                             │  .resolution.*            │
@@ -175,25 +175,29 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 
 | Element ID | Mockup element | Behaviour summary |
 |---|---|---|
-| `agent.modelbar` | "Model: MiniMax H3" | Default Provider Connection + model; click → Providers screen. |
-| `agent.modelbar.status` | (dot) | Connection validated / error / Private Mode. |
-| `agent.brainstorm.panel` | "Brainstorming Agent" | Brainstorming Chat container; `data-view` = `split` / `max` / `min` (FR-099). |
-| `agent.brainstorm.thread` / `.message` | messages | Thread and message bubbles (`.user`, `.assistant`, `.system`). |
-| `agent.brainstorm.composer` / `.send` / `.attach` | input, send, attach icon | Composer; attach = reference an Asset or image into the chat. |
-| `agent.brainstorm.footer.model` | "Claude 3.5 Sonnet ▾" | Per-agent Model Assignment override. |
-| `agent.brainstorm.footer.ctx` | "0 / 200000" | Context usage: tokens used / model context length. |
-| `agent.brainstorm.handoff` | (added) | Card shown when the Brainstorming Agent proposes Edit Intents: "Send to Editor Agent" / "Dismiss". |
+| `agent.chat` | the assistant chat | One thread per Project with two modes (Operator decision 2026-10-26, FR-073): `data-mode` = `brainstorm` ("Diskusi", Brainstorming Agent) / `editor` ("Edit", Editor Agent); `data-maximized` while it fills the Agent Panel (FR-099). Replaces the two chats and the Model Bar. |
+| `agent.chat.header` | chat header bar | Status dot, model button, compact usage, help ⓘ, maximize; `data-mode`. |
+| `agent.chat.status` | (dot) | Connection of the current mode's model: `data-status` = `valid` / `error` / `unvalidated` / `none` / `private` (shield in Private Mode); the last EM-4xxx run failure wins (FR-071). |
+| `agent.chat.model` | "Model: Claude Sonnet 4.5 ▾" | The current mode's Model Assignment (separate per agent, `data-agent`); opens `agent.chat.model.popover`; without any Provider Connection it reads "Connect an AI provider" and opens `scr.providers`. ⚠ when the model carries a quality warning. |
+| `agent.chat.model.popover` | model list popover | FR-073 / FR-115 (2026-10-26): a clean list, not a table: `.search` (name or id; ↑/↓ + Enter), `.refresh`, `.connection` (only with more than one validated connection), `.list` (listbox), `.section` (`data-section` = `recommended` "Disarankan" / `free` "Gratis" / `paid` "Berbayar"), `.row` (model name, short provider, `data-model-id`, `data-quality` = ok / weak / unsupported, `aria-selected`), `.row.price` ("$0.30/1M" or "Free"), `.row.warn` (⚠, `data-reasons`), `.more` (per section), `.warning` + `.warning.recommended` (a warned pick keeps the popover open), `.nomatch`, `.empty`, `.fetch`, `.manage` ("Manage providers…" → `scr.providers`). |
+| `agent.chat.usage` | "1,2K / 200K" | Compact context usage of the current mode's last request; tooltip: tokens, last request cost, summarisation note; `data-tone` muted / warn (≥ 60 %) / danger (≥ 80 %) (FR-074). |
+| `agent.chat.thread` | messages | One thread: both agents' messages in time order, the Plan Cards and "Applied directly" lines (FR-085, FR-086). |
+| `agent.chat.message` / `agent.chat.message.agent` | a message bubble and its agent tag | `data-agent` = `brainstorm` / `editor`, `data-role` = `user` / `assistant` / `system`; `.agent` is the tag ("💡 Diskusi" / "✂️ Edit") on every message, including the Creator's own (the mode it was sent in). |
+| `agent.chat.streaming` | streaming reply | The reply while it streams (FR-075), with its agent tag and Cancel; `data-agent`. |
+| `agent.chat.apply` | "Kerjakan di video" / "Apply to video" | On a Diskusi answer: sends the answer to Edit mode as the request; on a proposed-changes card (`agent.brainstorm.handoff`) it hands the ticked proposals to the Intent Queue (R-082). Either way the chat switches to Edit. |
+| `agent.chat.composer` / `agent.chat.send` / `agent.chat.attach` | input, send, attach icon | One composer for both modes (`data-mode`); Enter sends; Tab in an empty composer switches the mode; attach = reference an Asset or image. |
+| `agent.chat.mode` / `agent.chat.mode.brainstorm` / `agent.chat.mode.editor` | "💡 Diskusi \| ✂️ Edit" | Mode switch in the composer (`role=radiogroup`, `aria-checked`); Ctrl+1 / Ctrl+2 inside the chat; remembered per Project (prefs). |
+| `agent.editor.picks` | "Your picks" strip | The Intent Queue as a compact strip above the composer, shown in Edit mode only; `data-open` while expanded. |
+| `agent.editor.intentqueue.toggle` / `agent.editor.intentqueue.count` | "Your picks (3) ▴" | Expands / collapses the strip (`aria-expanded`, persisted in prefs `picksOpen`); the count badge is highlighted while picks wait for Plan. |
+| `agent.editor.plancard.undo` | Undo on an executed plan | The one-line summary after Execute (and an older plan in the thread) offers Undo while its version is the head. |
+| `agent.brainstorm.handoff` | (added) | Card shown when the Brainstorming Agent proposes Edit Intents: "Apply to video" (Kerjakan di video) / "Dismiss". |
 | `agent.brainstorm.handoff.item` / `agent.brainstorm.handoff.item.reason` | (added) | One proposed change in plain words (category, value → target); an invalid one is greyed (`data-invalid`) with its reason and EM code and cannot be sent (FR-076). |
-| `agent.editor.panel` | "Editor Agent" | Editor Chat container; `data-view` = `split` / `max` / `min` (FR-099). |
-| `agent.editor.thread` / `.message` | messages | As above. |
 | `agent.editor.intentqueue` | (added) | Intent Queue list; `.item`, `.item.superseded`, `.item.restore`, `.item.remove`, `.clear`. |
 | `agent.editor.plancard` | (added) | Plan Card; `.goal`, `.step`, `.step.tool`, `.step.diff`, `.risk`, `.notes`, `.baseversion`, `.baseversion.stale`. |
 | `agent.editor.plan` | (added) | "Plan" button: asks the Editor Agent to plan the queued intents (also triggered by composer send and by hand-off when auto-plan is on). |
 | `agent.editor.plancard.replan` | (added) | Re-plan a stale or invalid plan against the current version. |
 | `agent.editor.execute` | Execute | Executes the current Edit Plan. Disabled when no plan, stale, or validation failed. |
 | `agent.editor.cancel` | (added) | Cancels a running plan or agent request. |
-| `agent.editor.composer` / `.send` / `.attach` | input, send | Composer for direct instructions to the Editor Agent. |
-| `agent.editor.footer.model` / `.footer.ctx` | footer | As for brainstorm. |
 | `agent.output` | settings block | Output Settings container. |
 | `agent.output.profile.standard` / `.accelerated` / `.turbo` | Speed buttons | Performance Profile selector (policies in PERFORMANCE.md). |
 | `agent.output.profile.help` | ⓘ | Tooltip explaining profiles honestly. |
@@ -274,10 +278,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.title.sample` | "Sample ·" / "Contoh ·" marker in the Project Title | Shown only on the R-025 sample project (`isSample: true`); the marker uses the project's language. |
 | `lib.divider` | Library Panel / Stage divider | `role="separator"`; drag or ←/→ (16 px) resizes the Library Panel 240–420 px, dragging below 200 px collapses it to the rail; double-click or Enter resets (EDITOR_INTERACTION_MODEL.md §9). |
 | `agent.divider` | Stage / Agent Panel divider | As `lib.divider` for the Agent Panel, 320–900 px (default 360 / 420 / 480 px for the narrow / standard / wide window bucket); the maximum is further capped so the Stage never shrinks below 640 px (FR-099, operator feedback 2026-10-25). |
-| `agent.chats` | chat area of the Agent Panel | FR-099: holds the Brainstorming Chat, `agent.chat.divider` and the Editor Chat, sharing the panel height (no outer scroll); `data-maximized` = `brainstorm` / `editor` while one chat is maximized. |
-| `agent.chat.divider` | Brainstorming / Editor Chat divider | FR-099: `role="separator"` (horizontal); drag or ↑/↓ (16 px) moves the split, Home/End to the ends, double-click or Enter resets to 40 % / 60 %; keeps Brainstorming ≥ 140 px and Editor ≥ 200 px (it also holds the Intent Queue); ratio persisted in prefs and Settings `layout.chatSplit`; hidden while a chat is maximized. |
-| `agent.brainstorm.header` / `agent.editor.header` | chat header bar | FR-099: title, help ⓘ and `….maximize`; `data-view` = `split` / `max` / `min`. Reduced (`min`, the other chat maximized) only this bar shows and its title is a button that restores the split view. |
-| `agent.brainstorm.maximize` / `agent.editor.maximize` | maximize / restore toggle in a chat header | FR-099: `aria-pressed`; maximizing gives that chat the whole chat area (the other keeps its header bar); pressed again, or pressed on the reduced chat, restores the split; persisted (`layout.chatMaximized`). |
+| `agent.chat.maximize` | maximize / restore toggle in the chat header | FR-099: `aria-pressed`; maximizing gives the chat the whole Agent Panel (Output Settings hidden); pressed again restores; persisted (`layout.chatMaximized`). |
 | `agent.output.toggle` | Output Settings header button | FR-099: `aria-expanded`; expands/collapses Output Settings (collapsed by default; persisted as `layout.outputCollapsed`). |
 | `agent.output.summary` | summary in the collapsed Output Settings header | FR-099: "16:9 · 1080p · 30 fps · Standard" (ratio · resolution · frame rate · Performance Profile), shown only while collapsed. |
 | `stage.divider` | Player / Timeline View divider | ↑/↓ resizes the Timeline View height (220 px to 50 % of the Stage). |
@@ -293,14 +294,11 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `stage.player.state.empty` / `stage.player.state.empty.import` | Player empty state | QA 2026-10-25: a Composition Version with nothing in it (no clips, texts, overlays, captions, audio or background) shows "Nothing to preview yet" with Import… instead of a spinner; a hover preview of a preset still plays. |
 | `stage.player.state.noproject` / `stage.player.state.noproject.new` / `stage.player.state.noproject.open` | Player without a Project | No Project open: "No project open" with New Project (same as `hdr.menu.file.new`) and Open… (`scr.project.open`). |
 | `stage.timeline.element.generated` | "generated" badge on a bar | FR-064: the element's Asset came from a generator job (voice, music, thumbnail). |
-| `agent.brainstorm.message.copy` / `agent.editor.message.copy` | copy icon under a message | FR-077: copies the message text to the clipboard. |
-| `agent.brainstorm.message.retry` / `agent.editor.message.retry` | "Try again" on a saved failure | FR-077: a persisted system message keeps its EM code and inline recovery after a restart. |
+| `agent.chat.message.copy` | copy icon under a message | FR-077: copies the message text to the clipboard. |
+| `agent.chat.message.retry` | "Try again" on a failure | FR-077: a persisted system message keeps its EM code and inline recovery after a restart; also on a live error bubble. "Switch model" opens `agent.chat.model.popover` for that agent. |
 | `agent.editor.message.applied` | "Applied directly: …" line | FR-085: a deterministic pick compiled and applied without any model, in thread order. |
-| `agent.brainstorm.attach.file` / `agent.editor.attach.file` | "Image from this computer" in the attach menu | FR-072: imports a PNG/JPEG/WebP ≤ 10 MB (EM-1002 above) and attaches it. |
-| `agent.brainstorm.attach.error` / `agent.editor.attach.error` | inline attachment notice | FR-072: EM-4307 (model cannot read images) or EM-1002 with Remove attachment / Switch model. |
-| `agent.brainstorm.footer.model.popover` / `agent.editor.footer.model.popover` | popover opened by the footer model name | FR-073: per-agent model choice with the shared ModelPicker (compact); a pick applies to the next request of that agent only and closes the popover (it stays open when the pick carries a quality warning, showing `….picker.warning`); "Manage providers…" link. |
-| `agent.brainstorm.footer.model.connection` / `agent.editor.footer.model.connection` | connection select in the popover | FR-073: shown only with more than one validated Provider Connection; switches the table shown. |
-| `agent.brainstorm.footer.model.picker` / `agent.editor.footer.model.picker` | ModelPicker in the popover | FR-073 / FR-115: same parts as `scr.providers.models`: `agent.<agent>.footer.model.picker.search`, `….refresh`, `….category` / `.category.all` / `.category.free` / `.category.paid`, `….filter.json` / `.filter.images`, `….count`, `….sort.name` / `.sort.context` / `.sort.price`, `….list`, `….row`, `….row.recommended`, `….row.warn`, `….row.price.unknown`, `….warning`, `….warning.recommended`, `….more`, `….nomatch`, `….empty`, `….fetch`. |
+| `agent.chat.attach.file` | "Image from this computer" in the attach menu | FR-072: imports a PNG/JPEG/WebP ≤ 10 MB (EM-1002 above) and attaches it. |
+| `agent.chat.attach.error` | inline attachment notice | FR-072: EM-4307 (model cannot read images) or EM-1002 with Remove attachment / Switch model. |
 | `agent.editor.plancard.step.ops` / `agent.editor.plancard.model` / `agent.editor.plancard.result` | Plan Card details | FR-081 ops count per step and model name; FR-086 diff summary ("3 added, 1 modified") once executed. |
 | `agent.editor.plancard.step.dropped` / `agent.editor.plancard.locked` | Plan Card details | FR-081: a step EM-2302 removed (it touched a Locked Key), shown struck through, and the inline EM-2302 notice; steps of a plan that still touch Locked Keys are struck through (`data-locked` on `agent.editor.plancard.step`). |
 | `agent.output.ratio.help.table` | pixel table in the ratio help popover | FR-087/FR-096: PERFORMANCE §3 pixels for every ratio × resolution, computed. |
@@ -378,7 +376,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `sys.update.restart` | Update "Restart now" | EM-8105; disabled while an export runs, the Shell also defers the install until the queue is empty. |
 | `sys.update.later` | Update "Later" | Hides the banner; the update stays downloaded. |
 | `sys.update.retry` | Update "Try again" | EM-8104 (interrupted update, previous version kept), EM-8102, EM-8101: runs a new check (FR-152). |
-| `agent.brainstorm.budget` / `agent.editor.budget` | "Change budget" in the EM-4201 message | FR-117 / AI-016: opens `scr.providers` with focus on `.budget.project` (or `.budget.month`) of the connection whose cap is used up. |
+| `agent.chat.budget` | "Change budget" in the EM-4201 message | FR-117 / AI-016: opens `scr.providers` with focus on `.budget.project` (or `.budget.month`) of the connection whose cap is used up. |
 | `scr.generate.voice.voice` | Voice picker | Installed Piper/Kokoro voices (FR-101). |
 | `scr.generate.voice.speed` | Speed slider | 0.8–1.2 (FR-101). |
 | `scr.generate.voice.preview` | Audio preview | Plays the generated audio before Insert (FR-101, FR-102). |
@@ -439,9 +437,11 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 3. The avatar is licence status because Expertmotion has no user accounts.
 4. "480p" in the mockup is treated as the draft preview quality, not an export preset (Master Project Prompt §13 lists 720p as the smallest export preset).
 5. The three timeline rows in the mockup become five Tracks (video, overlay, text, caption, audio); since 2026-10-26 (ADR-027) the Timeline View draws them as lanes: captions, one row per layer (front-most on top), the video Track, audio lanes.
-6. Chat footers show the per-agent model and context usage; the top Model Bar shows the default Provider Connection.
+6. Since 2026-10-26 one assistant chat replaces the two chats and the Model Bar: the chat header shows the current mode's model (per agent) and its context usage.
 
 ## Retired ids
+
+Removed on 2026-10-26 with the two separate chats (Operator decision: ONE assistant chat with two modes, Diskusi / Edit; FR-073, FR-099); the names are not reused: `agent.modelbar`, `agent.modelbar.status`, `agent.modelbar.provider`, `agent.modelbar.model` (now `agent.chat.model` / `agent.chat.status` in the chat header), `agent.chats`, `agent.chat.divider` (no split any more), `agent.brainstorm.panel`, `agent.editor.panel` (now `agent.chat`), `agent.brainstorm.header`, `agent.editor.header` (now `agent.chat.header`), `agent.brainstorm.maximize`, `agent.editor.maximize` (now `agent.chat.maximize`), `agent.brainstorm.thread`, `agent.editor.thread` (now `agent.chat.thread`), `agent.brainstorm.message` / `agent.editor.message` with `.copy` / `.retry` (now `agent.chat.message` with `data-agent`), `agent.brainstorm.composer` / `.send` / `.attach` / `.attach.file` / `.attach.error` and the same under `agent.editor.` (now `agent.chat.composer` …), `agent.brainstorm.footer.model` / `.footer.ctx` / `.footer.model.popover` / `.footer.model.connection` / `.footer.model.picker.*` and the same under `agent.editor.` (now `agent.chat.model`, `agent.chat.usage`, `agent.chat.model.popover` …), `agent.brainstorm.budget`, `agent.editor.budget` (now `agent.chat.budget`).
 
 Removed on 2026-10-26 with the layered lanes (Operator decision: CapCut-style timeline, ADR-027); the names are not reused: `stage.timeline.track.overlay`, `stage.timeline.track.text` (now one `stage.timeline.lane.layer` per layer, texts and overlays mixed by stacking order), `stage.timeline.track.audio` (now `stage.timeline.lane.audio` per lane).
 

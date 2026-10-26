@@ -15,6 +15,7 @@ import { issueError, type CompositionStore } from './store.js';
 import { brainstormTools, deltaEmitter } from '../modules/agents.js';
 import { getAssignment } from '../modules/providers.js';
 import { cachedModels } from '../s3/usage-store.js';
+import { discussionFor } from '../s3/shared-context.js';
 
 /** FR-080 / FR-072: what an Editor Chat message adds to the Rewrite envelope and the provider request. */
 export interface AgentPlanExtras { selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images?: ChatImage[] | undefined; attachments?: string[] | undefined; onDelta?: ((d: string) => void) | undefined;
@@ -404,7 +405,8 @@ export class Workflow {
       const assets = this.store.facts(projectId), tier = this.ctx.hooks.tier(), lockedKeys = lockedKeysFromQueue(queue);
       const notes = (this.ctx.db.prepare("SELECT json_extract(plan_json, '$.notes') AS n FROM edit_plans WHERE project_id = ? AND id != ? AND json_extract(plan_json, '$.notes') IS NOT NULL ORDER BY updated_at DESC LIMIT 1").get(projectId, planId) as { n: string } | undefined)?.n;
       const env = buildRewriteEnvelope({ model: head.model, baseVersion: head.hash, assets, intents, lockedKeys, tier, ...(message ? { creatorMessage: message } : {}), ...(notes ? { creatorNotes: notes } : {}),
-        ...(extras.selection?.length ? { selection: extras.selection } : {}), ...(extras.playheadMs !== undefined ? { playheadMs: extras.playheadMs } : {}), ...(extras.attachments?.length ? { attachments: extras.attachments } : {}) });
+        ...(extras.selection?.length ? { selection: extras.selection } : {}), ...(extras.playheadMs !== undefined ? { playheadMs: extras.playheadMs } : {}), ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
+        discussion: discussionFor(this.ctx, projectId, this.editorContextLength()) });   // AI_WORKFLOW §10.1: shared chat context
       let usage: ChatUsage[] = [];
       // FR-084: plan deltas stream as agent.run.delta (the S3 chat passes its own emitter for its run; queue-started runs use one here).
       const own = extras.onDelta || external ? null : deltaEmitter(this.ctx, projectId, runId, 'editor');   // an external run owns its events
@@ -458,9 +460,11 @@ export class Workflow {
   /** FR-074: the counter is the last request's input + output tokens over the assigned model's context length (Capability Table). */
   private editorContextUsage(usage: readonly ChatUsage[]): { usedTokens: number; contextLength: number | null } {
     const last = usage[usage.length - 1];
-    let contextLength: number | null = null;
-    try { const a = getAssignment(this.ctx, 'editor'); contextLength = a ? cachedModels(this.ctx, a.connectionId)?.find((m) => m.modelId === a.modelId)?.contextLength ?? null : null; } catch { /* providers module absent */ }
-    return { usedTokens: last ? last.inputTokens + last.outputTokens : 0, contextLength };
+    return { usedTokens: last ? last.inputTokens + last.outputTokens : 0, contextLength: this.editorContextLength() };
+  }
+  /** The Editor Agent model's context length (Capability Table), null when unknown. */
+  private editorContextLength(): number | null {
+    try { const a = getAssignment(this.ctx, 'editor'); return a ? cachedModels(this.ctx, a.connectionId)?.find((m) => m.modelId === a.modelId)?.contextLength ?? null : null; } catch { return null; /* providers module absent */ }
   }
   private finishRun(runId: string, status: 'done' | 'failed' | 'cancelled', code: string | null): void {
     this.ctx.db.prepare("UPDATE agent_runs SET status = ?, error_code = ?, finished_at = ? WHERE id = ? AND status = 'running'").run(status, code, this.ctx.now(), runId);

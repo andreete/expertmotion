@@ -412,9 +412,9 @@ The op is `op:theme.setTextDefaults {fontFamily?, fontSize?, weight?, colour?, a
 
 **Creator actions**
 
-1. Type in `agent.brainstorm.composer`: "buat intro energik untuk video review HP" and click `agent.brainstorm.send`.
-2. Read the reply in `agent.brainstorm.thread` (Indonesian, UX-042): a 3-sentence concept (judul besar yang muncul "pop", transisi dorong yang cepat, durasi intro ≈ 2,5 detik) and a question-free proposal.
-3. The handoff card `agent.brainstorm.handoff` lists 3 proposed intents; click "Send to Editor Agent" / "Kirim ke Editor Agent".
+1. Type in `agent.chat.composer`: "buat intro energik untuk video review HP" and click `agent.chat.send`.
+2. Read the reply in `agent.chat.thread` (Indonesian, UX-042): a 3-sentence concept (judul besar yang muncul "pop", transisi dorong yang cepat, durasi intro ≈ 2,5 detik) and a question-free proposal.
+3. The handoff card `agent.brainstorm.handoff` lists 3 proposed intents; click "Apply to video" / "Kerjakan di video".
 4. The Editor Agent runs automatically on the hand-off (spinner "Asking fake-mid…" / "Bertanya ke fake-mid…"); `agent.editor.plancard` appears with badge "Proposed by Editor Agent · nothing applied yet" / "Usulan Editor Agent · belum diterapkan".
 5. Click `agent.editor.execute`.
 
@@ -464,7 +464,7 @@ Handoff rule used here: intents arriving from the Brainstorming Agent are **neve
 
 **Creator actions**
 
-1. Type in `agent.editor.composer`: "ganti semua transisi jadi wipe dari kiri" → `agent.editor.send`.
+1. Type in `agent.chat.composer`: "ganti semua transisi jadi wipe dari kiri" → `agent.chat.send`.
 2. Plan Card appears; read `agent.editor.plancard.risk`.
 3. `agent.editor.execute`.
 
@@ -508,7 +508,7 @@ EN variant of the risk: "Cut 1 (Slide) was your own pick, so it was left unchang
 
 **Creator actions**
 
-1. `agent.editor.composer`: "tambahkan transisi fade di semua potongan" → send. Plan Card shows a 2-op plan (`plan.ready`, `baseVersion vB1`).
+1. `agent.chat.composer`: "tambahkan transisi fade di semua potongan" → send. Plan Card shows a 2-op plan (`plan.ready`, `baseVersion vB1`).
 2. **Before** Execute: in `lib.assets.panel` select FX-V3 (`lib.assets.card.select`), click `lib.assets.insert` → the Insert compiles immediately (`c4 = FX-V3 5 000`, head `vB1+1`, duration 24 000 ms).
 3. Observe `agent.editor.plancard.baseversion.stale` with "Composition changed; re-plan" / "Komposisi berubah; susun ulang"; `agent.editor.execute` is disabled.
 4. Click the re-plan action on the stale badge (`agent.editor.plancard.replan`, **[GAP-4]** not yet in ELEMENT_IDS.md).
@@ -552,7 +552,7 @@ EN variant of the risk: "Cut 1 (Slide) was your own pick, so it was left unchang
 
 **Creator actions**
 
-1. `agent.editor.composer`: "tambahkan judul 'Harga Resmi' di awal dan buat transisinya lebih cepat" → send.
+1. `agent.chat.composer`: "tambahkan judul 'Harga Resmi' di awal dan buat transisinya lebih cepat" → send.
 2. Observe the spinner twice ("Asking fake-mid…" then "Checking the plan again…" / "Memeriksa rencana lagi…").
 3. Plan Card appears with one step and one warning; `agent.editor.execute`.
 
@@ -599,9 +599,9 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
 
 **Creator actions**
 
-1. `agent.editor.composer`: "bikin intronya lebih hidup" → send.
+1. `agent.chat.composer`: "bikin intronya lebih hidup" → send.
 2. Observe three spinner phases.
-3. Read the error in `agent.editor.thread` and expand "Show raw answer" / "Tampilkan jawaban mentah".
+3. Read the error in `agent.chat.thread` and expand "Show raw answer" / "Tampilkan jawaban mentah".
 
 **Expected Intent Queue**
 
@@ -722,7 +722,7 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
 **Creator actions**
 
 1. Toggle `agent.output.private` on. `sys.privatemode.banner` appears: "Private Mode: nothing leaves this computer. Agents and model downloads are paused." / "Mode Privat: tidak ada yang keluar dari komputer ini. Agen dan unduhan model dijeda."
-2. Try to type in `agent.editor.composer` → it is `.disabled` with the inline notice **EM-4401** "Agents are off in Private Mode: Private Mode blocks all internet use, so the agents are unavailable. Designs, timeline and export still work." / "Agen nonaktif dalam Private Mode: Private Mode memblokir semua akses internet, sehingga agen tidak tersedia. Desain, timeline dan ekspor tetap berfungsi." (action "Turn off Private Mode" / "Matikan Private Mode"); `agent.modelbar.status` shows "Private Mode".
+2. Try to type in `agent.chat.composer` → it is `.disabled` with the inline notice **EM-4401** "Agents are off in Private Mode: Private Mode blocks all internet use, so the agents are unavailable. Designs, timeline and export still work." / "Agen nonaktif dalam Private Mode: Private Mode memblokir semua akses internet, sehingga agen tidak tersedia. Desain, timeline dan ekspor tetap berfungsi." (action "Turn off Private Mode" / "Matikan Private Mode"); `agent.chat.status` shows "Private Mode".
 3. Design ▸ Transitions → click `preset:transition.fade` (nothing selected).
 4. `hdr.action.models` → every `scr.models.row.install` is disabled with **EM-7006** "Download paused" / "Unduhan dijeda" (`reason: private`).
 5. `hdr.action.export` → render a 1080p export.
@@ -753,7 +753,7 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
 
 **Creator actions**
 
-1. `agent.editor.composer`: "kasih fade di semua potongan dan judul 'Halo!' di awal" → send.
+1. `agent.chat.composer`: "kasih fade di semua potongan dan judul 'Halo!' di awal" → send.
 2. Plan Card shows 3 ops (2 × `op:transition.set`, 1 × `op:text.add`); `agent.editor.execute`.
 3. Observe `sys.offline` ("Reconnecting…" / "Menyambung ulang…") for ≈ 1–3 s (Desktop Shell restart with backoff), then the Editor reconnects.
 4. Read the Plan Card: "Interrupted; nothing was applied. Execute again." / "Terputus; tidak ada yang diterapkan. Jalankan lagi."
@@ -797,9 +797,9 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
 
 **Creator actions**
 
-1. Open the project: `sys.toast` **EM-4202** (warn, once per session) "80 % of budget used: This project has used $0.85 of its $1.00 AI budget." / "80 % anggaran terpakai: Proyek ini telah memakai $0,85 dari anggaran AI $1,00." (AI_WORKFLOW §11); `agent.editor.footer.ctx` tooltip repeats the figures.
-2. `agent.editor.composer`: "tambahkan fade di semua potongan" → send → plan arrives; usage now $1.05.
-3. `agent.editor.composer`: "sekarang tambahkan judul" → send.
+1. Open the project: `sys.toast` **EM-4202** (warn, once per session) "80 % of budget used: This project has used $0.85 of its $1.00 AI budget." / "80 % anggaran terpakai: Proyek ini telah memakai $0,85 dari anggaran AI $1,00." (AI_WORKFLOW §11); `agent.chat.usage` tooltip repeats the figures.
+2. `agent.chat.composer`: "tambahkan fade di semua potongan" → send → plan arrives; usage now $1.05.
+3. `agent.chat.composer`: "sekarang tambahkan judul" → send.
 4. Read the error; open `scr.providers` via "Change budget" / "Ubah anggaran", set `scr.providers.budget.month` to $5.00, save; send again → works.
 5. Meanwhile click `preset:transition.slide` with `c1` selected → compiles regardless of budget.
 
@@ -871,10 +871,10 @@ EN (EM-2302 catalogue copy): "The Editor Agent's plan tried to change settings y
 
 **Creator actions**
 
-1. `agent.editor.composer`: "make the captions pop and add soft music bed, duck under my voice" → send.
+1. `agent.chat.composer`: "make the captions pop and add soft music bed, duck under my voice" → send.
 2. Read the Plan Card and its warn risk; `agent.editor.execute`.
 3. Drag FX-M1 (`bed-lofi.mp3`) onto `lib.assets.drop`; wait for `ready`.
-4. `agent.editor.composer`: "now add the music" → send; `agent.editor.execute`.
+4. `agent.chat.composer`: "now add the music" → send; `agent.editor.execute`.
 
 **Expected Intent Queue** (after step 1 the Rewrite splits the message into three intents, one per category):
 
@@ -939,7 +939,7 @@ The agent is expected to call `catalogue.search {query: "pop", category: "captio
 
 **Creator actions**
 
-1. Type in `agent.editor.composer`: "taruh judul di atas logo" → `agent.editor.send`; `agent.editor.execute`.
+1. Type in `agent.chat.composer`: "taruh judul di atas logo" → `agent.chat.send`; `agent.editor.execute`.
 2. Drag `t1` on the Timeline right by about 2 s and one row up (end edge near 5 000 ms), release.
 3. With `t1` focused, press Alt+↓.
 4. Ctrl+Z.
@@ -982,7 +982,7 @@ Rewrite envelope (step 1): `composition.text[0] = {id: t1, …, layer: 0}`, `com
 
 **Creator actions**
 
-1. Type in `agent.editor.composer`: "potong klip pertama di detik 3, lalu perbesar videonya jadi 120% dan geser sedikit ke kiri" → `agent.editor.send`; `agent.editor.execute`.
+1. Type in `agent.chat.composer`: "potong klip pertama di detik 3, lalu perbesar videonya jadi 120% dan geser sedikit ke kiri" → `agent.chat.send`; `agent.editor.execute`.
 2. Nothing selected, playhead at 7 000 ms: press S.
 3. Select the second part of clip 1 (`stage.timeline.element`, 3 000–5 000 ms) and, on the Player, drag its box right by a quarter of the frame and its corner out with Shift to 150 % (one gesture each; here as one pick with the final values).
 

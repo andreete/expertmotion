@@ -41,7 +41,15 @@ export function lockedSteps(plan: PlanDto): { dropped: Array<{ n: number; text: 
   return { dropped, touching };
 }
 
-/** FR-086: an older plan inline in the Editor thread, collapsed: goal, status, version hash, diff summary. */
+/** Undo for an executed plan whose version is still the head (the one-line summary after Execute, 2026-10-26). */
+function UndoPlan({ plan }: { plan: PlanDto }) {
+  const { state, actions, t } = useStore();
+  const to = plan.result?.toVersion;
+  if (plan.status !== 'executed' || !to || to !== state.head?.hash || !state.canUndo) return null;
+  return <button type="button" data-el="agent.editor.plancard.undo" className="shrink-0 font-semibold text-em-accent underline" onClick={() => void actions.undo()}>{t('ui.sys.toast.undo')}</button>;
+}
+
+/** FR-086: an older plan inline in the chat thread, collapsed: goal, status, version hash, diff summary (+ Undo while it is the head). */
 export function PlanSummary({ plan }: { plan: PlanDto }) {
   const { t } = useStore();
   const v = plan.result?.toVersion?.slice(0, 6);
@@ -51,6 +59,7 @@ export function PlanSummary({ plan }: { plan: PlanDto }) {
       <span className="min-w-0 flex-1 truncate text-em-text"><ModelText inline text={plan.goal} /></span>
       <span>{t(`ui.agent.plan.status.${plan.status}`)}{v ? ` · v${v}` : ''}</span>
       {plan.result && <span className="text-em-muted">· {diffSummary(plan.result, t)}</span>}
+      <UndoPlan plan={plan} />
     </div>
   );
 }
@@ -61,7 +70,8 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
   const [notes, setNotes] = useState(plan.notes ?? '');
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => { setNotes(plan.notes ?? ''); }, [plan.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (plan.status !== 'executed') { setCollapsed(false); return; } const h = setTimeout(() => setCollapsed(true), 10_000); return () => clearTimeout(h); }, [plan.status]);
+  // 2026-10-26: after Execute the card becomes a one-line summary with Undo right away ("Details" expands it again).
+  useEffect(() => { setCollapsed(plan.status === 'executed'); }, [plan.status]);
   const headHash = state.head?.hash;
   const stale = plan.status === 'stale' || (plan.status === 'valid' && headHash !== undefined && plan.baseVersion !== headHash);
   const status = stale ? 'stale' : plan.status;
@@ -83,7 +93,8 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
   const otherValidation = plan.validation.filter((v) => !(v.code === 'EM-2302' && v.path.startsWith('droppedSteps[')));
   if (collapsed) {
     return <div data-el="agent.editor.plancard" data-status="executed" data-collapsed="true" className="flex items-center gap-2 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} /><span className="min-w-0 flex-1 truncate"><ModelText inline text={plan.goal} /></span>
-      <span>{t('ui.agent.plan.status.executed')} · v{(plan.result?.toVersion ?? headHash ?? '').slice(0, 6)}{plan.result ? ` · ${diffSummary(plan.result, t)}` : ''}</span><button type="button" className="underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button></div>;
+      <span className="shrink-0">{t('ui.agent.plan.status.executed')} · v{(plan.result?.toVersion ?? headHash ?? '').slice(0, 6)}</span>{plan.result && <span data-el="agent.editor.plancard.result" className="shrink-0 text-em-text-2">· {diffSummary(plan.result, t)}</span>}
+      <UndoPlan plan={plan} /><button type="button" className="shrink-0 underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button></div>;
   }
   return (
     <section data-el="agent.editor.plancard" data-status={status} role="region" aria-label={t('a11y.agent.editor.plancard', { goal: plan.goal, status: h.text, version: base })}
@@ -150,8 +161,8 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
         {(status === 'stale' || status === 'invalid' || status === 'failed' || status === 'cancelled') && (
           <Button el="agent.editor.plancard.replan" size={32} variant={status === 'stale' ? 'primary' : 'secondary'} onClick={() => void actions.plan()}>{status === 'cancelled' ? t('ui.agent.plan.rerun') : t('ui.agent.plan.replan')}</Button>
         )}
-        {status === 'executed' && <Button size={32} onClick={() => void actions.undo()}>{t('ui.sys.toast.undo')}</Button>}
-        {status !== 'executed' && status !== 'stale' && status !== 'cancelled' && (
+        {status === 'executed' && <Button el="agent.editor.plancard.undo" size={32} onClick={() => void actions.undo()}>{t('ui.sys.toast.undo')}</Button>}
+        {status !== 'executed' && status !== 'cancelled' && (   /* stale: shown disabled with its reason next to Re-plan */
           <Button el="agent.editor.execute" variant="primary" size={36} disabledReason={reason} loading={status === 'executing'} title={t('ui.agent.editor.execute.tooltip')}
             aria-label={t('a11y.agent.editor.execute')} onClick={() => void actions.execute()}>{t('ui.agent.editor.execute')} <span className="t-mono text-[10px] opacity-70">⌃↵</span></Button>
         )}

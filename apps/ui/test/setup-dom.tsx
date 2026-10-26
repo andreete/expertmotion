@@ -1,6 +1,6 @@
 // Shared jsdom setup for the Editor render tests: browser APIs jsdom lacks and a mock-mode render helper.
 // Each test file mocks '@remotion/player' with ./player-mock.tsx (the real Player needs media/canvas APIs jsdom lacks).
-import { render, waitFor, type RenderResult } from '@testing-library/react';
+import { fireEvent, render, waitFor, type RenderResult } from '@testing-library/react';
 
 class RO { observe() {} unobserve() {} disconnect() {} }
 const g = globalThis as Record<string, unknown>;
@@ -34,4 +34,18 @@ export const el = (id: string): HTMLElement | null => document.querySelector(`[d
 export const els = (id: string): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(`[data-el="${id}"]`)];
 export function present(id: string): boolean {
   return [...document.querySelectorAll('[data-el]')].some((n) => { const v = n.getAttribute('data-el') ?? ''; return v === id || v.startsWith(`${id}.`); });
+}
+
+/** The assistant chat composer in the given mode (clicks the composer's mode switch first; 2026-10-26 one chat, two modes). */
+export function chatComposer(mode: 'brainstorm' | 'editor'): HTMLElement {
+  const b = el(`agent.chat.mode.${mode}`);
+  if (b && b.getAttribute('aria-checked') !== 'true') fireEvent.click(b);
+  return el('agent.chat.composer')!;
+}
+/** Opens the Providers screen from the chat header: "Connect" without a connection, else Model ▾ → Manage providers. */
+export async function openProvidersFromChat(): Promise<void> {
+  fireEvent.click(el('agent.chat.model')!);
+  await waitFor(() => { if (!el('agent.chat.model.manage') && !document.querySelector('[data-el="scr.providers"]')) throw new Error('no model popover'); });
+  const manage = el('agent.chat.model.manage');
+  if (manage) fireEvent.click(manage);
 }

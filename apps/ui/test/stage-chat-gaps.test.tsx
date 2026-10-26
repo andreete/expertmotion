@@ -6,11 +6,11 @@ import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { createEmptyModel } from '@expertmotion/composition-model';
-import { renderEditor, el, els } from './setup-dom.js';
+import { renderEditor, el, els, chatComposer, openProvidersFromChat } from './setup-dom.js';
 import { StoreProvider } from '../src/state/store.js';
 import { createMockRuntime, type Runtime } from '../src/state/runtime.js';
 import { PlanCard, lockedSteps } from '../src/agent/PlanCard.js';
-import { proposalIssue, proposalTarget } from '../src/agent/BrainstormChat.js';
+import { proposalIssue, proposalTarget } from '../src/agent/proposals.js';
 import { translate } from '../src/i18n/index.js';
 import type { EditIntent, PlanDto } from '../src/api/types.js';
 
@@ -23,10 +23,10 @@ async function connect(runtime: Runtime) {
     const c = await runtime.api.addConnection({ provider: 'openrouter', label: 'OpenRouter', secret: 'sk-or-v1-test-key', validateNow: true });
     await runtime.api.putAssignments({ brainstorm: { agent: 'brainstorm', connectionId: c.id, modelId: 'openai/gpt-4.1-mini', settings: {} }, editor: { agent: 'editor', connectionId: c.id, modelId: 'anthropic/claude-sonnet-4.5', settings: {} } });
   });
-  fireEvent.click(el('agent.modelbar')!);
+  await openProvidersFromChat();
   await waitFor(() => { if (!el('scr.providers')?.textContent?.includes('OpenRouter')) throw new Error('providers'); });
   fireEvent.keyDown(el('scr.providers')!, { key: 'Escape' });
-  await waitFor(() => { if (el('agent.editor.composer')?.hasAttribute('readonly')) throw new Error('composer disabled'); });
+  await waitFor(() => { if (chatComposer('editor')?.hasAttribute('readonly')) throw new Error('composer disabled'); });
 }
 
 describe('Stage (FR-059, FR-066, FR-069)', () => {
@@ -79,20 +79,20 @@ describe('Editor Chat message envelope (FR-067, FR-072, FR-080) and queue (FR-07
     const clipId = clip.getAttribute('data-element-id')!;
     fireEvent.click(clip);
     await act(async () => { fireEvent.click(within(el('stage.timeline.inspector')!).getByRole('button', { name: t('ui.stage.timeline.inspector.ask') })); });
-    await waitFor(() => { if (!el('agent.editor.composer')?.closest('div')) throw new Error('no composer'); });
+    await waitFor(() => { if (!chatComposer('editor')?.closest('div')) throw new Error('no composer'); });
     // attach an image from disk (Claude Sonnet has image input in the mock Capability Table)
-    const input = el('agent.editor.panel')!.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const input = el('agent.chat')!.querySelector<HTMLInputElement>('input[type="file"]')!;
     await act(async () => { fireEvent.change(input, { target: { files: [new File(['png'], 'logo.png', { type: 'image/png' })] } }); });
-    await waitFor(() => { if (!el('agent.editor.panel')?.textContent?.includes('logo.png')) throw new Error('no chip'); });
-    fireEvent.change(el('agent.editor.composer')!, { target: { value: 'buat klip ini lebih cepat' } });
-    await act(async () => { fireEvent.keyDown(el('agent.editor.composer')!, { key: 'Enter' }); });
+    await waitFor(() => { if (!el('agent.chat')?.textContent?.includes('logo.png')) throw new Error('no chip'); });
+    fireEvent.change(chatComposer('editor'), { target: { value: 'buat klip ini lebih cepat' } });
+    await act(async () => { fireEvent.keyDown(chatComposer('editor'), { key: 'Enter' }); });
     await waitFor(() => { if (!spy.mock.calls.length) throw new Error('not sent'); });
     const bodySent = spy.mock.calls[0]![2];
     expect(bodySent.target).toEqual({ kind: 'clip', id: clipId });
     expect(bodySent.selection).toEqual([{ kind: 'clip', id: clipId }]);
     expect(typeof bodySent.playheadMs).toBe('number');
     expect(bodySent.attachments).toHaveLength(1);
-    await waitFor(() => { if (!els('agent.editor.message').some((m) => m.textContent?.includes('logo.png'))) throw new Error('no attachment in thread'); });
+    await waitFor(() => { if (!els('agent.chat.message').some((m) => m.textContent?.includes('logo.png'))) throw new Error('no attachment in thread'); });
     // FR-079: the planned chat intent can be removed
     await waitFor(() => { if (!document.querySelector('[data-el="agent.editor.intentqueue.item"][data-status="planned"]')) throw new Error('no planned item'); });
     const planned = document.querySelector<HTMLElement>('[data-el="agent.editor.intentqueue.item"][data-status="planned"]')!;

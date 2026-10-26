@@ -16,7 +16,7 @@ describe('tour', () => {
   it('FR-149: at most 8 steps, covering Header, Library, Asset Panel, Stage, Agent Panel and Output Settings', () => {
     expect(TOUR_STEPS.length).toBeLessThanOrEqual(TOUR_MAX_STEPS);
     const targets = TOUR_STEPS.flatMap((x) => x.targets);
-    for (const t of ['hdr.menu.design', 'lib.catalogue.card', 'lib.assets.panel', 'stage.timeline', 'agent.brainstorm.composer', 'agent.output']) expect(targets).toContain(t);
+    for (const t of ['hdr.menu.design', 'lib.catalogue.card', 'lib.assets.panel', 'stage.timeline', 'agent.chat.composer', 'agent.output']) expect(targets).toContain(t);
   });
 
   it('advanced(): numbers must grow, strings must change to a non-null value', () => {

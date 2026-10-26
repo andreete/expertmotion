@@ -1,51 +1,15 @@
-// Brainstorming Chat (agent.brainstorm.*): ideas only, never mutates (IX-12); hand-off card (IX-13).
+// Proposed changes from the Brainstorming Agent (agent.brainstorm.handoff*, IX-13, FR-076) and the plain-words helpers the
+// chat, the Intent Queue and the Plan Card share. The card's send = "Apply to video" (Kerjakan di video): it hands the ticked
+// proposals to the Intent Queue (R-082) and the chat switches to Edit mode (Operator decision 2026-10-26).
 import { useState } from 'react';
-import { SendHorizontal } from 'lucide-react';
+import { Clapperboard } from 'lucide-react';
 import { getPreset, validateParams } from '@expertmotion/catalogue';
 import type { CompositionModelT } from '@expertmotion/composition-model';
 import { useStore } from '../state/store.js';
 import type { EditIntent, MessageDto } from '../api/types.js';
 import { Button } from '../components/ui.js';
-import { AgentErrorBubble, Bubble, ChatHeader, Composer, StreamingBubble, Thread, chatSectionCls, type ChatLayoutProps } from './Chat.js';
-import { cx } from '../components/ui.js';
 import { categoryIcon } from '../library/presetVisual.js';
 import { targetText } from './IntentQueue.js';
-
-export function BrainstormChat(layout: ChatLayoutProps) {
-  const { state, actions, t } = useStore();
-  const [value, setValue] = useState('');
-  const [lastSent, setLastSent] = useState<{ text: string; att: string[] } | null>(null);
-  const send = async (att: string[]) => {
-    const text = value.trim();
-    setLastSent({ text, att });
-    setValue('');
-    const ok = await actions.send('brainstorm', text, att);
-    if (!ok) setValue(text);                            // composer restored on failure (IX-12 point 9)
-  };
-  return (
-    <section data-el="agent.brainstorm.panel" data-view={layout.view} aria-label={t('ui.agent.brainstorm.title')} className={cx(chatSectionCls('brainstorm', layout.view), layout.view === 'min' && 'border-b border-em-line')} style={layout.style}>
-      <ChatHeader agent="brainstorm" title={t('ui.agent.brainstorm.title')} help={t('ui.agent.brainstorm.help')} layout={layout} />
-      <div className={cx('flex min-h-0 flex-1 flex-col', layout.view === 'min' && 'hidden')}>
-      <Thread agent="brainstorm" label={t('a11y.agent.brainstorm.thread')}
-        empty={state.messages.brainstorm.length === 0 ? <div className="mx-auto max-w-[90%] text-center text-[12px] text-em-muted">{t('ui.agent.brainstorm.first')}</div> : null}>
-        {state.messages.brainstorm.map((m, idx) => (
-          <Bubble key={m.id} m={m} agent="brainstorm" onRetry={m.role === 'system' ? () => {
-            // FR-077: a restored failure re-sends the request it answered
-            const prev = state.messages.brainstorm.slice(0, idx).reverse().find((x) => x.role === 'user');
-            const text = prev?.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n') ?? '';
-            if (text) void actions.send('brainstorm', text, prev?.blocks.flatMap((b) => (b.type === 'attachment' && b.assetId ? [b.assetId] : [])) ?? []);
-          } : undefined}>
-            {m.blocks.map((b, i) => (b.type === 'proposed_intents' ? <Handoff key={i} message={m} intents={b.intents} handoffState={b.handoffState} /> : null))}
-          </Bubble>
-        ))}
-        <StreamingBubble agent="brainstorm" />
-        <AgentErrorBubble agent="brainstorm" onRetry={() => { if (lastSent) { setValue(lastSent.text); } }} />
-      </Thread>
-      <Composer agent="brainstorm" placeholder={t('ui.agent.brainstorm.placeholder')} value={value} setValue={setValue} onSend={(a) => void send(a)} />
-      </div>
-    </section>
-  );
-}
 
 export function intentTitle(i: Pick<EditIntent, 'category' | 'presetId' | 'instruction' | 'params'>, t: (k: string, v?: Record<string, string | number>) => string, lang: 'en' | 'id'): string {
   const cat = t(`ui.agent.category.${i.category}`);
@@ -97,7 +61,8 @@ export function proposalTarget(i: EditIntent, model: CompositionModelT | undefin
   return targetText({ ...i, resolvedTargets: [i.target], status: 'queued' }, model, t);
 }
 
-function Handoff({ message, intents, handoffState }: { message: MessageDto; intents: EditIntent[]; handoffState: 'pending' | 'sent' | 'dismissed' }) {
+/** The pending proposals of one Diskusi answer; `onApplied` runs after a successful hand-off (the chat switches to Edit). */
+export function ProposalCard({ message, intents, handoffState, onApplied }: { message: MessageDto; intents: EditIntent[]; handoffState: 'pending' | 'sent' | 'dismissed'; onApplied?: () => void }) {
   const { actions, t, lang, state } = useStore();
   const model = state.head?.model;
   const issues = Object.fromEntries(intents.map((i) => [i.id, proposalIssue(i, model, t)]));
@@ -129,7 +94,7 @@ function Handoff({ message, intents, handoffState }: { message: MessageDto; inte
         })}
       </ul>
       <div className="flex gap-2">
-        <Button variant="primary" size={28} icon={<SendHorizontal size={14} />} disabledReason={ticked.length ? null : t('ui.agent.brainstorm.handoff.none')} onClick={() => void actions.handoff(message, ticked.filter((id) => !issues[id]))}>{t('ui.agent.brainstorm.handoff.send')}</Button>
+        <Button el="agent.chat.apply" variant="primary" size={28} icon={<Clapperboard size={14} />} title={t('ui.agent.chat.apply.tip')} disabledReason={ticked.length ? null : t('ui.agent.brainstorm.handoff.none')} onClick={() => { void actions.handoff(message, ticked.filter((id) => !issues[id])).then((ok) => { if (ok) onApplied?.(); }); }}>{t('ui.agent.chat.apply')}</Button>
         <Button variant="ghost" size={28} onClick={() => actions.dismissHandoff(message)}>{t('ui.agent.brainstorm.handoff.dismiss')}</Button>
       </div>
     </div>

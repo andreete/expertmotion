@@ -4,20 +4,26 @@
 import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { act, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
-import { renderEditor, el, els } from './setup-dom.js';
+import { renderEditor, el, els, chatComposer } from './setup-dom.js';
 
 afterEach(() => cleanup());
 const card = (id: string) => document.querySelector<HTMLElement>(`[data-preset-id="${id}"]`)!;
 const items = () => els('agent.editor.intentqueue.item');
 const superseded = () => els('agent.editor.intentqueue.item.superseded');
 
+/** The "Your picks" strip is shown in Edit mode and expanded here (2026-10-26: compact strip above the composer). */
+async function renderPicks(seed: 'sample' | 'empty') {
+  const r = await renderEditor(seed, { prefs: { picksOpen: true } });
+  chatComposer('editor');
+  return r;
+}
 async function pick(id: string) {
   await act(async () => { fireEvent.click(card(id)); });
 }
 
 describe('Intent Queue', () => {
   it('shows a multi-target pick as one parent item "Fade → all 2 cuts", applied directly', async () => {
-    await renderEditor('sample');
+    await renderPicks('sample');
     await pick('preset:transition.fade');
     await waitFor(() => { if (!items().some((i) => i.textContent?.includes('Transition · Fade → all 2 cuts'))) throw new Error(items().map((i) => i.textContent).join('|')); });
     const item = items().find((i) => i.textContent?.includes('Fade'))!;
@@ -28,7 +34,7 @@ describe('Intent Queue', () => {
   });
 
   it('strikes through a superseded pick with an always-visible Restore, and Restore brings it back', async () => {
-    await renderEditor('sample');
+    await renderPicks('sample');
     await pick('preset:transition.fade');
     await waitFor(() => { if (!items().length) throw new Error('none'); });
     await pick('preset:transition.slide');
@@ -49,7 +55,7 @@ describe('Intent Queue', () => {
   });
 
   it('supersedes only the child when a later pick targets one cut', async () => {
-    await renderEditor('sample');
+    await renderPicks('sample');
     await pick('preset:transition.fade');
     await waitFor(() => { if (!items().length) throw new Error('none'); });
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="stage.timeline.element"][data-element-id="cut:1"]')!);
@@ -62,7 +68,7 @@ describe('Intent Queue', () => {
   });
 
   it('rejects a motion pick without a target clip only when no clip exists, and Remove takes it out', async () => {
-    await renderEditor('empty');
+    await renderPicks('empty');
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="motion"]')!);
     await pick('preset:motion.pop');
     await waitFor(() => { if (!items().some((i) => i.getAttribute('data-status') === 'rejected')) throw new Error('not rejected'); });
@@ -73,7 +79,7 @@ describe('Intent Queue', () => {
   });
 
   it('clears queued picks after a confirmation that names the count', async () => {
-    await renderEditor('sample');
+    await renderPicks('sample');
     await pick('preset:transition.fade');
     await pick('preset:transition.slide');
     await waitFor(() => { if (!superseded().length) throw new Error('none'); });
@@ -88,7 +94,7 @@ describe('Intent Queue', () => {
 
 describe('Intent Queue grouping', () => {
   it('collapses executed items of an older version under "Applied in v… (n)", expandable', async () => {
-    await renderEditor('sample');
+    await renderPicks('sample');
     await pick('preset:transition.fade');
     await waitFor(() => { if (!items().some((i) => i.getAttribute('data-status') === 'executed')) throw new Error('none'); });
     expect(el('agent.editor.intentqueue.group')).toBeNull();                     // the newest version stays expanded
@@ -105,5 +111,24 @@ describe('Intent Queue grouping', () => {
     expect(group.getAttribute('aria-expanded')).toBe('true');
     expect(fade.closest('ul[hidden]')).toBeNull();
     expect(items().find((i) => i.textContent?.includes('Fade'))?.closest('ul[hidden]')).toBeNull();
+  });
+});
+
+describe('"Your picks" strip (2026-10-26)', () => {
+  it('is a collapsed strip with a count badge in Edit mode only; the toggle expands it and persists', async () => {
+    await renderEditor('sample');
+    await pick('preset:transition.fade');
+    await waitFor(() => { if (!items().length) throw new Error('none'); });
+    expect(el('agent.editor.picks')!.hidden).toBe(true);                             // Diskusi mode: not shown
+    chatComposer('editor');
+    expect(el('agent.editor.picks')!.hidden).toBe(false);
+    const toggle = el('agent.editor.intentqueue.toggle')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(el('agent.editor.intentqueue.count')!.textContent).toBe('1');
+    expect(el('agent.editor.intentqueue')!.hidden).toBe(true);
+    fireEvent.click(toggle);
+    expect(el('agent.editor.intentqueue.toggle')!.getAttribute('aria-expanded')).toBe('true');
+    expect(el('agent.editor.intentqueue')!.hidden).toBe(false);
+    expect((JSON.parse(localStorage.getItem('expertmotion.prefs.v1') ?? '{}') as { picksOpen?: boolean }).picksOpen).toBe(true);
   });
 });

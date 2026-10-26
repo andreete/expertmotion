@@ -52,8 +52,8 @@ Rules: every control has an accessible name from visible text, `aria-label`, or 
 | `stage.timeline.track.*` | `row` in `grid` | "Video track, {n} clips" / "Trek video, {n} klip" etc. | — |
 | `stage.timeline.element` | `gridcell` + `button` | "{kind} {label}, {start} to {end}{, selected}" / "{kind} {label}, {start} sampai {end}{, terpilih}" | `aria-selected`; description lists effects/motion/transitions |
 | `stage.timeline.inspector` | `complementary` | "Inspector for {label}" / "Inspektur untuk {label}" | rows as `dl`/`dt`/`dd` |
-| `agent.modelbar` | `button` | "AI provider and default model: {provider}, {model}. Status: {status}" / "Penyedia AI dan model bawaan: {provider}, {model}. Status: {status}" | — |
-| `agent.brainstorm.thread` / `agent.editor.thread` | `log` (`aria-live="polite"`, `aria-relevant="additions"`) | "Brainstorming conversation" / "Percakapan Brainstorming" · "Editor Agent conversation" / "Percakapan Editor Agent" | streaming text announced at the end of the message, not per token |
+| `agent.chat.model` | `button` | "AI provider and default model: {provider}, {model}. Status: {status}" / "Penyedia AI dan model bawaan: {provider}, {model}. Status: {status}" | — |
+| `agent.chat.thread` / `agent.chat.thread` | `log` (`aria-live="polite"`, `aria-relevant="additions"`) | "Brainstorming conversation" / "Percakapan Brainstorming" · "Editor Agent conversation" / "Percakapan Editor Agent" | streaming text announced at the end of the message, not per token |
 | `agent.*.composer` | `textbox` (multiline) | "Message to the Brainstorming Agent" / "Pesan untuk Brainstorming Agent" etc. | `aria-describedby` → disabled reason (Private Mode / not configured) |
 | `agent.*.footer.ctx` | `status` | "Context used: {used} of {limit} tokens" / "Konteks terpakai: {used} dari {limit} token" | — |
 | `agent.brainstorm.handoff` | `group` | "Proposed changes from the Brainstorming Agent, {n} items" / "Usulan perubahan dari Brainstorming Agent, {n} item" | row checkboxes labelled by their title |

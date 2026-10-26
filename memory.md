@@ -35,6 +35,7 @@ Read this before any work. Update it after architecture decisions, milestones, f
 
 Operator decisions given in chat on 2026-10-24: Windows first; local open-source models for generative Tools; new repo; offline signed licence key. The Operator intends to hand execution of later stages to other models (e.g. Opus); documents must be self-sufficient.
 
+- Operator decision 2026-10-26 (from two mockups): ONE assistant chat with two modes replaces the Brainstorming and Editor Chats and the Model Bar: "Diskusi" = Brainstorming Agent, "Edit" = Editor Agent (`agent.chat.*`, FR-181…FR-183); storage stays per agent; the thread merges both; Model ▾ per mode in the chat header (popover list: Disarankan / Gratis / Berbayar); "Kerjakan di video" hands a Diskusi answer to Edit; shared context in AI_WORKFLOW §10.1 (`discussion` in the Editor envelope, `recentEdits` in the Brainstorming CONTEXT; prompt set v1.3.0); Providers screen = connections + budget, model table under "Lihat semua model". Copy short ("jangan terlalu wordy").
 - Operator requirements 2026-10-24: no manual installs; maximum compression; maximum reverse-engineering cost (ADR-021); one Licence Key = one computer (ADR-022); provider calls in JSON mode for every model in the MVP (ADR-023). Honest boundary kept: not impossible for the device owner.
 
 ## 3. Technology stack (pin exact versions in `docs/TRD.md`)

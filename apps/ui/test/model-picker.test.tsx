@@ -4,7 +4,7 @@
 import { vi, describe, it, expect, afterEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { act, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import { el, els, renderEditor } from './setup-dom.js';
+import { el, els, renderEditor, openProvidersFromChat } from './setup-dom.js';
 import { localModelByRef, localModelName, llmModelName } from '../src/state/model-names.js';
 import { PAGE, betterPick, defaultModelFor, formatContext, pickerRows, qualityOf, recommendedIds } from '../src/components/ModelPicker.js';
 import type { CapabilityRow, ModelStateDto } from '../src/api/types.js';
@@ -112,7 +112,7 @@ const assigned = (agent: string) => el(`scr.providers.assign.agent.${agent}`)!.g
 describe('Model table in Providers (FR-114, FR-115)', () => {
   it('Validate → table with one default per agent, no tier labels; toggle agent, search, keyboard, warned rows stay selectable, Save stores exact ids; names show the label', { timeout: 20_000 }, async () => {
     const { runtime } = await renderEditor('sample');
-    await act(async () => { fireEvent.click(el('agent.modelbar')!); });
+    await openProvidersFromChat();
     await until(() => el('scr.providers'), 'providers');
     fireEvent.change(el('scr.providers.key.input')!, { target: { value: KEY } });
     await act(async () => { fireEvent.click(el('scr.providers.validate')!); });
@@ -179,13 +179,13 @@ describe('Model table in Providers (FR-114, FR-115)', () => {
     const a = await runtime.api.getAssignments();
     expect(a.editor?.modelId).toBe('anthropic/claude-sonnet-4.5');                  // the exact model id is stored as before
     expect(a.brainstorm?.modelId).toBe('openai/gpt-4.1-mini');
-    await until(() => el('agent.modelbar')?.textContent?.includes('Claude Sonnet 4.5'), 'model bar label');
-    expect(el('agent.modelbar')!.textContent).not.toContain('anthropic/');
+    await until(() => el('agent.chat.model')?.textContent?.includes('GPT-4.1 mini'), 'chat header model label');   // Diskusi mode: the Brainstorming model
+    expect(el('agent.chat.model')!.textContent).not.toContain('openai/');
   });
 
   it('"Also use for" copies a pick to the other agent; each agent keeps its own pick', { timeout: 20_000 }, async () => {
     const { runtime } = await renderEditor('sample');
-    await act(async () => { fireEvent.click(el('agent.modelbar')!); });
+    await openProvidersFromChat();
     await until(() => el('scr.providers'), 'providers');
     fireEvent.change(el('scr.providers.key.input')!, { target: { value: KEY } });
     await act(async () => { fireEvent.click(el('scr.providers.validate')!); });
@@ -204,7 +204,7 @@ describe('Model table in Providers (FR-114, FR-115)', () => {
 
   it('Save without touching the table stores the Balanced defaults', { timeout: 20_000 }, async () => {
     const { runtime } = await renderEditor('sample');
-    await act(async () => { fireEvent.click(el('agent.modelbar')!); });
+    await openProvidersFromChat();
     await until(() => el('scr.providers'), 'providers');
     fireEvent.change(el('scr.providers.key.input')!, { target: { value: KEY } });
     await act(async () => { fireEvent.click(el('scr.providers.validate')!); });
@@ -220,7 +220,7 @@ describe('Model table in Providers (FR-114, FR-115)', () => {
     const many: CapabilityRow[] = Array.from({ length: 450 }, (_, i) => row(`vendor${i % 9}/model-${i}`, `Vendor ${i % 9}: Model ${i}`, 0.5 + i / 100));
     many.push(row('google/gemma-3-27b-it:free', 'Google: Gemma 3 27B (free)', 0), row('openai/gpt-4.1-mini', 'OpenAI: GPT-4.1 mini', 2));
     vi.spyOn(runtime.api, 'validateDraft').mockResolvedValue({ status: 'valid', validatedAt: '2026-10-25T00:00:00.000Z', models: many });
-    await act(async () => { fireEvent.click(el('agent.modelbar')!); });
+    await openProvidersFromChat();
     await until(() => el('scr.providers'), 'providers');
     fireEvent.change(el('scr.providers.key.input')!, { target: { value: KEY } });
     await act(async () => { fireEvent.click(el('scr.providers.validate')!); });
@@ -250,7 +250,7 @@ describe('Model table in Providers (FR-114, FR-115)', () => {
     const conns = (await runtime.api.listConnections()).items;
     vi.spyOn(runtime.api, 'connectionModels').mockResolvedValue({ items: [] } as never);
     const refresh = vi.spyOn(runtime.api, 'refreshConnectionModels');
-    await act(async () => { fireEvent.click(el('agent.modelbar')!); });
+    await openProvidersFromChat();
     await until(() => el('scr.providers.models.empty'), 'empty table');
     expect(el('scr.providers.models.empty')!.textContent).toMatch(/No model list yet/);
     await act(async () => { fireEvent.click(el('scr.providers.models.fetch')!); });

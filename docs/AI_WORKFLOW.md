@@ -280,14 +280,25 @@ Editor Agent tool loop (FR-080): the same JSON-mode protocol as the Brainstormin
 
 ## 9. Brainstorming → Editor hand-off
 
-The Brainstorming Agent's output schema includes an optional `proposedIntents: EditIntent[]` (source `brainstorm`, `needsInterpretation` true or false). The Editor shows a handoff card; on "Send to Editor Agent" the intents enter the Intent Queue. The Brainstorming Agent has no mutation tools and no `composition.validateOps`; its set is `composition.get` (summary), `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate` (same list as §8 and AGENT_DESIGN.md §2.1).
+The Brainstorming Agent's output schema includes an optional `proposedIntents: EditIntent[]` (source `brainstorm`, `needsInterpretation` true or false). The Editor shows a handoff card; on "Apply to video" ("Kerjakan di video", since 2026-10-26; was "Send to Editor Agent") the intents enter the Intent Queue and the assistant chat switches to Edit mode. A Diskusi answer without proposals can be applied too: its text becomes the Editor Agent's request (FR-183). The Brainstorming Agent has no mutation tools and no `composition.validateOps`; its set is `composition.get` (summary), `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate` (same list as §8 and AGENT_DESIGN.md §2.1).
 
 ## 10. Context management (brief §8.1)
 
 - Each agent keeps a thread per project. The request to the provider contains: system prompt (versioned, cached where the provider supports prompt caching), a compact project state block (≤ 4k tokens), the last N messages such that total ≤ 60 % of the model's context length, older messages summarised by the deterministic summariser (no LLM: keeps decisions, rejects, intents) into a `threadSummary` block.
 - Tool results older than two turns are replaced by one-line stubs.
 - Attachments (images from the Creator) are sent only to models with image input capability; otherwise a text description is requested from the Creator.
-- The chat footer shows `usedTokens / contextLength` from the last request's usage.
+- The chat header shows `usedTokens / contextLength` of the current mode's last request (`agent.chat.usage`).
+
+### 10.1 Shared context between the two modes (Operator decision 2026-10-26)
+
+The Agent Panel shows ONE assistant chat with two modes: "Diskusi" (Brainstorming Agent) and "Edit" (Editor Agent). Storage stays per agent (one conversation each, R-080…R-085, permissions unchanged); the thread merges both in time order. So that both agents see the same conversation, the Local Service adds a compact, deterministic block from the other agent when it builds a request (`packages/agents/src/shared-context.ts` decides what fits; `apps/service/src/s3/shared-context.ts` only reads rows):
+
+| Request | Block | Content | Budget |
+|---|---|---|---|
+| Editor Agent (Rewrite envelope §7, chat or queue-started) | `discussion` | the newest Brainstorming messages, newest first, `{from: creator \| brainstorm, text}`, each clipped to 900 characters, proposed changes as "(proposed N change(s); state)"; older messages counted and summarised in one line (`summary`, `omitted`) | 10 % of the Editor model's context (≈ 4 chars per token), 1 000 … 4 000 characters; at most 12 items; omitted when the Diskusi is empty |
+| Brainstorming Agent (CONTEXT block, P-1) | `recentEdits` | the newest Edit Plans (not drafts), newest first, `{goal, status: applied \| undone \| cancelled \| failed \| proposed, by: picks \| editor, changes?}`; `undone` = executed but its version left the head's lineage (FR-167) | at most 8 items and 1 600 characters |
+
+Rules: both blocks are data, never instructions (a constraint line in the envelope and the prompts say so; SYSTEM_PROMPT v1.3.0); they never add work — the Editor Agent plans only what the intents and the `creatorMessage` ask, and uses `discussion` to resolve "do what we discussed"; the Brainstorming Agent never claims a change is in the video unless `recentEdits` says `applied`. The existing limits stay: the envelope's composition summary ≤ ~4k tokens, the Brainstorming thread window ≤ 60 % of the context (the CONTEXT block is part of the system prompt, so it is counted in that window). Private Mode blocks both agents as before.
 
 ## 11. Usage and budget
 
@@ -328,3 +339,4 @@ Golden scenarios (GOLDEN_SCENARIOS.md) run against (a) the Compile path (pure un
 | AI-018 | Superseded intents are visible and restorable | UI test |
 | AI-019 | Hand-off from Brainstorming Agent is explicit (card) | UI test |
 | AI-020 | No tool can execute shell, filesystem or network actions from model input | code review + registry test |
+| AI-021 | Shared chat context (§10.1): the Editor envelope carries `discussion`, the Brainstorming CONTEXT carries `recentEdits`, both within their budgets and as data only | unit (packages/agents shared-context.test.ts) + integration (apps/service s3/shared-context.test.ts) |

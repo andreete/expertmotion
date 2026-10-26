@@ -98,12 +98,12 @@ Icons never appear without a text label or tooltip (UX-043).
 ```
 ┌ Header 48 px ──────────────────────────────────────────────────────────────┐
 ├ Library 300 ─┬ Stage flex (min 640) ───────────────────┬ Agent 420 ────────┤
-│ search 36    │ Player frame (aspect-fit, padding 16)   │ Model Bar 44      │
-│ mode hdr 32  │                                          │ Brainstorming 40% │
-│ catalogue /  │                                          │ ═ chat divider ═  │
-│              │                                          │ Editor Chat 60%   │
-│ text / tools │                                          │  (incl. Intent    │
-│ (scroll)     ├ Timeline View 220 min (resizable) ───────┤   Queue, Plan Card)│
+│ search 36    │ Player frame (aspect-fit, padding 16)   │ Chat header 44    │
+│ mode hdr 32  │                                          │ (Model ▾, usage)  │
+│ catalogue /  │                                          │ one thread        │
+│              │                                          │ (💡 / ✂️ tags,     │
+│ text / tools │                                          │  Plan Cards)      │
+│ (scroll)     ├ Timeline View 220 min (resizable) ───────┤ picks · composer  │
 │ Assets (≥160)│ ruler 24 · 5 tracks × 36 · inspector     │ ▸ Output (header) │
 └──────────────┴──────────────────────────────────────────┴───────────────────┘
  toasts bottom-right · banners under Header · render chip in Header
@@ -113,7 +113,7 @@ Icons never appear without a text label or tooltip (UX-043).
 |---|---|
 | Header | 48 px, `--em-panel`, bottom border `--em-line`; left: logo + menu tabs; centre: title; right: actions + window controls |
 | Columns | 300 / flex / 420 px at 1280–1599 (Agent 360 below 1280, 480 from 1600; resizable 320–900 px, Stage ≥ 640 px); ranges and collapse in EDITOR_INTERACTION_MODEL.md §9–10 |
-| Agent Panel inside | Model Bar, then the two chats sharing the remaining height through `agent.chat.divider` (default 40 % / 60 %, minimums 140 / 200 px, threads scroll internally, composers always visible), each header with `agent.<agent>.maximize` (maximized chat fills the area; the other shows only its header bar, which restores the split), then Output Settings collapsed to its header by default; split ratio, maximized chat and collapsed state persist (FR-099) |
+| Agent Panel inside | Since 2026-10-26 one assistant chat (FR-181): header 44 px (status, "Model: <label> ▾", compact usage, help, `agent.chat.maximize`), the thread (scrolls internally), the "Your picks" strip in Edit mode, the composer (always visible, with the Diskusi / Edit switch); then Output Settings collapsed to its header by default; maximized, the chat fills the panel and Output Settings is hidden. The split layout with `agent.chat.divider` is retired. |
 | Gutters | 16 px panel padding; 8 px between cards; 12 px between sections |
 | Timeline View | 220 px minimum: ruler 24 + lanes 36 each (at least captions, one layer lane, video, one audio lane; more lanes scroll vertically, ADR-027) + 16 padding; inspector docks to the right of the lanes (260 px) when an element is selected, else hidden |
 | Player frame | letterboxed inside the Stage with 16 px padding; aspect from the current ratio; frame border 1 px `--em-line`, radius `--r-4` |
@@ -258,36 +258,22 @@ Implements PRD-007, PRD-009.
 
 Implements PRD-010, PRD-011, PRD-012, PRD-008, PRD-020.
 
-### 7.1 Model Bar
+### 7.1 Assistant chat (`agent.chat.*`; Operator decision 2026-10-26)
+
+One thread per Project, two modes, like common AI tools (FR-181 … FR-183). Copy stays short: labels, not sentences; hints in tooltips.
 
 | Element | Component | Content EN / ID | States |
 |---|---|---|---|
-| `agent.modelbar` | 44 px row, clickable | "Model: OpenRouter · Anthropic: Claude Haiku 5.5" (the model's label from the Capability Table, FR-115; never a tier name or the raw id) + chevron → `scr.providers` | not configured: "Connect an AI provider" / "Hubungkan penyedia AI" (accent text) |
-| `agent.modelbar.status` | 8 px dot + icon | validated (success) · error (danger, tooltip `EM-4xxx`) · Private Mode (`shield-check`, private colour, "Private Mode: agents paused" / "Mode Privat: agen dijeda") | |
-
-### 7.2 Brainstorming Chat (`agent.brainstorm.*`)
-
-| Element | Component | Content EN / ID | States |
-|---|---|---|---|
-| `agent.brainstorm.panel` | section header `agent.brainstorm.header`: `t-label` "BRAINSTORMING AGENT" + help icon (tooltip "Ideas and planning. Never changes your video directly." / "Ide dan perencanaan. Tidak pernah mengubah video kamu secara langsung.") + `agent.brainstorm.maximize` IconButton `maximize-2` / `minimize-2` ("Maximize Brainstorming Agent" / "Perbesar Brainstorming Agent"; "Restore the split view" / "Kembalikan tampilan terbagi") | — | split · maximized · reduced to the header bar (title button "Show … again" / "Tampilkan lagi …" restores) |
-| `agent.brainstorm.thread` | scroll area; CMP-13 bubbles | first-run system bubble: "Tell me what the video is for and who will watch it." / "Ceritakan video ini untuk apa dan siapa penontonnya." | empty, streaming, error |
-| `agent.brainstorm.handoff` | Card accent-dashed border inside the thread | title "Proposed changes" / "Usulan perubahan"; rows with checkbox + category icon + "Caption style · Editorial → project"; buttons "Send to Editor Agent" / "Kirim ke Editor Agent" (primary) · "Dismiss" / "Abaikan" (ghost) | collapsed receipt after action |
-| `agent.brainstorm.composer` | textarea auto-grow 1–6 lines, `.attach` IconButton `paperclip`, `.send` IconButton `send-horizontal` | placeholder "Describe your idea…" / "Jelaskan ide kamu…"; disabled note in Private Mode (UX-024) or when not configured "Connect a provider to chat" / "Hubungkan penyedia untuk mengobrol" | status line above: "Asking <model>…" + Cancel |
-| `agent.brainstorm.footer.model` | select-like text button | "Anthropic: Claude Haiku 5.5 ▾" (model label; model id only in the tooltip) | opens `.footer.model.popover` (width 400): connection select `.footer.model.connection` when there are several validated connections, the compact ModelPicker `.footer.model.picker` (search focused, All / Free / Paid category, JSON / Images chips, sortable Model · Context · Price columns, JSON / Tools / Image badges under the name, "Recommended" badge, ⚠ quality badge, ↑/↓ + Enter), "Manage providers…" link; a pick switches that agent's model and closes the popover, unless the model carries a quality warning: then the popover stays open with `.footer.model.picker.warning` and "Use recommended instead" |
-| `agent.brainstorm.footer.ctx` | `t-mono` | "1 240 / 200 000" + tooltip "Context used in the last request / model limit" / "Konteks terpakai pada permintaan terakhir / batas model" | amber ≥ 60 %, red ≥ 85 % |
-
-### 7.3 Editor Chat (`agent.editor.*`)
-
-| Element | Component | Content EN / ID | States |
-|---|---|---|---|
-| `agent.editor.panel` | header `agent.editor.header`: `t-label` "EDITOR AGENT" + help ("Turns your picks and instructions into a plan. Nothing changes until you press Execute." / "Mengubah pilihan dan instruksi kamu menjadi rencana. Tidak ada yang berubah sampai kamu menekan Execute.") + `agent.editor.maximize` (as brainstorm) | — | split · maximized · reduced to the header bar |
-| `agent.editor.intentqueue` | list pinned at the top of the thread area; header "Your picks (3)" / "Pilihan kamu (3)" + `agent.editor.plan` Button secondary "Plan" / "Susun rencana" (enabled when a queued intent needs interpretation) + `.clear` ghost "Clear" / "Bersihkan" | CMP-15 items, newest first | empty: "Your picks and requests appear here." / "Pilihan dan permintaan kamu muncul di sini." |
-| `agent.editor.thread` | CMP-13 bubbles between queue and composer | system bubbles for handoffs and results | |
-| `agent.editor.plancard` | CMP-14 (§11.2) | — | — |
-| `agent.editor.execute` | Button primary 36 inside the Plan Card footer | "Execute" / "Execute" (kept as a product term; tooltip "Apply this plan (Ctrl+Enter outside the chat box)" / "Terapkan rencana ini (Ctrl+Enter di luar kotak chat)"; inside a chat composer Ctrl+Enter sends (FR-153)) | disabled reasons: "No plan yet" / "Belum ada rencana" · "Composition changed; re-plan" / "Komposisi berubah; susun ulang" · "Plan has a blocking issue" / "Rencana punya masalah pemblokir" |
-| `agent.editor.cancel` | Button ghost | "Cancel" / "Batal" | enabled while running |
-| `agent.editor.composer` / `.send` / `.attach` | as brainstorm | placeholder "Tell the Editor Agent what to change…" / "Katakan pada Editor Agent apa yang harus diubah…"; target chip "clip 2" removable | |
-| `agent.editor.footer.model` / `.footer.ctx` | as brainstorm | + badge "JSON mode" when the model lacks tool calling | |
+| `agent.chat.header` | 44 px row | left: `agent.chat.status` (8 px dot; Private Mode `shield-check`), `agent.chat.model` "Model: Claude Sonnet 4.5 ▾" / "Model: …" (the current mode's model label; id and agent name in the tooltip; ⚠ when warned); right: `agent.chat.usage` `t-mono` "1,2K / 200K" (tooltip: tokens, last cost, summarisation note; amber ≥ 60 %, red ≥ 80 %), "JSON" chip for an Editor model without tool calling, help ⓘ (the mode's agent help), `agent.chat.maximize` | no provider: "Connect an AI provider" / "Hubungkan penyedia AI" (accent, opens `scr.providers`) |
+| `agent.chat.model.popover` | Popover 340 px, list | search "Search models" / "Cari model" (focused; ↑/↓ + Enter), refresh icon, connection select (only with several validated connections); sections "Recommended" / "Disarankan", "Free" / "Gratis", "Paid" / "Berbayar" with counts; row = name · provider (short, muted) · price chip "$0.30/1M" or "Free" / "Gratis" · ⚠ (tooltip "May give weak results (small model or no JSON)" / "Mungkin kurang bagus (model kecil atau tanpa JSON)"); "N more" / "N lagi" per section; "Manage providers…" link | selected row accent; a warned pick keeps it open with "{model} may give weak results" + "Use recommended instead" |
+| `agent.chat.thread` | scroll area; CMP-13 bubbles | both agents in time order; every bubble starts with its tag `agent.chat.message.agent`: 💡 "Discuss" / "Diskusi" (warn tone) or ✂️ "Edit" (accent tone), also on the Creator's own bubbles (mode it was sent in); first-run hint per mode: "Tell me what the video is for and who will watch it." / "Ceritakan video ini untuk apa dan siapa penontonnya." · "Say what to change in the video." / "Bilang apa yang mau diubah di video." | streaming (`agent.chat.streaming`, "Asking <model>…" + Cancel), error bubble with Try again / Switch model (opens the popover for that agent) or Change budget |
+| Diskusi answer | bubble + footer | time, copy, `agent.chat.apply` "Apply to video" / "Kerjakan di video" (tooltip "Send to Edit mode" / "Kirim ke mode Edit") | hidden while the answer still has a pending proposals card (the card carries the same action) |
+| `agent.brainstorm.handoff` | Card accent-dashed border inside the answer | title "Proposed changes" / "Usulan perubahan"; rows with checkbox + category icon + "Caption style · Editorial → project"; buttons `agent.chat.apply` "Apply to video" / "Kerjakan di video" (primary; switches to Edit) · "Dismiss" / "Abaikan" (ghost) | collapsed receipt after action |
+| Edit reply | tag + Plan Card | the plan goal is the reply sentence (CMP-14, §11.2); a question from the Editor (only `needs-input` risks) is a normal bubble; after Execute a one-line summary "✓ goal · Executed · v1a2b3c · 1 added · Undo · Details" | older plans collapsed (`PlanSummary`), Undo while their version is the head |
+| `agent.editor.picks` | strip above the composer, Edit mode only | `agent.editor.intentqueue.toggle` "Your picks" / "Pilihanmu" + count badge `agent.editor.intentqueue.count` (accent while picks wait) + chevron; expanded: Plan / Clear / Cancel and the CMP-15 list (max 40 % of the chat) | collapsed by default (prefs) |
+| `agent.chat.composer` | textarea auto-grow 1–6 lines; toolbar below: `agent.chat.mode` segmented 💡 "Discuss" / "Diskusi" · ✂️ "Edit" (tooltips "Ideas, scripts, hooks, captions · Ctrl+1" / "Ide, naskah, hook, caption · Ctrl+1", "Change the video · Ctrl+2" / "Ubah video · Ctrl+2"), `agent.chat.attach` `paperclip`, `agent.chat.send` `send-horizontal` | placeholder per mode: "Describe your idea…" / "Jelaskan ide kamu…" · "Tell the Editor Agent what to change…"; target chip "clip 2" (Edit, from the inspector); Tab in an empty composer switches the mode | disabled note in Private Mode (UX-024) or when not configured "Connect a provider to chat" / "Hubungkan penyedia untuk mengobrol" |
+| `agent.editor.execute` | Button primary 36 inside the Plan Card footer | "Execute" / "Jalankan" (tooltip "Apply this plan (Ctrl+Enter outside the chat box)" / "Terapkan rencana ini (Ctrl+Enter di luar kotak chat)"; inside the composer Ctrl+Enter sends (FR-153)) | disabled reasons: "No plan yet" / "Belum ada rencana" · "Composition changed; re-plan" / "Komposisi berubah; susun ulang" (shown next to Re-plan) · "Plan has a blocking issue" / "Rencana punya masalah pemblokir" |
+| `agent.editor.cancel` | Button ghost in the picks strip | "Cancel" / "Batal" | enabled while running |
 
 ### 7.4 Output Settings (`agent.output.*`)
 
