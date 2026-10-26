@@ -1,4 +1,5 @@
-// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (47 ops: ADR-020 additions, ADR-027 element timing/layer).
+// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (49 ops: ADR-020 additions, ADR-027 element timing/layer,
+// ADR-028 split and canvas transform).
 // test/operations.test.ts fails if this table and the document disagree.
 import { z } from 'zod';
 import { CaptionPage, Hex, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
@@ -72,6 +73,12 @@ export const OPERATIONS = {
   'op:element.setTiming': def({ atMs: ms, durationMs: dur, trimBeforeMs: ms.optional(), layer: lane.optional() }, ['text', 'image', 'shape', 'audio'], 'scalar'),
   // ADR-027: stacking order. Exactly one of `layer` (absolute lane) or `move`; audio has lanes but no stacking (`layer` or up/down only).
   'op:element.setLayer': def({ layer: lane.optional(), move: z.enum(['up', 'down', 'front', 'back']).optional() }, ['text', 'image', 'shape', 'audio'], 'scalar'),
+  // ADR-028 (FR-179 cut / split): splits a clip, text, image, shape or audio layer at `atMs` (composition time, ms) into two
+  // adjacent parts; the second part gets a new id and continues the source (clip trimBeforeMs + d × playbackRate, audio + d).
+  'op:element.split': def({ atMs: ms }, ['clip', 'text', 'image', 'shape', 'audio'], null),
+  // ADR-028 (FR-180 canvas transform): picture position / zoom / rotation. x, y = centre offset as a fraction of the frame width /
+  // height; scale 1 = the objectFit result (clip, 0.1…10) or the stored size (image / shape, 0.05…20); rotation in degrees.
+  'op:element.setTransform': def({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }, ['clip', 'image', 'shape'], 'scalar'),
   'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),
   'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, null, 'list'),
   'op:audio.setDucking': def({ presetId: PresetId, params: Params.optional() }, ['audio'], 'exclusive-group'),
@@ -122,6 +129,9 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:overlay.setOpacity': return [`${el}.opacity`];
     case 'op:element.setTiming': return [`${el}.timing`, ...(a['layer'] === undefined ? [] : [`${el}.layer`])];
     case 'op:element.setLayer': return [`${el}.layer`];
+    // A clip split changes its trim and adds a cut (cut indexes after it shift); other splits change the item's timing.
+    case 'op:element.split': return t?.kind === 'clip' ? [`${el}.trim`, 'sequence.order'] : [`${el}.timing`];
+    case 'op:element.setTransform': return [`${el}.transform`];
     case 'op:theme.set': return fields(['paletteId', 'fontPairId', 'defaultEasingId']).map((f) => `theme.${f}`);
     case 'op:theme.setTextDefaults': return fields(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity']).map((f) => `theme.textDefaults.${f}`);
     case 'op:output.setRatio': return ['project.ratio'];

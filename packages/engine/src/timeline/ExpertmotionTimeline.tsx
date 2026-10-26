@@ -16,6 +16,7 @@ import { BackgroundLayer, VideoDim } from '../presets/backgrounds.js';
 import { SHAPES } from '../presets/shapes.js';
 import { TextElement } from '../presets/text.js';
 import { CaptionPageView } from '../presets/captions.js';
+import { clipTransformStyle, overlayTransform } from '../transform.js';
 
 const clampOpts = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 
@@ -90,11 +91,14 @@ const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'd
   const style: React.CSSProperties = { width: '100%', height: '100%', ...crop };   // objectFit goes through the prop (Remotion warns on style.objectFit for <Video>)
   const fadeIn = clip.fadeInMs ? interpolate(frame, [0, framesOf(clip.fadeInMs, fps)], [0, 1], clampOpts) : 1;
   const fadeOut = clip.fadeOutMs ? interpolate(frame, [durationInFrames - framesOf(clip.fadeOutMs, fps), durationInFrames], [1, 0], clampOpts) : 1;
+  // ADR-028: the media is moved / zoomed / rotated inside the clip's frame, which clips it (also during a transition).
   return (
-    <AbsoluteFill style={motionStyle(clip.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId)}>
-      {urls.kind === 'image'
-        ? <Img src={src} style={{ ...style, objectFit: clip.objectFit }} effects={effects} />
-        : <Video src={src} trimBefore={framesOf(clip.trimBeforeMs, fps)} playbackRate={clip.playbackRate} muted={clip.muted} volume={clip.volume * fadeIn * fadeOut} objectFit={clip.objectFit} style={style} effects={effects} />}
+    <AbsoluteFill style={{ ...motionStyle(clip.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId), overflow: 'hidden' }}>
+      <AbsoluteFill data-em-transform={clip.transform ? 'clip' : undefined} style={clipTransformStyle(clip.transform, layout.width, layout.height)}>
+        {urls.kind === 'image'
+          ? <Img src={src} style={{ ...style, objectFit: clip.objectFit }} effects={effects} />
+          : <Video src={src} trimBefore={framesOf(clip.trimBeforeMs, fps)} playbackRate={clip.playbackRate} muted={clip.muted} volume={clip.volume * fadeIn * fadeOut} objectFit={clip.objectFit} style={style} effects={effects} />}
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 };
@@ -104,7 +108,7 @@ const OverlayView: React.FC<{ element: CompositionModelT['tracks']['overlay'][nu
   const { left, top } = layout.toPx(element.position.x, element.position.y);
   const w = element.size.w * layout.u, h = element.size.h * layout.u;
   const m = motionStyle(element.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId);
-  const box: React.CSSProperties = { position: 'absolute', left, top, width: w, height: h, transform: 'translate(-50%, -50%)', display: 'flex', alignItems: 'center', justifyContent: 'center', ...m };
+  const box: React.CSSProperties = { position: 'absolute', left, top, width: w, height: h, transform: overlayTransform(element), display: 'flex', alignItems: 'center', justifyContent: 'center', ...m };
   if (element.kind === 'shape') {
     const Shape = SHAPES[element.presetId];
     return Shape ? <div style={{ ...box, ...(element.opacity === undefined ? {} : { opacity: element.opacity * (typeof m.opacity === 'number' ? m.opacity : 1) }) }}><Shape size={Math.min(w, h)} fill={element.fill} stroke={element.stroke} strokeWidth={element.strokeWidth === undefined ? undefined : element.strokeWidth * layout.u} params={element.params} /></div> : null;

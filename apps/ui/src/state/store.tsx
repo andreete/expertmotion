@@ -6,7 +6,7 @@ import type { ElementRefT, ProjectSettingsT } from '@expertmotion/composition-mo
 import { getPreset } from '@expertmotion/catalogue';
 import { createEventStream, type EventStream } from '../api/events.js';
 import type {
-  AgentKind, AssetDto, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
+  AgentKind, AssetDto, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
 } from '../api/types.js';
 import { initialState, reducer, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
@@ -37,6 +37,9 @@ export interface Actions {
   clipEdit(edit: { clipId: string; toIndex?: number; trimBeforeMs?: number; durationMs?: number }, label: string): Promise<void>;
   /** ADR-027: one Timeline gesture or layer key on a text, image, shape or audio layer = one Compile pick (undoable). */
   elementEdit(edit: ElementEdit, label: string): Promise<void>;
+  /** ADR-028: one undoable pick per scissors press / S (all listed items in one Composition Version) and per Player gesture / Inspector field. */
+  splitEdit(edit: SplitEdit, label: string): Promise<void>;
+  transformEdit(edit: TransformEdit, label: string): Promise<void>;
   updateProjectSettings(patch: Partial<ProjectSettingsT>): Promise<void>;
   upload(files: readonly File[]): Promise<AssetDto[]>;
   /** FR-014 / FR-041: packaged path import (picker or drag-and-drop): the cards appear at once (ingesting / failed) and follow ingest. */
@@ -283,6 +286,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       async elementEdit(edit, label) {
         const category = edit.kind === 'audio' ? 'audio' : edit.kind === 'text' ? 'text' : edit.kind === 'shape' ? 'shape' : 'asset';
         await createIntent({ source: 'ui', category, elementEdit: edit, target: { kind: edit.kind, id: edit.id }, plan: 'auto' }, label);
+      },
+      async splitEdit(edit, label) {
+        const kinds = [...new Set(edit.items.map((x) => x.kind))];
+        const category = kinds.length === 1 ? (kinds[0] === 'audio' ? 'audio' : kinds[0] === 'text' ? 'text' : kinds[0] === 'shape' ? 'shape' : 'asset') : 'asset';
+        const first = edit.items[0];
+        await createIntent({ source: 'ui', category, splitEdit: edit, target: first ? { kind: first.kind, id: first.id } : { kind: 'playhead' }, plan: 'auto' }, label);
+      },
+      async transformEdit(edit, label) {
+        await createIntent({ source: 'ui', category: edit.kind === 'shape' ? 'shape' : 'asset', transformEdit: edit, target: { kind: edit.kind, id: edit.id }, plan: 'auto' }, label);
       },
       // FR-088: Auto is `op:output.setAutoRatio` in the model (so it can be turned on again and Undo restores it).
       async setAutoRatio(on) {

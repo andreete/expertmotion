@@ -4,7 +4,7 @@
 // video Clips reorder and trim as before. Snapping to the playhead and other edges (Alt disables), a live ghost, keyboard
 // alternatives, and one undoable Compile pick per gesture (op:element.setTiming / op:element.setLayer; no LLM).
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { Bot, Minus, Plus, Sparkles } from 'lucide-react';
+import { Bot, Minus, Plus, Scissors, Sparkles } from 'lucide-react';
 import { deriveTiming, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
 import { getPreset } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
@@ -13,6 +13,9 @@ import type { ElementEdit, PlanDto } from '../api/types.js';
 import { Button, IconButton, cx } from '../components/ui.js';
 import { playerBus } from './playerBus.js';
 import { QuickParams } from './QuickParams.js';
+import { TransformFields } from './TransformFields.js';
+import { isTransformKind } from './canvas-transform.js';
+import { runSplit } from './split.js';
 import { formatTimecode } from '../i18n/index.js';
 
 type Track = 'video' | 'overlay' | 'text' | 'caption' | 'audio';
@@ -317,6 +320,10 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
     <section data-el="stage.timeline" role="region" aria-label={t('a11y.stage.timeline')} className="flex min-h-[220px] shrink-0 flex-col rounded-[12px] border border-em-line bg-em-panel" style={{ height }}>
       <div className="flex h-8 items-center gap-2 border-b border-em-line px-2">
         <span className="t-label flex-1">{t('ui.stage.timeline.title')}</span>
+        {/* ADR-028 / FR-179: split the selected item(s) — or the clip under the playhead — at the playhead (also S). */}
+        <IconButton el="stage.timeline.split" label={t('ui.stage.timeline.split')} aria-keyshortcuts="S" icon={<Scissors size={14} />} size={28}
+          disabledReason={hasClip || bars.length ? null : t('ui.stage.timeline.split.nothing')}
+          onClick={() => runSplit({ model, selection: state.selection, playheadMs: state.playheadMs, fps, splitEdit: actions.splitEdit, toast: actions.toast, t, time: (v) => formatTimecode(v, fps) })} />
         <IconButton label={t('ui.stage.timeline.zoomout')} icon={<Minus size={14} />} size={28} onClick={() => setZoom(Math.max(ZOOM_MIN, (zoom ?? pxPerMs * 1000) / 1.5))} />
         <button type="button" className="t-mono text-em-muted" onClick={() => setZoom(null)}>{t('ui.stage.timeline.fit')}</button>
         <IconButton label={t('ui.stage.timeline.zoomin')} icon={<Plus size={14} />} size={28} onClick={() => setZoom(Math.min(ZOOM_MAX, (zoom ?? pxPerMs * 1000) * 1.5))} />
@@ -503,6 +510,7 @@ function Inspector({ bars, model, onAsk }: { bars: Bar[]; model: CompositionMode
           </div>
         </div>
       )}
+      {bars.length === 1 && isTransformKind(b.ref.kind) && <TransformFields model={model} target={b.ref} />}
       {bars.length === 1 && <QuickParams model={model} target={b.ref} />}
     </aside>
   );

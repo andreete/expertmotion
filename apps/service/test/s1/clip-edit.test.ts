@@ -1,6 +1,7 @@
 // FR-068 (P1): Timeline drag on the video Track → clipEdit picks compiled to op:clip.move / op:clip.setTrim (Compile path,
 // queue-visible, one version each); the Creator's own drags are not blocked by their earlier picks' Locked Keys.
 // ADR-027: elementEdit picks (texts, images, shapes, audio) compile to op:element.setTiming / op:element.setLayer, undoable.
+// ADR-028: splitEdit (scissors / S) → op:element.split per item in ONE version; transformEdit (Player handles) → op:element.setTransform.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { headHash, insertClips, newProject, startS1, type S1Service } from './helpers.js';
 
@@ -52,5 +53,33 @@ describe('FR-068 clip edits', () => {
     expect(gone.body.error.code).toBe('EM-2203');
     const bad = await post({ category: 'text', elementEdit: { kind: 'text', id: a!.id, move: 'sideways' } });
     expect(bad.status).toBe(400);
+  });
+
+  it('ADR-028: a split of a clip and a text at the playhead is one executed pick and one undo; a transform pick is a scalar key', async () => {
+    const p = await newProject(s, 'Cut');
+    insertClips(s, p.id, ['a1', 'a2']);
+    const model = async () => (await s.json(`/projects/${p.id}/composition`)).body.head.model;
+    const post = async (body: Record<string, unknown>) => s.json(`/projects/${p.id}/intents`, { method: 'POST', json: { source: 'ui', target: { kind: 'playhead' }, ...body, baseVersion: await headHash(s, p.id) } });
+    expect((await post({ category: 'text', presetId: 'preset:text.title', text: 'Judul', playheadMs: 0 })).body.intent.status).toBe('executed');
+    const m0 = await model();
+    const clip = m0.tracks.video[0] as { id: string; durationMs: number }, text = m0.tracks.text[0] as { id: string };
+    const before = await headHash(s, p.id);
+    const cut = await post({ category: 'asset', target: { kind: 'clip', id: clip.id }, splitEdit: { atMs: 1500, items: [{ kind: 'clip', id: clip.id }, { kind: 'text', id: text.id }] } });
+    expect([cut.status, cut.body.intent.status]).toEqual([201, 'executed']);
+    const m1 = await model();
+    expect(m1.tracks.video.map((c: { trimBeforeMs: number; durationMs: number }) => [c.trimBeforeMs, c.durationMs])).toEqual([[0, 1500], [1500, clip.durationMs - 1500], [0, 6000]]);
+    expect(m1.tracks.text.map((x: { timing: { atMs: number; durationMs: number } }) => x.timing)).toEqual([{ atMs: 0, durationMs: 1500 }, { atMs: 1500, durationMs: 1500 }]);
+    const queue = (await s.json(`/projects/${p.id}/intents`)).body;
+    const kids = (queue.items as Array<{ parentIntentId?: string; propertyKey: string; status: string }>).filter((i) => i.parentIntentId === cut.body.intent.id);
+    expect(kids.map((k) => [k.propertyKey.split(':').slice(0, 3).join(':'), k.status]).sort()).toEqual([['list:split:clip', 'executed'], ['list:split:text', 'executed']]);
+    await s.json(`/projects/${p.id}/composition/undo`, { method: 'POST' });
+    expect(await headHash(s, p.id)).toBe(before);                                      // one undo restores both
+    const tf = await post({ category: 'asset', target: { kind: 'clip', id: clip.id }, transformEdit: { kind: 'clip', id: clip.id, x: -0.1, y: 0, scale: 1.2, rotation: 0 } });
+    expect(tf.body.intent).toMatchObject({ status: 'executed', propertyKey: `clip:${clip.id}.transform` });
+    expect((await model()).tracks.video[0].transform).toEqual({ x: -0.1, y: 0, scale: 1.2, rotation: 0 });
+    const outside = await post({ category: 'asset', splitEdit: { atMs: 50, items: [{ kind: 'clip', id: clip.id }] } });
+    expect(outside.body.error.code).toBe('EM-2201');
+    expect((await post({ category: 'asset', transformEdit: { kind: 'clip', id: clip.id, scale: 99 } })).status).toBe(400);
+    expect((await post({ category: 'asset', transformEdit: { kind: 'image', id: '01JAZK0000000000000000000C', x: 0 } })).body.error.code).toBe('EM-2203');
   });
 });

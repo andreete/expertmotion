@@ -201,6 +201,10 @@ export interface HealthDto {
 }
 
 // ── request bodies ──
+/** ADR-028 / FR-179: cut at the playhead (op:element.split per item). */
+export interface SplitEdit { atMs: number; items: Array<{ kind: 'clip' | 'text' | 'image' | 'shape' | 'audio'; id: Id }> }
+/** ADR-028 / FR-180: picture position / zoom / rotation (op:element.setTransform); x / y fractions of the frame, scale 1 = fit, degrees. */
+export interface TransformEdit { kind: 'clip' | 'image' | 'shape'; id: Id; x?: number; y?: number; scale?: number; rotation?: number }
 export interface ElementEdit { kind: 'text' | 'image' | 'shape' | 'audio'; id: Id; atMs?: number; durationMs?: number; trimBeforeMs?: number; layer?: number; move?: 'up' | 'down' | 'front' | 'back' }
 export interface DesignPickInput {
   source: 'ui' | 'chat'; category: IntentCategory; presetId?: string; params?: Record<string, unknown>; target: ElementRefT; selection?: ElementRefT[]; playheadMs?: number;
@@ -211,6 +215,9 @@ export interface DesignPickInput {
   clipEdit?: { clipId: Id; toIndex?: number; trimBeforeMs?: number; durationMs?: number };
   /** ADR-027 / FR-068: Timeline drag / trim / lane change / layer key on a text, image, shape or audio layer. */
   elementEdit?: ElementEdit;
+  /** ADR-028: Timeline scissors / S (FR-179) and Player handles / Inspector transform fields (FR-180). */
+  splitEdit?: SplitEdit;
+  transformEdit?: TransformEdit;
   /** Deterministic Text Panel field pick (FR-020…FR-028; `content` edits the selected text, FR-027). */
   field?: string; value?: unknown;
   /** FR-027 Add Text content (with a `preset:text.*` variant). */

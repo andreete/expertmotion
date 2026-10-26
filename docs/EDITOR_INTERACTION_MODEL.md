@@ -216,6 +216,36 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 9 | Audio past its source (not looping) → `EM-2306` toast and nothing applied (the drag already clamps to the source); an element removed meanwhile → `EM-2203`; a no-op drag sends nothing. |
 | 10 | Ctrl+Z restores the previous version (timing and layers together). |
 
+### IX-27 Canvas transform on the Player (clips, images, shapes; ADR-028, FR-180)
+
+| # | Spec |
+|---|---|
+| 1 | Pointer, with one clip, image or shape selected and playing at the playhead: `stage.player.canvas.box` shows its picture's box (rotated with it). Drag inside the box = move; drag a corner `stage.player.canvas.handle` (`nw/ne/se/sw`) = scale with the opposite corner fixed, **Shift** = keep the centre; drag the top handle (`rotate`) = rotate, **Shift** = snap to 0 / 90 / 180 / 270°; double-click the box = reset (centred, 100 %, 0°); Esc cancels a running gesture (and only the gesture). Snap guides (`stage.player.canvas.guide`): the centre snaps to the frame centre lines and the bounding box to the frame edges within 6 screen px; **Alt** turns snapping off. Drag threshold 3 px; clicks outside the box still play / pause. Keyboard / exact values: the inspector fields (`stage.timeline.inspector.transform.*`: X / Y in % of the frame, Scale %, Rotation °, Enter applies, Esc reverts; Fit, Fill, Reset; align centre / top / bottom / left / right). |
+| 2 | While dragging the Player shows the new picture live (optimistic local transform of the shown model, never sent; `data-gesture` on the box); after release the box keeps the new picture until the new Composition Version arrives. |
+| 3 | category asset (clip, image) or shape / `<kind>:<id>.transform` / scalar, `source: ui`, pick field `transformEdit {kind, id, x, y, scale, rotation}` (all four values, so the newest full state wins on supersession). |
+| 4 | Compile (no LLM): `op:element.setTransform {x, y, scale, rotation}`; x / y are fractions of the frame, scale 1 = the fit result (clip) or the stored size (image / shape), rotation in degrees. |
+| 5 | One Intent Queue item "Position, zoom or rotation" / "Posisi, zoom atau rotasi", executed; one Composition Version per gesture or field change; toast "Move / Zoom / Rotate / Reset Clip 1" with Undo. |
+| 6 | Player shows the transformed picture inside the frame (overflow hidden); export renders the same CSS (`clipTransformStyle` / `overlayTransform`, one function for both). |
+| 7 | The element stays selected; the inspector fields show the new values. |
+| 8 | As IX-02 (version row, autosave checkpoint). |
+| 9 | Element removed meanwhile → `EM-2203`; scale outside 10 %–1000 % (clip) / 5 %–2000 % (image, shape) is clamped by the handles and fields; a gesture that changes nothing sends nothing. |
+| 10 | Ctrl+Z restores the previous version. |
+
+### IX-28 Split at the playhead (scissors, S; ADR-028, FR-179)
+
+| # | Spec |
+|---|---|
+| 1 | `stage.timeline.split` (scissors in the Timeline header) or **S**: splits every selected clip, text, image, shape or audio layer that plays at the playhead (at least 100 ms from both its edges); with nothing splittable selected, the clip under the playhead. While playing, the live playhead is used. |
+| 2 | No dialog; the Timeline shows two bars at once after the version arrives. Nothing at the playhead → info toast "There is no clip under the playhead to split." / "Tidak ada klip di bawah playhead untuk dipotong."; a selection that does not play there → "The selected item does not play at the playhead…" / "Item yang dipilih tidak diputar di posisi playhead…"; nothing is sent. |
+| 3 | category by kind (asset when mixed) / `list:split:<kind>:<id>:<atMs>:<unique>` per item (a split never supersedes another pick and is not a Locked Key) / list, `source: ui`, pick field `splitEdit {atMs, items}`; several items = one parent with one child per item (expansion rule). |
+| 4 | Compile (no LLM): `op:element.split {atMs}` per item, all in ONE plan and ONE Composition Version. The first part keeps the id; the second part continues the source (clip `trimBeforeMs + d × playbackRate`, audio `trimBeforeMs + d`); the transition after a clip moves to the second part; transitions next to a shortened part are re-clamped (EM-2305 warn). |
+| 5 | One Intent Queue item "Split at the playhead (n)" / "Potong di playhead (n)", executed; toast "Split 2 items at 00:02.00" with Undo. |
+| 6 | Player unchanged at every frame (the parts play back to back). |
+| 7 | The selection keeps the first parts (their ids are unchanged). |
+| 8 | As IX-02. |
+| 9 | `EM-2201` (nothing at the playhead, from a stale client), `EM-2203` (item gone). |
+| 10 | Ctrl+Z restores the previous version (every split of the press at once). |
+
 ## 3. Agent Panel actions
 
 ### IX-12 Brainstorm send
@@ -445,7 +475,9 @@ Windows keys; `Ctrl` = `Ctrl` (macOS build P2 maps to `Cmd`). Shortcuts are list
 | ← / → | Previous / next frame; with an editable Timeline bar focused: move it one frame earlier / later (IX-26) | Editor | `stage.player.controls.scrubber`, `stage.timeline.element` |
 | Shift+← / → | −1 s / +1 s (Player, or the focused Timeline bar) | Editor | same |
 | Alt+↑ / Alt+↓ | Focused Timeline bar one lane up / down (layer forward / back; IX-26) | Stage | `stage.timeline.element` |
-| Alt (held while dragging) | Disable snapping to the playhead and edges (IX-26) | Stage | `stage.timeline.snap` |
+| Alt (held while dragging) | Disable snapping to the playhead and edges (IX-26) and to the frame centre / edges on the Player (IX-27) | Stage | `stage.timeline.snap`, `stage.player.canvas.guide` |
+| S | Split the selected item(s) — or the clip under the playhead — at the playhead (IX-28) | Stage | `stage.timeline.split` |
+| Shift (held while scaling / rotating on the Player) | Scale from the centre / snap rotation to 0 / 90 / 180 / 270° (IX-27) | Player | `stage.player.canvas.handle` |
 | Home / End | Start / end | Editor | same |
 | J / K / L | Reverse-scrub step / pause / play (K pauses; J steps back 1 s because reverse playback is out of scope) | Editor | same |
 | Ctrl+S | Save | Global | `hdr.action.save` |
@@ -455,7 +487,7 @@ Windows keys; `Ctrl` = `Ctrl` (macOS build P2 maps to `Cmd`). Shortcuts are list
 | Ctrl+E | Export | Global | `hdr.action.export` |
 | Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) | Undo / redo (Composition Version head); the shortcut sheet shows Ctrl+Shift+Z (FR-153) | Global (text fields keep native undo while focused) | — |
 | Ctrl+Enter | Send the chat message (FR-153) when a chat composer has focus; otherwise Execute the current plan | composer → send; global (focus outside text fields) when a valid plan exists → Execute | `agent.*.composer`, `agent.editor.execute` |
-| Esc | Cancel running request · close popover/modal · clear selection · exit fullscreen (in that priority) | Global | `agent.editor.cancel`, … |
+| Esc | Cancel a running Player or Timeline drag · cancel running request · close popover/modal · clear selection · exit fullscreen (in that priority) | Global | `agent.editor.cancel`, … |
 | / | Focus Catalogue Search | Editor | `lib.search.input` |
 | 1 / 2 / 3 | Switch to Home / Design / Tools | Editor | `hdr.menu.*` |
 | Enter | Insert when Asset Panel focused and ≥ 1 selected | Library Panel | `lib.assets.insert` |
@@ -482,6 +514,7 @@ Shortcuts never fire while a text input, textarea or contenteditable has focus, 
 | Catalogue Card → Player | yes | Same as click with playhead target | — |
 | Timeline Element → another position | yes (FR-068; ADR-027 Operator decision 2026-10-25) | video Clip: `op:clip.move`; text / image / shape / audio: `op:element.setTiming` (time and, when dropped on another lane, `layer`) or `op:element.setLayer` (lane only) — IX-26 | dropping a visual item on the video or audio rows (or audio on layer rows) clamps to the nearest lane of its kind |
 | Element edge → trim | yes | video Clip: `op:clip.setTrim`; others: `op:element.setTiming` (audio left edge with `trimBeforeMs`) | trims stop at 100 ms and at the source end of non-looping audio |
+| Picture on the Player → another place / size / angle | yes (FR-180; ADR-028 Operator request 2026-10-26) | `op:element.setTransform` on the selected clip, image or shape — IX-27 | scale clamped to the item's range; the picture is clipped by the frame |
 | Panel divider | yes | Resize (§9) | — |
 
 General: drag threshold 4 px; drop targets show a 2 px accent inset outline during drag-over; Esc cancels; keyboard alternative exists for every drop (import button, badge click, Insert).

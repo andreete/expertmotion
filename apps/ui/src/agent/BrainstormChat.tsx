@@ -56,6 +56,9 @@ export function intentTitle(i: Pick<EditIntent, 'category' | 'presetId' | 'instr
     const v = out.kind === 'ratio' && out.value === 'custom' && out.customRatio ? `${out.customRatio.w}:${out.customRatio.h}` : String(out.value);
     return t(`ui.agent.intent.output.${out.kind}`, { value: v });
   }
+  const sp = i.params['__splitEdit'] as { atMs?: number; items?: unknown[] } | undefined;
+  if (sp) return t('ui.agent.intent.element.split', { count: Math.max(1, sp.items?.length ?? 1) });   // ADR-028 cut at the playhead
+  if (i.params['__transformEdit']) return t('ui.agent.intent.element.transform');                // ADR-028 Player handles / Inspector fields
   const el = i.params['__elementEdit'] as { atMs?: number; layer?: number; move?: string } | undefined;
   if (el) {                                                                     // ADR-027 Timeline drag / trim / lane / layer key
     if (el.atMs !== undefined) return el.layer !== undefined ? t('ui.agent.intent.element.timinglayer', { n: el.layer + 1 }) : t('ui.agent.intent.element.timing');

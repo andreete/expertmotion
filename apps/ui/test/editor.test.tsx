@@ -25,6 +25,7 @@ const NOT_IN_MOCK: Record<string, string> = {
   'stage.timeline.element.generated': 'needs a generator result on the timeline (covered in stage-agent.test.tsx)',
   'stage.timeline.lane.layer': 'needs a text, image or shape on the timeline (the sample has clips only; covered in timeline-lanes.test.tsx)',
   'stage.timeline.lane.audio': 'needs an audio layer (covered in timeline-lanes.test.tsx)',
+  'stage.player.canvas.guide': 'shown only while a canvas drag snaps (canvas-split.test.tsx)',
   'stage.timeline.ghost': 'shown only while dragging a bar (timeline-lanes.test.tsx)', 'stage.timeline.snap': 'shown only while a drag snaps (timeline-lanes.test.tsx)',
   'agent.brainstorm.message.copy': 'needs a brainstorm reply (stage-agent.test.tsx)', 'agent.editor.message.copy': 'needs an editor message (stage-agent.test.tsx)',
   'agent.brainstorm.message.retry': 'saved failure only (stage-agent.test.tsx)', 'agent.editor.message.retry': 'saved failure only',
@@ -100,6 +101,8 @@ describe('main editor element ids', () => {
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.assets.card"] button[aria-label="Asset actions"]')!); sweep();
     // Timeline selection → inspector
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="stage.timeline.element"]')!); sweep();
+    // ADR-028: a selected clip shows the canvas handles on the Player and the transform fields in the inspector
+    fireEvent.click(document.querySelector<HTMLElement>('[data-el="stage.timeline.element"][data-kind="clip"]')!); sweep();
     // FR-173: a pick creates a persisted Composition Version — no dirty dot
     await waitFor(() => { if (!document.querySelector('[data-el="lib.catalogue.tab"]')) throw new Error('no tabs'); });
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="lib.catalogue.tab"][data-category="transition"]')!);

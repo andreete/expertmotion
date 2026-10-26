@@ -37,7 +37,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 │ lib.catalogue      │   .play .pause .time .duration .ratio .res  │ agent.brainstorm.panel    │
 │  lib.catalogue.tab │   .scrubber .fullscreen .menu               │  .thread .message         │
 │  lib.catalogue.card│  stage.player.state.loading/.error          │  .composer .send .attach  │
-│   .thumb .label    │                                             │  .footer.model .footer.ctx│
+│   .thumb .label    │  stage.player.canvas.box .handle .guide     │  .footer.model .footer.ctx│
 │   .badge.model     │ stage.timeline                              │  .handoff (→ Editor)      │
 │   .badge.gpu       │  stage.timeline.ruler  stage.timeline.head  │ agent.editor.panel        │
 │  (Home mode)       │  stage.timeline.track.caption               │  .thread .message         │
@@ -146,6 +146,10 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `stage.player.controls.fullscreen` | (added) | Fullscreen toggle. |
 | `stage.player.menu` | hamburger (≡) | Player menu: safe-area overlay, draft/full quality, loop, mute. |
 | `stage.player.state.loading` / `.error` | (states) | Loading spinner / error card with recovery action. |
+| `stage.player.canvas.layer` | (added 2026-10-26, ADR-028) | Transparent layer over the Player surface that holds the canvas handles; it only takes pointer events on the box, so clicks elsewhere still play / pause. |
+| `stage.player.canvas.box` | (added 2026-10-26, ADR-028) | Selection box of the selected clip, image or shape while it plays at the playhead (`data-kind`, `data-element-id`, `data-x` / `data-y` / `data-scale` / `data-rotation` = the shown transform, `data-gesture` while dragging): drag inside = move, double-click = reset (IX-27, FR-180). |
+| `stage.player.canvas.handle` | (added 2026-10-26, ADR-028) | Corner handles `data-handle="nw|ne|se|sw"` (scale; Shift keeps the centre) and the rotation handle `data-handle="rotate"` above the top edge (Shift snaps to 0 / 90 / 180 / 270). |
+| `stage.player.canvas.guide` | (added 2026-10-26, ADR-028) | Snap guide line while moving (`data-axis="x"` vertical / `"y"` horizontal, `data-at` in frame units): frame centre lines and frame edges; hidden while Alt is held. |
 | `stage.timeline` | rows under player | Timeline View container. |
 | `stage.timeline.ruler` / `.head` | (added) | Time ruler and playhead line. |
 | `stage.timeline.track.video` / `.caption` | rows in mockup | The video Track row and the caption row (captions render above every layer, so their row is the top row). |
@@ -159,6 +163,11 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `stage.timeline.element.selected` | (state) | Selected element; Design Picks target it. |
 | `stage.timeline.inspector` | (added) | Read-only property sheet for the selected element, with "Ask Editor Agent to change" shortcut. |
 | `stage.timeline.quickparams` / `stage.timeline.quickparams.field` / `stage.timeline.quickparams.apply` | (added, P1) | FR-098 quick params under the inspector: transition duration, motion duration/delay, effect values; validated against the preset params schema (EM-2102 inline) before a Compile pick. |
+| `stage.timeline.split` | (added 2026-10-26, ADR-028) | Scissors button in the Timeline header (shortcut S): splits the selected clips / texts / images / shapes / audio layers that play at the playhead, or the clip under the playhead when nothing is selected, as one undoable pick (IX-28, FR-179). |
+| `stage.timeline.inspector.transform` | (added 2026-10-26, ADR-028) | "Position & zoom" section of the inspector for a selected clip, image or shape (FR-180). |
+| `stage.timeline.inspector.transform.x` / `.y` / `.scale` / `.rotation` | (added 2026-10-26, ADR-028) | Numeric fields: X / Y in % of the frame (0 = centred), Scale in % (100 = the fit result / stored size), Rotation in degrees; Enter or leaving the field applies, Esc reverts. |
+| `stage.timeline.inspector.transform.fit` / `.fill` / `.reset` | (added 2026-10-26, ADR-028) | Fit (whole picture inside the frame, centred), Fill (no empty frame, centred), Reset (the original position, zoom and rotation). |
+| `stage.timeline.inspector.transform.align` | (added 2026-10-26, ADR-028) | Quick-align buttons `data-align="center|top|bottom|left|right"` (centre both axes, or the bounding box against one frame edge). |
 | `stage.timeline.empty` | "Drag material here…" (replace) | Copy: "Insert assets, then your picks and the Editor Agent fill this timeline." |
 
 ## Agent Panel (`agent.*`)

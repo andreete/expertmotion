@@ -53,6 +53,45 @@ describe('ADR-027 element edits (Timeline drag / trim / lanes) and the top-most 
   });
 });
 
+describe('ADR-028 split and transform picks (Compile path, no LLM)', () => {
+  const withText = () => { const r = applyOperations(base(), [{ op: 'op:text.add', args: { text: 'Judul', variant: 'preset:text.title', atMs: 0, durationMs: 3000 } }], { assets: ASSETS, tier: 'T1', newId });
+    if (!r.ok) throw new Error('fixture'); return r.value.model; };
+  it('split with nothing listed → the clip under the playhead; one compiled op:element.split with a list key (never superseded, never locked)', () => {
+    const m = base(); const c2 = m.tracks.video[1]!.id;
+    const [i] = intents(m, { splitEdit: { atMs: 10_000, items: [] }, playheadMs: 10_000 });
+    expect(i).toMatchObject({ category: 'asset', needsInterpretation: false, propertyClass: 'list', propertyKey: expect.stringMatching(new RegExp(`^list:split:clip:${c2}:10000:`)), resolvedTargets: [{ kind: 'clip', id: c2 }], params: { targetLabel: 'split clip' } });
+    const ops = compileIntents(JSON.parse(JSON.stringify([i])) as EditIntentT[], (x) => pickFromIntent(x), m);
+    expect(ops.ok && ops.value.map((o) => [o.op, o.target, o.args])).toEqual([['op:element.split', { kind: 'clip', id: c2 }, { atMs: 10_000 }]]);
+    const q = enqueue(enqueue([], [{ ...i!, status: 'executed' }]), intents(m, { splitEdit: { atMs: 10_000, items: [] } }));
+    expect(q.map((x) => x.status)).toEqual(['executed', 'queued']);
+    expect(lockedKeysFromQueue(q.map((x) => ({ ...x, status: 'executed' as const })))).toEqual([]);
+  });
+  it('several listed items at the playhead → parent + one child per item that contains it; others are skipped', () => {
+    const m = withText(); const t = m.tracks.text[0]!.id, c1 = m.tracks.video[0]!.id, c2 = m.tracks.video[1]!.id;
+    const r = intents(m, { splitEdit: { atMs: 1500, items: [{ kind: 'text', id: t }, { kind: 'clip', id: c1 }, { kind: 'clip', id: c2 }] } });
+    expect(r.map((x) => x.propertyKey.split(':').slice(0, 5).join(':'))).toEqual(['group:asset:', `list:split:text:${t}:1500`, `list:split:clip:${c1}:1500`]);
+    const c = compileIntents(r, (x) => pickFromIntent(x), m);
+    expect(c.ok && c.value.map((o) => o.target)).toEqual([{ kind: 'text', id: t }, { kind: 'clip', id: c1 }]);
+  });
+  it('split refusals: nothing at the playhead → EM-2201; gone → EM-2203; too close to the edges → EM-2201', () => {
+    const m = base();
+    expect(createIntents(pick({ splitEdit: { atMs: 50_000, items: [] }, playheadMs: 50_000 }), { model: m, baseVersion: 'h', newId })).toMatchObject({ ok: false, issues: [{ code: 'EM-2201' }] });
+    expect(createIntents(pick({ splitEdit: { atMs: 1000, items: [{ kind: 'clip', id: 'gone' }] } }), { model: m, baseVersion: 'h', newId })).toMatchObject({ ok: false, issues: [{ code: 'EM-2203' }] });
+    expect(createIntents(pick({ splitEdit: { atMs: 7950, items: [{ kind: 'clip', id: m.tracks.video[0]!.id }] } }), { model: m, baseVersion: 'h', newId })).toMatchObject({ ok: false, issues: [{ code: 'EM-2201' }] });
+  });
+  it('transform: one scalar intent keyed <kind>:<id>.transform compiled with the given fields; a newer gesture supersedes it', () => {
+    const m = base(); const c1 = m.tracks.video[0]!.id;
+    const [i] = intents(m, { transformEdit: { kind: 'clip', id: c1, x: -0.2, y: 0, scale: 1.2, rotation: 0 } });
+    expect(i).toMatchObject({ category: 'asset', propertyClass: 'scalar', propertyKey: `clip:${c1}.transform`, needsInterpretation: false });
+    const c = compileIntents([i!], (x) => pickFromIntent(x), m);
+    expect(c.ok && c.value.map((o) => [o.op, o.args])).toEqual([['op:element.setTransform', { x: -0.2, y: 0, scale: 1.2, rotation: 0 }]]);
+    const q = enqueue([{ ...i!, status: 'executed' }], intents(m, { transformEdit: { kind: 'clip', id: c1, x: 0, y: 0, scale: 1, rotation: 90 } }));
+    expect(q.map((x) => x.status)).toEqual(['superseded', 'queued']);
+    expect(createIntents(pick({ transformEdit: { kind: 'image', id: 'gone', x: 0 } }), { model: m, baseVersion: 'h', newId })).toMatchObject({ ok: false, issues: [{ code: 'EM-2203' }] });
+    expect(createIntents(pick({ transformEdit: { kind: 'clip', id: c1 } }), { model: m, baseVersion: 'h', newId })).toMatchObject({ ok: false, issues: [{ code: 'EM-2102' }] });
+  });
+});
+
 describe('Target Resolution (AI_WORKFLOW §4)', () => {
   it('transition with nothing selected → all cuts; selected clip → its following cut; < 2 clips → EM-2202', () => {
     const m = base();

@@ -1,4 +1,4 @@
-// GOLDEN_SCENARIOS §4.2 harness (b) at package level: the agent half of GS-08, 09, 10, 17, 18, 20, 21 with the fake provider.
+// GOLDEN_SCENARIOS §4.2 harness (b) at package level: the agent half of GS-08, 09, 10, 17, 18, 20, 21, 22 with the fake provider.
 // The service-level half (DB rows, SSE, HTTP) lives in apps/service/test/s1.
 import { describe, expect, it } from 'vitest';
 import { applyOperations, hashModel, visualStack, type OperationT } from '@expertmotion/composition-model';
@@ -155,5 +155,42 @@ describe('GS-21 "taruh judul di atas logo": layers, then a Timeline drag and a l
     expect(visualStack(s.model).map((x) => x.id)).toEqual([t1.id, o1.id]);
     expect(s.providerCalls).toBe(0);
     expect(s.lockedKeys).toEqual(expect.arrayContaining([`text:${t1.id}.timing`, `text:${t1.id}.layer`]));
+  });
+});
+
+describe('GS-22 "potong klip di detik 3, perbesar 120% dan geser ke kiri": split and framing', () => {
+  it('the Editor Agent splits and reframes with op:element.split / op:element.setTransform; scissors and Player drags compile without it', async () => {
+    const s = new Scenario({ ratio: '16:9' });
+    const ins = applyOperations(s.model, ['FX-V3', 'FX-V1', 'FX-V2'].map((assetId, atIndex): OperationT => ({ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId, atIndex } })), { assets: s.assets, tier: s.tier, newId: s.newId });
+    if (!ins.ok) throw new Error('fixture');
+    s.model = ins.value.model; s.versions.push(hashModel(s.model));
+    const c1 = s.model.tracks.video[0]!;                                                 // FX-V3, a 9:16 clip in a 16:9 project, 0–5 s
+    const env = envFor(s, 'potong klip pertama di detik 3, lalu perbesar videonya jadi 120% dan geser sedikit ke kiri');
+    expect(env.capabilities.ops).toEqual(expect.arrayContaining(['op:element.split', 'op:element.setTransform']));
+    expect(env.composition.video[0]).not.toHaveProperty('transform');
+    const prov = fakeProvider([reply(s.head, [
+      { op: 'op:element.split', target: { kind: 'clip', id: c1.id }, args: { atMs: 3000 } },
+      { op: 'op:element.setTransform', target: { kind: 'clip', id: c1.id }, args: { scale: 1.2, x: -0.1 } }])]);
+    const r = await runEditorAgent(env, prov, ctxFor(s));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.plan.status).toBe('valid');
+    const a = applyOperations(s.model, planOps(r.plan), { assets: s.assets, tier: s.tier, newId: s.newId });
+    if (!a.ok) throw new Error('apply');
+    s.model = a.value.model; s.versions.push(hashModel(s.model));
+    expect(s.model.tracks.video.map((c) => [c.assetId, c.trimBeforeMs, c.durationMs, c.transform?.scale ?? 1])).toEqual([['FX-V3', 0, 3000, 1.2], ['FX-V3', 3000, 2000, 1], ['FX-V1', 0, 8000, 1], ['FX-V2', 0, 6000, 1]]);
+    expect(s.model.tracks.video[0]!.transform).toEqual({ x: -0.1, y: 0, scale: 1.2, rotation: 0 });
+    expect(s.durationMs).toBe(19_000);
+    // The Creator presses S with the playhead at 7 s (nothing selected): the clip under the playhead (c2 = FX-V1, 5–13 s) splits.
+    const cut = expectOk(s.pick({ splitEdit: { atMs: 7000, items: [] }, playheadMs: 7000 }));
+    expect(cut.ops).toEqual([expect.objectContaining({ op: 'op:element.split', args: { atMs: 7000 } })]);
+    expect(s.model.tracks.video.map((c) => [c.trimBeforeMs, c.durationMs])).toEqual([[0, 3000], [3000, 2000], [0, 2000], [2000, 6000], [0, 6000]]);
+    // A Player drag on the second part (move right a quarter, zoom 150 %): one transform pick, a Locked Key for the Editor Agent.
+    const second = s.model.tracks.video[1]!.id;
+    expectOk(s.pick({ transformEdit: { kind: 'clip', id: second, x: 0.25, y: 0, scale: 1.5, rotation: 0 } }));
+    expect(s.model.tracks.video[1]!.transform).toEqual({ x: 0.25, y: 0, scale: 1.5, rotation: 0 });
+    expect(s.lockedKeys).toEqual([`clip:${second}.transform`]);                        // splits are events, never Locked Keys
+    expect(s.providerCalls).toBe(0);
+    expect(s.durationMs).toBe(19_000);
   });
 });

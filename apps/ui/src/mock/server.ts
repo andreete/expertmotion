@@ -253,6 +253,23 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       if (e.toIndex !== undefined) return one(clip, `clip:${e.clipId}.order`, { op: 'op:clip.move', target: clip, args: { toIndex: e.toIndex } });
       return one(clip, `clip:${e.clipId}.trim`, { op: 'op:clip.setTrim', target: clip, args: { trimBeforeMs: e.trimBeforeMs ?? c.trimBeforeMs, durationMs: e.durationMs ?? c.durationMs } });
     }
+    if (body.splitEdit) {                                                                 // ADR-028 cut at the playhead, as the Local Service
+      const { atMs, items } = body.splitEdit;
+      const t = deriveTiming(model);
+      const windowOf = (k: string, id: string) => k === 'clip' ? t.elementWindows[id] : k === 'audio' ? (() => { const a = model.tracks.audio.find((x) => x.id === id); return a ? { fromMs: a.atMs, toMs: a.durationMs === undefined ? t.durationMs : a.atMs + a.durationMs } : undefined; })()
+        : (() => { const x = k === 'text' ? model.tracks.text.find((y) => y.id === id) : model.tracks.overlay.find((o) => o.id === id && o.kind === k); return x ? { fromMs: x.timing.atMs, toMs: x.timing.atMs + x.timing.durationMs } : undefined; })();
+      const list = items.length ? items : (() => { const id = elementAt(model, 'clip', atMs); return id ? [{ kind: 'clip' as const, id }] : []; })();
+      const inside = list.filter((x) => { const w = windowOf(x.kind, x.id); return w !== undefined && atMs >= w.fromMs + 100 && atMs <= w.toMs - 100; });
+      if (!inside.length) return { leaves: [], parentKey: '?', needsInterpretation: false, notices, reject: { code: 'EM-2201', message: 'Move the playhead inside the item you want to split.' } };
+      return { leaves: inside.map((x) => { const el: ElementRefT = { kind: x.kind, id: x.id }; return { target: el, key: `list:split:${x.kind}:${x.id}:${atMs}:${newId()}`, ops: [{ op: 'op:element.split', target: el, args: { atMs } }] }; }), parentKey: inside.length > 1 ? 'group:asset:' : `list:split:${newId()}`, needsInterpretation: false, notices };
+    }
+    if (body.transformEdit) {                                                             // ADR-028 Player handles / Inspector fields
+      const e = body.transformEdit; const el: ElementRefT = { kind: e.kind, id: e.id };
+      const exists = e.kind === 'clip' ? model.tracks.video.some((c) => c.id === e.id) : model.tracks.overlay.some((o) => o.id === e.id && o.kind === e.kind);
+      if (!exists) return { leaves: [], parentKey: '?', needsInterpretation: false, notices, reject: { code: 'EM-2203', message: `That ${e.kind} no longer exists.` } };
+      const args = Object.fromEntries((['x', 'y', 'scale', 'rotation'] as const).filter((k) => e[k] !== undefined).map((k) => [k, e[k]]));
+      return one(el, `${e.kind}:${e.id}.transform`, { op: 'op:element.setTransform', target: el, args });
+    }
     if (body.elementEdit) {                                                               // ADR-027 Timeline drag / trim / lane / layer key, as the Local Service
       const e = body.elementEdit; const el: ElementRefT = { kind: e.kind, id: e.id };
       const cur = e.kind === 'audio' ? model.tracks.audio.find((x) => x.id === e.id) : e.kind === 'text' ? model.tracks.text.find((x) => x.id === e.id) : model.tracks.overlay.find((x) => x.id === e.id && x.kind === e.kind);
@@ -441,7 +458,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const preset = body.presetId ? getPreset(body.presetId) : undefined;
     const propertyClass = (preset?.propertyClass ?? (body.category === 'shape' ? 'list' : body.category === 'text' && body.presetId ? 'list' : 'scalar')) as EditIntent['propertyClass'];
     const base = {
-      projectId: p.dto.id, source, createdAt: nowIso(), category: body.category, params: { ...(body.params ?? {}), ...(body.output ? { __output: body.output } : {}), ...(body.elementEdit ? { __elementEdit: body.elementEdit } : {}) }, target: body.target, propertyClass,
+      projectId: p.dto.id, source, createdAt: nowIso(), category: body.category, params: { ...(body.params ?? {}), ...(body.output ? { __output: body.output } : {}), ...(body.elementEdit ? { __elementEdit: body.elementEdit } : {}), ...(body.splitEdit ? { __splitEdit: body.splitEdit } : {}), ...(body.transformEdit ? { __transformEdit: body.transformEdit } : {}) }, target: body.target, propertyClass: body.splitEdit ? 'list' as const : propertyClass,
       baseVersion: body.baseVersion, supersedes: [] as string[], ...(body.presetId ? { presetId: body.presetId } : {}), ...(body.instruction ? { instruction: body.instruction } : {}),
     };
     if (res.reject) {

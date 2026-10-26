@@ -11,6 +11,8 @@ import { useStore } from '../state/store.js';
 import { Button, IconButton, MenuItem, Popover, cx } from '../components/ui.js';
 import { formatTimecode } from '../i18n/index.js';
 import { playerBus } from './playerBus.js';
+import { CanvasHandles, type CanvasGesture } from './CanvasHandles.js';
+import { canvasItemOf, transformEditOf, withLiveTransform, type Xf } from './canvas-transform.js';
 import { playerPrefsFor, playerPrefsPatch, type PlayerPrefs } from '../prefs.js';
 import type { AppState } from '../state/reducer.js';
 import type { ApiClient } from '../api/client.js';
@@ -102,7 +104,14 @@ export function StagePlayer() {
   const draft = !turbo && pp.draft;
   const assets = useMemo(() => buildAssetUrls(state, runtime.api), [state.assets, state.grant, runtime.api]); // eslint-disable-line react-hooks/exhaustive-deps
   const preview = useMemo(() => (head && state.previewPresetId ? previewModel(head, state.previewPresetId, state) : null), [head, state.previewPresetId]); // eslint-disable-line react-hooks/exhaustive-deps
-  const model = preview ?? head ?? null;
+  // ADR-028 / FR-180: canvas handles for the selected clip / image / shape; `live` is the optimistic transform of a running gesture.
+  const [live, setLive] = useState<{ id: string; xf: Xf } | null>(null);
+  const canvasItem = useMemo(() => (head && !preview && state.selection.length === 1 ? canvasItemOf(head, state.selection[0], (id) => { const a = state.assets.find((x) => x.id === id); return a ? { width: a.width, height: a.height } : null; }) : null),
+    [head, preview, state.selection, state.assets]);
+  useEffect(() => { setLive(null); }, [state.head?.hash, canvasItem?.id]);
+  const liveXf = live && canvasItem && live.id === canvasItem.id ? live.xf : null;
+  const base = preview ?? head ?? null;
+  const model = useMemo(() => (base && canvasItem && liveXf ? withLiveTransform(base, canvasItem, liveXf) : base), [base, canvasItem, liveXf]);
   const inputProps = useMemo<EngineInputProps | null>(() => (model ? { model, assets, quality: draft ? 'draft' : 'full' } : null), [model, assets, draft]);
   const meta = useMemo(() => (inputProps ? calculateMetadata({ props: inputProps }) : null), [inputProps]);
   const fps = meta?.fps ?? 30;
@@ -175,6 +184,18 @@ export function StagePlayer() {
     setPlayer({ draft: next });
     if (!next && (state.hardware?.tier ?? 'T0') === 'T0') actions.toast('warn', 'ui.stage.player.menu.full.t0warn');
   };
+  const itemLabel = (() => {
+    if (!canvasItem || !head) return '';
+    if (canvasItem.kind === 'clip') { const i = head.tracks.video.findIndex((c) => c.id === canvasItem.id); return t('ui.stage.player.canvas.clip', { n: i + 1 }); }
+    if (canvasItem.kind === 'image') { const o = head.tracks.overlay.find((x) => x.id === canvasItem.id); return o?.kind === 'image' ? state.assets.find((a) => a.id === o.assetId)?.name ?? t('ui.stage.timeline.kind.image') : ''; }
+    return t('ui.stage.timeline.kind.shape');
+  })();
+  const showHandles = !!canvasItem && ms >= canvasItem.fromMs && ms < canvasItem.toMs && !state.headLoading;
+  const commitTransform = (xf: Xf, g: CanvasGesture) => {
+    if (!canvasItem) return;
+    setLive({ id: canvasItem.id, xf });                                         // keep the new picture until the new version arrives
+    void actions.transformEdit(transformEditOf(canvasItem, xf), t(`ui.stage.player.canvas.done.${g}`, { label: itemLabel })).finally(() => setLive(null));
+  };
   const previewLabel = state.previewPresetId ? getPreset(state.previewPresetId)?.label[lang] : null;
   const version = state.head?.hash.slice(0, 6);
   const ratioLabel = ratio === 'custom' && head?.settings.customRatio ? `${head.settings.customRatio.w}:${head.settings.customRatio.h}` : ratio;
@@ -228,6 +249,10 @@ export function StagePlayer() {
             {safe && (
               <div aria-hidden className="pointer-events-none absolute border border-dashed border-em-accent-2/80"
                 style={{ left: safe.left * fit, top: safe.top * fit, right: safe.right * fit, bottom: safe.bottom * fit }} />
+            )}
+            {showHandles && canvasItem && (
+              <CanvasHandles item={canvasItem} xf={liveXf ?? canvasItem.xf} screenW={w} label={t('a11y.stage.player.canvas.box', { label: itemLabel })} hint={t('ui.stage.player.canvas.hint')}
+                onLive={(xf) => setLive(xf ? { id: canvasItem.id, xf } : null)} onCommit={commitTransform} />
             )}
             {previewLabel && <span className="absolute left-2 top-2 rounded-[4px] bg-em-accent px-1.5 text-[11px] font-semibold text-em-accent-ink">{t('ui.stage.player.previewing', { preset: previewLabel })}</span>}
             {previewLabel && !hasClip && <span className="absolute bottom-2 left-2 right-2 rounded-[4px] bg-black/70 px-1.5 text-center text-[11px]">{t('ui.stage.player.sample')}</span>}

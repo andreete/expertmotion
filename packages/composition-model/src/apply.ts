@@ -3,7 +3,8 @@
 import { getPreset, validateParams, type Category } from '@expertmotion/catalogue';
 import { fail, issue, ok, type Issue, type Result } from '@expertmotion/shared';
 import { OPERATIONS, isOpName, type OperationT } from './operations.js';
-import { CompositionModel, type AssetFacts, type AudioLayerT, type CaptionPageT, type ClipT, type CompositionModelT, type MotionT, type PositionT, type TextLayerT, type Tier } from './schema.js';
+import { CompositionModel, IDENTITY_TRANSFORM, type AssetFacts, type AudioLayerT, type CaptionPageT, type ClipT, type ClipTransformT, type CompositionModelT, type MotionT, type OverlayElementT, type PositionT, type TextLayerT, type Tier } from './schema.js';
+import { deriveTiming } from './timing.js';
 import { frameInUnits } from './units.js';
 import { detectRatio } from './ratio.js';
 import { diffModels, type ElementDiff } from './diff.js';
@@ -126,6 +127,24 @@ function shiftCutsForRemove(m: CompositionModelT, i: number, clipCountBefore: nu
   if (dropped) warnings.push(issue('EM-2203', `${dropped} transition(s) next to the removed clip were removed.`, 'info', path));
   m.transitions.sort((a, b) => a.cutIndex - b.cutIndex);
 }
+
+/** ADR-028: a transition next to a split clip is kept at most half the shorter neighbour; it is removed when that is < 100 ms. */
+function reclampCut(m: CompositionModelT, cutIndex: number, warnings: Issue[], path: string) {
+  const tr = m.transitions.find((x) => x.cutIndex === cutIndex);
+  const a = m.tracks.video[cutIndex], b = m.tracks.video[cutIndex + 1];
+  if (!tr || !a || !b) return;
+  const half = Math.floor(Math.min(a.durationMs, b.durationMs) * 0.5);
+  if (tr.durationMs <= half) return;
+  if (half < 100) { m.transitions = m.transitions.filter((x) => x !== tr); warnings.push(issue('EM-2305', `The transition on cut ${cutIndex + 1} was removed: the clips next to it are too short now.`, 'warn', path)); return; }
+  tr.durationMs = half;
+  warnings.push(issue('EM-2305', `Transition on cut ${cutIndex + 1} shortened to ${half} ms (half the shorter clip).`, 'warn', path));
+}
+/** ADR-028: the part after a split starts mid-way, so an enter motion stays on the first part only (without its exit). */
+function splitMotion(motion: MotionT | null): MotionT | null { return motion ? { ...motion, exit: false } : null; }
+const round = (v: number, digits: number) => { const f = 10 ** digits; return Math.round(v * f) / f; };
+/** Rotation stored in [0, 360) degrees, 0.01° steps. */
+export const normaliseRotation = (r: number): number => { const x = round(((r % 360) + 360) % 360, 2); return x >= 360 ? 0 : x; };
+const isIdentity = (t: ClipTransformT) => t.x === 0 && t.y === 0 && t.scale === 1 && t.rotation === 0;
 
 // ───────────────────────────── the operations ─────────────────────────────
 function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path: string, warnings: Issue[]): void {
@@ -326,6 +345,69 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       }
       const el = visualTarget(m, op, path);
       if (a.layer !== undefined) placeVisual(visualItems(m), el, a.layer); else moveVisual(visualItems(m), el, a.move);
+      return;
+    }
+    case 'op:element.split': {
+      // ADR-028: two adjacent parts, each ≥ 100 ms; the second gets a new id, continues the source and takes the fade-out,
+      // the first keeps the fade-in and the motion (without exit). A clip's following transition moves to the second part.
+      const t = needTarget(op, path);
+      const at: number = a.atMs;
+      const check = (from: number, len: number) => {
+        const d = Math.round(at - from);
+        if (d < 100 || len - d < 100) stop('EM-2102', `The split point ${at} ms is not inside the ${t.kind} (${Math.round(from)}–${Math.round(from + len)} ms) with at least 100 ms on each side.`, `${path}.args.atMs`);
+        return d;
+      };
+      if (t.kind === 'clip') {
+        const i = findIndex(v, t.id, 'clip', path), c = v[i]!;
+        const d = check(deriveTiming(m).clipStartMs[i]!, c.durationMs);
+        const image = ctx.assets.find((x) => x.id === c.assetId)?.kind === 'image';
+        const second: ClipT = { ...structuredClone(c), id: ctx.newId(), trimBeforeMs: image ? c.trimBeforeMs : Math.round(c.trimBeforeMs + d * c.playbackRate), durationMs: c.durationMs - d,
+          fadeInMs: 0, fadeOutMs: Math.min(c.fadeOutMs, c.durationMs - d), motion: null };
+        c.durationMs = d; c.fadeOutMs = 0; c.fadeInMs = Math.min(c.fadeInMs, d); c.motion = splitMotion(c.motion);
+        shiftCutsForInsert(m, i);                                  // cut i (after the clip) becomes cut i + 1: its transition follows the second part
+        v.splice(i + 1, 0, second);
+        reclampCut(m, i - 1, warnings, `${path}.args.atMs`); reclampCut(m, i + 1, warnings, `${path}.args.atMs`);
+        return;
+      }
+      if (t.kind === 'audio') {
+        const k = findIndex(m.tracks.audio, t.id, 'audio', path), l = m.tracks.audio[k]!;
+        const len = l.durationMs ?? Math.max(0, deriveTiming(m).durationMs - l.atMs);
+        const d = check(l.atMs, len);
+        const src = ctx.assets.find((x) => x.id === l.assetId)?.durationMs;
+        const tb = l.trimBeforeMs + d;
+        const { durationMs: _open, ...rest } = structuredClone(l); void _open;
+        const second: AudioLayerT = { ...rest, id: ctx.newId(), atMs: at, ...(l.durationMs === undefined ? {} : { durationMs: l.durationMs - d }),
+          trimBeforeMs: l.loop && src ? tb % src : tb, fadeInMs: 0, fadeOutMs: Math.min(l.fadeOutMs, len - d) };
+        l.durationMs = d; l.fadeOutMs = 0; l.fadeInMs = Math.min(l.fadeInMs, d);
+        m.tracks.audio.splice(k + 1, 0, second);                    // same lane: the parts touch, they do not overlap
+        return;
+      }
+      const el = visualTarget(m, op, path);
+      const d = check(el.timing.atMs, el.timing.durationMs);
+      const second = { ...structuredClone(el), id: ctx.newId(), timing: { atMs: el.timing.atMs + d, durationMs: el.timing.durationMs - d }, motion: null } as typeof el;
+      el.timing = { atMs: el.timing.atMs, durationMs: d }; el.motion = splitMotion(el.motion);
+      if ('kind' in second) m.tracks.overlay.splice(m.tracks.overlay.indexOf(el as OverlayElementT) + 1, 0, second);
+      else m.tracks.text.splice(m.tracks.text.indexOf(el as TextLayerT) + 1, 0, second);
+      return;
+    }
+    case 'op:element.setTransform': {
+      // ADR-028: absolute values; omitted fields keep theirs. Clips store `transform` (removed again at identity); images and
+      // shapes keep x / y in `position` (u) and add `scale` / `rotation` (removed again at 1 / 0).
+      if (a.x === undefined && a.y === undefined && a.scale === undefined && a.rotation === undefined) stop('EM-2102', 'op:element.setTransform needs at least one of x, y, scale or rotation.', `${path}.args`);
+      const t = needTarget(op, path);
+      if (t.kind === 'clip') {
+        const c = v[findIndex(v, t.id, 'clip', path)]!;
+        if (a.scale !== undefined && (a.scale < 0.1 || a.scale > 10)) stop('EM-2102', 'A clip can be zoomed from 10 % to 1000 %.', `${path}.args.scale`);
+        const cur = c.transform ?? IDENTITY_TRANSFORM;
+        const next: ClipTransformT = { x: round(a.x ?? cur.x, 4), y: round(a.y ?? cur.y, 4), scale: round(a.scale ?? cur.scale, 4), rotation: normaliseRotation(a.rotation ?? cur.rotation) };
+        if (isIdentity(next)) delete c.transform; else c.transform = next;
+        return;
+      }
+      const el = visualTarget(m, op, path) as OverlayElementT;
+      const f = frameInUnits(m.settings.ratio, m.settings.customRatio);
+      el.position = { x: a.x === undefined ? el.position.x : round(a.x * f.w, 1), y: a.y === undefined ? el.position.y : round(a.y * f.h, 1) };
+      if (a.scale !== undefined) { const s = round(a.scale, 4); if (s === 1) delete el.scale; else el.scale = s; }
+      if (a.rotation !== undefined) { const r = normaliseRotation(a.rotation); if (r === 0) delete el.rotation; else el.rotation = r; }
       return;
     }
     case 'op:audio.addBed': case 'op:audio.addLayer': {

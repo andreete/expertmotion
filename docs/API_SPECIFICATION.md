@@ -510,6 +510,8 @@ export const DesignPickInput = z.object({
   text: z.string().min(1).max(500).optional(),                     // FR-027 Add Text content with a `preset:text.*` variant; without it a variant pick re-styles the selected Text Layer (FR-025)
   clipEdit: z.object({ clipId, toIndex?, trimBeforeMs?, durationMs? }).optional(),   // FR-068 video Clip drag → op:clip.move / op:clip.setTrim
   elementEdit: z.object({ kind: z.enum(['text','image','shape','audio']), id, atMs?, durationMs?, trimBeforeMs?, layer?: 0..999, move?: z.enum(['up','down','front','back']) }).optional(),   // ADR-027 Timeline drag / trim / lane / layer key → op:element.setTiming (timing ± layer) or op:element.setLayer; EM-2203 when gone
+  splitEdit: z.object({ atMs: int ≥ 0, items: z.array({ kind: z.enum(['clip','text','image','shape','audio']), id }).max(50) }).optional(),   // ADR-028 scissors / S → op:element.split per listed item that contains atMs (≥ 100 ms from its edges; empty list = the clip at atMs), one child intent per item, one Composition Version; EM-2201 when none does, EM-2203 when gone
+  transformEdit: z.object({ kind: z.enum(['clip','image','shape']), id, x?: -2..2, y?: -2..2, scale?: 0.05..20, rotation?: -360..360 }).optional(),   // ADR-028 Player handles / Inspector fields → op:element.setTransform (x / y fractions of the frame, scale 1 = fit / stored size); EM-2203 when gone, EM-2102 when no field
 });
 ```
 

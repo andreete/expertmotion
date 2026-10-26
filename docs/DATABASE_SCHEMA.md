@@ -344,9 +344,13 @@ export const Clip = z.object({
   fadeInMs: z.number().int().min(0).default(0), fadeOutMs: z.number().int().min(0).default(0),
   objectFit: z.enum(['cover','contain']).default('cover'),
   crop: z.object({ left: z.number(), right: z.number(), top: z.number(), bottom: z.number() }).optional(), // 0..1
+  transform: ClipTransform.optional(),        // ADR-028: absent = identity (the picture before ADR-028); op:element.setTransform
   motion: Motion.nullable(),
   effects: z.array(EffectInstance).max(3),
 });
+// ADR-028: centre offset as a fraction of the frame width / height (0 = centred), scale 1 = the objectFit result, degrees clockwise ([0, 360) from applyOps).
+// applyOps deletes `transform` again when it reaches the identity, so a reset restores the earlier hash.
+export const ClipTransform = z.object({ x: z.number().min(-2).max(2), y: z.number().min(-2).max(2), scale: z.number().min(0.1).max(10), rotation: z.number().min(-360).max(360) });
 
 export const Transition = z.object({ cutIndex: z.number().int().min(0), presetId: PresetId, durationMs: z.number().int().min(100).max(2000), timing: z.enum(['linear','spring']), params: z.record(z.unknown()).default({}) });
 
@@ -362,9 +366,11 @@ export const TextLayer = z.object({
   motion: Motion.nullable(),
 });
 
+// ADR-028 (op:element.setTransform): zoom of the box (1 = `size`; absent = 1) and rotation in degrees (absent = 0); x / y stay in `position`.
+const OverlayScale = z.number().min(0.05).max(20).optional(), OverlayRotation = z.number().min(-360).max(360).optional();
 export const OverlayElement = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size, objectFit: z.enum(['cover','contain']), opacity: z.number(), motion: Motion.nullable(), effects: z.array(EffectInstance).max(3) }),
-  z.object({ kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, layer: Lane, position: Position, size: Size, fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional() /* op:overlay.setOpacity */, params: z.record(z.unknown()).default({}), motion: Motion.nullable() }),
+  z.object({ kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size, objectFit: z.enum(['cover','contain']), opacity: z.number(), scale: OverlayScale, rotation: OverlayRotation, motion: Motion.nullable(), effects: z.array(EffectInstance).max(3) }),
+  z.object({ kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, layer: Lane, position: Position, size: Size, fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional() /* op:overlay.setOpacity */, scale: OverlayScale, rotation: OverlayRotation, params: z.record(z.unknown()).default({}), motion: Motion.nullable() }),
 ]);
 
 export const CaptionPage = z.object({ text: z.string(), startMs: z.number().int(), durationMs: z.number().int(), tokens: z.array(z.object({ text: z.string(), fromMs: z.number().int(), toMs: z.number().int() })) });
@@ -387,6 +393,7 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 - `durationMs = durationPolicy === 'fixed' ? fixedDurationMs : Σ video[i].durationMs − Σ transitions[j].durationMs` (clamped ≥ 1000). Overlay/text/audio elements beyond the end are clipped at render; the validator warns.
 - Frames: `frames(ms) = Math.round(ms / 1000 * fps)`; width/height from the PERFORMANCE.md table.
 - Cut positions: `cutStartMs[k] = Σ_{i≤k} video[i].durationMs − Σ_{j≤k} transitions[j].durationMs`.
+- Picture transform (ADR-028): a Clip's media fills its frame with `objectFit`, then is translated by `x × width`, `y × height` px, rotated and scaled around its centre, inside the clip frame (overflow hidden); an image / shape box centred on `position` is rotated and scaled around its centre. `clipTransformStyle` / `overlayTransform` in `packages/engine/src/transform.ts` are the one implementation (Player and render).
 - Render order (ADR-027): background, video Track, video dim, then texts / images / shapes sorted by `layer` ascending (stable: overlays before texts on equal layers, which never overlap), then captions on top. `visualStack(model)` in `packages/composition-model/src/layers.ts` is the one implementation (Engine and Timeline View).
 - Lanes (ADR-027): items on one lane (`layer` for texts/images/shapes, `lane` for audio) never overlap in time; `applyOps` keeps both numberings dense (0 … n−1). Lane rule: a new item gets the layer just above every item it overlaps (0 when none; audio: first free lane); a move, trim or explicit lane that would overlap goes to the lane above, or to a new lane inserted there.
 
@@ -409,7 +416,7 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 
 ### 4.5 Versioning and hashing
 
-Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions.hash`. `baseVersion` in plans is this hash. Undo moves `projects.head_version_id` to `parent_id` and records a new version row with `cause = 'undo'` (history is never deleted). Checkpoints: debounced autosave (2 s after the last edit, at most every 5 s while dirty; NFR-020), before Execute, before render, max 20 files per project (oldest pruned).
+Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions.hash`. Schema changes that add an **optional** field whose absence reproduces the earlier picture keep `schemaVersion` (stored models and their hashes stay valid; `applyOps` removes such a field again when it returns to its neutral value) — ADR-028 `transform` / overlay `scale` / `rotation`; a field that must be written into stored JSON gets a version bump and a `migrateModel` step (§5.2). `baseVersion` in plans is this hash. Undo moves `projects.head_version_id` to `parent_id` and records a new version row with `cause = 'undo'` (history is never deleted). Checkpoints: debounced autosave (2 s after the last edit, at most every 5 s while dirty; NFR-020), before Execute, before render, max 20 files per project (oldest pruned).
 
 ## 5. Migrations
 
@@ -441,6 +448,7 @@ Later migrations append rows here (ADR-024).
 |---|---|---|
 | 1 | initial (§4 as baselined 2026-10-24) | — |
 | 2 | ADR-027 (2026-10-26): `layer` on TextLayer / OverlayImage / OverlayShape, `lane` on AudioLayer; looping audio honours `durationMs` | `MIGRATIONS[1]` = `assignLanesV1`: visual items are taken in the v1 render order (overlays in array order, then texts in array order) and each gets the lowest layer above every earlier item it overlaps in time, so every overlapping pair keeps its v1 front/back order and lanes are dense; audio layers get the first free lane in array order; `durationMs` is removed from v1 looping layers (v1 looped them to the end regardless). Golden fixture: `test/fixtures/model-v1.json` → `model-v2.expected.json`. Stored versions migrate lazily on load; opening a project commits the migrated head as a `cause = 'system'` version (R-016); checkpoints written before the migration still verify against the hash of their stored JSON |
+| 2 (unchanged) | ADR-028 (2026-10-26): optional Clip `transform`, optional `scale` / `rotation` on OverlayImage / OverlayShape | none: the fields are optional and absent means the identity, so every stored v2 model parses unchanged with the same hash (checkpoints keep verifying). Policy used (§4.5): an optional field whose absence reproduces the old picture needs no version bump; a field that must be defaulted into stored JSON does. Provisional caveat (ADR-028): a build from before ADR-028 drops the fields silently instead of refusing the project |
 
 ## 6. Backup, restore, portability
 

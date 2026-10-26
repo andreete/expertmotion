@@ -67,6 +67,11 @@ export const DesignPickInput = z.object({
   /** ADR-027 / FR-068: Timeline drag / trim / lane change / layer key on a text, image, shape or audio layer (op:element.setTiming / op:element.setLayer). */
   elementEdit: z.object({ kind: z.enum(['text', 'image', 'shape', 'audio']), id: z.string().min(1).max(64), atMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(100).optional(),
     trimBeforeMs: z.number().int().min(0).optional(), layer: z.number().int().min(0).max(999).optional(), move: z.enum(['up', 'down', 'front', 'back']).optional() }).strict().optional(),
+  /** ADR-028 / FR-179: cut at the playhead (op:element.split per listed item that contains atMs; empty list = the clip under the playhead). */
+  splitEdit: z.object({ atMs: z.number().int().min(0), items: z.array(z.object({ kind: z.enum(['clip', 'text', 'image', 'shape', 'audio']), id: z.string().min(1).max(64) }).strict()).max(50) }).strict().optional(),
+  /** ADR-028 / FR-180: Player handles / Inspector fields (op:element.setTransform). */
+  transformEdit: z.object({ kind: z.enum(['clip', 'image', 'shape']), id: z.string().min(1).max(64), x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(),
+    scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }).strict().optional(),
 }).strict();
 export type DesignPickInputT = z.infer<typeof DesignPickInput>;
 /** R-065 (FR-095 / FR-097): fully specified picks applied as one unit (one Composition Version); each pick's own baseVersion is ignored. */

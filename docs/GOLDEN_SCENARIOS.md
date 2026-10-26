@@ -101,8 +101,9 @@ Masih layak di 2026? Kita lihat.
 | GS-19 | Superseded intent restored | P0 | Compile | — |
 | GS-20 | English: "make the captions pop and add soft music bed, duck under my voice" | P0 (with P1/P2 markers) | Editor Agent | EN |
 | GS-21 | "taruh judul di atas logo": stacking order by the Editor Agent, then a Timeline drag across lanes and Alt+↓ (ADR-027) | P1 (FR-068) | Editor Agent + Compile | ID |
+| GS-22 | "potong klip pertama di detik 3, perbesar 120% dan geser ke kiri": split and framing by the Editor Agent, then S and a Player drag (ADR-028) | P1 (FR-179, FR-180) | Editor Agent + Compile | ID |
 
-Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS-12, GS-16, GS-17, GS-18, GS-21 (11 scenarios); English in GS-20; the rest are UI-only.
+Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS-12, GS-16, GS-17, GS-18, GS-21, GS-22 (12 scenarios); English in GS-20; the rest are UI-only.
 
 ## 3. Scenarios
 
@@ -972,6 +973,47 @@ Rewrite envelope (step 1): `composition.text[0] = {id: t1, …, layer: 0}`, `com
 
 **Pass criteria**: one op in the agent plan; Timeline rows after step 2 read … Layer 2 (`t1`) · Layer 1 (`o1`) …; zero provider calls for steps 2–3; Undo returns to the step-2 state; reply language Indonesian. Automated: `packages/agents/test/golden/replay.test.ts` (GS-21), `apps/ui/test/timeline-lanes.test.tsx`.
 
+### GS-22 "potong klip pertama di detik 3, perbesar 120% dan geser ke kiri": split and framing, then S and a Player drag
+
+| Field | Value |
+|---|---|
+| Priority | P1 (FR-179, FR-180, ADR-028; AI-004 for the agent half) |
+| Preconditions | B1 in a 16:9 project: `c1` = FX-V3 (1080×1920 portrait, objectFit cover, 0–5 000 ms), `c2` = FX-V1 (5 000–13 000 ms), `c3` = FX-V2 (13 000–19 000 ms); no transform on any clip (`composition.video[0]` has no `transform` in the envelope). Duration 19 000 ms. |
+
+**Creator actions**
+
+1. Type in `agent.editor.composer`: "potong klip pertama di detik 3, lalu perbesar videonya jadi 120% dan geser sedikit ke kiri" → `agent.editor.send`; `agent.editor.execute`.
+2. Nothing selected, playhead at 7 000 ms: press S.
+3. Select the second part of clip 1 (`stage.timeline.element`, 3 000–5 000 ms) and, on the Player, drag its box right by a quarter of the frame and its corner out with Shift to 150 % (one gesture each; here as one pick with the final values).
+
+**Expected Intent Queue**
+
+| # | category | presetId / params | target (as given) | resolvedTargets | propertyKey | propertyClass | needsInterpretation | status |
+|---|---|---|---|---|---|---|---|---|
+| 1 | layout | — (`instruction`) | `{kind: 'project'}` | `[]` | `chat:<message>` | scalar | true | queued → planned → executed |
+| 2 | asset | `__splitEdit {atMs: 7000, items: [clip c2]}` | `{kind: 'clip', id: c2}` | `[clip c2]` | `list:split:clip:c2:7000:<unique>` | list | false | compiled → executed |
+| 3 | asset | `__transformEdit {kind: clip, id: c1b, x: 0.25, y: 0, scale: 1.5, rotation: 0}` | `{kind: 'clip', id: c1b}` | `[clip c1b]` | `clip:c1b.transform` | scalar | false | compiled → executed |
+
+Rewrite envelope (step 1): `capabilities.ops` contains `op:element.split` and `op:element.setTransform`; `composition.video[0]` = `{id: c1, asset: kopi-latte.mov, durationMs: 5000, …}` without `transform`.
+
+**Expected path**: step 1 Editor Agent; steps 2–3 Compile (zero provider calls).
+
+**Expected Edit Plan (step 1)**
+
+```json
+{ "origin": "editor-agent", "goal": "Potong klip 1 di 3 detik, perbesar 120% dan geser ke kiri",
+  "steps": [ { "n": 1, "tool": "composition.applyOps", "expectedDiff": "Klip 1 dipotong di 0:03; bagian pertama diperbesar 120% dan digeser ke kiri. Durasi tetap 19 detik.",
+    "ops": [ { "op": "op:element.split", "target": { "kind": "clip", "id": "c1" }, "args": { "atMs": 3000 } },
+             { "op": "op:element.setTransform", "target": { "kind": "clip", "id": "c1" }, "args": { "scale": 1.2, "x": -0.1 } } ] } ],
+  "risks": [], "status": "valid" }
+```
+
+**Expected Composition diff**: step 1 `c1` 0–3 000 ms (`trimBeforeMs` 0, `transform {x −0.1, y 0, scale 1.2, rotation 0}`), new `c1b` 3 000–5 000 ms (`trimBeforeMs` 3 000, no transform), `c2`, `c3` unchanged; no transition on the new cut. Step 2 `c2` 5 000–7 000 ms + new part 7 000–13 000 ms (`trimBeforeMs` 2 000). Step 3 `c1b.transform {x 0.25, y 0, scale 1.5, rotation 0}`; Locked Keys `clip:c1b.transform` only (splits are events, never Locked Keys). Duration 19 000 ms throughout.
+
+**Expected render settings**: standard; a still at 1 000 ms shows the portrait clip zoomed 120 % and shifted left by a tenth of the frame (the same CSS in preview and export).
+
+**Edge handling**: S with the playhead within 100 ms of a cut, or a selection that does not play at the playhead, sends nothing (info toast); a split inside a transition overlap re-clamps that transition (EM-2305 warn); a Player gesture cancelled with Esc sends nothing; double-click on the box resets the transform (the stored clip has no `transform` again, so its hash returns to the one before step 3).
+
 ## 4. How the scenarios are executed
 
 Three harnesses share the same scenario files and the same assertions (AI_WORKFLOW §13).
@@ -1109,4 +1151,5 @@ All codes are owned by ERROR_CATALOGUE.md (159 codes, final); every row below ex
 | AI-018 | GS-19 |
 | AI-019 | GS-08 |
 | FR-068 (ADR-027 lanes, drag, trim) | GS-21 |
+| FR-179, FR-180 (ADR-028 split, canvas transform) | GS-22 |
 | UX-013, UX-033, UX-042, UX-053 | GS-04, GS-12, GS-08/09, GS-05 |

@@ -5,4 +5,5 @@ export { textLayerFit, MIN_FIT_U, type TextLayerFit } from './text-fit.js';
 export { calculateMetadata, type EngineMetadata } from './metadata.js';
 export { EMPTY_INPUT, type EngineInputProps, type AssetUrls } from './inputs.js';
 export { resolveDimensions, safeAreaFor, detectRatio, isRatio, SHORT_SIDE } from './formats.js';
+export { clipTransformStyle, overlayTransform } from './transform.js';
 export { isImplemented, missingImplementations, NOT_IMPLEMENTED } from './presets/index.js';

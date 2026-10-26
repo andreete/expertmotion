@@ -115,6 +115,8 @@ export class Workflow {
       ...(b.field ? { field: b.field, value: b.value } : {}), ...(b.output ? { output: { kind: b.output.kind, value: b.output.value, ...(b.output.customRatio ? { customRatio: b.output.customRatio } : {}) } } : {}),
       ...(b.assetId ? { assetId: b.assetId } : {}), ...(b.text ? { text: b.text } : {}),
       ...(b.elementEdit ? { elementEdit: Object.fromEntries(Object.entries(b.elementEdit).filter(([, v]) => v !== undefined)) as unknown as NonNullable<DesignPick['elementEdit']> } : {}),
+      ...(b.splitEdit ? { splitEdit: { atMs: b.splitEdit.atMs, items: b.splitEdit.items.map((x) => ({ kind: x.kind, id: x.id })) } } : {}),
+      ...(b.transformEdit ? { transformEdit: Object.fromEntries(Object.entries(b.transformEdit).filter(([, v]) => v !== undefined)) as unknown as NonNullable<DesignPick['transformEdit']> } : {}),
       ...(b.clipEdit ? { clipEdit: { clipId: b.clipEdit.clipId, ...(b.clipEdit.toIndex !== undefined ? { toIndex: b.clipEdit.toIndex } : {}), ...(b.clipEdit.trimBeforeMs !== undefined ? { trimBeforeMs: b.clipEdit.trimBeforeMs } : {}), ...(b.clipEdit.durationMs !== undefined ? { durationMs: b.clipEdit.durationMs } : {}) } } : {}),
     };
     const r = createIntents(pick, { model: head.model, baseVersion: head.hash, newId: this.ctx.newId, now: this.ctx.now });

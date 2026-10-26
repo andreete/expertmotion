@@ -4,6 +4,8 @@ import { useStore } from './state/store.js';
 import { playerBus } from './stage/playerBus.js';
 import { requestImport } from './header/Header.js';
 import { guardUnsaved } from './screens/Lifecycle.js';
+import { runSplit } from './stage/split.js';
+import { formatTimecode } from './i18n/index.js';
 
 export function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -73,11 +75,16 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
           if (sel) document.querySelector<HTMLButtonElement>('[data-el="stage.timeline.inspector"] button')?.click();
           break;
         }
+        case 's': case 'S': {                                              // ADR-028 / FR-179: split at the playhead (Timeline scissors)
+          const model = state.head?.model; const fps = model?.settings.fps ?? 30;
+          runSplit({ model, selection: state.selection, playheadMs: state.playheadMs, fps, splitEdit: actions.splitEdit, toast: actions.toast, t, time: (v) => formatTimecode(v, fps) });
+          break;
+        }
         case 'Delete': if (state.selection.length) actions.toast('info', 'ui.stage.timeline.delete.agent'); break;
         default: break;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state.plan, state.screen, state.streaming.editor, state.selection, state.head, actions, collapse, t]);
+  }, [state.plan, state.screen, state.streaming.editor, state.selection, state.head, state.playheadMs, actions, collapse, t]);
 }
