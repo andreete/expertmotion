@@ -6,6 +6,19 @@ import { framesOf } from './units.js';
 
 export const MIN_DURATION_MS = 1000, MAX_DURATION_MS = 1_800_000;
 
+/**
+ * ADR-030: a project without video Clips ("faceless", scenes built from a background, texts, shapes and a voice-over) fits its
+ * content too: its length is the end of the latest text, image, shape or audio layer with a length (open-ended / looping beds
+ * and captions follow the video, they never extend it). With Clips, fit-content stays the Clip sequence (texts past it are cut).
+ */
+export function contentEndWithoutClips(model: CompositionModelT): number {
+  let end = 0;
+  for (const t of model.tracks.text) end = Math.max(end, t.timing.atMs + t.timing.durationMs);
+  for (const o of model.tracks.overlay) end = Math.max(end, o.timing.atMs + o.timing.durationMs);
+  for (const a of model.tracks.audio) if (a.durationMs !== undefined && !a.loop) end = Math.max(end, a.atMs + a.durationMs);
+  return end;
+}
+
 export interface DerivedTiming {
   durationMs: number;
   /** cutStartMs[k] = start of clip k+1 = Σ_{i≤k} clip_i − Σ_{j≤k} transition_j */
@@ -25,7 +38,7 @@ export function deriveTiming(model: CompositionModelT): DerivedTiming {
     cursor += c.durationMs;
     if (i < v.length - 1) { cursor -= trans.get(i) ?? 0; cutStartMs.push(cursor); }
   });
-  const contentMs = cursor;
+  const contentMs = v.length ? cursor : contentEndWithoutClips(model);
   let durationMs = model.durationPolicy === 'fixed' && model.fixedDurationMs ? model.fixedDurationMs : contentMs;
   if (durationMs < MIN_DURATION_MS) durationMs = MIN_DURATION_MS;
   const windows: DerivedTiming['elementWindows'] = {};
@@ -57,7 +70,7 @@ export function deriveFrameTiming(model: CompositionModelT): FrameTiming {
   const clipStartFrames: number[] = [];
   let cursor = 0;
   clipFrames.forEach((f, i) => { clipStartFrames.push(cursor); cursor += f - (i < clipFrames.length - 1 ? (transitionFrames[i] ?? 0) : 0); });
-  const content = cursor;
+  const content = clipFrames.length ? cursor : framesOf(contentEndWithoutClips(model), fps);
   const durationInFrames = model.durationPolicy === 'fixed' && model.fixedDurationMs ? framesOf(model.fixedDurationMs, fps) : Math.max(framesOf(MIN_DURATION_MS, fps), content);
   return { fps, durationInFrames, clipFrames, transitionFrames, clipStartFrames };
 }

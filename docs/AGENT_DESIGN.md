@@ -47,6 +47,8 @@ Inputs (always the Rewrite envelope from AI_WORKFLOW §7): queued Edit Intents w
 
 Does: produce one `EditPlan` JSON; use `composition.validateOps` to dry-run before answering (recommended, max 3 calls); keep plans minimal (only what the intents and message ask); respect Locked Keys absolutely; ask one clarifying question instead of guessing when an intent is ambiguous: plan the other intents and attach `risks[{code:'needs-input', severity:'warn'}]` for the ambiguous one; a zero-step plan with a `block` risk only when nothing can be planned (SYSTEM_PROMPT.md P-2 rule 6, v1.0.1); write `expectedDiff` in the Creator's language.
 
+Also (ADR-030, QA 2026-10-26): builds videos **without media** from scene clips (`op:scene.add`: background preset, title / text, motion, transition per scene) — an empty project or one with assets only in the Library is never refused; may add generator plan steps (`tts.generate` voice-over from the script, `captions.generate` from the script / voice / Sequence audio) that the Local Service runs after Execute, skipped with a Model Manager hint when the local model is missing; resolves "ini / itu / klip ini" to the Creator's pointed `targets` (FR-189) and asks one short question when a pointed request is too vague.
+
 Does not: write code; reference files; add unrequested elements; change Output Settings unless asked; call `render.start`.
 
 Tools: the Brainstorming set (`composition.get`, `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate`) + `composition.validateOps`, `assets.probe`.
@@ -74,7 +76,8 @@ The Providers screen never refuses a model for its capabilities (Operator decisi
 | composition.applyOps | — | — | **Execute only** | via Execute |
 | catalogue.search | yes | yes | — | yes |
 | assets.list / probe | list | both | both | both |
-| captions.generate, tts.generate, music.generate, thumbnail.generate | — | — | plan step (P1/P2) | Generator Cards |
+| tts.generate, captions.generate | — | as Edit Plan steps only (ADR-030) | after Execute, by the Local Service | Generator Cards |
+| music.generate, thumbnail.generate | — | — | plan step (P1/P2) | Generator Cards |
 | render.estimate | yes | yes | — | yes |
 | render.start | — | — | — | **Creator only** |
 | hardware.profile, project.settings.get | yes | yes | yes | yes |
@@ -87,6 +90,9 @@ The Providers screen never refuses a model for its capabilities (Operator decisi
 3. The Editor Agent is invoked only when the Creator sends a message in Edit mode (`agent.chat.send`) or presses "Plan" (`agent.editor.plan`) or when a queued intent needs interpretation and the Creator has enabled "auto-plan" (default on; setting).
 4. The Plan Card sits inline under the Edit reply (the goal is the reply sentence): steps, expected diff, risks, usage. Execute ("Jalankan") applies and leaves a one-line summary with Undo; Cancel discards; editing the queue invalidates the plan (`stale`). An Editor question (a plan with only `needs-input` risks) is shown as a normal assistant message.
 5. After Execute, the Editor Agent receives the `ExecutionResult` summary as a system message in its thread so follow-ups are grounded.
+
+6. While a run works the chat shows its phase from `agent.run.progress` ("Membaca proyek…", "Menyusun rencana…", "Memeriksa rencana…", "Memperbaiki rencana (percobaan n)…", "Melihat <tool>…"); Execute shows "Menjalankan n perubahan…". A run that ends without a plan is an error bubble with the reason, the code and one next action (FR-190); each run outcome is one service log line (AI_WORKFLOW AI-025).
+7. Pointing (FR-189): Library assets and Timeline elements become chips in the composer ("@Klip 2", "@Reels 14.m4a") via "Tanya asisten" or the current selection; they travel as `targets` to both agents.
 
 ## 4. Context, memory and privacy per agent
 

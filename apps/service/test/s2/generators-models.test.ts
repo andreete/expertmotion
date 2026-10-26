@@ -148,6 +148,23 @@ describe('generators (R-130…R-133) with fake engines', () => {
     expect(s.applied.length).toBe(before + 1);
     expect((await s.api('/generator-jobs/01ZZZZZZZZZZZZZZZZZZZZZZZZ/insert', { method: 'POST' })).status).toBe(404);
   });
+  it.skipIf(!hasFfmpeg)('ADR-030 plan steps: tts.generate inserts the voice, then captions.generate {source: voice} times the script over it; the tool model is reported', async () => {
+    expect(await s.ctx.hooks.planToolModels!('id')).toMatchObject({ tts: { installed: true, modelKey: 'piper-test' } });
+    const before = s.applied.length;
+    const script = 'Tagihan listrik bengkak? Cabut charger yang tidak dipakai.';
+    const started = s.ctx.hooks.runPlanSteps!(pid, 'PLAN1', [{ n: 2, tool: 'tts.generate', args: { text: script, atMs: 1000, status: 'ready' }, dependsOn: [] }, { n: 3, tool: 'captions.generate', args: { source: 'voice', text: script, status: 'ready' }, dependsOn: [2] }]);
+    expect(started.map((x) => x.status)).toEqual(['started', 'started']);
+    await s.waitEvent((e) => e.name === 'service.notice' && e.data['kind'] === 'plan-step' && e.data['step'] === 3 && e.data['status'] !== 'started');
+    const notice = s.events.filter((e) => e.data['kind'] === 'plan-step' && e.data['step'] === 3).at(-1)!;
+    expect(notice.data).toMatchObject({ status: 'done', timedTo: 'voice' });
+    expect(s.applied.slice(before).map((a) => a.ops[0]!.op)).toEqual(['op:audio.addLayer', 'op:caption.setPages']);
+    const m = s.heads.get(pid)!.model;
+    const voice = m.tracks.audio.find((a) => a.role === 'voice' && a.atMs === 1000)!;
+    const pages = m.tracks.caption.pages;
+    expect(pages[0]!.startMs).toBe(voice.atMs);
+    expect(pages.at(-1)!.startMs + pages.at(-1)!.durationMs).toBeLessThanOrEqual(voice.atMs + (voice.durationMs ?? 0));
+    expect(m.tracks.caption.styleId).toBe('preset:caption.editorial');
+  });
   it('jobs run one at a time; a queued job can be cancelled; the model is in use while queued (EM-7104)', async () => {
     let open!: () => void; gate = new Promise((r) => { open = r; }); calls = [];
     const a = await json<GenJob>(await gen('voice', { text: 'satu', voiceId: 'piper-test', language: 'id' }));

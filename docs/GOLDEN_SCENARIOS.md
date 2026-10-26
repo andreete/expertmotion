@@ -102,8 +102,9 @@ Masih layak di 2026? Kita lihat.
 | GS-20 | English: "make the captions pop and add soft music bed, duck under my voice" | P0 (with P1/P2 markers) | Editor Agent | EN |
 | GS-21 | "taruh judul di atas logo": stacking order by the Editor Agent, then a Timeline drag across lanes and Alt+↓ (ADR-027) | P1 (FR-068) | Editor Agent + Compile | ID |
 | GS-22 | "potong klip pertama di detik 3, perbesar 120% dan geser ke kiri": split and framing by the Editor Agent, then S and a Player drag (ADR-028) | P1 (FR-179, FR-180) | Editor Agent + Compile | ID |
+| GS-23 | "Buat video faceless 30 detik tentang tips hemat listrik": a complete video from a prompt with zero assets — scene clips, texts, transitions, voice-over and captions steps (ADR-030) | P0 (FR-188) | Editor Agent + generators | ID |
 
-Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS-12, GS-16, GS-17, GS-18, GS-21, GS-22 (12 scenarios); English in GS-20; the rest are UI-only.
+Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS-12, GS-16, GS-17, GS-18, GS-21, GS-22, GS-23 (13 scenarios); English in GS-20; the rest are UI-only.
 
 ## 3. Scenarios
 
@@ -1014,6 +1015,31 @@ Rewrite envelope (step 1): `capabilities.ops` contains `op:element.split` and `o
 
 **Edge handling**: S with the playhead within 100 ms of a cut, or a selection that does not play at the playhead, sends nothing (info toast); a split inside a transition overlap re-clamps that transition (EM-2305 warn); a Player gesture cancelled with Esc sends nothing; double-click on the box resets the transform (the stored clip has no `transform` again, so its hash returns to the one before step 3).
 
+### GS-23 "Buat video faceless 30 detik tentang tips hemat listrik": a video from a prompt with ZERO assets
+
+| Field | Value |
+|---|---|
+| Priority | P0 (FR-188, ADR-030; QA 2026-10-26 #2 / #4, Operator emphasis: top acceptance criterion) |
+| Preconditions | New 9:16 project, **no assets** (Library empty), empty video Track, no Locked Keys; the voice model may or may not be installed. |
+
+**Creator actions**
+
+1. Diskusi: "Buat video faceless 30 detik tentang tips hemat listrik" → the Brainstorming Agent proposes hook (3 s), three tips (7 s each), CTA (6 s) with on-screen text, backgrounds, transitions and a script, as one intent per scene + one `generate` intent; it does not ask to import files.
+2. "Kerjakan di video" (or an Edit message "buat videonya") → Plan Card → Jalankan.
+3. Export (Standard, 720p or 1080p).
+
+**Expected path**: Editor Agent (no "insert an asset first" refusal); envelope `constraints` say the video Track is empty and to use `op:scene.add`; `capabilities.opArgs['op:scene.add']` lists its args; `stepTools` show whether the voice model is installed.
+
+**Expected Edit Plan** (recorded reply: `packages/agents/test/golden/fixtures/gs-23-editor-reply.json`, replayed inside a ```json fence with `"baseVersion": "{{base_version}}"`, which the runtime replaces): step 1 `composition.applyOps` = `op:theme.set {paletteId: preset:palette.neon-tech}`, five `op:scene.add` (target sequence; spotlight / gradient / grid / dots / moving-gradient backgrounds; transitions slide 400 ms ×3 and fade 500 ms), one `op:shape.add` star on the hook; step 2 `tts.generate {text: <script>}` (`args.status` `ready`, or `needs-model` + a `model-missing` warn risk naming the Model Manager); step 3 `captions.generate {source: voice}` dependsOn [2] (without the voice model it becomes `op:caption.setPages` + `op:caption.setStyle preset:caption.editorial` from the script in step 3's own ops).
+
+**Expected Composition diff**: 5 scene clips (`scene.presetId` set, no `assetId`), a title on every scene (scene 2–4 also a subtitle), 4 transitions; duration 30 000 − 3 × 400 − 500 = 28 300 ms; no blocking `validate` issue. After Execute the voice job starts (R-073 `toolSteps`), inserts a voice layer, and the captions are timed over it.
+
+**Expected render**: every scene paints its background and its title (engine Thumbnail frames); a real render of a 3-scene faceless project produces a validated MP4 (render smoke, `EM_RENDER_SMOKE=1`).
+
+**Edge handling**: no voice model → steps 1 and 3 still apply, step 2 skipped with the Model Manager link; a `transitionMs` longer than half a scene is clamped (EM-2305 warn); the Creator's own clips in the Library may be mixed in with `op:clip.insert`.
+
+**Harness**: `packages/agents/test/golden/faceless.test.ts` (b), `packages/engine/test/faceless.test.tsx`, `apps/service/test/s3/faceless-pointing.test.ts`, `apps/service/test/s2/render-smoke.test.ts`.
+
 ## 4. How the scenarios are executed
 
 Three harnesses share the same scenario files and the same assertions (AI_WORKFLOW §13).
@@ -1152,4 +1178,5 @@ All codes are owned by ERROR_CATALOGUE.md (159 codes, final); every row below ex
 | AI-019 | GS-08 |
 | FR-068 (ADR-027 lanes, drag, trim) | GS-21 |
 | FR-179, FR-180 (ADR-028 split, canvas transform) | GS-22 |
+| FR-188 (ADR-030 videos without media), FR-189 (pointing) | GS-23 |
 | UX-013, UX-033, UX-042, UX-053 | GS-04, GS-12, GS-08/09, GS-05 |

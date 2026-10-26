@@ -55,6 +55,13 @@ test/                Vitest unit tests of the pure lib (no `electron` import)
 | `onUpdateState(cb)` / `getUpdateState()` | unsubscribe / `UpdateState` | FR-152 updater state for `sys.update` (available, downloading, downloaded EM-8105, deferred while a render runs, paused by Private Mode, error EM-8101…8104) |
 | `updateAction(action)` | `void` | Creator consent: `download` (never automatic), `restart` (deferred until no Render Job runs), `later`, `check` |
 | `openPath(path)` | `void` | FR-146 Play: opens a rendered `.mp4/.webm/.gif/.png/.wav` with the system player; anything else is ignored |
+| `copyText(text)` / `readClipboardText()` | `boolean` / `string` | clipboard through main (text only, size-capped) |
+| `logError(entry)` | `void` | FR-185: Editor error → Shell log; Zod-validated, ≤ 20 per minute, capped and scrubbed (lib/renderer-log.ts) |
+| `retryStartup()` | `boolean` | FR-184: splash / `sys.fatal` "Try again" after EM-8002; main starts the Service again with a fresh restart budget, otherwise no-op |
+
+`onServiceState` pushes are validated in the preload (lib/startup.ts `parseServiceStatePush`) and carry the startup
+`phase` / `progress` / `sinceMs` for the splash (FR-184). The window watches `render-process-gone`, `unresponsive` and
+`did-fail-load` (lib/renderer-recovery.ts, FR-185).
 
 No generic `invoke(channel, …)`. Every IPC handler validates `event.senderFrame` against the
 `app://expertmotion/` main frame (plus the Vite dev origin when not packaged).

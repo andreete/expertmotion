@@ -82,6 +82,19 @@ describe('FR-171 Service restart in the Editor', () => {
     expect(el('stage.timeline')).not.toBeNull();                       // the Editor stays mounted behind it (drafts kept)
   });
 
+  it('EM-8002: Try again asks the Shell to start the Service again; the next pushes clear sys.fatal (FR-184)', async () => {
+    const h = harness();
+    const retryStartup = vi.fn(async () => true);
+    (window as unknown as { expertmotion: Record<string, unknown> }).expertmotion['retryStartup'] = retryStartup;
+    await boot(h.runtime);
+    await h.push({ status: 'failed', code: 'EM-8002', logsDir: 'C:\\logs' });
+    await waitFor(() => { if (!el('sys.fatal.retry')) throw new Error('no retry'); });
+    fireEvent.click(el('sys.fatal.retry')!);
+    expect(retryStartup).toHaveBeenCalledTimes(1);
+    await h.push({ status: 'starting', phase: 'service', sinceMs: 40_000 });
+    await waitFor(() => { if (el('sys.fatal')) throw new Error('fatal still shown'); });
+  });
+
   it('EM-6001 storage locked: sys.fatal with the storage hint; a later ready with EM-6001 opens Restore', async () => {
     const h = harness();
     await boot(h.runtime);

@@ -35,12 +35,12 @@ describe('Editor Agent tool loop (FR-080)', () => {
     expect(prov.calls[0]!.system).toContain('composition.validateOps');
     expect(prov.calls[2]!.messages.at(-1)!.content).toContain('"toolResult"');
   });
-  it('a stale base in validateOps and a mutating tool are refused without failing the run', async () => {
+  it('a wrong base echoed to validateOps is ignored (the runtime owns the base, QA 2026-10-26); a mutating tool is refused without failing the run', async () => {
     const { h, env, ctx } = setup();
     const prov = fakeProvider([JSON.stringify({ tool: 'composition.validateOps', input: { baseVersion: 'old', ops: [] } }), JSON.stringify({ tool: 'composition.applyOps', input: {} }), fade(h)]);
     const r = await runEditorAgent(env, prov, ctx, { tools });
     expect(r.ok).toBe(true);
-    expect(r.toolCalls[0]!.output).toMatchObject({ ok: false, issues: [{ code: 'EM-2301' }] });
+    expect(r.toolCalls[0]!.output).not.toMatchObject({ issues: [{ code: 'EM-2301' }] });
     expect(r.toolCalls[1]!.output).toMatchObject({ error: { code: 'EM-4502' } });
   });
   it('without tools the prompt has no tool block (golden replay unchanged)', async () => {

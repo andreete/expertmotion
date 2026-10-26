@@ -6,7 +6,7 @@ import type { ElementRefT, ProjectSettingsT } from '@expertmotion/composition-mo
 import { getPreset } from '@expertmotion/catalogue';
 import { createEventStream, type EventStream } from '../api/events.js';
 import type {
-  AgentKind, AssetDto, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
+  AgentKind, AssetDto, ChatTarget, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
 } from '../api/types.js';
 import { initialState, reducer, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
@@ -16,6 +16,7 @@ import { loadPrefs, savePrefs, type Prefs } from '../prefs.js';
 export const OPEN_HARDWARE_EVENT = 'expertmotion:open-hardware';
 import { translate, type Lang } from '../i18n/index.js';
 import { localModelByRef, localModelName } from './model-names.js';
+import { normalizeKey } from './key-retry.js';
 
 export interface Actions {
   openProject(id: string): Promise<void>;
@@ -62,7 +63,10 @@ export interface Actions {
   cancelPlan(): Promise<void>;
   setNotes(notes: string): Promise<void>;
   /** FR-067 / FR-080: the Editor message carries the inspector target (if any), the selection and the playhead. */
-  send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null): Promise<boolean>;
+  send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null, targets?: ChatTarget[]): Promise<boolean>;
+  /** QA 2026-10-26 #6: point the assistant at an asset or Timeline element (chip in the composer, composer focused). */
+  pointAt(target: ChatTarget): void;
+  setChatTargets(targets: ChatTarget[]): void;
   /** R-082: hands proposed intents to the Intent Queue; resolves true when the Service accepted the hand-off. */
   handoff(message: MessageDto, intentIds: string[]): Promise<boolean>;
   dismissHandoff(message: MessageDto): void;
@@ -75,7 +79,7 @@ export interface Actions {
   startRender(input: Omit<RenderCreateInput, 'projectId'>): Promise<string | null>;
   cancelRender(jobId: string): Promise<void>;
   loadProviders(): Promise<void>;
-  addConnection(provider: ProviderKind, secret: string, label: string): Promise<boolean>;
+  addConnection(provider: ProviderKind, secret: string, label: string, opts?: { onError?: (e: EmError) => void }): Promise<boolean>;
   loadModels(): Promise<void>;
   reloadState(): Promise<void>;
   error(err: unknown): void;
@@ -438,7 +442,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
             const r = await api.executePlan(plan.id, { confirmDestructive: destructive });
             if (r.ok) {
               const n = (c: string) => r.diff.filter((d) => d.change === c).length;   // FR-086 diff summary on the executed card
-              dispatch({ type: 'plan', plan: { ...plan, status: 'executed', result: { ok: true, toVersion: r.toVersion ?? null, appliedOps: r.appliedOps, added: n('added'), removed: n('removed'), modified: n('modified') } } });
+              dispatch({ type: 'plan', plan: { ...plan, status: 'executed', result: { ok: true, toVersion: r.toVersion ?? null, appliedOps: r.appliedOps, added: n('added'), removed: n('removed'), modified: n('modified'), ...(r.toolSteps?.length ? { toolSteps: r.toolSteps } : {}) } } });
               await refreshHead();
               const v = (r.toVersion ?? '').slice(0, 6);
               toast('success', 'ui.sys.toast.applied', { count: r.appliedOps, version: v }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } });
@@ -472,18 +476,26 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const plan = stateRef.current.plan; if (!plan) return;
         try { const p = await api.setPlanNotes(plan.id, notes); dispatch({ type: 'plan', plan: { ...plan, notes: p.notes ?? notes } }); } catch (e) { error(e); }
       },
-      async send(agent, text, attachments = [], target = null) {
+      pointAt(target) {
+        const cur = stateRef.current.chatTargets;
+        const k = (x: ChatTarget) => `${x.kind}:${x.id ?? `#${x.index ?? ''}`}`;
+        if (!cur.some((x) => k(x) === k(target))) dispatch({ type: 'chatTargets', targets: [...cur, target].slice(0, 12) });
+        window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: {} }));
+      },
+      setChatTargets(targets) { dispatch({ type: 'chatTargets', targets }); },
+      async send(agent, text, attachments = [], target = null, targets = []) {
         const id = pid(); if (!id) return false;
         try {
           dispatch({ type: 'agentError', agent, code: null });
           const s0 = stateRef.current;
           const editorCtx = agent === 'editor' ? { ...(target ? { target } : {}), ...(s0.selection.length ? { selection: s0.selection.slice(0, 50) } : {}), playheadMs: Math.max(0, Math.round(s0.playheadMs)) } : {};
-          const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), baseVersion: headHash(), ...editorCtx });
+          const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), baseVersion: headHash(), ...editorCtx, ...(targets.length ? { targets: targets.slice(0, 12) } : {}) });
           dispatch({ type: 'messageAdded', agent, message: res.message });
           dispatch({ type: 'streamingStart', agent, runId: res.runId, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '' });
           return true;
         } catch (e) {
-          dispatch({ type: 'agentError', agent, code: errCode(e) });
+          const detail = e instanceof EmError ? { message: e.message, ...(e.details && typeof e.details === 'object' ? { details: e.details as Record<string, unknown> } : {}) } : null;
+          dispatch({ type: 'agentError', agent, code: errCode(e), detail });
           return false;
         }
       },
@@ -575,14 +587,14 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
             if (!stateRef.current.capabilities[cid]?.length) void api.connectionModels(cid).then((r) => dispatch({ type: 'capabilities', connectionId: cid, rows: r.items })).catch(() => undefined);
         } catch (e) { error(e); }
       },
-      async addConnection(provider, secret, label) {
+      async addConnection(provider, secret, label, opts = {}) {
         try {
-          const c = await api.addConnection({ provider, secret, label, validateNow: true });
+          const c = await api.addConnection({ provider, secret: normalizeKey(secret), label, validateNow: true });
           const models = await api.connectionModels(c.id).catch(() => ({ items: [] }));
           dispatch({ type: 'capabilities', connectionId: c.id, rows: models.items });
           await self.loadProviders();
           return c.status === 'valid';
-        } catch (e) { error(e); await self.loadProviders(); return false; }
+        } catch (e) { if (e instanceof EmError) opts.onError?.(e); error(e); await self.loadProviders(); return false; }
       },
       async loadModels() { try { dispatch({ type: 'models', models: (await api.listModels()).items }); } catch (e) { error(e); } },
       stopStreaming: (agent) => dispatch({ type: 'streamingStop', agent }),

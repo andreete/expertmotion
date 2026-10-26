@@ -79,7 +79,7 @@ export function purgeRemoved(ctx: ServiceContext, projectId: string): string[] {
 export function restoreReferenced(ctx: ServiceContext, projectId: string, model: CompositionModelT): string[] {
   const removed = ctx.db.prepare('SELECT id FROM assets WHERE project_id = ? AND deleted_at IS NOT NULL').all(projectId) as Array<{ id: string }>;
   if (!removed.length) return [];
-  const used = new Set<string>([...model.tracks.video.map((c) => c.assetId), ...model.tracks.audio.map((a) => a.assetId),
+  const used = new Set<string>([...model.tracks.video.flatMap((c) => (c.assetId ? [c.assetId] : [])), ...model.tracks.audio.map((a) => a.assetId),
     ...model.tracks.overlay.flatMap((o) => (o.kind === 'image' ? [o.assetId] : [])), ...(model.tracks.caption.sourceAssetId ? [model.tracks.caption.sourceAssetId] : [])]);
   const back = removed.map((r) => r.id).filter((id) => used.has(id));
   const up = ctx.db.prepare('UPDATE assets SET deleted_at = NULL, updated_at = ? WHERE id = ?');

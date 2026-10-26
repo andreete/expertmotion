@@ -2,7 +2,7 @@
 import { getPreset, validateParams, type Category } from '@expertmotion/catalogue';
 import { fitText, issue, type Issue } from '@expertmotion/shared';
 import type { AssetFacts, CompositionModelT, Tier } from './schema.js';
-import { deriveTiming, MAX_DURATION_MS, MIN_DURATION_MS } from './timing.js';
+import { contentEndWithoutClips, deriveTiming, MAX_DURATION_MS, MIN_DURATION_MS } from './timing.js';
 import { frameInUnits, SAFE_MARGIN_U } from './units.js';
 import { laneConflicts } from './layers.js';
 
@@ -29,7 +29,10 @@ export function validate(model: CompositionModelT, ctx: ValidateContext): Issue[
     return a;
   };
   v.forEach((c, i) => {
-    const a = assetRef(c.assetId, `tracks.video[${i}].assetId`);
+    // ADR-030: a clip shows media (assetId) or is a scene clip (scene background), never both or neither.
+    if ((c.assetId === undefined) === (c.scene === undefined)) { out.push(issue('CM-001', `Clip ${c.id} needs exactly one of a media asset or a scene background.`, 'block', `tracks.video[${i}]`)); return; }
+    if (c.scene) { presetCheck(c.scene.presetId, 'background', c.scene.params, `tracks.video[${i}].scene`); return; }
+    const a = assetRef(c.assetId!, `tracks.video[${i}].assetId`);
     if (a?.kind === 'video' && a.durationMs !== undefined && c.trimBeforeMs + c.durationMs * c.playbackRate > a.durationMs + 1)
       out.push(issue('CM-002', `Clip ${c.id} needs more source media than ${a.durationMs} ms.`, 'block', `tracks.video[${i}]`));
   });
@@ -58,7 +61,7 @@ export function validate(model: CompositionModelT, ctx: ValidateContext): Issue[
 
   // CM-005 duration
   const timing = deriveTiming(model);
-  const content = v.length ? timing.clipStartMs[v.length - 1]! + v[v.length - 1]!.durationMs : 0;
+  const content = v.length ? timing.clipStartMs[v.length - 1]! + v[v.length - 1]!.durationMs : contentEndWithoutClips(model);
   const total = model.durationPolicy === 'fixed' && model.fixedDurationMs ? model.fixedDurationMs : content;
   if (total < MIN_DURATION_MS || total > MAX_DURATION_MS) out.push(issue('CM-005', `Total duration ${total} ms is outside 1 s … 30 min.`, 'block', 'durationMs'));
   out.push(...timing.warnings);

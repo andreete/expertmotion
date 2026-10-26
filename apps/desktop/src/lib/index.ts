@@ -17,3 +17,7 @@ export * from './updater-policy.js';
 export * from './close-flow.js';
 export * from './permissions.js';
 export * from './window-chrome.js';
+export * from './startup.js';
+export * from './integrity-hash.js';
+export * from './renderer-recovery.js';
+export * from './renderer-log.js';

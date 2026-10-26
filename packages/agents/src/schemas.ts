@@ -52,10 +52,21 @@ export const EditPlan = z.object({
 });
 export type EditPlanT = z.infer<typeof EditPlan>;
 
+/**
+ * Plan step tools (AI_WORKFLOW §8, ADR-030): composition changes go through `composition.applyOps`; generator steps ask the
+ * Local Service to run a local model after Execute (`tts.generate` voice-over from a script, `captions.generate` captions from a
+ * script, the voice-over or the Sequence audio). Generator steps carry `args`, never ops.
+ */
+export const PLAN_STEP_TOOLS = ['composition.applyOps', 'tts.generate', 'captions.generate'] as const;
+export type PlanStepTool = (typeof PLAN_STEP_TOOLS)[number];
+export const TtsStepArgs = z.object({ text: z.string().min(1).max(2000), atMs: z.number().int().min(0).optional(), voiceId: z.string().min(1).max(64).optional(), language: z.enum(['id', 'en']).optional(), speed: z.number().min(0.8).max(1.2).optional() }).strict();
+export const CaptionsStepArgs = z.object({ source: z.enum(['script', 'voice', 'sequence']).default('script'), text: z.string().min(1).max(5000).optional(), atMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(500).optional(),
+  presetId: z.string().regex(PresetIdRe).optional(), language: z.enum(['id', 'en']).optional() }).strict();
+
 /** What the model is asked to return (SYSTEM_PROMPT.md P-2 output schema): the runtime fills id, projectId, origin, status. */
 export const ModelPlanReply = z.object({
   goal: z.string().max(300),
-  steps: z.array(z.object({ n: z.number().int().min(1), tool: z.literal('composition.applyOps'), ops: z.array(Operation), expectedDiff: z.string().max(200), dependsOn: z.array(z.number().int()).default([]) })).max(40),
+  steps: z.array(z.object({ n: z.number().int().min(1), tool: z.enum(PLAN_STEP_TOOLS), ops: z.array(Operation).default([]), args: z.record(z.string(), z.unknown()).default({}), expectedDiff: z.string().max(200), dependsOn: z.array(z.number().int()).default([]) })).max(40),
   risks: z.array(Risk).default([]),
   baseVersion: z.string(),
 }).strict();

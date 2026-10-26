@@ -14,6 +14,7 @@
  *   - native dialogs over IPC with sender validation (SEC-030)
  *   - crash/diagnostic logs with secret redaction (SEC-100…104)
  *   - electron-updater wiring, disabled in Private Mode (SEC-090…096)
+ *   - startup phases for the Editor splash (FR-184) and Editor window recovery: crash / hang / failed load (FR-185)
  *
  * The decision logic is in ./lib/* (pure, unit-tested on Linux). This file wires Electron to it.
  * Electron cannot run on the Linux dev server, so this file is typecheck-only here; see README.
@@ -21,8 +22,8 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, safeStorage, screen, session, shell, Tray, utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { randomBytes, createHash, createPublicKey, verify as nodeVerify } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes, createPublicKey, verify as nodeVerify } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { redact } from '@expertmotion/shared';
 import {
@@ -47,6 +48,12 @@ import { DOWNLOAD_RETRY_MS, downloadDecision, installDecision, nextUpdateState, 
 import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, remainingMs, type ShutdownAnswer } from './lib/close-flow.js';
 import { verifyManifest, type SignedManifest } from './lib/integrity.js';
 import { allowPermission, originOf } from './lib/permissions.js';
+import { shouldPushProgress, startingPush, type ServiceStatePush } from './lib/startup.js';
+import { hashManifestFiles, sha256File as streamSha256 } from './lib/integrity-hash.js';
+import {
+  didFailLoadEntry, goneChoice, initialCrashState, onRendererGone, RENDERER_GONE_DIALOG, UNRESPONSIVE_DIALOG, unresponsiveChoice, type CrashState,
+} from './lib/renderer-recovery.js';
+import { createRateLimiter, rendererLogFields } from './lib/renderer-log.js';
 
 /** Build-time constants injected by esbuild `define` (see scripts/build-main.mjs). */
 declare const __EM_FEED_URL__: string;
@@ -91,6 +98,11 @@ let updateState: UpdateState = { status: 'idle' };
 let updateStage: 'check' | 'download' | 'install' = 'check';
 let updateTimer: NodeJS.Timeout | null = null;
 let shuttingDown = false;
+/** Shell start time: the splash's elapsed seconds count from here (FR-184). */
+const shellStartedAt = Date.now();
+let crashState: CrashState = initialCrashState;
+/** FR-185: at most 20 Editor error lines per minute reach the Shell log. */
+const rendererLogAllowed = createRateLimiter(20, 60_000);
 const triedPorts = new Set<number>();
 const stderrTail: string[] = [];
 
@@ -382,8 +394,58 @@ function createWindow(): void {
   win.on('close', () => { if (saveTimer) clearTimeout(saveTimer); writeWindowState(win); });
   win.on('closed', () => { mainWindow = null; });
   win.webContents.on('did-finish-load', () => { win.webContents.send(IPC.serviceState, lastServiceState); });
+  watchRenderer(win);
 
   void win.loadURL(editorEntryUrl(app.isPackaged, process.env));
+}
+
+/**
+ * FR-185: a crashed, hung or failed Editor never leaves a silent black window. The Local Service keeps running; a reloaded
+ * Editor reconnects through getBootstrap and the re-sent service state. Decisions in lib/renderer-recovery.ts.
+ */
+function watchRenderer(win: BrowserWindow): void {
+  const wc = win.webContents;
+  wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    const entry = didFailLoadEntry(errorCode, errorDescription, validatedURL, isMainFrame);
+    if (entry) logLine(entry.level, entry.msg, entry.fields);
+  });
+  let killedForReload = false;                                         // "Reload" on a hang kills the renderer first
+  wc.on('render-process-gone', (_e, details) => {
+    if (killedForReload) { killedForReload = false; logLine('info', 'editor renderer restarted after a hang'); return; }
+    const decision = onRendererGone(crashState, { reason: details.reason, exitCode: details.exitCode }, Date.now(), shuttingDown);
+    if (decision.action === 'ignore') return;
+    crashState = decision.state;
+    logLine('error', 'editor renderer gone', { code: EM.rendererCrashed, reason: details.reason, exitCode: details.exitCode, action: decision.action });
+    writeCrashFile('shell', `renderer gone: ${details.reason} (exit ${details.exitCode})`);
+    if (win.isDestroyed()) return;
+    if (decision.action === 'reload') { wc.reload(); return; }
+    void dialog.showMessageBox(win, { type: 'error', ...RENDERER_GONE_DIALOG, buttons: [...RENDERER_GONE_DIALOG.buttons] }).then(({ response }) => {
+      if (win.isDestroyed()) return;
+      if (goneChoice(response) === 'reload') wc.reload(); else win.close();
+    });
+  });
+  let hang: AbortController | null = null;
+  win.on('unresponsive', () => {
+    if (hang !== null || win.isDestroyed()) return;                      // one dialog per episode
+    logLine('warn', 'editor unresponsive', { code: EM.rendererCrashed });
+    const ctl = new AbortController();
+    hang = ctl;
+    void dialog.showMessageBox(win, { type: 'warning', ...UNRESPONSIVE_DIALOG, buttons: [...UNRESPONSIVE_DIALOG.buttons], signal: ctl.signal })
+      .then(({ response }) => {
+        if (ctl.signal.aborted || win.isDestroyed()) return;
+        const choice = unresponsiveChoice(response);
+        logLine('info', 'editor unresponsive choice', { choice });
+        if (choice === 'reload') { killedForReload = true; wc.forcefullyCrashRenderer(); wc.reload(); } else if (choice === 'close') win.close();
+      })
+      .catch(() => undefined)
+      .finally(() => { if (hang === ctl) hang = null; });
+  });
+  win.on('responsive', () => {
+    if (hang === null) return;
+    logLine('info', 'editor responsive again');
+    hang.abort();
+    hang = null;
+  });
 }
 
 function hardenSession(): void {
@@ -475,6 +537,24 @@ function registerIpc(): void {
     return text.length <= 8_192 ? text : '';
   });
 
+  // FR-185: Editor errors reach the Shell log (validated, rate-limited, capped; logLine redacts secrets and profile paths).
+  ipcMain.handle(IPC.logError, (event, raw: unknown) => {
+    if (!senderOk(event) || !rendererLogAllowed(Date.now())) return;
+    const entry = rendererLogFields(raw);
+    if (entry) logLine(entry.level, entry.msg, entry.fields);
+  });
+  // FR-184: "Coba lagi" after EM-8002 (the supervisor gave up): one more start with a fresh restart budget. Anything else: no-op.
+  ipcMain.handle(IPC.retryStartup, (event) => {
+    if (!senderOk(event) || lastServiceState.status !== 'failed' || lastServiceState.code !== EM.serviceFailed || dbKeyHex === null) return false;
+    logLine('info', 'service start retried by the Creator');
+    restartState = initialRestartState;
+    triedPorts.clear();
+    stderrTail.length = 0;
+    pushServiceState(startingPush('service', shellStartedAt, Date.now()));
+    void startService();
+    return true;
+  });
+
   ipcMain.handle(IPC.getUpdateState, (event) => (senderOk(event) ? updateState : null));
   ipcMain.handle(IPC.updateAction, async (event, raw: unknown) => {
     const action = UpdateActionArg.safeParse(raw).data;
@@ -483,7 +563,6 @@ function registerIpc(): void {
   });
 }
 
-type ServiceStatePush = { status: 'starting' | 'ready' | 'offline' | 'failed'; bootstrap?: Endpoint; code?: string; logsDir?: string };
 /** Last pushed state, re-sent when the Editor (re)loads so a push before the renderer subscribed is never lost (FR-171). */
 let lastServiceState: ServiceStatePush = { status: 'starting' };
 /** Set when the Creator chose Restore backup for EM-6001: the next `ready` carries the code so the Editor opens Restore. */
@@ -688,17 +767,21 @@ function boot(): void {
     configureUpdater();
     createWindow();
     createTray();
-    pushServiceState({ status: 'starting' });
+    // FR-184: every step is pushed to the Editor splash (the window already shows it; nothing here blocks painting).
+    pushServiceState(startingPush('integrity', shellStartedAt, Date.now()));
     void checkIntegrity().then(async (ok) => {
       if (ok) {
+        pushServiceState(startingPush('keyring', shellStartedAt, Date.now()));
         const key = await acquireDbKey();                    // after the window exists: EM-6001 is shown in the Editor too
         if (key === null) return;
         dbKeyHex = key.keyHex;
         restoreBackupPending = key.restoreBackup;
+        pushServiceState(startingPush('service', shellStartedAt, Date.now()));
         void startService();
         return;
       }
-      fatalDialog('EM-8007', 'Some Expertmotion program files are missing or were changed. Reinstall Expertmotion from the original installer; your projects are kept.');
+      pushServiceState({ status: 'failed', code: EM.integrityFailed, logsDir: layout.logs });
+      fatalDialog(EM.integrityFailed, 'Some Expertmotion program files are missing or were changed. Reinstall Expertmotion from the original installer; your projects are kept.');
       app.quit();
     });
   });
@@ -716,13 +799,8 @@ function boot(): void {
 
 boot();
 
-// Exported for completeness; the sha256 used by the integrity verifier at startup.
-export function sha256File(path: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash('sha256');
-    createReadStream(path).on('data', (c) => hash.update(c)).on('end', () => resolve(hash.digest('hex'))).on('error', reject);
-  });
-}
+// Exported for completeness; the streaming sha256 used by the integrity verifier at startup (lib/integrity-hash.ts).
+export const sha256File = streamSha256;
 
 /**
  * Startup integrity check (SEC-061, SEC-133): verifies the signed manifest written by
@@ -737,14 +815,21 @@ async function checkIntegrity(): Promise<boolean> {
     const fileFor = (logical: string) => logical.startsWith('dist/')
       ? join(process.resourcesPath, 'app.asar', ...logical.split('/'))
       : join(process.resourcesPath, ...logical.split('/'));
-    const digests = new Map<string, { sha256: string; bytes: number }>();
-    for (const entry of signed.manifest.entries) {
-      const file = fileFor(entry.path);
-      if (!existsSync(file)) continue;
-      digests.set(entry.path, { sha256: await sha256File(file), bytes: statSync(file).size });
-    }
+    // Every listed file is hashed in full (SEC-133); streamed, a few files at a time, with progress for the splash (FR-184).
+    const started = Date.now();
+    let lastPush: number | null = null;
+    const digests = await hashManifestFiles(signed.manifest.entries, fileFor, {
+      onProgress: (p) => {
+        const now = Date.now();
+        if (!shouldPushProgress(lastPush, now, p.files, p.totalFiles)) return;
+        lastPush = now;
+        pushServiceState(startingPush('integrity', shellStartedAt, now, p.totalBytes > 0 ? p.bytes / p.totalBytes : p.files / Math.max(1, p.totalFiles)));
+      },
+    });
     const publicKey = createPublicKey({ key: Buffer.from(keyB64, 'base64'), format: 'der', type: 'spki' });
     const result = verifyManifest(signed, new Uint8Array(0), digests, (msg, sig) => nodeVerify(null, msg, publicKey, Buffer.from(sig, 'base64')));
+    const bytes = signed.manifest.entries.reduce((n, e) => n + e.bytes, 0);
+    logLine(result.ok ? 'info' : 'error', `integrity check done in ${Date.now() - started} ms`, { files: signed.manifest.entries.length, mb: Math.round(bytes / 1048576), ok: result.ok });
     if (!result.ok) logLine('error', 'integrity check failed', { code: result.code, path: result.path });
     return result.ok;
   } catch (err) {

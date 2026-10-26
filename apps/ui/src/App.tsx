@@ -28,6 +28,8 @@ import type { LibMode } from './state/reducer.js';
 import { Splitter } from './components/Splitter.js';
 import { LAYOUT, bucketFor, clamp, defaultSizes, resolveColumns, timelineMax } from './layout.js';
 import { layoutOf, type PanelSizes } from './prefs.js';
+import { Splash } from './startup/Splash.js';
+import { rememberLang, startupLang } from './startup/progress.js';
 
 function useWindowWidth(): number {
   const [w, setW] = useState(typeof window === 'undefined' ? 1440 : window.innerWidth);
@@ -75,6 +77,8 @@ export function App() {
   const warned = useRef(false);
   useEffect(() => { if (tiny && !warned.current) { warned.current = true; actions.toast('info', 'ui.window.small'); } }, [tiny, actions]);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
+  const settingsLoaded = state.settings !== null;
+  useEffect(() => { if (settingsLoaded) rememberLang(lang); }, [lang, settingsLoaded]);   // FR-184: the next splash speaks it
 
   if (state.boot === 'no-service') return <I18nContext.Provider value={i18n}>{state.fatal ? <FatalOverlay /> : <NoService />}</I18nContext.Provider>;
   // No Trial Mode: until a Licence Key verifies, the licence screen is the whole product (also after a revocation mid-session).
@@ -126,6 +130,7 @@ export function App() {
         <LifecycleEffects />
         <Tour />
         {state.fatal && <FatalOverlay />}
+        {state.boot === 'loading' && !state.fatal && <Splash overlay lang={settingsLoaded ? lang : startupLang()} phase="project" />}
       </div>
     </I18nContext.Provider>
   );
@@ -335,6 +340,9 @@ function FatalOverlay() {
         {f.code === 'EM-6001' && <p className="mb-3 text-em-text-2">{t('ui.sys.fatal.storage.hint')}</p>}
         <p className="t-mono mb-4 text-[12px] text-em-text-2">{f.code}</p>
         <div className="flex justify-end gap-2">
+          {f.code === 'EM-8002' && bridge?.retryStartup && (
+            <Button el="sys.fatal.retry" onClick={() => void bridge.retryStartup?.()}>{t('ui.sys.splash.retry')}</Button>
+          )}
           {f.logsDir && bridge?.openFolder && (
             <Button el="sys.fatal.diagnostics" onClick={() => void bridge.openFolder?.(f.logsDir!)}>{t('ui.sys.fatal.diagnostics')}</Button>
           )}

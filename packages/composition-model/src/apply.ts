@@ -185,8 +185,9 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
     }
     case 'op:clip.setTrim': case 'op:clip.setPlaybackRate': case 'op:clip.setVolume': case 'op:clip.setFit': {
       const c = v[findIndex(v, needTarget(op, path).id, 'clip', path)]!;
-      if (op.op === 'op:clip.setTrim') { c.trimBeforeMs = a.trimBeforeMs; c.durationMs = a.durationMs; checkSource(c, asset(ctx, c.assetId, ['video', 'image'], path), `${path}.args`); }
-      if (op.op === 'op:clip.setPlaybackRate') { c.playbackRate = a.rate; checkSource(c, asset(ctx, c.assetId, ['video', 'image'], path), `${path}.args.rate`); }
+      // ADR-030: a scene clip has no source media: a trim only sets its length, a rate changes nothing that needs checking.
+      if (op.op === 'op:clip.setTrim') { c.trimBeforeMs = c.scene ? 0 : a.trimBeforeMs; c.durationMs = a.durationMs; if (c.assetId) checkSource(c, asset(ctx, c.assetId, ['video', 'image'], path), `${path}.args`); }
+      if (op.op === 'op:clip.setPlaybackRate') { c.playbackRate = a.rate; if (c.assetId) checkSource(c, asset(ctx, c.assetId, ['video', 'image'], path), `${path}.args.rate`); }
       if (op.op === 'op:clip.setVolume') { c.volume = a.volume; if (a.fadeInMs !== undefined) c.fadeInMs = a.fadeInMs; if (a.fadeOutMs !== undefined) c.fadeOutMs = a.fadeOutMs; }
       if (op.op === 'op:clip.setFit') { c.objectFit = a.objectFit; if (a.crop) c.crop = a.crop; else delete c.crop; }
       return;
@@ -218,6 +219,42 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const motion = typeof motionId === 'string' ? motionFrom(motionId, getPreset(motionId)!.defaults as Record<string, unknown>) : null;
       const layer: TextLayerT = { id: ctx.newId(), variantId: a.variant, text: a.text, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position, style: { ...(a.styleOverrides ?? {}) }, effect: null, motion };
       addVisual(m, layer, a.layer);
+      return;
+    }
+    case 'op:scene.add': {
+      // ADR-030: a scene of a video without media = a scene clip on the video Track (its background preset for durationMs) plus
+      // its title / body text over it, and optionally the transition from the previous scene. Cuts, transitions, Undo, Timeline
+      // and render treat it like any clip. Appended at the end unless atIndex is given.
+      const bg = a.background ?? 'preset:background.gradient';
+      const params = preset(bg, 'background', a.backgroundParams, ctx, `${path}`, warnings);
+      const at: number = a.atIndex ?? v.length;
+      if (at > v.length) stop('EM-2102', `atIndex ${at} is beyond the end (${v.length}).`, `${path}.args.atIndex`);
+      const clip: ClipT = { id: ctx.newId(), scene: { presetId: bg, params }, trimBeforeMs: 0, durationMs: a.durationMs, playbackRate: 1, volume: 1, muted: false, fadeInMs: 0, fadeOutMs: 0, objectFit: 'cover', motion: null, effects: [] };
+      shiftCutsForInsert(m, at);
+      v.splice(at, 0, clip);
+      let tIn = 0;
+      if (a.transition !== undefined && at > 0 && a.transition !== 'preset:transition.none') {
+        applyOne(m, { op: 'op:transition.set', target: { kind: 'cut', index: at - 1 }, args: { presetId: a.transition, durationMs: a.transitionMs ?? 500, timing: 'linear' } }, ctx, path, warnings);
+        tIn = m.transitions.find((x) => x.cutIndex === at - 1)?.durationMs ?? 0;
+      }
+      const start = deriveTiming(m).clipStartMs[at]! + tIn;
+      const len = Math.max(100, a.durationMs - tIn);
+      const parts: Array<[string, string, 'titleVariant' | 'textVariant']> = [];
+      if (a.title !== undefined) parts.push([a.title, a.titleVariant ?? 'preset:text.title', 'titleVariant']);
+      if (a.text !== undefined) parts.push([a.text, a.textVariant ?? (a.title === undefined ? 'preset:text.title' : 'preset:text.subtitle'), 'textVariant']);
+      for (const [text, variant, field] of parts) {
+        const vp = getPreset(variant);
+        if (!vp || vp.category !== 'text') stop('EM-2101', `${variant} is not a text variant.`, `${path}.args.${field}`);
+        const motionId = a.motionId ?? vp!.data?.['motionId'];
+        const motion = typeof motionId === 'string' ? motionFrom(motionId, preset(motionId, 'motion', {}, ctx, `${path}.args.motionId`, warnings)) : null;
+        addVisual(m, { id: ctx.newId(), variantId: variant, text, timing: { atMs: start, durationMs: len }, layer: 0, position: variantPosition(m, variant), style: {}, effect: null, motion }, undefined);
+      }
+      return;
+    }
+    case 'op:scene.setBackground': {
+      const c = v[findIndex(v, needTarget(op, path).id, 'clip', path)]!;
+      if (!c.scene) stop('EM-2102', 'This clip shows media; only scene clips have a scene background (use op:background.set for the project background).', `${path}.target`);
+      c.scene = { presetId: a.presetId, params: preset(a.presetId, 'background', a.params, ctx, path, warnings) };
       return;
     }
     case 'op:text.setContent': case 'op:text.setStyle': case 'op:text.setEffect': case 'op:text.setTiming': case 'op:text.remove': {
@@ -360,7 +397,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       if (t.kind === 'clip') {
         const i = findIndex(v, t.id, 'clip', path), c = v[i]!;
         const d = check(deriveTiming(m).clipStartMs[i]!, c.durationMs);
-        const image = ctx.assets.find((x) => x.id === c.assetId)?.kind === 'image';
+        const image = !!c.scene || ctx.assets.find((x) => x.id === c.assetId)?.kind === 'image';
         const second: ClipT = { ...structuredClone(c), id: ctx.newId(), trimBeforeMs: image ? c.trimBeforeMs : Math.round(c.trimBeforeMs + d * c.playbackRate), durationMs: c.durationMs - d,
           fadeInMs: 0, fadeOutMs: Math.min(c.fadeOutMs, c.durationMs - d), motion: null };
         c.durationMs = d; c.fadeOutMs = 0; c.fadeInMs = Math.min(c.fadeInMs, d); c.motion = splitMotion(c.motion);

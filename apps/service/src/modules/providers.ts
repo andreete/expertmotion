@@ -10,6 +10,7 @@ import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
 import { customBaseUrlProblem } from '../services/egress.js';
 import { createSecretBox, secretHint, type SecretBox } from '../s3/crypto.js';
+import { keyIsRecent, markKeyChanged, normalizeKey } from '../s3/keys.js';
 import { chatProviderFor, DEFAULT_CALL_TIMEOUT_MS, listModels, VALIDATE_TIMEOUT_MS, validateKey } from '../s3/adapters.js';
 import { Agent, AssignmentDto, AssignmentSettings, audit, emit, Id, monthOf, ProviderKind, requireProject, type AgentT, type AssignmentDtoT, type CapabilityRowT, type ProviderKindT } from '../s3/dto.js';
 import { budgetCheck, budgetState, cachedModels, connectionMonthSpend, projectConnectionMonthSpend, projectMonthSpend, recordUsage } from '../s3/usage-store.js';
@@ -82,7 +83,10 @@ async function validateConn(ctx: ServiceContext, id: string): Promise<{ status: 
     if (em.code === 'EM-4002') {
       ctx.db.prepare("UPDATE provider_connections SET status='invalid', validated_at=?, updated_at=? WHERE id=?").run(at, at, id);
       changed(ctx, 'providers');
-      throw new EmError('EM-4002', `${r.provider} did not accept this key. Check that it was copied completely and is still active.`, { status: 422, details: { connectionId: id, status: 'invalid' } });
+      const det = (em.details ?? {}) as { status?: number; reason?: string };
+      const recentKey = keyIsRecent(ctx, id);
+      ctx.log.warn({ connectionId: id, provider: r.provider, code: 'EM-4002', providerStatus: det.status ?? null, providerReason: det.reason ?? null, recentKey }, 'provider key not accepted');
+      throw new EmError('EM-4002', `${r.provider} did not accept this key. Check that it was copied completely and is still active.${recentKey ? ' New keys can take 1–2 minutes to become active.' : ''}`, { status: 422, details: { connectionId: id, status: 'invalid', recentKey, ...(det.status ? { providerStatus: det.status } : {}), ...(det.reason ? { reason: det.reason } : {}) } });
     }
     throw em;
   }
@@ -222,13 +226,15 @@ function budgetView(ctx: ServiceContext, month = monthOf(ctx.now())) {
 
 /** SEC-082: https only, a DNS hostname (no IP literal, no localhost); the host joins the provider allow-list once saved. */
 const CustomBaseUrl = z.string().max(512).superRefine((v, c) => { const p = customBaseUrlProblem(v); if (p) c.addIssue({ code: 'custom', message: `baseUrl: ${p}` }); });
-const AddBody = z.object({ provider: ProviderKind, label: z.string().trim().min(1).max(60), secret: z.string().trim().min(8).max(512), baseUrl: CustomBaseUrl.optional(),
+/** FR-191: whitespace / line breaks / zero-width characters anywhere in a pasted key are removed before anything else. */
+const Secret = z.string().max(2048).transform(normalizeKey).pipe(z.string().min(8).max(512));
+const AddBody = z.object({ provider: ProviderKind, label: z.string().trim().min(1).max(60), secret: Secret, baseUrl: CustomBaseUrl.optional(),
   budgetMonthUsd: z.number().positive().nullable().default(null), validateNow: z.boolean().default(true) }).strict();
-const PatchBody = z.object({ label: z.string().trim().min(1).max(60).optional(), secret: z.string().trim().min(8).max(512).optional(), baseUrl: CustomBaseUrl.nullable().optional(),
+const PatchBody = z.object({ label: z.string().trim().min(1).max(60).optional(), secret: Secret.optional(), baseUrl: CustomBaseUrl.nullable().optional(),
   budgetMonthUsd: z.number().positive().nullable().optional() }).strict();
 const ConnParams = z.object({ connId: Id });
 const AssignBody = z.object({ brainstorm: AssignmentDto.nullable().optional(), editor: AssignmentDto.nullable().optional(), defaultConnectionId: Id.nullable().optional() }).strict();
-const DryRunBody = z.object({ provider: ProviderKind, secret: z.string().trim().min(8).max(512) }).strict();
+const DryRunBody = z.object({ provider: ProviderKind, secret: Secret }).strict();
 const TestBody = z.object({ connectionId: Id.optional(), draft: DryRunBody.optional(), brainstorm: z.string().min(1).max(200).nullable().optional(), editor: z.string().min(1).max(200).nullable().optional() }).strict();
 const BudgetBody = z.object({ connections: z.array(z.object({ connectionId: Id, budgetMonthUsd: z.number().min(0).max(10_000).nullable() })).max(50).optional(),
   projects: z.array(z.object({ projectId: Id, connectionId: Id.nullable().optional(), limitUsd: z.number().min(0).max(10_000).nullable() })).max(500).optional() }).strict();
@@ -261,6 +267,7 @@ export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModul
         const sealed = box(ctx).seal(body.secret, aadFor(id));
         ctx.db.prepare("INSERT INTO provider_connections(id, provider, label, base_url, secret_enc, secret_hint, status, budget_month_usd, created_at, updated_at) VALUES (?,?,?,?,?,?,'unvalidated',?,?,?)")
           .run(id, body.provider, body.label, body.baseUrl ?? null, sealed, secretHint(body.secret), body.budgetMonthUsd, now, now);
+        markKeyChanged(ctx, id);
         if (!defaultConnection(ctx)) setDefault(ctx, id);
         audit(ctx, 'provider.added', { connectionId: id, provider: body.provider });
         res.setHeader('Location', `/api/v1/providers/connections/${id}`);
@@ -287,7 +294,7 @@ export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModul
           if (body.secret !== undefined) ctx.db.prepare("UPDATE provider_connections SET secret_enc=?, secret_hint=?, status='unvalidated', validated_at=NULL WHERE id=?").run(box(ctx).seal(body.secret, aadFor(r.id)), secretHint(body.secret), r.id);
           ctx.db.prepare('UPDATE provider_connections SET updated_at=? WHERE id=?').run(now, r.id);
         })();
-        if (body.secret !== undefined) audit(ctx, 'provider.key-replaced', { connectionId: r.id });
+        if (body.secret !== undefined) { audit(ctx, 'provider.key-replaced', { connectionId: r.id }); markKeyChanged(ctx, r.id); }
         changed(ctx, 'providers');
         return toDto(getConn(ctx, r.id));
       });
@@ -316,7 +323,12 @@ export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModul
         if (ctx.egress.isPrivate()) throw new EmError('EM-8202', 'Private Mode is on, so "Validate key" was not sent to the internet.', { details: { action: 'Validate key' } });
         try { await validateKey(body.provider, body.secret, egressFetch(ctx)); } catch (e) {
           const em = e instanceof EmError ? e : new EmError('EM-4003', 'Could not reach the AI provider.', { cause: e });
-          if (em.code === 'EM-4002') throw new EmError('EM-4002', `${body.provider} did not accept this key. Check that it was copied completely and is still active.`, { status: 422, details: { provider: body.provider, status: 'invalid' } });
+          if (em.code === 'EM-4002') {
+            // A key being validated before it is saved was just pasted: always "new" (FR-191 hint + automatic retry in the Editor).
+            const det = (em.details ?? {}) as { status?: number; reason?: string };
+            ctx.log.warn({ provider: body.provider, code: 'EM-4002', providerStatus: det.status ?? null, providerReason: det.reason ?? null, recentKey: true }, 'provider key not accepted (dry run)');
+            throw new EmError('EM-4002', `${body.provider} did not accept this key. Check that it was copied completely and is still active. New keys can take 1–2 minutes to become active.`, { status: 422, details: { provider: body.provider, status: 'invalid', recentKey: true, ...(det.status ? { providerStatus: det.status } : {}), ...(det.reason ? { reason: det.reason } : {}) } });
+          }
           if (em.code === 'EM-4003' && isOffline(em.cause ?? e)) throw new EmError('EM-8201', 'No internet connection.', { status: 503 });
           throw em;
         }

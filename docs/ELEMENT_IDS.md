@@ -237,6 +237,21 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `sys.fatal` | Fatal Service state shown in the Editor (EM-8002 after three failed restarts, EM-6001 storage locked; FR-171, FR-176). The Editor stays mounted behind it. |
 | `sys.fatal.diagnostics` | Open Diagnostics: opens the logs folder through the Shell (the Diagnostics screen needs the Service). |
 | `sys.fatal.quit` | Quit Expertmotion. |
+| `sys.fatal.retry` | Try again (EM-8002 only): asks the Shell to start the Local Service once more with a fresh restart budget (FR-184). |
+| `sys.splash` | Startup screen (FR-184): app mark, current step, thin progress bar; `data-phase` = `starting` / `integrity` / `keyring` / `service` / `project` / `failed`. Rendered before anything is awaited; covers the Editor until the first project is open. |
+| `sys.splash.placeholder` | Static first paint in `index.html` (dark background, app mark, "Memulai…"; inline styles only) until the script replaces it with `sys.splash`. |
+| `sys.splash.step` | Current step: "Memeriksa file aplikasi…" (integrity), "Membuka penyimpanan…" (keyring), "Menyalakan layanan…" (service), "Memuat proyek…" (project). |
+| `sys.splash.progress` | Thin determinate bar over all steps (integrity fills by bytes hashed; other steps ease toward their share). |
+| `sys.splash.elapsed` | Elapsed seconds since the Shell started, shown after 5 s. |
+| `sys.splash.slow` | "Still working" line after 20 s. |
+| `sys.splash.error` | Failure before the Editor mounted: title, EM- code (`sys.splash.code`), one sentence. |
+| `sys.splash.code` | The EM- code of the failure, selectable. |
+| `sys.splash.retry` | "Coba lagi" / "Try again": Shell retry after EM-8002, otherwise a window reload. |
+| `sys.splash.logs` | "Buka folder log" / "Open log folder": opens the Shell's logs folder. |
+| `sys.crash` | Top-level error boundary (FR-185): "Ada yang tidak beres" / "Something went wrong" with EM-8009 instead of a black window. |
+| `sys.crash.code` | EM-8009, selectable. |
+| `sys.crash.message` | The error name and message (≤ 300 characters), selectable. |
+| `sys.crash.reload` | "Muat ulang" / "Reload": reloads the window; the Local Service keeps running. |
 | `sys.live` | Visually hidden ARIA live region for status announcements. |
 
 ## Additions found while building the Editor (Stage 3, 2026-10-24)
@@ -429,6 +444,33 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `stage.timeline.inspector.locate` / `stage.timeline.inspector.remove` | Locate / Remove in that box | FR-048: same actions as `lib.assets.card.action.locate` and `lib.assets.card.action.remove`. |
 | `scr.backup.restore.renamed` | EM-6303 notice in the restore dialog | FR-018: the backup was restored as a renamed copy; nothing was overwritten. |
 | `scr.backup.restore.open` | "Open restored project" | FR-018: opens the restored copy and closes the dialog. |
+
+## Additions for pointing, agent progress and error recovery (FR-189, FR-190, FR-191) (QA 2026-10-26 items 3–6)
+
+| Element id | Mockup label | Purpose |
+|---|---|---|
+| `agent.chat.targets` | chip strip above the composer | The pointed assets and Timeline elements ("@Klip 2", "@Reels 14.m4a"): explicit "Ask assistant" picks plus the current Timeline selection; sent as `targets` (ids + kind + label) with the next message in either mode; cleared after a successful send. |
+| `agent.chat.target` / `agent.chat.target.remove` | one chip / its × | `data-kind` = `asset` / `clip` / `text` / `image` / `shape` / `audio` / `cut`; × (or Backspace in an empty composer for the last chip) removes it. |
+| `agent.chat.message.targets` | chips on a sent message | Read-only copy of the targets a message was sent with (message block `targets`). |
+| `agent.chat.progress` | "Menyusun rencana…" | What the running agent is doing (`agent.run.progress`: `data-phase` = `reading` / `planning` / `checking` / `correcting` / `tool`), and "Menjalankan N perubahan…" while a plan executes. |
+| `agent.chat.error.action` / `agent.chat.error.reason` | next-action button and reason in an error bubble | The failure card (live `agent.run.failed` or a saved "EM-xxxx: reason" message) shows the reason and the recovery actions chosen by the EM code (`data-action` = `providers` / `rephrase` / `switchmodel`; "Try again" keeps `agent.chat.message.retry` (`data-action=retry`), the budget action keeps `agent.chat.budget`). |
+| `agent.chat.error.keyhint` | "Key baru kadang perlu 1–2 menit untuk aktif" | EM-4002 on a key added or replaced in the last 5 minutes: hint, automatic retry countdown (every ~20 s, at most 3 times) and "Coba lagi"; also on the Providers add / validate forms (`scr.providers.keyhint`). |
+| `scr.providers.keyhint` | same hint on the Providers form | See `agent.chat.error.keyhint`; the retry re-runs the validation. |
+| `lib.assets.card.action.ask` | "Tanya asisten" in the Asset card menu | Points the assistant at this Asset: adds it as a chip and focuses the composer. |
+| `stage.timeline.inspector.ask` | "Tanya asisten" in the Timeline inspector | Points the assistant at the selected element (chip + composer focus; in Edit mode also the FR-067 target). |
+| `agent.editor.plancard.toolstep` | a generator step on the Plan Card | `tts.generate` ("Suara narasi: …") / `captions.generate` ("Teks layar dari naskah"); `data-status` = `ready` / `needs-model` (skipped until the model is installed). |
+| `agent.editor.plancard.models` | "Buka Model Manager" | Shown with a `model-missing` risk; opens `scr.models`. |
+| `agent.editor.plancard.toolnote` | "Suara sedang dibuat…" | After Execute, when a generator step started (`toolSteps`). |
+
+## Additions for startup, recovery and busy feedback (FR-184 … FR-186, 2026-10-26)
+
+The startup and crash ids (`sys.splash.*`, `sys.crash.*`, `sys.fatal.retry`) are listed under Global (`sys.*`) above.
+
+| Element id | Mockup label | Purpose |
+|---|---|---|
+| `lib.assets.importing` | "Mengimpor 2/5…" | Asset Panel header line while a batch of files is prepared: assets seen ingesting since none were; disappears when the batch is done (FR-186). |
+| `scr.project.open.opening` | "Membuka proyek…" | On the chosen row of the Open dialog until the project is loaded; the dialog closes afterwards (FR-186). |
+| `scr.generate.voice.progress.status` (same under `.music`, `.thumbnail`, `.captions`, `.hashtags`) | "Membuat suara… 45 %" | Generator status line above the bar: "Memulai…" during the request, "Menunggu giliran…" while queued, then what it makes and the percent (FR-186). |
 
 ## Assumptions where the mockup does not define behaviour
 

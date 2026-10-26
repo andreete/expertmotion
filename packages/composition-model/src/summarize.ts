@@ -8,7 +8,7 @@ export interface CompactComposition {
   settings: { fps: number; ratio: string; resolution: string; language: string };
   durationMs: number;
   /** `transform` (ADR-028) only when the picture was moved, zoomed or rotated: x / y fractions of the frame, scale 1 = fit result, degrees. */
-  video: Array<{ id: string; asset: string; durationMs: number; trimBeforeMs: number; effects: string[]; motion: string | null; transform?: { x: number; y: number; scale: number; rotation: number } }>;
+  video: Array<{ id: string; asset: string | null; scene?: string; durationMs: number; trimBeforeMs: number; effects: string[]; motion: string | null; transform?: { x: number; y: number; scale: number; rotation: number } }>;
   cuts: Array<{ index: number; transition: string | null; durationMs: number | null }>;
   /** `layer`: stacking order shared by texts and overlays, higher = in front (ADR-027). */
   text: Array<{ id: string; variant: string; text: string; atMs: number; durationMs: number; layer: number }>;
@@ -29,7 +29,7 @@ export function summarizeForAgent(model: CompositionModelT, assets: readonly Ass
   const out: CompactComposition = {
     settings: { fps: model.settings.fps, ratio: model.settings.ratio, resolution: model.settings.resolution, language: model.settings.language },
     durationMs: t.durationMs,
-    video: model.tracks.video.map((c) => ({ id: c.id, asset: names.get(c.assetId) ?? c.assetId, durationMs: c.durationMs, trimBeforeMs: c.trimBeforeMs, effects: c.effects.map((e) => e.presetId), motion: c.motion?.presetId ?? null, ...(c.transform ? { transform: c.transform } : {}) })),
+    video: model.tracks.video.map((c) => ({ id: c.id, asset: c.assetId === undefined ? null : names.get(c.assetId) ?? c.assetId, ...(c.scene ? { scene: c.scene.presetId } : {}), durationMs: c.durationMs, trimBeforeMs: c.trimBeforeMs, effects: c.effects.map((e) => e.presetId), motion: c.motion?.presetId ?? null, ...(c.transform ? { transform: c.transform } : {}) })),
     cuts: model.tracks.video.slice(1).map((_, i) => { const tr = model.transitions.find((x) => x.cutIndex === i); return { index: i, transition: tr?.presetId ?? null, durationMs: tr?.durationMs ?? null }; }),
     text: model.tracks.text.map((x) => ({ id: x.id, variant: x.variantId, text: x.text.length > 120 ? `${x.text.slice(0, 117)}…` : x.text, atMs: x.timing.atMs, durationMs: x.timing.durationMs, layer: x.layer })),
     overlay: model.tracks.overlay.map((o) => ({ id: o.id, kind: o.kind, preset: o.kind === 'shape' ? o.presetId : null, asset: o.kind === 'image' ? names.get(o.assetId) ?? o.assetId : null, atMs: o.timing.atMs, durationMs: o.timing.durationMs, layer: o.layer,

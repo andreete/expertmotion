@@ -215,7 +215,7 @@ export class Backups {
         const m = migrateModel(raw); if (!m.ok) throw bad('model invalid');
         const x = structuredClone(m.value); x.projectId = pid;
         const ma = (id: string) => assetIds.get(id) ?? id;
-        for (const c of x.tracks.video) c.assetId = ma(c.assetId);
+        for (const c of x.tracks.video) if (c.assetId !== undefined) c.assetId = ma(c.assetId);
         for (const o of x.tracks.overlay) if (o.kind === 'image') o.assetId = ma(o.assetId);
         for (const a of x.tracks.audio) a.assetId = ma(a.assetId);
         if (x.tracks.caption.sourceAssetId) x.tracks.caption.sourceAssetId = ma(x.tracks.caption.sourceAssetId);

@@ -3,7 +3,7 @@
 // The LLM never mutates: every model change goes through CompositionStore.commit after deterministic validation (AI-001, AI-004).
 import {
   EditIntent, buildCompilePlan, buildRewriteEnvelope, chatIntent, compileIntents, createIntents, enqueue, lockedKeysFromQueue, pickFromIntent, planOps, remove, restore,
-  runEditorAgent, settingsPatchOf, validatePlan, type ChatImage, type ChatUsage, type DesignPick, type EditIntentT, type EditPlanT,
+  runEditorAgent, settingsPatchOf, validatePlan, type ChatImage, type PointedTarget, type RunProgress, type ToolModel, type EditorRunDiagnostics, type ChatUsage, type DesignPick, type EditIntentT, type EditPlanT,
 } from '@expertmotion/agents';
 import { validateParams } from '@expertmotion/catalogue';
 import { OPERATIONS, type CompositionModelT, type ElementRefT, type OperationT } from '@expertmotion/composition-model';
@@ -19,13 +19,17 @@ import { discussionFor } from '../s3/shared-context.js';
 
 /** FR-080 / FR-072: what an Editor Chat message adds to the Rewrite envelope and the provider request. */
 export interface AgentPlanExtras { selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images?: ChatImage[] | undefined; attachments?: string[] | undefined; onDelta?: ((d: string) => void) | undefined;
-  chat?: { messageId: string; target?: ElementRefT | undefined } | undefined }
+  chat?: { messageId: string; target?: ElementRefT | undefined } | undefined;
+  /** FR-189 pointed targets (chat chips); FR-190 run phases. */
+  targets?: PointedTarget[] | undefined; onProgress?: ((p: RunProgress) => void) | undefined }
 
 type Reason = 'created' | 'superseded' | 'restored' | 'removed' | 'cleared' | 'compiled' | 'executed' | 'rejected';
 export interface ExecutionResultT {
   planId: string; ok: boolean; fromVersion: string; toVersion?: string; appliedOps: number;
   diff: Array<{ elementId: string; change: 'added' | 'removed' | 'modified'; fields: string[] }>;
   error?: { code: string; message: string; step?: number; path?: string }; rollback?: { performed: boolean; toVersion: string }; durationMs: number;
+  /** ADR-030: generator steps started after the commit (voice-over, captions over it), or skipped (model not installed). */
+  toolSteps?: Array<{ n: number; tool: string; status: 'started' | 'skipped' | 'failed' | 'done'; jobId?: string; code?: string }>;
 }
 export interface PickResult { intent: EditIntentT; queue: ReturnType<Workflow['queueDto']>; superseded: string[]; appliedVersion: VersionDto | null; planId: string | null; notices: Array<{ code: string }> }
 interface Run { ac: AbortController; runId: string; projectId: string; planId: string; external: boolean }
@@ -377,7 +381,8 @@ export class Workflow {
     const active = this.activeRun(projectId);
     if (active) throw new EmError('EM-4305', 'Wait for the current answer to finish, or cancel it, before sending another message.', { details: { agent: 'editor', activeRunId: active.runId } });
     const head = this.store.head(projectId);
-    if (!head.model.tracks.video.length) throw new EmError('EM-2202', 'Insert at least one asset before applying designs or asking the Editor Agent.', { details: { projectId } });
+    // QA 2026-10-26 #2/#4: no "insert an asset first" gate — an empty project is built from scenes (ADR-030), and assets that are
+    // only in the Library are in the envelope for op:clip.insert.
     const provider = this.ctx.hooks.providerFor('editor', projectId);
     this.ctx.hooks.budgetCheck(projectId);
     let intents = selectedIntents;
@@ -406,14 +411,21 @@ export class Workflow {
       const notes = (this.ctx.db.prepare("SELECT json_extract(plan_json, '$.notes') AS n FROM edit_plans WHERE project_id = ? AND id != ? AND json_extract(plan_json, '$.notes') IS NOT NULL ORDER BY updated_at DESC LIMIT 1").get(projectId, planId) as { n: string } | undefined)?.n;
       const env = buildRewriteEnvelope({ model: head.model, baseVersion: head.hash, assets, intents, lockedKeys, tier, ...(message ? { creatorMessage: message } : {}), ...(notes ? { creatorNotes: notes } : {}),
         ...(extras.selection?.length ? { selection: extras.selection } : {}), ...(extras.playheadMs !== undefined ? { playheadMs: extras.playheadMs } : {}), ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
-        discussion: discussionFor(this.ctx, projectId, this.editorContextLength()) });   // AI_WORKFLOW §10.1: shared chat context
+        discussion: discussionFor(this.ctx, projectId, this.editorContextLength()),   // AI_WORKFLOW §10.1: shared chat context
+        ...(extras.targets?.length ? { targets: extras.targets } : {}) });
+      // ADR-030: generator plan steps (voice-over, captions) and whether their local models are installed.
+      let toolModels: { tts: ToolModel | null; stt: ToolModel | null } | undefined;
+      try { toolModels = await this.ctx.hooks.planToolModels?.(head.model.settings.language); } catch { toolModels = undefined; }
+      if (toolModels) env.capabilities.stepTools = { 'tts.generate': { available: !!toolModels.tts?.installed, ...(toolModels.tts ? { model: toolModels.tts.label } : {}) }, 'captions.generate': { script: true, sequence: !!toolModels.stt?.installed } };
+      const t0 = Date.now();
       let usage: ChatUsage[] = [];
       // FR-084: plan deltas stream as agent.run.delta (the S3 chat passes its own emitter for its run; queue-started runs use one here).
       const own = extras.onDelta || external ? null : deltaEmitter(this.ctx, projectId, runId, 'editor');   // an external run owns its events
       const onDelta = extras.onDelta ?? (own ? (d: string) => own.push(d) : null);
       try {
-        const r = await runEditorAgent(env, provider, { model: head.model, baseVersion: head.hash, assets, tier, lockedKeys, newId: this.ctx.newId, planId, projectId },
-          { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId), tools: brainstormTools(this.ctx, projectId, head.model.settings.language),
+        const progress = extras.onProgress ?? (external ? undefined : (p: RunProgress) => this.ctx.bus.emit('agent.run.progress', { at: this.ctx.now(), projectId, runId, agent: 'editor', ...p }));
+        const r = await runEditorAgent(env, provider, { model: head.model, baseVersion: head.hash, assets, tier, lockedKeys, newId: this.ctx.newId, planId, projectId, language: head.model.settings.language, ...(toolModels ? { toolModels } : {}) },
+          { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId), tools: brainstormTools(this.ctx, projectId, head.model.settings.language), ...(progress ? { onProgress: progress } : {}),
             ...(onDelta ? { onDelta: (d: string) => { if (!ac.signal.aborted) onDelta(d); } } : {}), ...(extras.images?.length ? { images: extras.images } : {}) }).finally(() => own?.flush());
         usage = r.usage;
         // Usage is recorded under the run that made the request (the S3 chat's run when external, FR-074).
@@ -421,6 +433,9 @@ export class Workflow {
         const current = this.planRow(planId);
         if (current.status === 'cancelled' || ac.signal.aborted) { this.finishCancelled(run); return this.planDtoFor(planId); }
         const agg = aggregate(usage);
+        this.logRun({ projectId, runId, planId, provider: provider.id, model: provider.model, durationMs: Date.now() - t0, diagnostics: r.diagnostics, targets: extras.targets?.length ?? 0,
+          ...(r.ok ? { status: r.plan.status, steps: r.plan.steps.length, ops: planOps(r.plan).length, toolSteps: r.plan.steps.filter((x) => x.tool !== 'composition.applyOps').map((x) => `${x.tool}:${String(x.args['status'] ?? '')}`), risks: r.plan.risks.map((x) => x.code), validation: r.plan.validation.map((x) => `${x.code}@${x.path}`).slice(0, 10) }
+            : { status: 'failed', error: r.error } ) });
         if (r.ok) {
           let status: EditPlanT['status'] = 'valid';
           try { if (this.store.head(projectId).hash !== head.hash) status = 'stale'; } catch { status = 'cancelled'; }
@@ -449,12 +464,27 @@ export class Workflow {
           this.updatePlan(planId, plan, 'failed');
           if (!external) { this.finishRun(runId, 'failed', em.code); this.ctx.bus.emit('agent.run.failed', { at: this.ctx.now(), projectId, runId, agent: 'editor', code: em.code, retryable: true }); }
           this.emitPlanInvalid(projectId, plan, 'failed', em.code);
-          this.ctx.log.warn({ projectId, code: em.code, err: em.message }, 'editor plan run failed');
+          this.logRun({ projectId, runId, planId, provider: provider.id, model: provider.model, durationMs: Date.now() - t0, status: 'failed', error: em, targets: extras.targets?.length ?? 0 });
         }
       } finally { this.runs.delete(planId); }
       return this.planDtoFor(planId);
     })();
     return { plan: this.planDtoFor(planId), runId, done };
+  }
+
+  /**
+   * FR-190: one line per Editor Agent run in the service log — agent, provider, model id, duration, plan size, the repairs the
+   * lenient parser made, validation codes / paths, provider error code / HTTP status / the provider's own reason. Never prompt
+   * text, Creator text or keys (the logger redacts secrets as well).
+   */
+  private logRun(x: { projectId: string; runId: string; planId: string; provider: string; model: string; durationMs: number; status: string; diagnostics?: EditorRunDiagnostics; error?: EmError; steps?: number; ops?: number; toolSteps?: string[]; risks?: string[]; validation?: string[]; targets: number }): void {
+    const d = x.diagnostics;
+    const det = (x.error?.details ?? {}) as Record<string, unknown>;
+    const line = { agent: 'editor', mode: 'edit', projectId: x.projectId, runId: x.runId, planId: x.planId, provider: x.provider, model: x.model, durationMs: x.durationMs, status: x.status, targets: x.targets,
+      ...(x.steps !== undefined ? { steps: x.steps, ops: x.ops, toolSteps: x.toolSteps, risks: x.risks, validation: x.validation } : {}),
+      ...(d ? { attempts: d.attempts, toolRounds: d.toolRounds, repairs: d.repairs, repairKinds: d.repairKinds, parseFailures: d.parseFailures, intentsReturned: d.intentsReturned, fallbackQuestion: !!d.fallbackQuestion, lastIssues: d.lastIssues.map((i) => `${i.code}@${i.path}`) } : {}),
+      ...(x.error ? { code: x.error.code, ...(typeof det['status'] === 'number' ? { providerStatus: det['status'] } : {}), ...(typeof det['reason'] === 'string' ? { providerReason: det['reason'] } : {}) } : {}) };
+    if (x.error) this.ctx.log.warn(line, 'agent run failed'); else this.ctx.log.info(line, 'agent run');
   }
 
   /** FR-074: the counter is the last request's input + output tokens over the assigned model's context length (Capability Table). */
@@ -566,6 +596,17 @@ export class Workflow {
           beforeEvent: () => this.emitQueue(projectId, [...new Set([...(o.extraChanged ?? []), ...intentChanged])], 'executed'),
         });
         this.emitPlanReady(planId);
+        // ADR-030: generator steps run after the commit (they need the committed head) as Local Service jobs; each inserts its
+        // result as a later Composition Version. A step whose model is missing is reported as skipped (the Plan Card says so).
+        const gen = v.plan.steps.filter((st) => st.tool !== 'composition.applyOps');
+        if (gen.length) {
+          const runnable = gen.filter((st) => st.args['status'] !== 'needs-model');
+          let started: NonNullable<ExecutionResultT['toolSteps']> = [];
+          try { started = runnable.length && this.ctx.hooks.runPlanSteps ? this.ctx.hooks.runPlanSteps(projectId, planId, runnable.map((st) => ({ n: st.n, tool: st.tool, args: st.args, dependsOn: st.dependsOn }))) : runnable.map((st) => ({ n: st.n, tool: st.tool, status: 'skipped' as const, code: 'EM-9004' })); }
+          catch (e) { started = runnable.map((st) => ({ n: st.n, tool: st.tool, status: 'failed' as const, code: e instanceof EmError ? e.code : 'EM-7101' })); }
+          result.toolSteps = [...started, ...gen.filter((st) => st.args['status'] === 'needs-model').map((st) => ({ n: st.n, tool: st.tool, status: 'skipped' as const, code: 'EM-7001' }))].sort((x, y) => x.n - y.n);
+          this.updatePlan(planId, v.plan, 'executed', { result });
+        }
         return { result, version: c.changed ? c.version : versionDto(this.store.versionRow(projectId, c.version.id)) };
       } catch (e) {
         // SQLite rolled the transaction back: head, intents and history are unchanged (AI_WORKFLOW §12).

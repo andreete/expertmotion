@@ -26,21 +26,22 @@ export function estimateCost(model: string, inputTokens: number, outputTokens: n
 /** Maps provider/transport failures to EM codes (AI_WORKFLOW §12, ERROR_CATALOGUE EM-4xxx). */
 export function mapProviderError(e: unknown): EmError {
   if (e instanceof EmError) return e;
-  const err = e as { name?: string; statusCode?: number; message?: string; cause?: unknown };
+  const err = e as { name?: string; statusCode?: number; message?: string; cause?: unknown; responseBody?: unknown };
   const msg = String(err?.message ?? e);
   if (err?.name === 'AbortError' || /aborted|timeout|timed out/i.test(msg)) return new EmError('EM-4101', 'The AI provider took too long to answer.', { cause: e });
+  // The provider's own reason from the error body (redacted, ≤ 300 chars): shown for refusals, logged for 401/403 (FR-191).
+  const body = /provider HTTP \d+: ([\s\S]*)$/.exec(msg)?.[1] ?? (typeof err?.responseBody === 'string' ? err.responseBody.slice(0, 2000) : '');
+  let reason = '';
+  if (body) { try { const j = JSON.parse(body) as { error?: { message?: unknown; type?: unknown } | string; message?: unknown }; reason = String((typeof j.error === 'object' ? j.error?.message ?? j.error?.type : j.error) ?? j.message ?? ''); } catch { reason = body; } }
+  reason = reason.replace(/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/g, '$1…').replace(/(AIza[A-Za-z0-9_-]{4})[A-Za-z0-9_-]+/g, '$1…').slice(0, 300);
+  const status = typeof err?.statusCode === 'number' ? err.statusCode : undefined;
   switch (err?.statusCode) {
-    case 401: case 403: return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e });
-    case 402: return new EmError('EM-4201', 'The provider account has no credit left.', { cause: e });
-    case 404: return new EmError('EM-4004', 'This model is not available from the provider.', { cause: e });
-    case 400: case 413: case 422: {
+    case 401: case 403: return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
+    case 402: return new EmError('EM-4201', 'The provider account has no credit left.', { cause: e, details: { status } });
+    case 404: return new EmError('EM-4004', 'This model is not available from the provider.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
+    case 400: case 413: case 422:
       // The provider understood the call and refused it: show its own reason (from the error body) instead of "cannot be reached".
-      const body = /provider HTTP \d+: ([\s\S]*)$/.exec(msg)?.[1] ?? '';
-      let reason = '';
-      try { const j = JSON.parse(body) as { error?: { message?: unknown } | string; message?: unknown }; reason = String((typeof j.error === 'object' ? j.error?.message : j.error) ?? j.message ?? ''); } catch { reason = body; }
-      reason = reason.replace(/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/g, '$1…').slice(0, 300);
       return new EmError('EM-4105', `The AI provider refused the request${reason ? `: ${reason}` : '.'}`, { cause: e, details: { status: err.statusCode, ...(reason ? { reason } : {}) } });
-    }
     case 429: return new EmError('EM-4102', 'The AI provider is rate limiting requests.', { cause: e });
     default: break;
   }

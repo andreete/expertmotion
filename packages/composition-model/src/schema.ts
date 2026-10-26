@@ -52,8 +52,13 @@ const OverlayScale = z.number().min(0.05).max(20).optional();
 const OverlayRotation = z.number().min(-360).max(360).optional();
 export const EffectInstance = z.object({ presetId: PresetId, params: Params.default({}), motion: z.enum(['static', 'in', 'out']).default('static') });
 
+/**
+ * ADR-030: a scene clip has no media; it shows a background preset (solid / gradient / animated) for its length on the video
+ * Track, so faceless videos get cuts and transitions like any other video. Exactly one of `assetId` or `scene` (CM-001).
+ */
+export const SceneBackground = z.object({ presetId: PresetId, params: Params.default({}) });
 export const Clip = z.object({
-  id: z.string(), assetId: z.string(),
+  id: z.string(), assetId: z.string().optional(), scene: SceneBackground.optional(),
   trimBeforeMs: z.number().int().min(0), durationMs: z.number().int().min(100),
   playbackRate: z.number().min(0.25).max(4).default(1),
   volume: z.number().min(0).max(1).default(1), muted: z.boolean().default(false),
@@ -131,6 +136,7 @@ export type CompositionModelT = z.infer<typeof CompositionModel>;
 export type ProjectSettingsT = z.infer<typeof ProjectSettings>;
 export type ThemeT = z.infer<typeof Theme>;
 export type ClipT = z.infer<typeof Clip>;
+export type SceneBackgroundT = z.infer<typeof SceneBackground>;
 export type ClipTransformT = z.infer<typeof ClipTransform>;
 export type TransitionT = z.infer<typeof Transition>;
 export type TextLayerT = z.infer<typeof TextLayer>;

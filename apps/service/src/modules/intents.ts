@@ -26,7 +26,7 @@ export const intentsModule: ServiceModule = {
       const head = store.head(projectId);
       const mode = input.mode === 'compile' ? 'compile-only' : input.mode ?? 'auto';
       const started = workflow.createPlan(projectId, { intentIds: input.intentIds ?? [], message: input.instruction, baseVersion: head.hash, mode, signal: input.signal, runId: input.runId,
-        extras: { selection: input.selection, playheadMs: input.playheadMs, attachments: input.attachments, images: input.images, onDelta: input.onDelta, chat: input.chat } });
+        extras: { selection: input.selection, playheadMs: input.playheadMs, attachments: input.attachments, images: input.images, onDelta: input.onDelta, chat: input.chat, targets: input.targets, onProgress: input.onProgress } });
       const plan = await started.done;
       return { ...(plan as unknown as EditPlanT), planId: plan.id, ...(started.runId ? { runId: started.runId } : {}) };
     };

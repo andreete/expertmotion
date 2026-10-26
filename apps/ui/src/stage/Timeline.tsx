@@ -16,16 +16,23 @@ import { QuickParams } from './QuickParams.js';
 import { TransformFields } from './TransformFields.js';
 import { isTransformKind } from './canvas-transform.js';
 import { runSplit } from './split.js';
-import { formatTimecode } from '../i18n/index.js';
+import { formatTimecode, translate } from '../i18n/index.js';
 
 type Track = 'video' | 'overlay' | 'text' | 'caption' | 'audio';
 /** One Timeline row, top to bottom. `layer` rows hold texts/images/shapes of that layer; the extra empty lane above the top layer (and below the last audio lane) is where a drop opens a new lane. */
 export interface LaneRow { key: string; kind: 'caption' | 'layer' | 'video' | 'audio'; lane: number; isNew: boolean }
-interface Bar { id: string; ref: ElementRefT; kind: string; label: string; fromMs: number; toMs: number; track: Track; row: string; lane?: number; diffId: string; assetId?: string; generated?: boolean }
+interface Bar { id: string; ref: ElementRefT; kind: string; label: string; fromMs: number; toMs: number; track: Track; row: string; lane?: number; diffId: string; assetId?: string; generated?: boolean; /** ADR-030 scene clip: CSS background of its preset (no media) */ swatch?: string }
 type EditableKind = ElementEdit['kind'];
 const EDITABLE = new Set(['text', 'image', 'shape', 'audio']);
 const isEditable = (b: Pick<Bar, 'kind'>) => EDITABLE.has(b.kind);
 
+/** ADR-030: a CSS background for a scene clip bar from the hex colours in its background params (else an accent gradient). */
+export function sceneSwatch(params: Record<string, unknown> | undefined): string {
+  const hex = Object.values(params ?? {}).flatMap((v) => (Array.isArray(v) ? v : [v])).filter((v): v is string => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v));
+  if (hex.length >= 2) return `linear-gradient(90deg, ${hex[0]}, ${hex[1]})`;
+  if (hex.length === 1) return hex[0]!;
+  return 'linear-gradient(90deg, var(--em-accent), var(--em-panel-2))';
+}
 /** FR-064: every Timeline Element as a bar; backgrounds span the whole duration; `generated` marks Assets made by a generator. */
 export function buildBars(model: CompositionModelT, assetName: (id: string) => string, lang: 'en' | 'id', generatedAssets: ReadonlySet<string> = new Set()): Bar[] {
   const t = deriveTiming(model);
@@ -34,7 +41,11 @@ export function buildBars(model: CompositionModelT, assetName: (id: string) => s
   if (model.background) bars.push({ id: 'background', ref: { kind: 'background' }, kind: 'background', label: label(model.background.presetId), fromMs: 0, toMs: Math.max(1, t.durationMs), track: 'video', row: 'video', diffId: 'background' });
   model.tracks.video.forEach((c, i) => {
     const w = t.elementWindows[c.id]!;
-    bars.push({ id: c.id, ref: { kind: 'clip', id: c.id }, kind: 'clip', label: `${i + 1} · ${assetName(c.assetId)}`, fromMs: w.fromMs, toMs: w.toMs, track: 'video', row: 'video', diffId: c.id, assetId: c.assetId, generated: generatedAssets.has(c.assetId) });
+    if (c.assetId === undefined) {
+      // ADR-030: a scene clip (no media): "Scene N · <background>" with a colour / gradient swatch instead of a thumbnail.
+      const bg = c.scene?.presetId;
+      bars.push({ id: c.id, ref: { kind: 'clip', id: c.id }, kind: 'clip', label: `${translate(lang, 'ui.stage.timeline.scene', { n: i + 1 })}${bg ? ` · ${label(bg)}` : ''}`, fromMs: w.fromMs, toMs: w.toMs, track: 'video', row: 'video', diffId: c.id, swatch: sceneSwatch(c.scene?.params) });
+    } else bars.push({ id: c.id, ref: { kind: 'clip', id: c.id }, kind: 'clip', label: `${i + 1} · ${assetName(c.assetId)}`, fromMs: w.fromMs, toMs: w.toMs, track: 'video', row: 'video', diffId: c.id, assetId: c.assetId, generated: generatedAssets.has(c.assetId) });
     c.effects.forEach((e) => bars.push({ id: `effect:${c.id}:${e.presetId}`, ref: { kind: 'effect', id: `${c.id}|${e.presetId}` }, kind: 'effect', label: label(e.presetId), fromMs: w.fromMs, toMs: w.toMs, track: 'video', row: 'video', diffId: c.id }));
   });
   for (const tr of model.transitions) {
@@ -89,7 +100,7 @@ export function clipDragEdit(model: CompositionModelT, clipId: string, mode: Cli
   }
   const frame = 1000 / model.settings.fps;
   const snap = (ms: number) => Math.round(Math.round(ms / frame) * frame);
-  const a = assetOf(c.assetId);
+  const a = c.assetId === undefined ? undefined : assetOf(c.assetId);
   const source = a?.kind === 'video' && a.durationMs !== null ? a.durationMs : null;
   if (mode === 'end') {
     const max = source === null ? 1_800_000 : Math.floor((source - c.trimBeforeMs) / c.playbackRate);
@@ -375,7 +386,8 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
                         className={cx('absolute truncate rounded-[4px] border px-1 text-left text-[11px] em-trans', STRIP[b.kind] ? `${STRIP[b.kind]} rounded-[2px] px-0 text-[0px]` : b.kind === 'transition' ? 'top-1 h-7 z-10 bg-em-panel-2' : 'top-1 h-7 bg-em-panel-2',
                           draggable && 'touch-none', dragging && !clipDrag && 'opacity-40',
                           sel ? 'border-em-accent shadow-[0_0_0_2px_var(--em-accent)]' : missing ? 'border-dashed border-em-danger' : 'border-em-line hover:border-em-line-strong', pulse && 'em-pulse')}
-                        style={{ left: b.kind === 'transition' ? left - 6 : left, width: b.kind === 'transition' ? 12 : w, ...(STRIP[b.kind] ? { background: KIND_COLOUR[b.kind] } : { borderTop: `3px solid ${KIND_COLOUR[b.kind] ?? 'var(--em-line)'}` }) }}>
+                        data-scene={b.swatch ? 'true' : undefined}
+                        style={{ left: b.kind === 'transition' ? left - 6 : left, width: b.kind === 'transition' ? 12 : w, ...(STRIP[b.kind] ? { background: KIND_COLOUR[b.kind] } : { borderTop: `3px solid ${KIND_COLOUR[b.kind] ?? 'var(--em-line)'}` }), ...(b.swatch ? { backgroundImage: b.swatch } : {}) }}>
                         {b.kind === 'transition' ? <span aria-hidden>◆</span> : STRIP[b.kind] ? null : <>{b.kind === 'clip' && model?.tracks.video.find((c) => c.id === b.id)?.effects.length ? <Sparkles size={10} className="mr-0.5 inline" aria-hidden /> : null}
                           {draggable && <><span aria-hidden data-el="stage.timeline.element.handle" data-edge="start" className="absolute bottom-0 left-0 top-0 w-1.5 cursor-ew-resize" /><span aria-hidden data-el="stage.timeline.element.handle" data-edge="end" className="absolute bottom-0 right-0 top-0 w-1.5 cursor-ew-resize" /></>}
                           {b.generated && <span data-el="stage.timeline.element.generated" className="mr-1 rounded-[3px] bg-em-accent-2/30 px-0.5 text-[9px] uppercase">{t('ui.stage.timeline.generated')}</span>}
@@ -400,7 +412,7 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
               <span className="absolute -left-1 top-0 h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-[var(--em-accent)]" />
             </div>
             </>}
-            {!hasClip && (
+            {!hasClip && !bars.length && (
               <div data-el="stage.timeline.empty" className={cx('pointer-events-none flex', showLanes ? 'absolute inset-x-0 bottom-0 top-6' : 'h-full min-h-[160px]', 'items-center justify-center p-4 text-center text-em-muted')}>
                 {t('ui.stage.timeline.empty')}
               </div>
@@ -445,9 +457,14 @@ function Inspector({ bars, model, onAsk }: { bars: Bar[]; model: CompositionMode
   if (b.kind === 'clip' && b.track === 'video') {
     const c = model.tracks.video.find((x) => x.id === b.id);
     const i = model.tracks.video.findIndex((x) => x.id === b.id);
-    if (c) {
+    if (c && c.assetId === undefined) {
+      // ADR-030 scene clip: no media fields, its background preset instead.
       const tin = model.transitions.find((x) => x.cutIndex === i - 1), tout = model.transitions.find((x) => x.cutIndex === i);
-      rows.push([L('asset'), asset(c.assetId)], [L('trim'), ms(c.trimBeforeMs)], [L('rate'), `${c.playbackRate}×`],
+      rows.push([L('background'), label(c.scene?.presetId)], [L('params'), params(c.scene?.params)], [L('motion'), c.motion ? label(c.motion.presetId) : '—'],
+        [L('transitionin'), tin ? label(tin.presetId) : '—'], [L('transitionout'), tout ? label(tout.presetId) : '—']);
+    } else if (c) {
+      const tin = model.transitions.find((x) => x.cutIndex === i - 1), tout = model.transitions.find((x) => x.cutIndex === i);
+      rows.push([L('asset'), asset(c.assetId ?? '')], [L('trim'), ms(c.trimBeforeMs)], [L('rate'), `${c.playbackRate}×`],
         [L('volume'), c.muted ? L('muted') : pct(c.volume)], [L('fades'), `${c.fadeInMs} / ${c.fadeOutMs} ms`], [L('fit'), c.objectFit],
         [L('motion'), c.motion ? `${label(c.motion.presetId)} · ${c.motion.durationMs} ms` : '—'],
         [L('effects'), c.effects.map((e) => label(e.presetId)).join(', ') || '—'],
@@ -499,7 +516,7 @@ function Inspector({ bars, model, onAsk }: { bars: Bar[]; model: CompositionMode
       <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[12px]">
         {rows.map(([k, v]) => <div key={k} className="contents"><dt className="text-em-muted">{k}</dt><dd className="truncate" title={v}>{v}</dd></div>)}
       </dl>
-      <Button size={28} icon={<Bot size={14} />} onClick={() => onAsk(b)} disabledReason={state.settings?.privateMode ? t('err.EM-4401.title') : null}>{t('ui.stage.timeline.inspector.ask')}</Button>
+      <Button el="stage.timeline.inspector.ask" size={28} icon={<Bot size={14} />} onClick={() => onAsk(b)} disabledReason={state.settings?.privateMode ? t('err.EM-4401.title') : null}>{t('ui.stage.timeline.inspector.ask')}</Button>
       {missingAsset && (
         // FR-048: the element's Asset file is missing — the same Locate (re-link by hash) and Remove as on the Asset card.
         <div data-el="stage.timeline.inspector.missing" className="flex flex-col gap-1 rounded-[6px] border border-dashed border-em-danger p-1.5 text-[12px]">

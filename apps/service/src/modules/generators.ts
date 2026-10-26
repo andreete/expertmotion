@@ -21,7 +21,16 @@ const BODIES: Record<GeneratorKind, z.ZodType<Record<string, unknown>>> = {
 export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceModule {
   return {
     name: 'generators',
-    start(ctx) { const n = generatorsServiceOf(ctx, opts).recover(); if (n) ctx.log.info({ jobs: n }, 'interrupted generator jobs marked failed'); },
+    start(ctx) {
+      const svc = generatorsServiceOf(ctx, opts);
+      const n = svc.recover(); if (n) ctx.log.info({ jobs: n }, 'interrupted generator jobs marked failed');
+      // ADR-030: plan generator steps (voice-over, captions) for the Editor Agent and Execute.
+      ctx.hooks.planToolModels = async (language) => {
+        const enabled = opts.enabledKinds ?? GENERATOR_KINDS;
+        return { tts: enabled.includes('voice') ? await svc.planToolModel('tts', language) : null, stt: enabled.includes('captions') ? await svc.planToolModel('stt', language) : null };
+      };
+      ctx.hooks.runPlanSteps = (projectId, planId, steps) => svc.runPlanSteps(projectId, planId, steps);
+    },
     register(router, ctx) {
       const svc = generatorsServiceOf(ctx, opts);
       route(router, 'get', '/generators', {}, async () => ({ items: await svc.cards() }));   // R-135 (FR-100, FR-107)

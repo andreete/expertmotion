@@ -47,7 +47,8 @@ export function proposalIssue(i: Pick<EditIntent, 'presetId' | 'params' | 'categ
     const params = Object.fromEntries(Object.entries(i.params ?? {}).filter(([k]) => !k.startsWith('__')));
     if (Object.keys(params).length) { const v = validateParams(i.presetId, params); if (!v.ok) return { code: 'EM-2102', reason: `${t('err.EM-2102.title')}: ${v.issues[0]?.message ?? ''}`.trim() }; }
   }
-  if (model && !model.tracks.video.length && i.category !== 'output' && i.category !== 'layout') return { code: 'EM-2202', reason: t('err.EM-2202.title') };
+  // QA 2026-10-26 #2/#4: an empty project can be built from proposals (scenes, texts); only transitions need two clips.
+  if (model && i.category === 'transition' && model.tracks.video.length < 2) return { code: 'EM-2202', reason: t('err.EM-2202.title') };
   return null;
 }
 /** FR-076: where a proposed change lands, in plain words ("all 3 cuts", "Clip 2", "project", "your selection"). */

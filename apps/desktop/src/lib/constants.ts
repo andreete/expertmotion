@@ -64,6 +64,10 @@ export const IPC = {
   /** Clipboard through main (renderer clipboard permissions stay denied, SEC-029): write any short text; read only on a click. */
   copyText: 'em:copy-text',
   readClipboardText: 'em:read-clipboard-text',
+  /** FR-185: the Editor's error boundary / window error handlers log to the Shell log (validated, rate-limited, size-capped). */
+  logError: 'em:log-error',
+  /** FR-184: "Coba lagi" on the startup splash after EM-8002 restarts the Local Service with a fresh restart budget. */
+  retryStartup: 'em:retry-startup',
 } as const;
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
 
@@ -72,7 +76,7 @@ export type IpcChannel = (typeof IPC)[keyof typeof IPC];
  * `pickSavePath` is the save dialog required by the Desktop Shell brief; see README "Bridge surface".
  */
 export const BRIDGE_KEYS = ['getBootstrap', 'pickFiles', 'pickFolder', 'pickSavePath', 'openFolder', 'openExternal', 'getPathsForFiles', 'onServiceState',
-  'onUpdateState', 'getUpdateState', 'updateAction', 'openPath', 'copyText', 'readClipboardText'] as const;
+  'onUpdateState', 'getUpdateState', 'updateAction', 'openPath', 'copyText', 'readClipboardText', 'logError', 'retryStartup'] as const;
 /** Update actions the Editor may request (FR-152); anything else is ignored by main. */
 export const UPDATE_ACTIONS = ['download', 'restart', 'later', 'check'] as const;
 export type UpdateAction = (typeof UPDATE_ACTIONS)[number];
@@ -99,6 +103,9 @@ export const EM = {
   serviceRestarting: 'EM-8001',
   serviceFailed: 'EM-8002',
   serviceRestarted: 'EM-8003',
+  integrityFailed: 'EM-8007',
+  rendererCrashed: 'EM-8008',
+  editorError: 'EM-8009',
   updateCheckFailed: 'EM-8101',
   updateDownloadFailed: 'EM-8102',
   updateNotTrusted: 'EM-8103',

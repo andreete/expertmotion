@@ -7,7 +7,7 @@ import { FPS_VALUES, RATIOS, RESOLUTIONS, type Ratio, type Resolution } from '@e
 import { resolveDimensions } from '@expertmotion/engine/formats';
 import { outputDefaults, useStore } from '../state/store.js';
 import type { CheckpointDto, DiskUsageDto, Fps, ProjectDto, ProjectSettingsExtras, VersionDto } from '../api/types.js';
-import { Button, Empty, Field, IconButton, Modal, inputCls, cx } from '../components/ui.js';
+import { Button, Empty, Field, IconButton, Modal, Spinner, inputCls, cx } from '../components/ui.js';
 import { formatBytes, formatDate, formatDuration, type Lang } from '../i18n/index.js';
 import { guardUnsaved } from './Lifecycle.js';
 
@@ -112,6 +112,7 @@ export function OpenProjectDialog({ onClose }: { onClose: () => void }) {
   const [confirm, setConfirm] = useState<ProjectDto | null>(null);
   const [typed, setTyped] = useState('');
   const [keepOutputs, setKeepOutputs] = useState(true);
+  const [opening, setOpening] = useState<string | null>(null);              // FR-186: "Membuka proyek…" on the chosen row
   const load = () => {
     void runtime.api.listProjects({ limit: 200 }).then((p) => setItems(p.items)).catch((e) => { actions.error(e); setItems([]); });
     void runtime.api.diskUsage().then(setUsage).catch(() => setUsage(null));
@@ -121,8 +122,10 @@ export function OpenProjectDialog({ onClose }: { onClose: () => void }) {
   const pick = (p: ProjectDto) => {
     if (p.id === state.project?.id) { onClose(); return; }
     // FR-174: switching away from unsaved UI state asks first (the prompt replaces this dialog).
-    guardUnsaved({ state, actions }, () => { void actions.openProject(p.id); actions.setScreen(null); });
-    if (!state.project?.dirty) onClose();
+    if (opening) return;
+    if (state.project?.dirty) { guardUnsaved({ state, actions }, () => { void actions.openProject(p.id); actions.setScreen(null); }); return; }
+    setOpening(p.id);
+    void actions.openProject(p.id).finally(() => { setOpening(null); onClose(); });
   };
   const del = async (p: ProjectDto) => {
     try {
@@ -151,7 +154,8 @@ export function OpenProjectDialog({ onClose }: { onClose: () => void }) {
                 <span className="truncate font-medium">{p.name}</span>
                 <span className="text-[11px] text-em-muted">{t('ui.scr.project.open.modified', { date: formatDate(p.updatedAt, lang as Lang) })} · {formatDuration(p.durationMs)} · {t('ui.scr.project.open.assets', { count: p.assetCount })}</span>
               </span>
-              {use(p.id) && <span data-el="scr.project.open.usage" className="t-mono shrink-0 text-[11px] text-em-muted">{formatBytes(use(p.id)!.totalBytes, lang)}</span>}
+              {opening === p.id ? <span data-el="scr.project.open.opening" role="status" className="shrink-0 text-[12px]"><Spinner size={14} label={t('ui.scr.project.open.opening')} /></span>
+                : use(p.id) && <span data-el="scr.project.open.usage" className="t-mono shrink-0 text-[11px] text-em-muted">{formatBytes(use(p.id)!.totalBytes, lang)}</span>}
             </button>
             <IconButton el="scr.project.open.delete" label={t('ui.scr.project.open.delete', { name: p.name })} icon={<Trash2 size={14} />} size={28} onClick={() => { setConfirm(p); setTyped(''); setKeepOutputs(true); }} />
           </li>

@@ -24,7 +24,7 @@ export function canvasItemOf(model: CompositionModelT, ref: ElementRefT | undefi
   if (ref.kind === 'clip') {
     const c = model.tracks.video.find((x) => x.id === ref.id);
     if (!c) return null;
-    const d = dims(c.assetId), aw = d?.width ?? null, ah = d?.height ?? null;
+    const d = c.assetId === undefined ? null : dims(c.assetId), aw = d?.width ?? null, ah = d?.height ?? null;
     let baseW = f.w, baseH = f.h;
     if (aw && ah) { const k = c.objectFit === 'cover' ? Math.max(f.w / aw, f.h / ah) : Math.min(f.w / aw, f.h / ah); baseW = aw * k; baseH = ah * k; }
     const w = deriveTiming(model).elementWindows[c.id]!;

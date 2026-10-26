@@ -318,6 +318,9 @@ Frame rate and duration are **not** here (ADR-010); a link row "Frame rate 30 fp
 | Inline error | danger left border 2 px · `EM-` code in `t-mono` · one sentence · 1–2 actions · "Details" disclosure (copies code, time, context) | shown at the origin; no technical words |
 | Error card | inside the region (Player, sheet) with same anatomy | for regions that cannot show content |
 | Degraded | control visible, disabled, reason adjacent or in tooltip; badge where applicable | never hide |
+| Startup splash (`sys.splash`, FR-184) | full window `--em-bg` · app mark 64 px · "Expertmotion" · 3 px determinate bar (accent on panel-2, 280 px) · step line in `--em-text-2` with elapsed seconds in mono after 5 s · "still working" line after 20 s; same geometry as the static `index.html` placeholder so the first paint does not jump | rendered before any await; step text comes from the Shell's `phase`; failure replaces the bar with an inline error (danger left border, EM- code, one sentence, Try again + Open log folder); covers the Editor (z 90) until the first project is open |
+| Crash screen (`sys.crash`, FR-185) | full window · app mark 48 px · inline error card: "Something went wrong" / "Ada yang tidak beres", EM-8009, error message in mono (≤ 300 chars, selectable), primary "Reload" / "Muat ulang" | replaces the React tree only; the Local Service keeps running; the error is logged to the Shell log |
+| In-place busy line (FR-186) | Spinner 14 px + one short verb line ("Mengimpor 2/5…", "Membuat suara… 45 %", "Membuka proyek…", "Menunggu giliran…"), optional bar under it | shown where the action started; an error is a different state (danger colour + code + retry), never the spinner turning red |
 
 ## 10. Notification rules
 

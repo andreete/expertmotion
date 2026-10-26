@@ -30,7 +30,9 @@ export function Header() {
   const [draft, setDraft] = useState('');
   const [titleError, setTitleError] = useState(false);
   const p = state.project;
-  const hasClip = (state.head?.model?.tracks.video.length ?? 0) > 0;
+  // QA 2026-10-26 #2: a faceless video (scene clips, texts, shapes) exports too; only a project with nothing on it is blocked.
+  const hm = state.head?.model;
+  const hasClip = (hm?.tracks.video.length ?? 0) + (hm?.tracks.text.length ?? 0) + (hm?.tracks.overlay.length ?? 0) > 0;
   const exportReason = hasClip ? null : t('ui.hdr.export.disabled');
   const queue = renderQueue(state.renders);
   const rendering = queue.active ?? queue.queued[0];

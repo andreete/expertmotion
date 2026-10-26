@@ -200,7 +200,7 @@ describe('agents module', () => {
 });
 
 describe('agents with the real S1 composition and intents modules', () => {
-  it('editor message → createPlan (S1): S1 errors surface on the run and in the thread', async () => {
+  it('editor message → createPlan (S1) on an EMPTY project: no "insert an asset first" gate (QA 2026-10-26 #2); an unusable reply ends as EM-4301 with its reason in the thread', async () => {
     const { projectsModule } = await import('../../src/modules/projects.js');
     const { compositionModule } = await import('../../src/modules/composition.js');
     const { intentsModule } = await import('../../src/modules/intents.js');
@@ -216,12 +216,11 @@ describe('agents with the real S1 composition and intents modules', () => {
       expect(r.status).toBe(202);
       const { runId } = await body<{ runId: string }>(r);
       await waitFor(async () => (await body<Run>(await s.api(`/agent-runs/${runId}`))).status !== 'running', 5000);
-      // S1 refuses to plan an empty composition: the S1 error reaches the agents run and the thread unchanged.
-      expect(await body<Run>(await s.api(`/agent-runs/${runId}`))).toMatchObject({ status: 'failed', errorCode: 'EM-2202' });
+      expect(await body<Run>(await s.api(`/agent-runs/${runId}`))).toMatchObject({ status: 'failed', errorCode: 'EM-4301' });
       const th = await body<{ messages: { items: Msg[] } }>(await s.api(`/projects/${projectId}/conversations/editor`));
       expect(th.messages.items.map((m) => m.role)).toEqual(['user', 'system']);
-      expect(fake.calls).toHaveLength(0);
-      expect((s.ctx.db.prepare('SELECT count(*) n FROM usage_records WHERE project_id = ?').get(projectId) as { n: number }).n).toBe(0);
+      expect(th.messages.items[1]!.blocks[0]!.text).toContain('EM-4301');
+      expect(fake.calls).toHaveLength(3);                                         // first answer + 2 corrections
     } finally { await s.close(); }
   });
 });

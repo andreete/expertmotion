@@ -18,9 +18,12 @@
  *   openPath(path)             → void       (play a rendered Output with the system player; media files only)
  *   copyText(text)             → boolean    (system clipboard via main; true when it holds the text)
  *   readClipboardText()        → string     (system clipboard text, ≤ 8 KB; used by the licence Paste button)
+ *   logError(entry)            → void       (FR-185: Editor error → Shell log; validated, rate-limited and size-capped in main)
+ *   retryStartup()             → boolean    (FR-184: splash "Coba lagi" after EM-8002; main restarts the Service once more)
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from './lib/constants.js';
+import { parseServiceStatePush, type ServiceStatePush } from './lib/startup.js';
 
 export interface Bootstrap {
   port: number;
@@ -41,12 +44,15 @@ export interface PickSaveOptions {
   filters?: { name: string; extensions: string[] }[];
 }
 
-export interface ServiceState {
-  status: 'starting' | 'ready' | 'offline' | 'failed';
-  /** A fresh endpoint after a Service restart re-issued the token (API_SPECIFICATION §2.1 rotation). */
-  bootstrap?: Bootstrap;
-  /** EM-8xxx code when status is 'failed'. */
+/** Service state push (FR-171) with the startup phase for the splash (FR-184); validated here before it reaches the Editor. */
+export type ServiceState = ServiceStatePush;
+
+export interface RendererLogEntry {
+  level: 'warn' | 'error';
   code?: string;
+  message: string;
+  stack?: string;
+  source: 'error-boundary' | 'window-error' | 'unhandled-rejection';
 }
 
 export interface UpdateState {
@@ -64,7 +70,7 @@ const api = {
   // Drag-and-drop import: File.path was removed in Electron 32; webUtils returns the OS path of a dropped File ('' otherwise).
   getPathsForFiles: (files: readonly File[]): string[] => files.map((f) => webUtils.getPathForFile(f)).filter((p) => p.length > 0),
   onServiceState: (cb: (state: ServiceState) => void): (() => void) => {
-    const listener = (_event: unknown, state: ServiceState): void => cb(state);
+    const listener = (_event: unknown, raw: unknown): void => { const state = parseServiceStatePush(raw); if (state !== null) cb(state); };
     ipcRenderer.on(IPC.serviceState, listener);
     return () => ipcRenderer.removeListener(IPC.serviceState, listener);
   },
@@ -78,6 +84,8 @@ const api = {
   openPath: (targetPath: string): Promise<void> => ipcRenderer.invoke(IPC.openPath, targetPath) as Promise<void>,
   copyText: (text: string): Promise<boolean> => ipcRenderer.invoke(IPC.copyText, text) as Promise<boolean>,
   readClipboardText: (): Promise<string> => ipcRenderer.invoke(IPC.readClipboardText) as Promise<string>,
+  logError: (entry: RendererLogEntry): Promise<void> => ipcRenderer.invoke(IPC.logError, entry) as Promise<void>,
+  retryStartup: (): Promise<boolean> => ipcRenderer.invoke(IPC.retryStartup) as Promise<boolean>,
 } as const;
 
 contextBridge.exposeInMainWorld('expertmotion', Object.freeze(api));

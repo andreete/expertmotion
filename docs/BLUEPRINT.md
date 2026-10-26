@@ -413,7 +413,7 @@ Exports: none consumed by other packages. Every interactive element carries `dat
 apps/desktop/src/
   main/index.ts        single-instance lock, safeStorage keyring (wrap/unwrap Database Key), random free loopback port 42300–42399 (SEC-008), `utilityProcess.fork(service.cjs)` + bootstrap `postMessage({token, port, dataDir, dbKeyHex})` (SEC-002), wait for `{type:'ready'}`, restart backoff 1 s/3 s/9 s (EM-8001/8002), window, app:// protocol for apps/ui/dist, close flow (EM-8304), tray, updater
   main.ts (IPC)        handlers: pickFiles({filters, multiple}) → paths; pickFolder; pickSavePath; openFolder(path); openExternal(url: HTTPS on EXTERNAL_HOSTS only); getBootstrap() → {port, token}
-  preload.ts           contextBridge.exposeInMainWorld('expertmotion', { getBootstrap, pickFiles, pickFolder, pickSavePath, openFolder, openExternal, getPathsForFiles (webUtils, drag-and-drop), onServiceState, onUpdateState, getUpdateState, updateAction, openPath }) — closed set, asserted by test/bridge-surface.test.ts
+  preload.ts           contextBridge.exposeInMainWorld('expertmotion', { getBootstrap, pickFiles, pickFolder, pickSavePath, openFolder, openExternal, getPathsForFiles (webUtils, drag-and-drop), onServiceState, onUpdateState, getUpdateState, updateAction, openPath, copyText, readClipboardText, logError, retryStartup }) — closed set, asserted by test/bridge-surface.test.ts
   main/license/        bytecode-protected (ADR-007): nothing else lives here; verification itself is in apps/service/license (also bytecode)
 ```
 

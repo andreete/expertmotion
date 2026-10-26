@@ -12,6 +12,7 @@ import { createAssetsModule } from '../../src/modules/assets.js';
 import { mediaModule } from '../../src/modules/media.js';
 import { createRendersModule } from '../../src/modules/renders.js';
 import { ingestOf } from '../../src/s2/ingest.js';
+import { applyOperations, createEmptyModel, type OperationT } from '@expertmotion/composition-model';
 import { hasFfmpeg, importDir, json, shell, startS2, type S2Service } from './harness.js';
 
 const BUNDLE = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../../resources/engine/bundle');
@@ -47,5 +48,27 @@ describe.skipIf(!enabled)('render smoke (real renderer)', () => {
     console.log(JSON.stringify({ smoke: 'ok', seconds: (Date.now() - t0) / 1000, bytes: out.bytes, peakRssMb: Math.round(process.resourceUsage().maxRSS / 1024),
       renderGrantMediaRequests: renderHits, originsCleared: s.ctx.mediaOrigins.size === 0 }));
     expect(renderHits).toBeGreaterThan(0);
+  }, 300_000);
+
+  // GS-23 / ADR-030: a video WITHOUT any media (scene clips with backgrounds, titles, transitions) exports like any other.
+  it('renders a faceless video built only from scene clips (no assets) to a validated MP4', async () => {
+    const fid = s.project('Faceless');
+    const ops: OperationT[] = [
+      { op: 'op:scene.add', target: { kind: 'sequence' }, args: { durationMs: 1500, background: 'preset:background.spotlight', title: 'Tagihan listrik bengkak?' } },
+      { op: 'op:scene.add', target: { kind: 'sequence' }, args: { durationMs: 1500, background: 'preset:background.gradient', title: 'Tips 1', text: 'Cabut charger', transition: 'preset:transition.slide', transitionMs: 300 } },
+      { op: 'op:scene.add', target: { kind: 'sequence' }, args: { durationMs: 1500, background: 'preset:background.dots', title: 'Follow!', transition: 'preset:transition.fade', transitionMs: 300 } },
+    ];
+    let n = 0;
+    const r0 = applyOperations(createEmptyModel(fid, { autoRatio: false, ratio: '9:16', resolution: '720p', fps: 30 }), ops, { assets: [], tier: 'T0', newId: () => `sc${++n}` });
+    if (!r0.ok) throw new Error(JSON.stringify(r0.issues));
+    s.version(fid, r0.value.model);
+    const r = await s.api('/renders', { method: 'POST', json: { projectId: fid, outputProfile: { ratio: '9:16', resolution: '720p', fps: 30, format: 'mp4', alpha: false }, performanceProfile: 'standard', fileName: 'faceless' } });
+    const body = await json<{ id: string; error?: unknown }>(r);
+    expect(r.status, JSON.stringify(body)).toBe(202);
+    const ev = await s.waitEvent((e) => ['render.done', 'render.failed', 'render.cancelled'].includes(e.name) && e.data['jobId'] === body.id, 280_000);
+    expect(ev.name, JSON.stringify(ev.data)).toBe('render.done');
+    const out = ev.data['output'] as { validated: boolean; width: number; height: number; durationMs: number | null };
+    expect(out.validated).toBe(true); expect([out.width, out.height]).toEqual([720, 1280]);
+    console.log(JSON.stringify({ faceless: 'ok', output: out }));
   }, 300_000);
 });

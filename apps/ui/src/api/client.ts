@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { EmError, EM_CODE_RE, type EmCode } from '@expertmotion/shared';
 import type { ElementRefT, OperationT, ProjectSettingsT } from '@expertmotion/composition-model';
 import type {
-  AgentKind, AgentRunDto, AssetDto, AssignmentDto, AssignmentsDto, CapabilityRow, CatalogueItemDto, CheckpointDto, CompositionHeadResponse, ConnectionDto,
+  AgentKind, AgentRunDto, AssetDto, AssignmentDto, AssignmentsDto, CapabilityRow, CatalogueItemDto, ChatTarget, CheckpointDto, CompositionHeadResponse, ConnectionDto,
   ConversationDto, DesignPickInput, DiskUsageDto, ElementDiff, ExecutionResult, GeneratorCardDto, GeneratorJobDto, GeneratorKind, HardwareProfileDto, HardwareTickDto, HealthDto, Id,
   IntentCreateResponse, IntentQueueDto, LicenseDto, MediaGrantDto, MediaVariant, MessageDto, ModelRegistrySource, ModelStateDto, OpenProjectResponse, OutputDto, Page, PlanDto,
   ProbeResultDto, ProjectCreateInput, ProjectDto, ProjectSettingsExtras, ProjectUiState, ProviderKind, ProviderKindInfo, RecentCodeDto, RecoverySummaryDto, RenderCreateInput, RenderEstimate, RenderJobDto, SettingsDto, VersionDto,
@@ -36,6 +36,10 @@ export interface ShellBridge {
   /** Clipboard through the Shell (the renderer's own clipboard permission is denied). */
   copyText?: (text: string) => Promise<boolean>;
   readClipboardText?: () => Promise<string>;
+  /** FR-185: Editor errors to the Shell log (validated, rate-limited, size-capped in main). */
+  logError?: (entry: { level: 'warn' | 'error'; code?: string; message: string; stack?: string; source: 'error-boundary' | 'window-error' | 'unhandled-rejection' }) => Promise<void> | void;
+  /** FR-184: the splash's "Try again" after EM-8002; resolves true when the Shell restarts the Service. */
+  retryStartup?: () => Promise<boolean>;
 }
 
 const shellBridge = (): ShellBridge | undefined => (typeof window !== 'undefined' ? window.expertmotion : undefined);
@@ -71,12 +75,19 @@ export const DOCS_URL: string = (import.meta.env as Record<string, string | unde
 
 const Boot = z.object({ port: z.number().int().min(1).max(65535), token: z.string().min(8) });
 
-/** Shell → Editor service state (preload `ServiceState`, FR-171): `ready` may carry a fresh endpoint; `failed` carries EM-8002/EM-6001. */
+/** Startup steps shown on the splash (FR-184). The Shell pushes the first three; `project` is the Editor's first project load. */
+export const STARTUP_PHASES = ['integrity', 'keyring', 'service', 'project'] as const;
+export type StartupPhase = (typeof STARTUP_PHASES)[number];
+/** Shell → Editor service state (preload `ServiceState`, FR-171): `ready` may carry a fresh endpoint; `failed` carries EM-8002/EM-6001;
+ *  `starting` carries the startup phase, its progress (0…1) and the time since the Shell started (FR-184). */
 export const ServiceStatePush = z.object({
   status: z.enum(['starting', 'ready', 'offline', 'failed']),
   bootstrap: Boot.optional(),
   code: z.string().regex(EM_CODE_RE).optional(),
   logsDir: z.string().max(1024).optional(),
+  phase: z.enum(STARTUP_PHASES).optional(),
+  progress: z.number().min(0).max(1).optional(),
+  sinceMs: z.number().int().min(0).max(3_600_000).optional(),
 });
 export type ServiceStatePushT = z.infer<typeof ServiceStatePush>;
 export const bootstrapFromPush = (b: { port: number; token: string }): Bootstrap => ({ baseUrl: `http://127.0.0.1:${b.port}`, token: b.token });
@@ -242,7 +253,7 @@ export class ApiClient {
   setPlanNotes(planId: Id, notes: string): Promise<PlanDto> { return this.patch(`/plans/${planId}/notes`, { notes }); }    // R-075
   // ── 6.9 agents ──
   getConversation(id: Id, agent: AgentKind, query: { limit?: number; cursor?: string } = {}): Promise<ConversationDto> { return this.get(`/projects/${id}/conversations/${agent}`, query); } // R-080
-  sendMessage(id: Id, agent: AgentKind, body: { text: string; attachments?: Array<{ assetId: Id }>; intentIds?: Id[]; baseVersion: string; target?: ElementRefT; selection?: ElementRefT[]; playheadMs?: number }): Promise<{ message: MessageDto; runId: Id; planId?: Id }> {
+  sendMessage(id: Id, agent: AgentKind, body: { text: string; attachments?: Array<{ assetId: Id }>; intentIds?: Id[]; baseVersion: string; target?: ElementRefT; selection?: ElementRefT[]; playheadMs?: number; targets?: ChatTarget[] }): Promise<{ message: MessageDto; runId: Id; planId?: Id }> {
     return this.post(`/projects/${id}/conversations/${agent}/messages`, body);                                          // R-081
   }
   handoff(id: Id, body: { messageId: Id; intentIds?: Id[]; baseVersion: string }): Promise<{ queue: IntentQueueDto; accepted: Id[]; rejected: Array<{ id: Id; code: string }>; planId: Id | null }> {

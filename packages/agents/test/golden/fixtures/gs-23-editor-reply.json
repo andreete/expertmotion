@@ -1,0 +1,18 @@
+{
+  "goal": "Membuat video faceless 30 detik: 5 adegan tips hemat listrik dengan narasi dan teks layar.",
+  "steps": [
+    { "n": 1, "tool": "composition.applyOps", "expectedDiff": "Tema neon dan 5 adegan (hook, 3 tips, ajakan), ±29 detik.", "dependsOn": [], "ops": [
+      { "op": "op:theme.set", "target": { "kind": "project" }, "args": { "paletteId": "preset:palette.neon-tech" } },
+      { "op": "op:scene.add", "target": { "kind": "sequence" }, "args": { "durationMs": 3000, "background": "preset:background.spotlight", "title": "Tagihan listrik bengkak?" } },
+      { "op": "op:scene.add", "target": { "kind": "sequence" }, "args": { "durationMs": 7000, "background": "preset:background.gradient", "title": "Tips 1", "text": "Cabut charger yang tidak dipakai", "transition": "preset:transition.slide", "transitionMs": 400 } },
+      { "op": "op:scene.add", "target": { "kind": "sequence" }, "args": { "durationMs": 7000, "background": "preset:background.grid", "title": "Tips 2", "text": "Setel AC di 24–26 °C", "transition": "preset:transition.slide", "transitionMs": 400 } },
+      { "op": "op:scene.add", "target": { "kind": "sequence" }, "args": { "durationMs": 7000, "background": "preset:background.dots", "title": "Tips 3", "text": "Ganti lampu ke LED", "transition": "preset:transition.slide", "transitionMs": 400 } },
+      { "op": "op:scene.add", "target": { "kind": "sequence" }, "args": { "durationMs": 6000, "background": "preset:background.moving-gradient", "title": "Follow untuk tips hemat lainnya", "transition": "preset:transition.fade", "transitionMs": 500 } },
+      { "op": "op:shape.add", "args": { "presetId": "preset:shape.star", "atMs": 0, "durationMs": 3000, "position": "top-right", "size": 160 } }
+    ] },
+    { "n": 2, "tool": "tts.generate", "expectedDiff": "Narasi dari naskah.", "dependsOn": [], "ops": [], "args": { "text": "Tagihan listrik bengkak? Coba tiga tips ini. Satu, cabut charger yang tidak dipakai. Dua, setel AC di dua puluh empat sampai dua puluh enam derajat. Tiga, ganti lampu ke LED. Follow untuk tips hemat lainnya!" } },
+    { "n": 3, "tool": "captions.generate", "expectedDiff": "Teks layar mengikuti narasi.", "dependsOn": [2], "ops": [], "args": { "source": "voice" } }
+  ],
+  "risks": [],
+  "baseVersion": "{{base_version}}"
+}

@@ -4,11 +4,13 @@
 // FR-053 import-level error banner with a recovery action, FR-054 filter by the Catalogue Search.
 // FR-014 / FR-041: the packaged path import (picker, drag-and-drop) shows the cards at once (store.importPaths), each with its
 // ingest stage; FR-042 EM-1201 cards offer "Import again"; FR-045 select all (button, Ctrl+A while the panel has focus).
+import { assetTarget } from '../agent/targets.js';
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import { AudioLines, CheckSquare, File as FileIcon, FileText, Film, Image as ImageIcon, ListPlus, MoreHorizontal, Upload, X } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import type { AssetDto } from '../api/types.js';
-import { Badge, Button, IconButton, Popover, Progress, cx } from '../components/ui.js';
+import { Badge, Button, IconButton, Popover, Progress, Spinner, cx } from '../components/ui.js';
+import { emptyBatch, nextImportBatch, type ImportBatch } from './import-batch.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
 
 const ACCEPT = '.mp4,.mov,.webm,.mkv,.png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.aac,.m4a,.ogg,.srt,.vtt';
@@ -47,6 +49,9 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
     ...(state.head?.model?.tracks.overlay ?? []).flatMap((o) => (o.kind === 'image' ? [o.assetId] : []))]);
 
   const assetsRef = useRef(assets); assetsRef.current = assets;
+  const batchRef = useRef<ImportBatch>(emptyBatch);
+  batchRef.current = nextImportBatch(batchRef.current, assets);              // FR-186: "Mengimpor 2/5…"
+  const batch = batchRef.current;
   // FR-029 / FR-030: insert imported files as soon as their ingest is ready (image → overlay at the playhead, video → Clip).
   const flushPending = () => {
     for (const [id, p] of [...pending.current]) {
@@ -180,6 +185,7 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
             onClick={() => void selectAll()} disabledReason={pool.length ? null : t('ui.lib.assets.selectall.none')} />
           <IconButton label={t('ui.lib.assets.import')} icon={<Upload size={16} />} size={28} onClick={() => void pick()} disabledReason={state.project ? null : t('ui.common.noproject')} />
         </div>
+        {batch.total > 0 && <div data-el="lib.assets.importing" role="status" className="text-[12px]"><Spinner size={14} label={t('ui.lib.assets.importing', { done: batch.done, total: batch.total })} /></div>}
         <input ref={input} type="file" multiple accept={accept} hidden aria-hidden tabIndex={-1} data-testid="asset-input"
           onChange={(e) => { const files = [...(e.target.files ?? [])]; e.target.value = ''; const ins = nextInsert.current; nextInsert.current = null; if (files.length) void actions.upload(files).then((items) => remember(items, ins)); }} />
         {over && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-em-bg/70 text-[14px] font-semibold">{t('ui.lib.assets.drop')}</div>}
@@ -260,6 +266,10 @@ function AssetCard({ asset: a, badge, previewing, selected, inTimeline, onToggle
               {a.kind === 'subtitle' && (
                 <button type="button" role="menuitem" data-el="lib.assets.card.action.usecaptions" className="w-full rounded-[6px] px-2 py-1.5 text-left hover:bg-em-panel-2"
                   onClick={() => { setMenu(false); void actions.captionsFromAsset(a.id); }}>{t('ui.lib.assets.usecaptions')}</button>
+              )}
+              {a.status === 'ready' && (
+                <button type="button" role="menuitem" data-el="lib.assets.card.action.ask" className="w-full rounded-[6px] px-2 py-1.5 text-left hover:bg-em-panel-2"
+                  onClick={() => { setMenu(false); actions.pointAt(assetTarget(a)); }}>{t('ui.lib.assets.ask')}</button>
               )}
               <button type="button" role="menuitem" data-el="lib.assets.card.action.remove" className="w-full rounded-[6px] px-2 py-1.5 text-left text-em-danger hover:bg-em-panel-2"
                 onClick={() => { setMenu(false); void actions.removeAsset(a.id); }}>{t('ui.common.remove')}</button>

@@ -2,9 +2,12 @@
 // Brainstorming Agent, "Edit" = Editor Agent): CMP-13 bubbles tagged with their agent, the thread, the composer with the
 // mode switch, and the header with "Model: <label> ▾" (per mode), status and compact usage.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { CircleHelp, Clapperboard, Copy, ImagePlus, Lightbulb, Maximize2, Minimize2, Paperclip, Scissors, SendHorizontal, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { AtSign, CircleHelp, Clapperboard, Copy, ImagePlus, Lightbulb, Loader, Maximize2, Minimize2, Paperclip, Scissors, SendHorizontal, ShieldCheck, TriangleAlert, X } from 'lucide-react';
 import { errCode, useStore } from '../state/store.js';
-import type { AgentKind, CapabilityRow, MessageDto } from '../api/types.js';
+import type { AgentKind, CapabilityRow, ChatTarget, MessageDto } from '../api/types.js';
+import type { AgentErrorDetail } from '../state/reducer.js';
+import { isRecentKey, keyRetryDelay } from '../state/key-retry.js';
+import { targetKey } from './targets.js';
 import { Button, IconButton, Popover, cx } from '../components/ui.js';
 import { qualityOf } from '../components/ModelPicker.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
@@ -17,7 +20,6 @@ import { ModelPopover } from './ModelPopover.js';
 export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
 /** FR-077: a persisted system line "EM-4101: …" → its code (so a restored failure keeps its inline recovery). */
 export const systemCode = (text: string): string | null => /^(EM-\d{4})\b/.exec(text.trim())?.[1] ?? null;
-const RETRYABLE = new Set(['EM-4101', 'EM-4102', 'EM-4103', 'EM-4003', 'EM-4301', 'EM-4303', 'EM-4304']);
 
 /** FR-099: the assistant chat either shares the panel with Output Settings or fills it (maximized). */
 export interface ChatLayoutProps { maximized: boolean; onToggleMax: () => void }
@@ -71,16 +73,9 @@ export function Bubble({ m, agent, children, onRetry, onApply, text: override, h
   if (m.role === 'system') {
     const code = systemCode(text);
     if (!code) return <div data-el="agent.chat.message" data-agent={agent} data-role="system" className="mx-auto max-w-[90%] text-center text-[12px] text-em-muted">{text}</div>;
-    // FR-077: a saved failure keeps its EM code and an inline recovery after a restart.
-    return (
-      <div data-el="agent.chat.message" data-agent={agent} data-role="system" data-code={code} className="rounded-[6px] border-l-2 border-em-danger/70 bg-em-panel-2 px-2.5 py-1.5 text-[12px]">
-        <div className="flex items-center gap-2"><ModeTag agent={agent} /><span className="flex-1 font-semibold">{t(`err.${code}.title`)}</span><span className="t-mono text-em-muted">{code}</span><span className="text-[10px] text-em-muted">{stamp}</span></div>
-        <div className="mt-1 flex gap-2">
-          {onRetry && RETRYABLE.has(code) && <Button el="agent.chat.message.retry" size={28} onClick={onRetry}>{t('ui.sys.toast.tryagain')}</Button>}
-          {code.startsWith('EM-4') && <Button size={28} variant="ghost" onClick={() => openModelPicker(agent)}>{t('ui.agent.common.switchmodel')}</Button>}
-        </div>
-      </div>
-    );
+    // FR-077: a saved failure keeps its EM code, its reason and an inline recovery after a restart (same card as a live failure).
+    const reason = text.trim().replace(/^EM-\d{4}:?\s*/, '');
+    return <ErrorCard agent={agent} code={code} detail={reason ? { message: reason } : null} stamp={stamp} onRetry={onRetry} saved />;
   }
   const user = m.role === 'user';
   const shown = hideText ? '' : text;
@@ -91,6 +86,10 @@ export function Bubble({ m, agent, children, onRetry, onApply, text: override, h
         ? <div className="max-w-[92%] whitespace-pre-wrap rounded-[8px] border-l-2 border-em-accent bg-em-panel-2 px-2.5 py-1.5">{shown}</div>
         : <div className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={shown} raw /></div>)}
       {attachments.map((a, i) => a.type === 'attachment' && <span key={i} className="rounded-[4px] border border-em-line px-1 text-[11px] text-em-muted">📎 {a.name}</span>)}
+      {m.blocks.map((b, i) => (b.type === 'targets' && b.items.length ? (
+        <span key={`t${i}`} data-el="agent.chat.message.targets" className="flex max-w-[92%] flex-wrap justify-end gap-1">
+          {b.items.map((x) => <span key={targetKey(x)} data-kind={x.kind} className="inline-flex items-center gap-0.5 rounded-full border border-em-accent/50 px-1.5 text-[11px] text-em-accent"><AtSign size={10} aria-hidden />{x.label}</span>)}
+        </span>) : null))}
       {children}
       {(shown || onApply) && (
         <span className="flex items-center gap-1.5 text-[10px] text-em-muted">{stamp}{shown && <CopyButton text={shown} />}
@@ -124,7 +123,9 @@ export function StreamingBubble({ agent }: { agent: AgentKind }) {
   return (
     <div data-el="agent.chat.streaming" data-agent={agent} className="flex flex-col items-start gap-1">
       <ModeTag agent={agent} />
-      <div className="text-[12px] text-em-muted">{t('ui.agent.common.asking', { model: names.llm(s.modelId, agent) || t('ui.agent.common.model') })}
+      <div className="text-[12px] text-em-muted">{s.phase
+        ? <span data-el="agent.chat.progress" data-phase={s.phase} role="status" className="inline-flex items-center gap-1"><Loader size={12} className="em-spin" aria-hidden />{progressText(s, t)}</span>
+        : t('ui.agent.common.asking', { model: names.llm(s.modelId, agent) || t('ui.agent.common.model') })}
         <button type="button" className="ml-2 underline" onClick={() => { void runtime.api.cancelAgentRun(s.runId).catch(() => undefined); if (agent === 'editor') void actions.cancelPlan(); else actions.stopStreaming(agent); }}>{t('ui.common.cancel')}</button>
       </div>
       {shown && <div aria-hidden className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={shown} raw /><span className="em-skeleton ml-0.5 inline-block h-3 w-1.5 align-middle" /></div>}
@@ -142,23 +143,82 @@ export function useAgentErrorVars(agent: AgentKind): Record<string, string> {
   return { ...(conn?.label ? { provider: conn.label, connection: conn.label } : {}), ...(model ? { model } : {}), agent: t(`ui.agent.${agent}.title`) };
 }
 
-export function AgentErrorBubble({ agent, onRetry }: { agent: AgentKind; onRetry: () => void }) {
-  const { state, actions, t } = useStore();
+/** QA 2026-10-26 #5: what the running agent is doing (agent.run.progress), in the Creator's words. */
+export function progressText(p: { phase?: string | undefined; attempt?: number | undefined; tool?: string | undefined }, t: (k: string, v?: Record<string, string | number>) => string): string {
+  switch (p.phase) {
+    case 'reading': return t('ui.agent.progress.reading');
+    case 'planning': return t('ui.agent.progress.planning');
+    case 'checking': return t('ui.agent.progress.checking');
+    case 'correcting': return t('ui.agent.progress.correcting', { n: p.attempt ?? 2 });
+    case 'tool': return t('ui.agent.progress.tool', { tool: p.tool ?? '…' });
+    default: return t('ui.agent.progress.planning');
+  }
+}
+/** The recovery actions of an agent failure, by EM code (QA 2026-10-26 #5). `retry` is always offered unless a fix comes first. */
+export type ErrorAction = 'retry' | 'providers' | 'rephrase' | 'switchmodel' | 'budget';
+export function errorActions(code: string): ErrorAction[] {
+  if (code === 'EM-4002') return ['retry', 'providers'];
+  if (code === 'EM-4001' || code === 'EM-4007') return ['providers'];
+  if (code === 'EM-4301' || code === 'EM-4302') return ['rephrase', 'switchmodel'];
+  if (code === 'EM-4201') return ['budget'];
+  if (code === 'EM-4401' || code === 'EM-8202') return [];
+  return ['retry'];
+}
+
+/**
+ * One failure card for live failures (agent.run.failed / a refused send) and saved ones (system message "EM-xxxx: reason"):
+ * title, the reason, the code small, and the next action. EM-4002 on a key added in the last 5 minutes adds the "new keys need
+ * a minute" hint with an automatic retry every ~20 s (at most 3) and "Coba lagi" (live failures only).
+ */
+export function ErrorCard({ agent, code, detail, stamp, onRetry, onRephrase, saved }: { agent: AgentKind; code: string; detail: AgentErrorDetail | null; stamp?: string; onRetry?: (() => void) | undefined; onRephrase?: (() => void) | undefined; saved?: boolean }) {
+  const { actions, t } = useStore();
   const vars = useAgentErrorVars(agent);
-  const code = state.agentError[agent];
-  if (!code) return null;
+  const recent = !saved && code === 'EM-4002' && isRecentKey(detail?.details);
+  const [auto, setAuto] = useState(0);
+  const [left, setLeft] = useState<number | null>(null);
+  const delay = recent && onRetry ? keyRetryDelay(auto, code, true) : null;
+  useEffect(() => {
+    if (delay === null) { setLeft(null); return; }
+    const until = Date.now() + delay;
+    setLeft(Math.ceil(delay / 1000));
+    const tick = setInterval(() => setLeft(Math.max(0, Math.ceil((until - Date.now()) / 1000))), 1000);
+    const fire = setTimeout(() => { setAuto((n) => n + 1); onRetry?.(); }, delay);
+    return () => { clearInterval(tick); clearTimeout(fire); };
+  }, [delay, code]); // eslint-disable-line react-hooks/exhaustive-deps
+  const title = t(`err.${code}.title`, vars);
+  const reason = detail?.message && detail.message !== title ? detail.message : t(`err.${code}.body`, vars);
+  const list = errorActions(code).filter((a) => a !== 'retry' || onRetry).filter((a) => a !== 'rephrase' || onRephrase || true);
+  const run = (a: ErrorAction) => {
+    if (a === 'retry') onRetry?.();
+    else if (a === 'providers') actions.setScreen({ kind: 'providers' });
+    else if (a === 'budget') actions.setScreen({ kind: 'providers', focus: { field: 'project' } });
+    else if (a === 'switchmodel') openModelPicker(agent);
+    else if (onRephrase) onRephrase(); else window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent } }));
+  };
+  const label: Record<ErrorAction, string> = { retry: t('ui.sys.toast.tryagain'), providers: t('ui.agent.error.providers'), rephrase: t('ui.agent.error.rephrase'), switchmodel: t('ui.agent.common.switchmodel'), budget: t('err.EM-4201.action') };
   return (
-    <div data-el="agent.chat.message" data-agent={agent} data-role="system" role="alert" className="rounded-[6px] border-l-2 border-em-danger bg-em-panel-2 px-2.5 py-1.5">
-      <div className="flex items-center gap-2"><ModeTag agent={agent} /><span className="flex-1 font-semibold">{t(`err.${code}.title`, vars)}</span><span className="t-mono text-em-muted">{code}</span></div>
-      <div className="text-em-text-2">{t(`err.${code}.body`, vars)}</div>
-      <div className="mt-1.5 flex gap-2">
-        <Button el="agent.chat.message.retry" size={28} onClick={onRetry}>{t('ui.sys.toast.tryagain')}</Button>
-        {code === 'EM-4201'   /* FR-117 / AI-016: Change budget opens Providers on the budget field */
-          ? <Button el="agent.chat.budget" size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'providers', focus: { field: 'project' } })}>{t('err.EM-4201.action')}</Button>
-          : <Button size={28} variant="ghost" onClick={() => openModelPicker(agent)}>{t('ui.agent.common.switchmodel')}</Button>}
-      </div>
+    <div data-el="agent.chat.message" data-agent={agent} data-role="system" data-code={code} role={saved ? undefined : 'alert'} className="rounded-[6px] border-l-2 border-em-danger bg-em-panel-2 px-2.5 py-1.5 text-[12px]">
+      <div className="flex items-center gap-2"><ModeTag agent={agent} /><span className="flex-1 font-semibold">{title}</span><span className="t-mono text-[10px] text-em-muted">{code}</span>{stamp ? <span className="text-[10px] text-em-muted">{stamp}</span> : null}</div>
+      <div data-el="agent.chat.error.reason" className="text-em-text-2">{reason}</div>
+      {recent && (
+        <div data-el="agent.chat.error.keyhint" role="status" className="mt-1 text-em-warn">{t('ui.agent.error.keyhint')}{left !== null ? ` ${t('ui.agent.error.keyhint.retry', { s: left })}` : ''}</div>
+      )}
+      {list.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-2">
+          {list.map((a, i) => (
+            <Button key={a} el={a === 'retry' ? 'agent.chat.message.retry' : a === 'budget' ? 'agent.chat.budget' : 'agent.chat.error.action'} data-action={a} size={28} variant={i === 0 ? 'secondary' : 'ghost'} onClick={() => run(a)}>{label[a]}</Button>
+          ))}
+        </div>
+      )}
     </div>
   );
+}
+
+export function AgentErrorBubble({ agent, onRetry, onRephrase }: { agent: AgentKind; onRetry: () => void; onRephrase?: () => void }) {
+  const { state } = useStore();
+  const code = state.agentError[agent];
+  if (!code) return null;
+  return <ErrorCard agent={agent} code={code} detail={state.agentErrorDetail?.[agent] ?? null} onRetry={onRetry} onRephrase={onRephrase} />;
 }
 
 /** The mode switch in the composer (Ctrl+1 / Ctrl+2, or Tab in an empty composer). */
@@ -180,8 +240,10 @@ export function ModeSwitch({ mode, setMode }: { mode: AgentKind; setMode: (m: Ag
   );
 }
 
-export function Composer({ mode, setMode, placeholder, chip, onClearChip, value, setValue, onSend }: {
-  mode: AgentKind; setMode: (m: AgentKind) => void; placeholder: string; chip?: string | null; onClearChip?: () => void; value: string; setValue: (v: string) => void; onSend: (attachments: string[]) => void;
+export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTarget, value, setValue, onSend }: {
+  mode: AgentKind; setMode: (m: AgentKind) => void; placeholder: string; value: string; setValue: (v: string) => void; onSend: (attachments: string[]) => void;
+  /** QA 2026-10-26 #6: the pointed assets / Timeline elements, sent as `targets` with the next message (removable chips). */
+  targets?: ChatTarget[]; onRemoveTarget?: (t: ChatTarget) => void;
 }) {
   const { state, t, runtime, dispatch } = useStore();
   const agent = mode;
@@ -228,7 +290,16 @@ export function Composer({ mode, setMode, placeholder, chip, onClearChip, value,
   const images = state.assets.filter((a) => a.kind === 'image' && a.status === 'ready');
   return (
     <div className="shrink-0 border-t border-em-line p-2">
-      {chip && mode === 'editor' && <span className="mb-1 inline-flex items-center gap-1 rounded-full border border-em-accent/60 px-2 text-[11px] text-em-accent">{chip}{onClearChip && <button type="button" aria-label={t('ui.common.remove')} onClick={onClearChip}><X size={12} /></button>}</span>}
+      {targets.length > 0 && (
+        <div data-el="agent.chat.targets" role="list" aria-label={t('ui.agent.chat.targets')} className="mb-1 flex flex-wrap gap-1">
+          {targets.map((x) => (
+            <span key={targetKey(x)} role="listitem" data-el="agent.chat.target" data-kind={x.kind} title={t('ui.agent.chat.target.tip')} className="inline-flex max-w-full items-center gap-0.5 rounded-full border border-em-accent/60 px-1.5 text-[11px] text-em-accent">
+              <AtSign size={10} aria-hidden /><span className="truncate">{x.label}</span>
+              {onRemoveTarget && <button type="button" data-el="agent.chat.target.remove" aria-label={t('ui.agent.chat.target.remove', { label: x.label })} onClick={() => onRemoveTarget(x)}><X size={11} /></button>}
+            </span>
+          ))}
+        </div>
+      )}
       {attachments.length > 0 && <div className="mb-1 flex flex-wrap gap-1">{attachments.map((id) => (
         <span key={id} className="inline-flex items-center gap-1 rounded-[4px] border border-em-line px-1 text-[11px]">📎 {state.assets.find((a) => a.id === id)?.name}
           <button type="button" aria-label={t('ui.agent.composer.attach.remove')} onClick={() => setAttachments((x) => x.filter((y) => y !== id))}><X size={10} /></button></span>))}</div>}
@@ -248,6 +319,7 @@ export function Composer({ mode, setMode, placeholder, chip, onClearChip, value,
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send(); }   /* Enter or Ctrl+Enter sends (FR-153) */
             else if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !value) { e.preventDefault(); setMode(mode === 'brainstorm' ? 'editor' : 'brainstorm'); }
+            else if (e.key === 'Backspace' && !value && targets.length && onRemoveTarget) { e.preventDefault(); onRemoveTarget(targets[targets.length - 1]!); }
           }}
           className="min-h-7 w-full resize-none bg-transparent px-1.5 py-1 text-[14px] leading-5 outline-none placeholder:text-em-muted" />
         <div className="flex items-center gap-1">

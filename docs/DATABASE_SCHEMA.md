@@ -336,8 +336,10 @@ const Size = z.object({ w: z.number(), h: z.number() });          // in u
 const Timing = z.object({ atMs: z.number().int().min(0), durationMs: z.number().int().min(100) });
 const Lane = z.number().int().min(0);        // ADR-027: one Timeline lane per value; texts/images/shapes: higher = more in front
 
+// ADR-030: a scene clip has no media and shows a background preset for its length (videos without media, "faceless").
+export const SceneBackground = z.object({ presetId: PresetId /* preset:background.* */, params: z.record(z.unknown()).default({}) });
 export const Clip = z.object({
-  id: z.string(), assetId: z.string(),
+  id: z.string(), assetId: z.string().optional(), scene: SceneBackground.optional(),   // exactly one of the two (CM-001); no schema bump (ADR-030, as ADR-028)
   trimBeforeMs: z.number().int().min(0), durationMs: z.number().int().min(100),
   playbackRate: z.number().min(0.25).max(4).default(1),
   volume: z.number().min(0).max(1).default(1), muted: z.boolean().default(false),
@@ -390,7 +392,8 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 
 ### 4.3 Derived values (never stored)
 
-- `durationMs = durationPolicy === 'fixed' ? fixedDurationMs : Σ video[i].durationMs − Σ transitions[j].durationMs` (clamped ≥ 1000). Overlay/text/audio elements beyond the end are clipped at render; the validator warns.
+- `durationMs = durationPolicy === 'fixed' ? fixedDurationMs : Σ video[i].durationMs − Σ transitions[j].durationMs` (clamped ≥ 1000). Overlay/text/audio elements beyond the end are clipped at render; the validator warns. ADR-030: with **no Clips at all**, fit-content is the end of the latest text, image, shape or audio layer with a length (looping / open-ended beds and captions never extend it), so a video of texts and a voice-over has a length; `contentEndWithoutClips` in `timing.ts` is the one implementation (Player, render, validator).
+- Scene clips (ADR-030): a Clip with `scene` paints `BackgroundLayer(scene)` inside its clip frame (motion, transform and transitions as for media); `trimBeforeMs` stays 0, no source checks (CM-002 does not apply).
 - Frames: `frames(ms) = Math.round(ms / 1000 * fps)`; width/height from the PERFORMANCE.md table.
 - Cut positions: `cutStartMs[k] = Σ_{i≤k} video[i].durationMs − Σ_{j≤k} transitions[j].durationMs`.
 - Picture transform (ADR-028): a Clip's media fills its frame with `objectFit`, then is translated by `x × width`, `y × height` px, rotated and scaled around its centre, inside the clip frame (overflow hidden); an image / shape box centred on `position` is rotated and scaled around its centre. `clipTransformStyle` / `overlayTransform` in `packages/engine/src/transform.ts` are the one implementation (Player and render).
@@ -401,7 +404,7 @@ export const Background = z.object({ presetId: PresetId, params: z.record(z.unkn
 
 | Code | Rule | Severity |
 |---|---|---|
-| CM-001 | every `assetId` exists in `assets` with status `ready` | block |
+| CM-001 | every `assetId` exists in `assets` with status `ready`; a Clip has exactly one of `assetId` or `scene` (ADR-030), a scene's `presetId` is a background preset | block |
 | CM-002 | `trimBeforeMs + durationMs × playbackRate ≤ asset.duration_ms` for video/audio (a Clip played at rate 2 consumes twice its timeline duration of source media; corrected 2026-10-24 from `÷`) | block |
 | CM-003 | `transitions[*].cutIndex < video.length − 1`, unique per cut | block |
 | CM-004 | transition `durationMs ≤ 0.5 × min(adjacent clip durations)` | warn → auto-clamp; block if < 100 ms |

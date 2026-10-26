@@ -3,7 +3,7 @@
 // Local Service returns. Kept React-free so it can be unit-tested directly.
 import type { ElementRefT } from '@expertmotion/composition-model';
 import type {
-  AgentKind, AssetDto, AssignmentsDto, UsageNumbers, CapabilityRow, ConnectionDto, EditIntent, ElementDiff, HardwareProfileDto, HardwareTickDto, HealthDto, IntentQueueDto,
+  AgentKind, AgentPhase, AssetDto, AssignmentsDto, ChatTarget, UsageNumbers, CapabilityRow, ConnectionDto, EditIntent, ElementDiff, HardwareProfileDto, HardwareTickDto, HealthDto, IntentQueueDto,
   LicenseDto, MediaGrantDto, MessageDto, ModelStateDto, OpenProjectResponse, OutputDto, PerformanceProfile, PlanDto, ProjectDto, RenderJobDto, ServiceEvent,
   SettingsDto, VersionDto,
 } from '../api/types.js';
@@ -26,7 +26,9 @@ export type Screen =
   /** FR-002: closing while a Render Job runs: "Cancel render and close" / "Keep rendering". */
   | { kind: 'close.render'; jobId: string; then: () => void };
 
-export interface Streaming { runId: string; text: string; modelId: string }
+export interface Streaming { runId: string; text: string; modelId: string; /** agent.run.progress (QA 2026-10-26 #5) */ phase?: AgentPhase; attempt?: number; tool?: string }
+/** agent.run.failed `message` / `details` (QA 2026-10-26 #3/#5): the reason shown in the error bubble; `details.recentKey` = new key. */
+export interface AgentErrorDetail { message?: string; details?: Record<string, unknown> }
 
 export interface AppState {
   /** `unlicensed`: globals loaded, nothing else; only the licence screen is shown until a key verifies (no Trial Mode) */
@@ -66,6 +68,9 @@ export interface AppState {
   /** FR-061: a newer Composition Version was announced (composition.updated) and its model is still being fetched. */
   headLoading: boolean;
   agentError: Record<AgentKind, string | null>;
+  agentErrorDetail: Record<AgentKind, AgentErrorDetail | null>;
+  /** QA 2026-10-26 #6: explicit "Ask assistant" chips of the open project (the Timeline selection adds its own chips on top). */
+  chatTargets: ChatTarget[];
   connections: ConnectionDto[];
   assignments: AssignmentsDto | null;
   capabilities: Record<string, CapabilityRow[]>;
@@ -94,7 +99,7 @@ export const initialState: AppState = {
   boot: 'loading', stream: 'connecting', streamAttempt: 0, serviceEpoch: 0, fatal: null, health: null, settings: null, licence: null, hardware: null, tick: null, project: null, head: null,
   canUndo: false, canRedo: false, grant: null, assets: [], ingestStage: {}, queue: null, pending: [], plan: null, previousPlans: [], renders: [], outputs: [],
   messages: { brainstorm: [], editor: [] }, streaming: { brainstorm: null, editor: null }, contextUsage: { brainstorm: null, editor: null }, lastUsage: { brainstorm: null, editor: null }, headLoading: false, doneRuns: [],
-  agentError: { brainstorm: null, editor: null }, connections: [], assignments: null, capabilities: {}, models: [], toasts: [], live: null,
+  agentError: { brainstorm: null, editor: null }, agentErrorDetail: { brainstorm: null, editor: null }, chatTargets: [], connections: [], assignments: null, capabilities: {}, models: [], toasts: [], live: null,
   libMode: 'design', selection: [], playheadMs: 0, previewPresetId: null, screen: null, pulse: null, performanceProfile: 'standard', assetSelection: [],
   editorDraft: null, checkpointBadge: false, backupJob: null, update: null, sampleReady: [],
 };
@@ -123,7 +128,8 @@ export type Action =
   | { type: 'outputs'; outputs: OutputDto[] }
   | { type: 'messages'; agent: AgentKind; messages: MessageDto[]; contextUsage?: AppState['contextUsage'][AgentKind] }
   | { type: 'messageAdded'; agent: AgentKind; message: MessageDto }
-  | { type: 'agentError'; agent: AgentKind; code: string | null }
+  | { type: 'agentError'; agent: AgentKind; code: string | null; detail?: AgentErrorDetail | null }
+  | { type: 'chatTargets'; targets: ChatTarget[] }
   | { type: 'streamingStart'; agent: AgentKind; runId: string; modelId: string }
   | { type: 'streamingStop'; agent: AgentKind }
   | { type: 'providers'; connections?: ConnectionDto[]; assignments?: AssignmentsDto | null }
@@ -206,14 +212,21 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     case 'agent.run.started': return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.run.id, text: '', modelId: ev.data.modelId } }, agentError: { ...state.agentError, [ev.data.agent]: null } };
     case 'agent.run.delta': {
       const s = state.streaming[ev.data.agent];
-      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.runId, modelId: s?.modelId ?? '', text: `${s?.text ?? ''}${ev.data.delta}` } } };
+      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { ...(s?.runId === ev.data.runId ? s : {}), runId: ev.data.runId, modelId: s?.modelId ?? '', text: `${s?.text ?? ''}${ev.data.delta}` } } };
     }
     case 'agent.run.done': {
       const agent = ev.data.run.agent;
       const msgs = state.messages[agent].some((m) => m.id === ev.data.message.id) ? state.messages[agent] : [...state.messages[agent], ev.data.message];
       return { ...state, doneRuns: [ev.data.run.id, ...state.doneRuns].slice(0, 20), messages: { ...state.messages, [agent]: msgs }, streaming: { ...state.streaming, [agent]: null }, contextUsage: { ...state.contextUsage, [agent]: ev.data.contextUsage ?? state.contextUsage[agent] }, lastUsage: { ...state.lastUsage, [agent]: ev.data.usage ?? state.lastUsage[agent] } };
     }
-    case 'agent.run.failed': return { ...state, doneRuns: [ev.data.runId, ...state.doneRuns].slice(0, 20), streaming: { ...state.streaming, [ev.data.agent]: null }, agentError: { ...state.agentError, [ev.data.agent]: ev.data.code } };
+    case 'agent.run.progress': {
+      if (state.doneRuns.includes(ev.data.runId)) return state;
+      const s = state.streaming[ev.data.agent];
+      if (s && s.runId !== ev.data.runId) return state;
+      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.runId, text: s?.text ?? '', modelId: s?.modelId ?? '', phase: ev.data.phase, ...(ev.data.attempt !== undefined ? { attempt: ev.data.attempt } : {}), ...(ev.data.tool ? { tool: ev.data.tool } : {}) } } };
+    }
+    case 'agent.run.failed': return { ...state, doneRuns: [ev.data.runId, ...state.doneRuns].slice(0, 20), streaming: { ...state.streaming, [ev.data.agent]: null }, agentError: { ...state.agentError, [ev.data.agent]: ev.data.code },
+      agentErrorDetail: { ...state.agentErrorDetail, [ev.data.agent]: ev.data.message || ev.data.details ? { ...(ev.data.message ? { message: ev.data.message } : {}), ...(ev.data.details ? { details: ev.data.details } : {}) } : null } };
     case 'model.progress': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, bytesDone: ev.data.bytesDone, bytesTotal: ev.data.bytesTotal, status: ev.data.status, pausedReason: ev.data.pausedReason ?? null } : m)) };
     case 'model.installed': return { ...state, models: state.models.map((m) => (m.key === ev.data.model.key ? ev.data.model : m)) };
     case 'model.failed': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, status: ev.data.code === 'EM-7006' ? 'not-installed' : 'failed', errorCode: ev.data.code } : m)) };   // EM-7006 = paused (FR-161)
@@ -267,10 +280,10 @@ export function reducer(state: AppState, action: Action): AppState {
         canUndo: o.head.parentId !== null, canRedo: false, checkpointBadge: o.checkpointNewerThanSave !== null,
         messages: { brainstorm: action.messages?.brainstorm ?? [], editor: action.messages?.editor ?? [] },
         contextUsage: { brainstorm: action.contextUsage?.brainstorm ?? null, editor: action.contextUsage?.editor ?? null },
-        streaming: { brainstorm: null, editor: null }, agentError: { brainstorm: null, editor: null }, outputs: [], pulse: null, headLoading: false, lastUsage: { brainstorm: null, editor: null },
+        streaming: { brainstorm: null, editor: null }, agentError: { brainstorm: null, editor: null }, agentErrorDetail: { brainstorm: null, editor: null }, ...(state.project?.id === o.project.id ? {} : { chatTargets: [] }), outputs: [], pulse: null, headLoading: false, lastUsage: { brainstorm: null, editor: null },
       };
     }
-    case 'projectClosed': return { ...state, project: null, head: null, grant: null, assets: [], queue: null, plan: null, previousPlans: [], selection: [], messages: { brainstorm: [], editor: [] } };
+    case 'projectClosed': return { ...state, project: null, head: null, grant: null, assets: [], queue: null, plan: null, previousPlans: [], selection: [], chatTargets: [], messages: { brainstorm: [], editor: [] } };
     case 'project': return { ...state, project: action.project };
     case 'head': return { ...state, headLoading: false, head: action.head, canUndo: action.canUndo, canRedo: action.canRedo, project: state.project ? { ...state.project, headVersionId: action.head.id, headHash: action.head.hash, durationMs: action.head.durationMs, settings: action.head.model?.settings ?? state.project.settings } : null, selection: pruneSelection(state.selection, action.head) };
     case 'grant': return { ...state, grant: action.grant };
@@ -293,7 +306,8 @@ export function reducer(state: AppState, action: Action): AppState {
       if (at < 0) at = list.length;
       return { ...state, messages: { ...state.messages, [action.agent]: [...list.slice(0, at), m, ...list.slice(at)] } };
     }
-    case 'agentError': return { ...state, agentError: { ...state.agentError, [action.agent]: action.code }, ...(action.code ? { streaming: { ...state.streaming, [action.agent]: null } } : {}) };
+    case 'chatTargets': return { ...state, chatTargets: action.targets.slice(0, 12) };
+    case 'agentError': return { ...state, agentError: { ...state.agentError, [action.agent]: action.code }, agentErrorDetail: { ...state.agentErrorDetail, [action.agent]: action.code ? action.detail ?? null : null }, ...(action.code ? { streaming: { ...state.streaming, [action.agent]: null } } : {}) };
     case 'streamingStart': if (state.doneRuns.includes(action.runId)) return state;
       return { ...state, streaming: { ...state.streaming, [action.agent]: state.streaming[action.agent] ?? { runId: action.runId, text: '', modelId: action.modelId } } };
     case 'streamingStop': return { ...state, streaming: { ...state.streaming, [action.agent]: null } };

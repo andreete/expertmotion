@@ -8,7 +8,9 @@ import { Check } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import { visibleQueue } from '../state/reducer.js';
 import { chatModeFor, chatModePatch } from '../prefs.js';
-import type { AgentKind, EditIntent, MessageDto, PlanDto } from '../api/types.js';
+import type { AgentKind, ChatTarget, EditIntent, MessageDto, PlanDto } from '../api/types.js';
+import type { ElementRefT } from '@expertmotion/composition-model';
+import { elementTarget, mergeTargets, selectionTargets, targetKey } from './targets.js';
 import { AgentErrorBubble, Bubble, ChatHeader, Composer, ModeTag, StreamingBubble, Thread, messageText, type ChatLayoutProps } from './Chat.js';
 import { IntentQueue, targetText } from './IntentQueue.js';
 import { PlanCard, PlanSummary } from './PlanCard.js';
@@ -46,9 +48,21 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     actions.announce(t('ui.agent.chat.mode.changed', { mode: t(`ui.agent.mode.${m}`) }));
   }, [prefs, projectId, setPrefs, actions, t]);
   const [value, setValue] = useState('');
-  const [chip, setChip] = useState<string | null>(null);
+  const [draftTarget, setDraftTarget] = useState<ElementRefT | null>(null);
   const [plans, setPlans] = useState<Record<string, PlanDto>>({});
-  const [lastSent, setLastSent] = useState<{ text: string; att: string[] } | null>(null);
+  const [lastSent, setLastSent] = useState<{ agent: AgentKind; text: string; att: string[]; targets: ChatTarget[]; target: ElementRefT | null } | null>(null);
+  // QA 2026-10-26 #6: chips = explicit "Ask assistant" picks + the current Timeline selection (minus the ones removed or sent).
+  const selKey = JSON.stringify(state.selection);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  useEffect(() => { setDismissed(new Set()); }, [selKey]);
+  const selChips = useMemo(() => selectionTargets(state.selection, state.head?.model, state.assets, t), [selKey, state.head?.model, state.assets, t]); // eslint-disable-line react-hooks/exhaustive-deps
+  const targets = useMemo(() => mergeTargets(state.chatTargets, selChips, dismissed), [state.chatTargets, selChips, dismissed]);
+  const removeTarget = (x: ChatTarget) => {
+    const k = targetKey(x);
+    if (state.chatTargets.some((y) => targetKey(y) === k)) actions.setChatTargets(state.chatTargets.filter((y) => targetKey(y) !== k));
+    setDismissed((d) => new Set([...d, k]));
+    if (draftTarget && targetKey({ kind: draftTarget.kind as ChatTarget['kind'], ...(draftTarget.id !== undefined ? { id: draftTarget.id } : {}), ...(draftTarget.index !== undefined ? { index: draftTarget.index } : {}) }) === k) { setDraftTarget(null); dispatch({ type: 'editorDraft', draft: null }); }
+  };
   const draft = state.editorDraft;
   useEffect(() => {                                                  // FR-086: plans referenced by a restored thread
     if (!projectId) return;
@@ -59,7 +73,9 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
   useEffect(() => {                                                  // FR-067: "Ask the Editor" from the inspector → Edit mode
     if (!draft) return;
     setValue(draft.text);
-    setChip(draft.target ? draft.text.replace(/:\s*$/, '') : null);
+    setDraftTarget(draft.target);
+    const chipOf = draft.target ? elementTarget(draft.target, state.head?.model, state.assets, t) : null;
+    if (chipOf) actions.pointAt(chipOf);
     window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent: 'editor' } }));
   }, [draft?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -72,17 +88,33 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     const text = value.trim();
     const agent = mode;
     setValue('');
-    if (agent === 'brainstorm') setLastSent({ text, att: attachments });
-    const ok = await actions.send(agent, text, attachments, agent === 'editor' && chip ? draft?.target ?? null : null);
+    const target = agent === 'editor' ? draftTarget : null;
+    const sentTargets = targets;
+    setLastSent({ agent, text, att: attachments, targets: sentTargets, target });
+    const ok = await actions.send(agent, text, attachments, target, sentTargets);
     if (!ok) setValue(text);                                         // composer restored on failure (IX-12 point 9)
-    else if (agent === 'editor') { setChip(null); dispatch({ type: 'editorDraft', draft: null }); }
+    else {
+      actions.setChatTargets([]); setDismissed(new Set(sentTargets.map(targetKey)));   // chips are used up by the message
+      if (agent === 'editor') { setDraftTarget(null); dispatch({ type: 'editorDraft', draft: null }); }
+    }
+  };
+  /** Live failure "Coba lagi": the same request again (text, attachments, targets). */
+  const retry = (agent: AgentKind) => {
+    if (lastSent && lastSent.agent === agent) { void actions.send(agent, lastSent.text, lastSent.att, lastSent.target, lastSent.targets); return; }
+    if (agent === 'editor') void actions.plan();
+  };
+  const rephrase = (agent: AgentKind) => {
+    setMode(agent);
+    if (lastSent && lastSent.agent === agent) { setValue(lastSent.text); if (lastSent.targets.length) actions.setChatTargets(lastSent.targets); }
+    window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent } }));
   };
   /** "Apply to video" on a Diskusi answer without pending proposals: the answer becomes the Edit request. */
   const applyToVideo = async (m: MessageDto) => {
     const request = applyRequest(messageText(m), t);
     setMode('editor');
-    const ok = await actions.send('editor', request);
-    if (!ok) setValue(request);
+    setLastSent({ agent: 'editor', text: request, att: [], targets, target: null });
+    const ok = await actions.send('editor', request, [], null, targets);
+    if (!ok) setValue(request); else { actions.setChatTargets([]); setDismissed(new Set(targets.map(targetKey))); }
   };
   const plan = state.plan;
   // FR-085/FR-086: one thread in creation order: both agents' messages, the plan each Edit reply produced (inline), and
@@ -143,13 +175,13 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
         {thread.rows.map((r) => r.node)}
         <StreamingBubble agent="brainstorm" />
         <StreamingBubble agent="editor" />
-        <AgentErrorBubble agent="brainstorm" onRetry={() => { if (lastSent) { setMode('brainstorm'); setValue(lastSent.text); } }} />
-        <AgentErrorBubble agent="editor" onRetry={() => void actions.plan()} />
+        <AgentErrorBubble agent="brainstorm" onRetry={() => retry('brainstorm')} onRephrase={() => rephrase('brainstorm')} />
+        <AgentErrorBubble agent="editor" onRetry={() => retry('editor')} onRephrase={() => rephrase('editor')} />
         {plan && !thread.current && <div className="flex flex-col items-start gap-1"><ModeTag agent="editor" /><PlanCard plan={plan} /></div>}
       </Thread>
       <IntentQueue hidden={mode !== 'editor'} />
-      <Composer mode={mode} setMode={setMode} placeholder={t(mode === 'brainstorm' ? 'ui.agent.brainstorm.placeholder' : 'ui.agent.editor.placeholder')} chip={chip}
-        onClearChip={() => { setChip(null); setValue(''); dispatch({ type: 'editorDraft', draft: null }); }} value={value} setValue={setValue} onSend={(att) => void send(att)} />
+      <Composer mode={mode} setMode={setMode} placeholder={t(mode === 'brainstorm' ? 'ui.agent.brainstorm.placeholder' : 'ui.agent.editor.placeholder')} targets={targets}
+        onRemoveTarget={removeTarget} value={value} setValue={setValue} onSend={(att) => void send(att)} />
     </section>
   );
 }

@@ -6,7 +6,7 @@ import { BRIDGE_KEYS, isAllowedExternal, isPlayableOutput } from '../src/lib/con
 describe('preload bridge surface (SEC-031)', () => {
   it('exposes exactly the documented keys', () => {
     expect([...BRIDGE_KEYS].sort()).toEqual(['copyText', 'getBootstrap', 'getPathsForFiles', 'onServiceState', 'openExternal', 'openFolder', 'pickFiles', 'pickFolder', 'pickSavePath', 'readClipboardText',
-      'onUpdateState', 'getUpdateState', 'updateAction', 'openPath'].sort());
+      'onUpdateState', 'getUpdateState', 'updateAction', 'openPath', 'logError', 'retryStartup'].sort());
   });
 
   it('exposes no generic invoke pass-through', () => {

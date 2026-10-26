@@ -18,6 +18,14 @@ describe('CSP meta (SEC-024)', () => {
     expect(out).toMatch(/<meta charset="UTF-8" \/>\n\s+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self';/);
     expect(injectCspMeta(out)).toBe(out);
   });
+  it('paints a dark placeholder with the app mark and "Memulai…" before any script runs, with no inline script (FR-184)', () => {
+    const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    expect(html).toContain('data-el="sys.splash.placeholder"');
+    expect(html).toContain('Memulai…');
+    expect(html).toMatch(/<body style="[^"]*background:#0E0F12/);
+    expect(html.match(/<script\b[^>]*>/g)).toEqual(['<script type="module" src="/src/main.tsx">']);   // external module only
+    expect(html).not.toMatch(/\son[a-z]+=/i);                                                          // no inline handlers
+  });
   it('runs only for production builds (dev server keeps working)', () => {
     expect(cspMetaPlugin.apply).toBe('build');
   });

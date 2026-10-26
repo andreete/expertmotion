@@ -1,5 +1,5 @@
-// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (49 ops: ADR-020 additions, ADR-027 element timing/layer,
-// ADR-028 split and canvas transform).
+// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (51 ops: ADR-020 additions, ADR-027 element timing/layer,
+// ADR-028 split and canvas transform, ADR-030 scenes for videos without media).
 // test/operations.test.ts fails if this table and the document disagree.
 import { z } from 'zod';
 import { CaptionPage, Hex, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
@@ -43,6 +43,14 @@ export const OPERATIONS = {
   'op:transition.set': def({ presetId: PresetId, durationMs: z.number().int().min(100).max(2000), timing: z.enum(['linear', 'spring']).default('linear'), params: Params.optional() }, ['cut'], 'exclusive-group'),
   'op:transition.clear': def({}, ['cut'], null),
   'op:text.add': def({ text: z.string().min(1).max(500), variant: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), styleOverrides: TextStyle.optional(), layer: lane.optional() }, null, 'list'),
+  // ADR-030 (faceless videos): one scene of a video without media — a title and/or body text for `durationMs`, starting at
+  // `atMs` or right after the latest text / image / shape (so consecutive scene ops line up). The project background shows behind.
+  // ADR-030 (videos without media): a scene clip (background preset for durationMs) on the video Track with its title / text and
+  // the transition from the previous scene; appended unless atIndex is given.
+  'op:scene.add': def({ durationMs: z.number().int().min(500).max(120_000), background: PresetId.optional(), backgroundParams: Params.optional(), atIndex: z.number().int().min(0).optional(),
+    title: z.string().min(1).max(200).optional(), text: z.string().min(1).max(500).optional(), titleVariant: PresetId.optional(), textVariant: PresetId.optional(), motionId: PresetId.optional(),
+    transition: PresetId.optional(), transitionMs: z.number().int().min(100).max(2000).optional() }, ['sequence'], 'list'),
+  'op:scene.setBackground': def({ presetId: PresetId, params: Params.optional() }, ['clip'], 'scalar'),
   'op:text.setContent': def({ text: z.string().min(1).max(500) }, ['text'], 'scalar'),
   // FR-025: `variant` re-applies a text variant to an existing layer (variantId, variant position; size/weight/align follow the variant).
   'op:text.setStyle': def({ ...TextStyle.shape, variant: PresetId.optional() }, ['text'], 'scalar'),
@@ -106,7 +114,8 @@ export function propertyKeysOf(op: OperationT): string[] {
   const fields = (names: readonly string[]) => names.filter((n) => a[n] !== undefined);
   switch (op.op) {
     case 'op:clip.remove': case 'op:clip.move': return [el, 'sequence.order'];
-    case 'op:clip.insert': return a['atIndex'] === undefined ? [] : ['sequence.order'];   // appending shifts no existing cut index
+    case 'op:clip.insert': case 'op:scene.add': return a['atIndex'] === undefined ? [] : ['sequence.order'];   // appending shifts no existing cut index
+    case 'op:scene.setBackground': return [`${el}.scene`];
     case 'op:clip.setTrim': return [`${el}.trim`];
     case 'op:clip.setPlaybackRate': return [`${el}.playbackRate`];
     case 'op:clip.setVolume': return [`${el}.volume`, ...fields(['fadeInMs', 'fadeOutMs']).map((f) => `${el}.${f}`)];
@@ -139,7 +148,7 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:output.setAutoRatio': return ['project.ratioAuto'];
     case 'op:project.setFps': return ['project.fps'];
     case 'op:project.setDurationPolicy': return ['project.durationPolicy'];
-    default: return [];                                         // list additions (text.add, shape.add, audio.add*, generated.insert) touch no existing key
+    default: return [];                                         // list additions (text.add, scene.add, shape.add, audio.add*, generated.insert) touch no existing key
   }
 }
 export function lockedKeysOf(ops: readonly OperationT[]): string[] {

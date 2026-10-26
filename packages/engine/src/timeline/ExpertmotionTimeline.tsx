@@ -41,7 +41,7 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
           {model.tracks.video.flatMap((clip, i) => {
             const nodes: React.ReactNode[] = [
               <TransitionSeries.Sequence key={clip.id} durationInFrames={ft.clipFrames[i]!} premountFor={premountFor}>
-                <ClipView clip={clip} urls={assets[clip.assetId]} quality={quality} layout={layout} durationInFrames={ft.clipFrames[i]!} />
+                <ClipView clip={clip} urls={clip.assetId === undefined ? undefined : assets[clip.assetId]} quality={quality} layout={layout} durationInFrames={ft.clipFrames[i]!} />
               </TransitionSeries.Sequence>,
             ];
             const tr = model.transitions.find((x) => x.cutIndex === i);
@@ -84,6 +84,12 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
 
 const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'draft' | 'full'; layout: Layout; durationInFrames: number }> = ({ clip, urls, quality, layout, durationInFrames }) => {
   const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const t = useTheme();
+  // ADR-030: a scene clip (no media) paints its own background preset; motion, transform and transitions apply as for media.
+  if (clip.scene) return (
+    <AbsoluteFill style={{ ...motionStyle(clip.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId), overflow: 'hidden', backgroundColor: t.bg }} data-em-scene={clip.scene.presetId}>
+      <AbsoluteFill style={clipTransformStyle(clip.transform, layout.width, layout.height)}><BackgroundLayer background={clip.scene} /></AbsoluteFill>
+    </AbsoluteFill>
+  );
   if (!urls) return <AbsoluteFill style={{ backgroundColor: '#000' }} />;
   const src = quality === 'draft' && urls.proxy ? urls.proxy : urls.playable;
   const effects = effectsFor(clip.effects, frame, durationInFrames, fps);
@@ -122,7 +128,7 @@ function voiceWindows(model: CompositionModelT, assets: Record<string, AssetUrls
   const out: Array<[number, number]> = [];
   for (const a of model.tracks.audio) if (a.role === 'voice') out.push([framesOf(a.atMs, fps), framesOf(a.atMs + (a.durationMs ?? 0), fps)]);
   const ft = deriveFrameTiming(model);
-  model.tracks.video.forEach((c, i) => { if (!c.muted && c.volume > 0 && assets[c.assetId]?.hasAudio) out.push([ft.clipStartFrames[i]!, ft.clipStartFrames[i]! + ft.clipFrames[i]!]); });
+  model.tracks.video.forEach((c, i) => { if (!c.muted && c.volume > 0 && c.assetId !== undefined && assets[c.assetId]?.hasAudio) out.push([ft.clipStartFrames[i]!, ft.clipStartFrames[i]! + ft.clipFrames[i]!]); });
   return out;
 }
 

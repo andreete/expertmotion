@@ -56,8 +56,9 @@ export async function boot(cfg: ServiceConfig, opts: { resources?: Resources; mo
   const log = createLogger(p.logs, { echo: opts.echoLogs ?? cfg.dev });
   setEngineLog(createLogger(p.logs, { prefix: 'engine' }));
   try { pruneLogs(p.logs); } catch { /* ignore */ }
+  const dbStart = Date.now();
   const { db, openedVia, migrated } = openDatabase(p.db, cfg.dbKeyHex);
-  log.info({ openedVia, migrated }, 'database opened');
+  log.info({ openedVia, migrated, ms: Date.now() - dbStart }, 'database opened');
   const settings = new SettingsStore(db);
   const ctx: ServiceContext = {
     cfg, paths: p, db, bus: new EventBus(), grants: new GrantStore(cfg.mediaGrantTtlMs), settings, log,
@@ -65,7 +66,15 @@ export async function boot(cfg: ServiceConfig, opts: { resources?: Resources; mo
     resources: opts.resources ?? defaultResources(), hooks: defaultHooks(), newId, now: nowIso, mediaOrigins: new Set<string>(),
   };
   const modules = opts.modules ?? MODULES;
-  for (const m of modules) await m.start?.(ctx);
+  // Startup timing (QA 2026-10-26: ~38 s to `ready` on a T0 laptop): slow module starts are logged so the next QA log shows where.
+  const bootStart = Date.now();
+  for (const m of modules) {
+    const t0 = Date.now();
+    await m.start?.(ctx);
+    const ms = Date.now() - t0;
+    if (ms >= 250) log.info({ module: m.name, ms }, 'module start slow');
+  }
+  log.info({ ms: Date.now() - bootStart, modules: modules.length }, 'modules started');
   const app = createApp(ctx, modules);
   const stop = async () => { for (const m of [...modules].reverse()) { try { await m.stop?.(ctx); } catch (e) { log.error({ module: m.name, err: String(e) }, 'stop failed'); } } db.close(); };
   return { ctx, app, stop, openedVia };

@@ -8,7 +8,7 @@ import type { Router } from 'express';
 import { z } from 'zod';
 import { EmError, errorMessage } from '@expertmotion/shared';
 import { ElementRef, hashModel, summarizeForAgent, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
-import { BrainstormTurn, createIntents, runBrainstorm, type ChatImage, type ChatMessage, type ChatUsage, type DesignPick, type EditIntentT, type IntentCategory, type ToolHandlers } from '@expertmotion/agents';
+import { BrainstormTurn, createIntents, resolvePointedTargets, runBrainstorm, type PointedTarget, type RunProgress, type ChatImage, type ChatMessage, type ChatUsage, type DesignPick, type EditIntentT, type IntentCategory, type ToolHandlers } from '@expertmotion/agents';
 import { availableOnTier, searchPresets, type Category } from '@expertmotion/catalogue';
 import { renderServiceOf } from '../s2/render-service.js';
 import type { ServiceContext } from '../context.js';
@@ -19,13 +19,15 @@ import { cachedModels, runUsage } from '../s3/usage-store.js';
 import { s3, track } from '../s3/state.js';
 import { getAssignment } from './providers.js';
 import { recentEditsFor } from '../s3/shared-context.js';
+import { keyIsRecent } from '../s3/keys.js';
 
 /** Hook the intents module is asked to install (see report): enqueue already-validated intents, return the IntentQueueDto. */
 export interface HandoffHooks { enqueueIntents(projectId: string, intents: EditIntentT[]): { queue: unknown } }
 
 type Proposal = NonNullable<z.infer<typeof BrainstormTurn>['proposedIntents']>[number] & { id: string };
 type Block = { type: 'text'; text: string } | { type: 'tool_call'; name: string; input: unknown } | { type: 'tool_result'; name: string; output: unknown }
-  | { type: 'proposed_intents'; intents: Proposal[]; handoffState: 'pending' | 'sent' | 'dismissed' } | { type: 'attachment'; assetId?: string; mime: string; name: string };
+  | { type: 'proposed_intents'; intents: Proposal[]; handoffState: 'pending' | 'sent' | 'dismissed' } | { type: 'attachment'; assetId?: string; mime: string; name: string }
+  | { type: 'targets'; items: PointedTarget[] };
 interface MsgRow { id: string; conversation_id: string; role: 'user' | 'assistant' | 'system' | 'tool'; blocks_json: string; agent_run_id: string | null; created_at: string }
 interface RunRow { id: string; project_id: string; agent: AgentT; connection_id: string | null; model_id: string; status: 'running' | 'done' | 'failed' | 'cancelled'; error_code: string | null; started_at: string; finished_at: string | null; plan_id: string | null }
 
@@ -67,13 +69,30 @@ function finishRun(ctx: ServiceContext, runId: string, status: 'done' | 'failed'
   s3(ctx).runs.delete(runId);
   return r.changes > 0;
 }
+/** FR-190: what the chat shows and the log keeps for a failure: the reason, HTTP status / provider reason, and for EM-4002 whether the key is new. */
+function failureDetails(ctx: ServiceContext, run: RunRow, em: EmError): Record<string, unknown> {
+  const d = (em.details ?? {}) as Record<string, unknown>;
+  return { ...(typeof d['status'] === 'number' ? { providerStatus: d['status'] } : {}), ...(typeof d['reason'] === 'string' ? { reason: d['reason'] } : {}),
+    ...(em.code === 'EM-4002' ? { recentKey: keyIsRecent(ctx, run.connection_id) } : {}), ...(Array.isArray(d['lastIssues']) ? { lastIssues: d['lastIssues'] } : {}) };
+}
+/** FR-190: one log line per agent run outcome (never prompt text, Creator text or keys). The Editor's plan details come from S1. */
+export function logAgentRun(ctx: ServiceContext, run: RunRow, x: { status: 'done' | 'failed'; code?: string; details?: Record<string, unknown>; extra?: Record<string, unknown> }) {
+  const line = { agent: run.agent, mode: run.agent === 'brainstorm' ? 'diskusi' : 'edit', projectId: run.project_id, runId: run.id, connectionId: run.connection_id, model: run.model_id,
+    durationMs: Date.now() - Date.parse(run.started_at), status: x.status, ...(x.code ? { code: x.code } : {}), ...(x.details ?? {}), ...(x.extra ?? {}) };
+  if (x.status === 'failed') ctx.log.warn(line, 'agent run failed'); else ctx.log.info(line, 'agent run');
+}
 function failRun(ctx: ServiceContext, run: RunRow, convId: string, e: unknown) {
   const em = e instanceof EmError ? e : new EmError('EM-9001', 'Something went wrong.');
   if (!(e instanceof EmError)) ctx.log.error({ runId: run.id, err: errorMessage(e) }, 'agent run crashed');
   if (!finishRun(ctx, run.id, 'failed', em.code)) return;
-  insertMessage(ctx, convId, 'system', [{ type: 'text', text: `${em.code}: ${em.message}` }], run.id);
-  emit(ctx, 'agent.run.failed', { projectId: run.project_id, runId: run.id, agent: run.agent, code: em.code, retryable: ['EM-4101', 'EM-4102', 'EM-4103', 'EM-4003', 'EM-4301'].includes(em.code) });
+  const details = failureDetails(ctx, run, em);
+  logAgentRun(ctx, run, { status: 'failed', code: em.code, details });
+  const hint = em.code === 'EM-4002' && details['recentKey'] ? ' New keys can take 1–2 minutes to become active.' : '';
+  insertMessage(ctx, convId, 'system', [{ type: 'text', text: `${em.code}: ${em.message}${hint}` }], run.id);
+  emit(ctx, 'agent.run.failed', { projectId: run.project_id, runId: run.id, agent: run.agent, code: em.code, message: `${em.message}${hint}`, details,
+    retryable: ['EM-4101', 'EM-4102', 'EM-4103', 'EM-4003', 'EM-4301', 'EM-4105'].includes(em.code) || (em.code === 'EM-4002' && details['recentKey'] === true) });
 }
+const progressEmitter = (ctx: ServiceContext, projectId: string, runId: string, agent: AgentT) => (p: RunProgress) => emit(ctx, 'agent.run.progress', { projectId, runId, agent, ...p });
 function cancelRun(ctx: ServiceContext, runId: string, code: 'EM-4303' | 'EM-4304' | 'EM-8202'): void {
   const live = s3(ctx).runs.get(runId);
   const row = getRun(ctx, runId);
@@ -96,17 +115,24 @@ const matchesBase = (h: { versionId: string; hash: string }, base: string) => ba
 function historyOf(ctx: ServiceContext, convId: string): ChatMessage[] {
   const rows = ctx.db.prepare("SELECT role, blocks_json FROM messages WHERE conversation_id = ? AND role IN ('user','assistant') ORDER BY created_at, id").all(convId) as Array<{ role: 'user' | 'assistant'; blocks_json: string }>;
   return rows.flatMap((r) => {
-    const text = (JSON.parse(r.blocks_json) as Block[]).flatMap((b) => (b.type === 'text' ? [b.text] : b.type === 'proposed_intents' ? [`(proposed ${b.intents.length} change(s); ${b.handoffState})`] : [])).join('\n');
+    const text = (JSON.parse(r.blocks_json) as Block[]).flatMap((b) => (b.type === 'text' ? [b.text] : b.type === 'proposed_intents' ? [`(proposed ${b.intents.length} change(s); ${b.handoffState})`]
+      : b.type === 'targets' ? [`(pointed at: ${b.items.map((t) => `@${t.label}`).join(', ')})`] : [])).join('\n');
     return text ? [{ role: r.role, content: text }] : [];
   });
 }
 
-export function brainstormContext(ctx: ServiceContext, project: { id: string; name: string; language: 'id' | 'en' }) {
-  let composition: unknown = null;
-  try { const head = ctx.hooks.composition(project.id); composition = summarizeForAgent(head.model, ctx.hooks.assetFacts(project.id), 2000); } catch { /* no head yet */ }
+export function brainstormContext(ctx: ServiceContext, project: { id: string; name: string; language: 'id' | 'en' }, targets: PointedTarget[] = []) {
+  let composition: unknown = null; let pointed: unknown[] = [];
+  try {
+    const head = ctx.hooks.composition(project.id); const facts = ctx.hooks.assetFacts(project.id);
+    composition = summarizeForAgent(head.model, facts, 2000);
+    if (targets.length) pointed = resolvePointedTargets(targets, head.model, facts);
+  } catch { /* no head yet */ }
   // AI_WORKFLOW §10.1: what the Editor changed in the same project chat (plan goals, applied / undone), token-budgeted.
   const recentEdits = recentEditsFor(ctx, project.id);
-  return { project: { name: project.name, language: project.language }, tier: ctx.hooks.tier(), composition, ...(recentEdits ? { recentEdits } : {}) };
+  // QA 2026-10-26 #2: the asset list is always in CONTEXT (an empty list means "build from scenes", never "upload first").
+  const assets = (() => { try { return ctx.hooks.assetFacts(project.id).filter((a) => a.status === 'ready').slice(0, 40).map((a) => ({ id: a.id, kind: a.kind, name: a.name ?? a.id, ...(a.durationMs !== undefined ? { durationMs: a.durationMs } : {}) })); } catch { return []; } })();
+  return { project: { name: project.name, language: project.language }, tier: ctx.hooks.tier(), composition, assets, ...(pointed.length ? { targets: pointed } : {}), ...(recentEdits ? { recentEdits } : {}) };
 }
 
 /**
@@ -169,12 +195,14 @@ function imagePart(ctx: ServiceContext, projectId: string, assetId: string): Cha
   return { mediaType, data: data.toString('base64'), name: r.name };
 }
 
-async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: string, project: { id: string; name: string; language: 'id' | 'en' }, signal: AbortSignal, images: ChatImage[] = []) {
+async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: string, project: { id: string; name: string; language: 'id' | 'en' }, signal: AbortSignal, images: ChatImage[] = [], targets: PointedTarget[] = []) {
   const provider = ctx.hooks.providerFor('brainstorm', project.id);
   const deltas = deltaEmitter(ctx, project.id, run.id, 'brainstorm');
-  const r = await runBrainstorm(historyOf(ctx, convId), brainstormContext(ctx, project), project.language, provider, {
+  const progress = progressEmitter(ctx, project.id, run.id, 'brainstorm');
+  progress({ phase: 'reading' });
+  const r = await runBrainstorm(historyOf(ctx, convId), brainstormContext(ctx, project, targets), project.language, provider, {
     signal, budgetCheck: () => ctx.hooks.budgetCheck(project.id), contextLength: contextLengthOf(ctx, run.connection_id, run.model_id),
-    tools: brainstormTools(ctx, project.id, project.language), onDelta: (d) => { if (!signal.aborted) deltas.push(d); }, ...(images.length ? { images } : {}),
+    tools: brainstormTools(ctx, project.id, project.language), onDelta: (d) => { if (!signal.aborted) deltas.push(d); }, ...(images.length ? { images } : {}), onProgress: progress,
   }).finally(() => deltas.flush());
   record(ctx, project.id, 'brainstorm', run.id, r.usage);
   if (signal.aborted) return;
@@ -186,23 +214,34 @@ async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: strin
   if (r.turn.proposedIntents?.length) blocks.push({ type: 'proposed_intents', intents: r.turn.proposedIntents.map((p) => ({ ...p, id: ctx.newId() })), handoffState: 'pending' });
   const msg = insertMessage(ctx, convId, 'assistant', blocks, run.id);
   if (!finishRun(ctx, run.id, 'done', null)) return;
+  logAgentRun(ctx, run, { status: 'done', extra: { provider: provider.id, toolCalls: r.toolCalls.length, proposals: r.turn.proposedIntents?.length ?? 0, questions: r.turn.questions?.length ?? 0, targets: targets.length } });
   const done = getRun(ctx, run.id)!;
   emit(ctx, 'agent.run.done', { projectId: project.id, run: runDto(ctx, done), message: msgDto(msg), usage: runDto(ctx, done).usage, contextUsage: contextUsage(ctx, project.id, 'brainstorm') });
 }
 
 /** FR-080: the intents module enqueues the message as a chat Edit Intent once the run can start; the Editor Agent plans every queued intent with it. */
-interface EditorTurn { messageId: string; text: string; target?: ElementRefT | undefined; selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images: ChatImage[]; attachments: string[] }
+interface EditorTurn { messageId: string; text: string; target?: ElementRefT | undefined; selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images: ChatImage[]; attachments: string[]; targets: PointedTarget[] }
 async function executeEditor(ctx: ServiceContext, run: RunRow, convId: string, projectId: string, turn: EditorTurn, signal: AbortSignal) {
   const deltas = deltaEmitter(ctx, projectId, run.id, 'editor');
   const plan = await ctx.hooks.createPlan(projectId, { instruction: turn.text, mode: 'agent', signal, runId: run.id, chat: { messageId: turn.messageId, ...(turn.target ? { target: turn.target } : {}) },
     ...(turn.selection?.length || turn.target ? { selection: turn.target ? [turn.target, ...(turn.selection ?? [])] : turn.selection! } : {}), ...(turn.playheadMs !== undefined ? { playheadMs: turn.playheadMs } : {}),
-    ...(turn.attachments.length ? { attachments: turn.attachments } : {}), ...(turn.images.length ? { images: turn.images } : {}), onDelta: (d) => { if (!signal.aborted) deltas.push(d); } })
+    ...(turn.attachments.length ? { attachments: turn.attachments } : {}), ...(turn.images.length ? { images: turn.images } : {}), onDelta: (d) => { if (!signal.aborted) deltas.push(d); },
+    ...(turn.targets.length ? { targets: turn.targets } : {}), onProgress: progressEmitter(ctx, projectId, run.id, 'editor') })
     .finally(() => deltas.flush()) as Awaited<ReturnType<ServiceContext['hooks']['createPlan']>> & { runId?: string };
   // Usage is recorded by the intents module under this run (FR-074); only a module without a run id leaves it to us.
   if (plan.usage && !plan.runId) record(ctx, projectId, 'editor', run.id, [plan.usage]);
   if (signal.aborted) return;
+  // QA 2026-10-26 #5: a run that produced no plan (provider error, EM-4301, …) is a failure with its reason and next action in the
+  // chat — never the Creator's own message echoed back as the "reply" with an empty Plan Card.
+  if ((plan.status === 'failed' || plan.status === 'invalid' || plan.status === 'stale') && plan.steps.length === 0) {
+    const v = plan.validation?.[0];
+    const code = (v?.code && /^EM-\d{4}$/.test(v.code) ? v.code : 'EM-4301') as EmError['code'];
+    ctx.db.prepare('UPDATE agent_runs SET plan_id = COALESCE(plan_id, ?) WHERE id = ?').run(plan.planId, run.id);
+    return failRun(ctx, run, convId, new EmError(code, v?.message ?? 'The model could not produce a valid plan.'));
+  }
   const msg = insertMessage(ctx, convId, 'assistant', [{ type: 'text', text: plan.goal }, { type: 'tool_result', name: 'plan', output: { planId: plan.planId, planRunId: plan.runId ?? null, status: plan.status, steps: plan.steps.length, risks: plan.risks } }], run.id);
   if (!finishRun(ctx, run.id, 'done', null, plan.planId)) return;
+  logAgentRun(ctx, run, { status: 'done', extra: { planId: plan.planId, planStatus: plan.status, steps: plan.steps.length } });
   const done = getRun(ctx, run.id)!;
   emit(ctx, 'agent.run.done', { projectId, run: runDto(ctx, done), message: msgDto(msg), usage: runDto(ctx, done).usage, contextUsage: contextUsage(ctx, projectId, 'editor'), planId: plan.planId });
 }
@@ -214,7 +253,9 @@ function record(ctx: ServiceContext, projectId: string, agent: AgentT, runId: st
 const AgentParams = z.object({ id: Id, agent: Agent });
 const SendBody = z.object({ text: z.string().min(1).max(8000), attachments: z.array(z.object({ assetId: Id })).max(4).default([]), intentIds: z.array(Id).max(100).optional(), baseVersion: z.string().min(1).max(128),
   /** FR-067: the element "Ask Editor Agent" referenced; FR-080: the Timeline selection and playhead at send time (Editor only). */
-  target: ElementRef.optional(), selection: z.array(ElementRef).max(50).optional(), playheadMs: z.number().int().min(0).max(36_000_000).optional() }).strict();
+  target: ElementRef.optional(), selection: z.array(ElementRef).max(50).optional(), playheadMs: z.number().int().min(0).max(36_000_000).optional(),
+  /** FR-189: what the Creator pointed at (composer chips): explicit targets with a friendly label, both modes. */
+  targets: z.array(z.object({ kind: z.enum(['asset', 'clip', 'text', 'image', 'shape', 'audio', 'cut']), id: z.string().min(1).max(64).optional(), index: z.number().int().min(0).optional(), label: z.string().trim().min(1).max(80) }).strict()).max(12).default([]) }).strict();
 const HandoffBody = z.object({ messageId: Id, intentIds: z.array(Id).max(12).optional(), baseVersion: z.string().min(1).max(128) }).strict();
 
 export const agentsModule: ServiceModule = {
@@ -272,14 +313,15 @@ export const agentsModule: ServiceModule = {
       const run: RunRow = { id: runId, project_id: project.id, agent, connection_id: a?.connectionId ?? null, model_id: provider.model, status: 'running', error_code: null, started_at: now, finished_at: null, plan_id: null };
       const msg = ctx.db.transaction(() => {
         ctx.db.prepare("INSERT INTO agent_runs(id, project_id, agent, connection_id, model_id, status, started_at) VALUES (?,?,?,?,?,'running',?)").run(runId, project.id, agent, run.connection_id, run.model_id, now);
-        return insertMessage(ctx, convId, 'user', [{ type: 'text', text: body.text }, ...attachments], runId);
+        return insertMessage(ctx, convId, 'user', [{ type: 'text', text: body.text }, ...attachments, ...(body.targets.length ? [{ type: 'targets' as const, items: body.targets as PointedTarget[] }] : [])], runId);
       })();
       const controller = new AbortController();
       s3(ctx).runs.set(runId, { controller, projectId: project.id, agent });
       emit(ctx, 'agent.run.started', { projectId: project.id, run: runDto(ctx, run), agent, modelId: run.model_id });
       const names = attachments.flatMap((b) => (b.type === 'attachment' ? [b.name] : []));
-      const work = agent === 'brainstorm' ? executeBrainstorm(ctx, run, convId, project, controller.signal, images)
-        : executeEditor(ctx, run, convId, project.id, { messageId: msg.id, text: body.text, target: body.target, selection: body.selection, playheadMs: body.playheadMs, images, attachments: names }, controller.signal);
+      const targets = body.targets as PointedTarget[];
+      const work = agent === 'brainstorm' ? executeBrainstorm(ctx, run, convId, project, controller.signal, images, targets)
+        : executeEditor(ctx, run, convId, project.id, { messageId: msg.id, text: body.text, target: body.target, selection: body.selection, playheadMs: body.playheadMs, images, attachments: names, targets }, controller.signal);
       void track(ctx, work.catch((e: unknown) => { if (!controller.signal.aborted) failRun(ctx, run, convId, e); }));
       return { message: msgDto(msg), runId, planId: null };
     });

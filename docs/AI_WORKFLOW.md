@@ -90,7 +90,7 @@ export const EditPlan = z.object({
   goal: z.string().max(300),
   steps: z.array(z.object({
     n: z.number().int().min(1),
-    tool: z.string(),                   // "composition.applyOps" | "captions.generate" | ...
+    tool: z.string(),                   // "composition.applyOps" | "tts.generate" | "captions.generate" (ADR-030 generator steps: args, no ops)
     ops: z.array(Operation).default([]),// for composition.applyOps
     args: z.record(z.unknown()).default({}),
     expectedDiff: z.string().max(200),  // human-readable, shown in Plan Card
@@ -161,6 +161,8 @@ The resolved target is written to `resolvedTargets` and displayed on the Intent 
 | `op:transition.set` | cut | `{presetId, durationMs, timing: 'linear'|'spring', params?}` | exclusive-group | validator recomputes total duration |
 | `op:transition.clear` | cut | `{}` | — | |
 | `op:text.add` | playhead/absolute | `{text, variant, atMs, durationMs, position, styleOverrides?, layer?}` | list | uses Theme defaults; layer by the ADR-027 lane rule (front of everything it overlaps unless `layer` is given) |
+| `op:scene.add` | sequence | `{durationMs (500..120000), background? = preset:background.gradient (a background preset id), backgroundParams?, atIndex?, title? (≤ 200), text? (≤ 500), titleVariant? = preset:text.title, textVariant? = preset:text.subtitle (title when there is no title), motionId? (motion preset for the texts; default the variant's), transition? (transition preset into this scene from the previous one), transitionMs? = 500}` | list | ADR-030 (videos without media, FR-188): appends (or inserts at `atIndex`) a **scene clip** — a clip without media that shows its background preset for `durationMs` — and its title / body text over it (from the clip start plus the incoming transition, to the clip end), and sets the transition on the cut before it; cuts, transitions, effects, split, trim, Undo, Timeline and render treat it like any clip; total duration = Σ scenes − transitions; keys as `op:clip.insert` |
+| `op:scene.setBackground` | clip (scene clip) | `{presetId (background), params?}` | scalar | ADR-030: changes a scene clip's background; on a media clip → EM-2102; key `clip:<id>.scene` |
 | `op:text.setContent` | text | `{text}` | scalar | |
 | `op:text.setStyle` | text | `{fontFamily?, fontSize? (16..200 u), weight?, italic?, colour?, align?, opacity?, variant?}` | scalar per field | each field its own Locked Key; `variant` (FR-025) sets `variantId`, moves the layer to the variant position and drops its size/weight/align overrides |
 | `op:text.setEffect` | text | `{presetId, params?}` | exclusive-group | text effects |
@@ -252,10 +254,36 @@ Rewrite envelope sent to the Editor Agent (JSON, not prose):
   "selection": [{ "kind": "clip", "id": "..." }],   // FR-080: Timeline selection at send time (omitted when empty)
   "playheadMs": 3000,                              // FR-080: playhead at send time (chat messages)
   "attachments": ["logo.png"],                     // FR-072: names only; images go as image parts to image-input models
-  "capabilities": { "ops": [...names...], "presets": {...ids by category, with hardware flags...}, "maxOpsPerPlan": 200 },
+  "targets": [{ "kind": "asset", "id": "...", "label": "Reels 14.m4a", "facts": { "assetKind": "audio", "durationMs": 14000, "onTimeline": [] } }],   // FR-189: chat chips (omitted when none)
+  "capabilities": { "ops": [...names...], "opArgs": { "op:text.add": "{text: string, variant: preset id, atMs: int 0.., durationMs: int 100.., …} target: none", ... },
+                    "presets": {...ids by category, with hardware flags...}, "maxOpsPerPlan": 200,
+                    "stepTools": { "tts.generate": { "available": true, "model": "…" }, "captions.generate": { "script": true, "sequence": false } } },
   "constraints": ["never touch lockedKeys", "times in ms", "respond with EditPlan JSON only"]
 }
 ```
+
+### 7.1 Reading a model-authored plan (ADR-030, QA 2026-10-26)
+
+Real models (Claude Haiku 4.5 on Windows) produced plans that a strict parser rejected three times. `parseModelReply` therefore first applies `normalizeModelReply` (`packages/agents/src/plan-normalize.ts`), which repairs only **unambiguous** slips and lists each repair (`fixes`, logged as counts and kinds, never content):
+
+| Slip | Repair |
+|---|---|
+| prose / ```json fence around the JSON; `{plan: …}` / `{editPlan: …}` wrapper; a top-level `ops` array; a step that is itself one op | parsed / unwrapped / wrapped into one `composition.applyOps` step |
+| missing `n`, `expectedDiff`, `dependsOn`, `risks`; risks as strings; `questions` | numbered from 1; empty; `[]`; `{code:'note', severity:'info'}`; one `needs-input` risk |
+| `goal` > 300 or `expectedDiff` > 200 characters | clipped with "…" |
+| `baseVersion` missing or different | replaced by the runtime's base (staleness is checked against the head by the Local Service, AI-013) |
+| `tool` "applyOps", "composition.apply", "tts", "voice.generate", "captions" … | the plan step tool it names |
+| op name without `op:`, wrong case, known alias (`op:transition.add` → `op:transition.set`, `op:clip.trim` → `op:clip.setTrim`, `op:clip.split` → `op:element.split`, …) | the vocabulary name |
+| args in `params` / `arguments` / at the op's top level | moved into `args` |
+| near-miss arg names that the op does not have (`startMs`/`start` → `atMs`, `duration` → `durationMs`, `content` → `text`, `preset` → `presetId`, `color` → `colour`, `speed` → `rate`, `zoom` → `scale`, …); `endMs` with `atMs` | renamed / `durationMs = endMs − atMs` |
+| numbers as strings; fractional ms; volume 0–100; scale in percent | numbers; rounded; ÷ 100 |
+| short preset ids (`"fade"` for a transition, `"title"` for a variant) | `preset:<category>.<name>` when that preset exists |
+| forgotten fields with one obvious value (`op:text.add` variant / atMs / durationMs, `op:transition.set` durationMs, `op:audio.addLayer` volume, `op:shape.add` atMs / durationMs) | `preset:text.title` / 0 / 3000; 500; 1; 0 / 3000 |
+| target as a bare id or number; kind alias (`video`, `title`, `music`, `logo`); extra keys; the id of an **asset** where its one clip / layer / image is meant; a target inside args (`clipId`, `cutIndex`) | the element's real `{kind, id}` / `{kind:'cut', index}` (left as is when ambiguous) |
+| unknown arg keys | dropped and named in the correction message |
+| `intents` instead of a plan | intents with a preset id compile deterministically (no extra model call); otherwise one correction asking for ops |
+
+Everything else goes to validation; a rejection is sent back (max `maxCorrections` = 2) as one line per blocking issue with the **step, op index and op name** and that op's exact args signature from `capabilities.opArgs` (`correctionMessage`). When the Creator pointed at elements (FR-189) and no valid plan results, the run returns a zero-step plan with one `needs-input` question about those elements instead of EM-4301.
 
 ## 8. Tools (registry; permissions in AGENT_DESIGN.md)
 
@@ -267,8 +295,8 @@ Rewrite envelope sent to the Editor Agent (JSON, not prose):
 | `catalogue.search` | `{query, category?}` | presets with params schema | none | both |
 | `assets.list` | `{projectId}` | asset metadata | none | both |
 | `assets.probe` | `{assetId}` | detailed probe | none | Editor Agent |
-| `captions.generate` | `{assetId, language}` | `{jobId}` → pages | spawns whisper (P1) | Editor Agent via plan step |
-| `tts.generate` | `{text, voiceId, language}` | `{jobId}` → asset | spawns sherpa-onnx (P1) | plan step |
+| `captions.generate` | plan step args `{source: 'script' \| 'voice' \| 'sequence', text?, atMs?, durationMs?, presetId?, language?}` | `script`: pages from the text over the window (no model; becomes `op:caption.setPages` in the plan's own version); `voice`: after the step's voice job, script pages timed over the voice layer; `sequence`: `{jobId}` → pages (whisper) | `sequence` spawns whisper | Editor Agent via plan step (ADR-030) |
+| `tts.generate` | plan step args `{text (≤ 2000), atMs?, voiceId?, language?, speed?}` | `{jobId}` → voice Asset inserted at `atMs` as a later Composition Version | spawns sherpa-onnx | Editor Agent via plan step (ADR-030); without an installed voice model the step is `needs-model` + a `model-missing` warn risk (Model Manager link), the other steps run |
 | `music.generate` | `{prompt, durationMs, style}` | `{jobId}` → asset | spawns ACE-Step (P2) | plan step |
 | `thumbnail.generate` | `{prompt?, frameMs?, titleText?}` | `{jobId}` → image | spawns sd.cpp / renderStill (P2) | plan step |
 | `render.estimate` | `{versionId, outputProfile, performanceProfile}` | `{seconds, bytes, warnings}` | none | both |
@@ -312,7 +340,7 @@ Rules: both blocks are data, never instructions (a constraint line in the envelo
 |---|---|
 | Provider timeout (30 s first token, 120 s total) | retry once with backoff; then `EM-4101` with "Try again / switch model" |
 | Rate limit (429) | wait per `Retry-After` up to 20 s, once; then `EM-4102` |
-| Invalid JSON / schema | re-prompt with the Zod error (max 2); then `EM-4301` and the raw text is shown collapsed for transparency |
+| Invalid JSON / schema | unambiguous slips repaired first (§7.1); otherwise re-prompt with the Zod error / validation lines naming step, op and its args signature (max 2); then `EM-4301` (details: last issue codes / paths) as an error bubble with "Ubah kalimat" / "Ganti model" — a run that produced no plan is never shown as a reply; with pointed targets a short question instead (§7.1) |
 | Model lacks tool calling | Capability Table routes to JSON-mode prompting (tools described in prompt, output is the EditPlan JSON) |
 | `touchesLockedKeys` non-empty | one re-prompt listing the keys; then drop those ops with notice: a `locked-key` info risk plus one `validation` entry per affected step `{ code: 'EM-2302', path: 'droppedSteps[<n>]', message: '<n>. <expectedDiff> (<locked keys>)' }`, which the Plan Card lists struck through (FR-081) |
 | Execute fails mid-transaction | SQLite rollback; `ExecutionResult.rollback.performed = true`; version unchanged |
@@ -339,4 +367,8 @@ Golden scenarios (GOLDEN_SCENARIOS.md) run against (a) the Compile path (pure un
 | AI-018 | Superseded intents are visible and restorable | UI test |
 | AI-019 | Hand-off from Brainstorming Agent is explicit (card) | UI test |
 | AI-020 | No tool can execute shell, filesystem or network actions from model input | code review + registry test |
+| AI-022 | Lenient reading of model plans (§7.1): only unambiguous repairs; the runtime owns `baseVersion`; correction messages name step, op and args signature; `capabilities.opArgs` lists every op's args | unit (packages/agents leniency.test.ts) |
+| AI-023 | Videos without media (ADR-030): `op:scene.add` / `op:scene.setBackground`, generator plan steps `tts.generate` / `captions.generate` with model-missing handling; no "insert an asset first" gate for the Editor Agent | GS-23 (packages/agents golden/faceless.test.ts, packages/engine faceless.test.tsx, apps/service s3/faceless-pointing.test.ts, render smoke) |
+| AI-024 | Pointed targets (FR-189) resolve with facts in the envelope / CONTEXT; a vague pointed request asks one question | unit + service test |
+| AI-025 | One diagnostic log line per agent run and `agent.run.progress` phases (FR-190); never prompt text, Creator text or keys | service test |
 | AI-021 | Shared chat context (§10.1): the Editor envelope carries `discussion`, the Brainstorming CONTEXT carries `recentEdits`, both within their budgets and as data only | unit (packages/agents shared-context.test.ts) + integration (apps/service s3/shared-context.test.ts) |

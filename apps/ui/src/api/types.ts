@@ -87,10 +87,12 @@ export interface PlanDto {
   /** FR-086: summary of the ExecutionResult once executed (R-071 PlanDto `result`). */
   result?: PlanResultSummary | null;
 }
-export interface PlanResultSummary { ok: boolean; toVersion: string | null; appliedOps: number; added: number; removed: number; modified: number }
+export interface PlanResultSummary { ok: boolean; toVersion: string | null; appliedOps: number; added: number; removed: number; modified: number; toolSteps?: ToolStepResult[] }
+/** R-073: generator steps of a plan (tts.generate, captions.generate) started after the Composition Version was committed. */
+export interface ToolStepResult { n: number; tool: string; status: 'started' | 'skipped' | 'done' | 'failed'; jobId?: Id; code?: string }
 export interface ExecutionResult {
   planId: Id; ok: boolean; fromVersion: string; toVersion?: string; appliedOps: number; diff: ElementDiff[];
-  error?: { code: string; message: string; step?: number; path?: string }; rollback?: { performed: boolean; toVersion: string }; durationMs: number; notice?: string;
+  error?: { code: string; message: string; step?: number; path?: string }; rollback?: { performed: boolean; toVersion: string }; durationMs: number; notice?: string; toolSteps?: ToolStepResult[];
 }
 export interface ElementDiff { elementId: string; change: 'added' | 'removed' | 'modified'; fields: string[] }
 export interface CheckpointDto { id: Id; projectId: Id; versionId: Id; reason: 'autosave' | 'pre-execute' | 'pre-render' | 'manual'; createdAt: Iso; durationMs: number; hash?: string; bytes?: number }
@@ -135,7 +137,12 @@ export type MessageBlock =
   | { type: 'tool_call'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; output: unknown }
   | { type: 'proposed_intents'; intents: EditIntent[]; handoffState: 'pending' | 'sent' | 'dismissed' }
-  | { type: 'attachment'; assetId?: Id; mime: string; name: string };
+  | { type: 'attachment'; assetId?: Id; mime: string; name: string }
+  | { type: 'targets'; items: ChatTarget[] };
+/** QA 2026-10-26 #6 (pointing): an asset or Timeline element the Creator pointed the assistant at ("@Klip 2"). */
+export type ChatTargetKind = 'asset' | 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut';
+export interface ChatTarget { kind: ChatTargetKind; id?: string; index?: number; label: string }
+export type AgentPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool';
 export interface MessageDto { id: Id; role: 'user' | 'assistant' | 'system' | 'tool'; blocks: MessageBlock[]; agentRunId: Id | null; createdAt: Iso }
 export interface ConversationDto {
   conversationId: Id; agent: AgentKind; summary: unknown; assignment: AssignmentDto | null; contextUsage: { usedTokens: number; contextLength: number } | null; messages: Page<MessageDto>;
@@ -260,7 +267,8 @@ export interface EventMap {
   'agent.run.started': { run: AgentRunDto; agent: AgentKind; modelId: string; planId?: Id };
   'agent.run.delta': { runId: Id; agent: AgentKind; delta: string; toolCall?: { name: string; input: unknown } };
   'agent.run.done': { run: AgentRunDto; message: MessageDto; usage: UsageNumbers | null; contextUsage: { usedTokens: number; contextLength: number } | null };
-  'agent.run.failed': { runId: Id; agent: AgentKind; code: string; retryable: boolean };
+  'agent.run.progress': { runId: Id; agent: AgentKind; phase: AgentPhase; attempt?: number; tool?: string };
+  'agent.run.failed': { runId: Id; agent: AgentKind; code: string; retryable: boolean; message?: string; details?: Record<string, unknown> };
   'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render' };
   'model.installed': { model: ModelStateDto };
   'model.failed': { key: string; code: string };
@@ -272,7 +280,7 @@ export interface EventMap {
 export type EventName = keyof EventMap;
 export const EVENT_NAMES: readonly EventName[] = [
   'intent.updated', 'plan.ready', 'plan.invalid', 'composition.updated', 'render.queued', 'render.progress', 'render.done', 'render.failed', 'render.cancelled',
-  'ingest.progress', 'ingest.done', 'ingest.failed', 'agent.run.started', 'agent.run.delta', 'agent.run.done', 'agent.run.failed', 'model.progress', 'model.installed',
+  'ingest.progress', 'ingest.done', 'ingest.failed', 'agent.run.started', 'agent.run.delta', 'agent.run.progress', 'agent.run.done', 'agent.run.failed', 'model.progress', 'model.installed',
   'model.failed', 'hardware.tick', 'license.changed', 'settings.changed', 'service.notice',
 ];
 export type ServiceEvent = { [K in EventName]: { name: K; data: EventMap[K] & EventEnvelope } }[EventName];

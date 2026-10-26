@@ -10,7 +10,7 @@ import { compileDefaults, getPreset, listPresets, type Category } from '@expertm
 import { newId } from '@expertmotion/shared';
 import { resolveDimensions } from '@expertmotion/engine/formats';
 import type {
-  AgentKind, AssetDto, AssignmentDto, CapabilityRow, CatalogueItemDto, CheckpointDto, ConnectionDto, DesignPickInput, EditIntent, ExecutionResult,
+  AgentKind, AssetDto, ChatTarget, AssignmentDto, CapabilityRow, CatalogueItemDto, CheckpointDto, ConnectionDto, DesignPickInput, EditIntent, ExecutionResult,
   GeneratorJobDto, HardwareProfileDto, IntentCategory, IntentQueueDto, LicenseDto, MediaGrantDto, MessageBlock, MessageDto, ModelStateDto, OutputDto,
   PlanDto, ProjectDto, RenderCreateInput, RenderJobDto, SettingsDto, VersionCause, VersionDto,
 } from '../api/types.js';
@@ -511,7 +511,11 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const runId = newId(), modelId = assignments.editor?.modelId ?? 'mock-model';
     lastEditorRunId = runId;
     emit('agent.run.started', { projectId: p.dto.id, run: run(p, runId, 'editor', 'running', plan.id), agent: 'editor', modelId, planId: plan.id });
+    // QA 2026-10-26 #5: what the agent is doing (agent.run.progress), as the Service reports it.
+    later(100, () => { if (plan.status === 'draft') emit('agent.run.progress', { projectId: p.dto.id, runId, agent: 'editor', phase: 'reading' }); });
+    later(300, () => { if (plan.status === 'draft') emit('agent.run.progress', { projectId: p.dto.id, runId, agent: 'editor', phase: 'planning' }); });
     later(400, () => emit('agent.run.delta', { projectId: p.dto.id, runId, agent: 'editor', delta: 'Reading the composition and your picks… ' }));
+    later(700, () => { if (plan.status === 'draft') emit('agent.run.progress', { projectId: p.dto.id, runId, agent: 'editor', phase: 'checking' }); });
     later(900, () => {
       if (plan.status !== 'draft') return;
       const hasClips = head(p).model.tracks.video.length > 0;
@@ -564,7 +568,10 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       plan.status = 'executed';
       for (const i of p.intents) if (i.status === 'planned') { i.status = 'executed'; i.appliedVersion = p.pointer + 1; }
       settleParents(p);
-      const res: ExecutionResult = { planId, ok: true, fromVersion: from, toVersion: v.hash, appliedOps: ops.length, diff: r.value.diff, durationMs: 41 };
+      // Generator steps (tts.generate / captions.generate) start after the commit; a needs-model step is skipped.
+      const toolSteps = plan.steps.filter((st) => st.tool === 'tts.generate' || st.tool === 'captions.generate')
+        .map((st) => ({ n: st.n, tool: st.tool, status: st.args['status'] === 'needs-model' ? 'skipped' as const : 'started' as const, ...(st.args['status'] === 'needs-model' ? { code: 'EM-7001' } : { jobId: newId() }) }));
+      const res: ExecutionResult = { planId, ok: true, fromVersion: from, toVersion: v.hash, appliedOps: ops.length, diff: r.value.diff, durationMs: 41, ...(toolSteps.length ? { toolSteps } : {}) };
       p.results.set(planId, res);
       const count = (c: string) => r.value.diff.filter((d) => d.change === c).length;
       plan.result = { ok: true, toVersion: v.hash, appliedOps: ops.length, added: count('added'), removed: count('removed'), modified: count('modified') };   // FR-086
@@ -755,7 +762,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const idMap = new Map(src.assets.map((a, i) => [a.id, p.assets[i]!.id]));
     const model = structuredClone(head(src).model);
     model.projectId = p.dto.id;
-    for (const c of model.tracks.video) c.assetId = idMap.get(c.assetId) ?? c.assetId;
+    for (const c of model.tracks.video) if (c.assetId !== undefined) c.assetId = idMap.get(c.assetId) ?? c.assetId;
     commit(p, model, 'system', []);
     p.dto.dirty = false;
     return created(p.dto);
@@ -1033,7 +1040,10 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     if (!assignments[agent]) throw new HttpError(422, 'EM-4007', `The ${agent === 'editor' ? 'Editor Agent' : 'Brainstorming Agent'} has no model yet.`);
     // FR-072: attachments become attachment blocks (images reach the model only with image input; checked in the Service).
     const atts = (Array.isArray(body['attachments']) ? body['attachments'] as Array<{ assetId: string }> : []).flatMap((x) => { const a = p.assets.find((y) => y.id === x.assetId); return a ? [{ type: 'attachment' as const, assetId: a.id, mime: a.kind === 'image' ? 'image/*' : `${a.kind}/*`, name: a.name }] : []; });
-    const user: MessageDto = { id: newId(), role: 'user', blocks: [{ type: 'text', text }, ...atts], agentRunId: null, createdAt: nowIso() };
+    // QA 2026-10-26 #6: pointed assets / elements travel as a `targets` block (ids + kind + label).
+    const targets = (Array.isArray(body['targets']) ? body['targets'] as ChatTarget[] : []).filter((x) => x && typeof x.label === 'string' && x.label.length > 0).slice(0, 12)
+      .map((x) => ({ kind: x.kind, ...(x.id !== undefined ? { id: x.id } : {}), ...(x.index !== undefined ? { index: x.index } : {}), label: x.label.slice(0, 80) }));
+    const user: MessageDto = { id: newId(), role: 'user', blocks: [{ type: 'text', text }, ...atts, ...(targets.length ? [{ type: 'targets' as const, items: targets }] : [])], agentRunId: null, createdAt: nowIso() };
     p.messages[agent].push(user);
     if (agent === 'editor') {
       if (body['baseVersion'] !== head(p).hash) throw new HttpError(409, 'EM-2301', 'Base version is not the head.');
@@ -1095,7 +1105,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     connections.push(c);
     if (!assignments.defaultConnectionId) assignments.defaultConnectionId = c.id;
     if (body['validateNow'] !== false && !settings.privateMode) {
-      if (/bad|invalid/i.test(secret)) { c.status = 'invalid'; throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.'); }
+      if (/bad|invalid/i.test(secret)) { c.status = 'invalid'; throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.', { connectionId: c.id, status: 'invalid', recentKey: true }); }
       c.status = 'valid'; c.validatedAt = nowIso(); c.modelsFetchedAt = nowIso();
     }
     emit('settings.changed', { scope: 'providers' });
@@ -1154,7 +1164,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const body = obj(b), secret = String(body['secret'] ?? '').trim();
     if (body['provider'] !== 'openrouter') throw new HttpError(422, 'EM-9004', 'Not available in this version yet.', { feature: `provider.${String(body['provider'])}`, plannedPriority: 'P1' });
     if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.');
-    if (/bad|invalid/i.test(secret)) throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.');
+    if (/bad|invalid/i.test(secret)) throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.', { status: 'invalid', recentKey: true });
     return { status: 'valid', validatedAt: nowIso(), models: CAPABILITIES };
   });
   r('POST', '/providers/test', (_m, b) => {

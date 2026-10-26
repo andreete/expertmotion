@@ -1,29 +1,100 @@
 // Step 8 (AI_WORKFLOW §2): deterministic validation of any Edit Plan (compiled or model-authored) before Execute is enabled.
-import { applyOperations, conflictsWithLocked, hashModel, propertyKeysOf, validate, type ApplyContext, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT, type Tier } from '@expertmotion/composition-model';
+import { applyOperations, conflictsWithLocked, deriveTiming, hashModel, propertyKeysOf, validate, type ApplyContext, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT, type Tier } from '@expertmotion/composition-model';
 import { issue, parseLooseJson, type Issue } from '@expertmotion/shared';
-import { EditPlan, ModelPlanReply, type EditPlanT } from './schemas.js';
+import { CaptionsStepArgs, EditPlan, ModelPlanReply, PLAN_STEP_TOOLS, TtsStepArgs, type EditPlanT } from './schemas.js';
+import { normalizeModelReply } from './plan-normalize.js';
+import { scriptPages } from './script-captions.js';
 
-export interface PlanContext { model: CompositionModelT; baseVersion: string; assets: readonly AssetFacts[]; tier: Tier; lockedKeys: readonly string[]; newId: () => string; jobs?: ApplyContext['jobs'] }
+/** A local model a generator plan step needs (ADR-030): its Model Manager key, display label and whether it is installed. */
+export interface ToolModel { installed: boolean; modelKey: string; label: string }
+export interface PlanContext { model: CompositionModelT; baseVersion: string; assets: readonly AssetFacts[]; tier: Tier; lockedKeys: readonly string[]; newId: () => string; jobs?: ApplyContext['jobs'];
+  /** ADR-030: models behind generator steps (voice: tts, transcription: stt); absent = not checked (tests, compile path). */
+  toolModels?: { tts?: ToolModel | null; stt?: ToolModel | null }; language?: 'id' | 'en' }
 export interface PlanValidation { plan: EditPlanT; issues: Issue[]; predicted?: { model: CompositionModelT; diff: ElementDiff[]; durationMs?: number } }
 export const MAX_OPS = 200, MAX_STEPS = 40;
 
 export const planOps = (plan: Pick<EditPlanT, 'steps'>): OperationT[] => plan.steps.flatMap((s) => s.ops);
 
-/** Validates a plan; returns it with status valid | invalid | stale, the validation rows, touchesLockedKeys and the predicted diff. */
-export function validatePlan(plan: EditPlanT, ctx: PlanContext): PlanValidation {
+export const DEFAULT_CAPTION_STYLE = 'preset:caption.editorial';
+const RUNTIME_ARGS = ['status', 'modelKey', 'modelLabel'];
+const stripRuntime = (a: Record<string, unknown>) => Object.fromEntries(Object.entries(a).filter(([k]) => !RUNTIME_ARGS.includes(k)));
+
+/**
+ * ADR-030 generator steps, before the composition dry run: argument checks, model availability (a missing model makes the step
+ * `needs-model` with a `model-missing` warn risk — the rest of the plan still runs), and captions from a script that need no model
+ * become ordinary `op:caption.setPages` steps timed over the predicted video (or the window given). Captions that follow a voice-over
+ * step stay a generator step: the Local Service times them over the voice once it exists.
+ */
+function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT; issues: Issue[] } {
   const issues: Issue[] = [];
+  if (!plan.steps.some((s) => s.tool !== 'composition.applyOps')) return { plan, issues };
+  const id = ctx.language !== 'en';
+  const risks = [...plan.risks];
+  const missing = (m: ToolModel, what: string) => {
+    const message = id ? `${what} butuh model "${m.label}" yang belum terpasang. Pasang di Model Manager, lalu jalankan lagi; langkah lain tetap jalan.` : `${what} needs the "${m.label}" model, which is not installed. Install it in the Model Manager and run again; the other steps still run.`;
+    if (!risks.some((r) => r.code === 'model-missing' && r.message === message)) risks.push({ code: 'model-missing', message, severity: 'warn' });
+  };
+  const tts = new Map<number, { text: string; ready: boolean }>();
+  let steps = plan.steps.map((s, i) => {
+    if (s.tool !== 'tts.generate') return s;
+    const r = TtsStepArgs.safeParse(stripRuntime(s.args));
+    if (!r.success) { const x = r.error.issues[0]!; issues.push(issue('EM-2102', `Step ${s.n} (tts.generate): ${[...x.path].join('.') || 'args'}: ${x.message}. Expected args {text (≤ 2000 characters, the script to speak), atMs?, voiceId?, language?, speed?}.`, 'block', `steps[${i}].args`)); return s; }
+    const m = ctx.toolModels?.tts;
+    const ready = !m || m.installed;
+    if (m && !ready) missing(m, id ? 'Suara narasi' : 'The voice-over');
+    tts.set(s.n, { text: r.data.text, ready });
+    return { ...s, args: { ...r.data, status: ready ? 'ready' : 'needs-model', ...(m ? { modelKey: m.modelKey, modelLabel: m.label } : {}) } };
+  });
+  // Predicted video length from the composition steps alone (for script captions spread over the whole video).
+  const compOps = steps.filter((s) => s.tool === 'composition.applyOps').flatMap((s) => s.ops);
+  const pre = compOps.length ? applyOperations(ctx.model, compOps, { assets: ctx.assets, tier: ctx.tier, newId: () => 'dry', ...(ctx.jobs ? { jobs: ctx.jobs } : {}) }) : null;
+  const predictedModel = pre?.ok ? pre.value.model : ctx.model;
+  const videoMs = deriveTiming(predictedModel).durationMs;
+  const styled = predictedModel.tracks.caption.styleId !== null;
+  steps = steps.map((s, i) => {
+    if (s.tool !== 'captions.generate') return s;
+    const r = CaptionsStepArgs.safeParse(stripRuntime(s.args));
+    if (!r.success) { const x = r.error.issues[0]!; issues.push(issue('EM-2102', `Step ${s.n} (captions.generate): ${[...x.path].join('.') || 'args'}: ${x.message}. Expected args {source: 'script'|'voice'|'sequence', text? (the script), atMs?, durationMs?, presetId? (caption style), language?}.`, 'block', `steps[${i}].args`)); return s; }
+    const a = r.data;
+    if (a.source === 'sequence') {
+      const m = ctx.toolModels?.stt;
+      if (m && !m.installed) missing(m, id ? 'Teks dari suara di video' : 'Captions from the video audio');
+      return { ...s, args: { ...a, status: !m || m.installed ? 'ready' : 'needs-model', ...(m ? { modelKey: m.modelKey, modelLabel: m.label } : {}) } };
+    }
+    const voice = [...s.dependsOn, ...(a.source === 'voice' ? [...tts.keys()] : [])].map((n) => tts.get(n)).find(Boolean);
+    const text = a.text ?? voice?.text;
+    if (!text) { issues.push(issue('EM-2102', `Step ${s.n} (captions.generate): give the script in args.text.`, 'block', `steps[${i}].args.text`)); return s; }
+    if (voice?.ready) return { ...s, args: { ...a, source: 'voice', text, status: 'ready' } };
+    // Script captions (no model needed): pages over the window, set now in the same Composition Version.
+    const from = a.atMs ?? 0, to = a.durationMs !== undefined ? from + a.durationMs : videoMs;
+    const pages = scriptPages(text, from, Math.min(to, videoMs));
+    const style = a.presetId ?? (styled || compOps.some((o) => o.op === 'op:caption.setStyle') ? undefined : DEFAULT_CAPTION_STYLE);
+    return { n: s.n, tool: 'composition.applyOps', args: {}, dependsOn: s.dependsOn, expectedDiff: s.expectedDiff || (id ? 'Teks layar dari naskah' : 'Captions from the script'),
+      ops: [{ op: 'op:caption.setPages', target: { kind: 'project' as const }, args: { pages } }, ...(style ? [{ op: 'op:caption.setStyle', target: { kind: 'project' as const }, args: { presetId: style } }] : [])] };
+  });
+  return { plan: { ...plan, steps, risks }, issues };
+}
+
+/** Validates a plan; returns it with status valid | invalid | stale, the validation rows, touchesLockedKeys and the predicted diff. */
+export function validatePlan(input: EditPlanT, ctx: PlanContext): PlanValidation {
+  const prepared = prepareToolSteps(input, ctx);
+  const plan = prepared.plan;
+  const issues: Issue[] = [...prepared.issues];
   const ops = planOps(plan);
   if (plan.baseVersion !== ctx.baseVersion) issues.push(issue('EM-2301', 'The composition changed after this plan was made; plan again.', 'block', 'baseVersion'));
   if (ops.length > MAX_OPS) issues.push(issue('EM-2304', `The plan has ${ops.length} operations; the limit is ${MAX_OPS}.`, 'block', 'steps'));
   if (plan.steps.length > MAX_STEPS) issues.push(issue('EM-2304', `The plan has ${plan.steps.length} steps; the limit is ${MAX_STEPS}.`, 'block', 'steps'));
   if (plan.steps.length === 0 && !plan.risks.some((r) => r.code === 'needs-input')) issues.push(issue('EM-4302', 'The plan is empty.', 'block', 'steps'));
-  for (const s of plan.steps) if (s.tool !== 'composition.applyOps' && s.ops.length) issues.push(issue('EM-2303', `Step ${s.n}: operations must go through composition.applyOps.`, 'block', `steps[${s.n - 1}].tool`));
+  plan.steps.forEach((s, i) => {
+    if (!(PLAN_STEP_TOOLS as readonly string[]).includes(s.tool)) issues.push(issue('EM-2303', `Step ${s.n}: "${s.tool}" is not a plan tool; use composition.applyOps, tts.generate or captions.generate.`, 'block', `steps[${i}].tool`));
+    else if (s.tool !== 'composition.applyOps' && s.ops.length) issues.push(issue('EM-2303', `Step ${s.n}: operations must go through composition.applyOps.`, 'block', `steps[${i}].tool`));
+  });
   const touched = conflictsWithLocked(ops.flatMap(propertyKeysOf), ctx.lockedKeys);
   if (touched.length) issues.push(issue('EM-2302', `The plan changes picks you made yourself: ${touched.join(', ')}.`, 'block', 'steps'));
   let predicted: PlanValidation['predicted'];
   if (!issues.some((i) => i.severity === 'block') && ops.length) {
     const r = applyOperations(ctx.model, ops, { assets: ctx.assets, tier: ctx.tier, newId: ctx.newId, ...(ctx.jobs ? { jobs: ctx.jobs } : {}) });
-    if (!r.ok) issues.push(...r.issues.map((i) => ({ ...i, path: `steps.${i.path}` })));
+    if (!r.ok) issues.push(...r.issues.map((i) => ({ ...i, path: stepPath(plan, i.path) })));
     else {
       issues.push(...r.warnings);
       const after = validate(r.value.model, { assets: ctx.assets, tier: ctx.tier });
@@ -38,19 +109,40 @@ export function validatePlan(plan: EditPlanT, ctx: PlanContext): PlanValidation 
   return { plan: out, issues, ...(predicted ? { predicted } : {}) };
 }
 
+/** `ops[7].args.text` (flat over the plan) → `steps[1].ops[2].args.text`, so a correction names the step and op the model wrote. */
+export function stepPath(plan: Pick<EditPlanT, 'steps'>, flat: string): string {
+  const m = /^ops\[(\d+)\](.*)$/.exec(flat);
+  if (!m) return `steps.${flat}`;
+  let k = Number(m[1]);
+  for (const [i, s] of plan.steps.entries()) { if (k < s.ops.length) return `steps[${i}].ops[${k}]${m[2]}`; k -= s.ops.length; }
+  return `steps.${flat}`;
+}
+
 /** Wraps compiled operations into an Edit Plan (origin compile) so the same Execute path applies (AI-004). */
 export function buildCompilePlan(ops: OperationT[], opts: { id: string; projectId: string; baseVersion: string; goal: string; expectedDiff: string }): EditPlanT {
   return EditPlan.parse({ id: opts.id, projectId: opts.projectId, baseVersion: opts.baseVersion, origin: 'compile', goal: opts.goal.slice(0, 300),
     steps: [{ n: 1, tool: 'composition.applyOps', ops, expectedDiff: opts.expectedDiff.slice(0, 200) }], status: 'draft' });
 }
 
-/** Parses a model reply (string) into an Edit Plan or returns the problems to send back to the model. */
-export function parseModelReply(text: string, meta: { id: string; projectId: string }): { plan?: EditPlanT; problem?: string } {
-  const json = extractJson(text);
-  if (json === undefined) return { problem: 'Your reply was not valid JSON. Reply with the EditPlan JSON object only.' };
+/**
+ * Parses a model reply (string) into an Edit Plan or returns the problems to send back to the model. With `normalize`
+ * (the Editor Agent run), unambiguous slips are repaired first (plan-normalize.ts) and `fixes` lists what was repaired;
+ * `intents` is set when the model returned intents instead of a plan.
+ */
+export function parseModelReply(text: string, meta: { id: string; projectId: string }, normalize?: Parameters<typeof normalizeModelReply>[1]): { plan?: EditPlanT; problem?: string; fixes?: string[]; intents?: unknown[] } {
+  let json = extractJson(text);
+  if (json === undefined) return { problem: 'Your reply was not valid JSON. Reply with the EditPlan JSON object only: {"goal": "...", "steps": [{"n": 1, "tool": "composition.applyOps", "ops": [...], "expectedDiff": "..."}], "risks": []}.' };
+  let fixes: string[] = [];
+  if (normalize) {
+    const n = normalizeModelReply(json, normalize);
+    fixes = n.fixes;
+    if (n.intents) return { intents: n.intents, fixes };
+    if (n.problem) return { problem: n.problem, fixes };
+    json = n.value;
+  }
   const r = ModelPlanReply.safeParse(json);
-  if (!r.success) return { problem: `The JSON does not match the EditPlan schema: ${r.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')}. Reply with corrected JSON only.` };
-  return { plan: EditPlan.parse({ ...r.data, id: meta.id, projectId: meta.projectId, origin: 'editor-agent', status: 'draft' }) };
+  if (!r.success) return { fixes, problem: `The JSON does not match the EditPlan schema: ${r.error.issues.slice(0, 5).map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')}. Each op is {"op": "op:<entity>.<verb>", "target"?: {"kind", "id"?, "index"?}, "args": {...}} with the args listed in capabilities.opArgs. Reply with corrected JSON only.` };
+  return { fixes, plan: EditPlan.parse({ ...r.data, id: meta.id, projectId: meta.projectId, origin: 'editor-agent', status: 'draft' }) };
 }
 /**
  * Accepts raw JSON, JSON inside a ```json fence, or the first balanced {...} object in the text; raw newlines inside strings

@@ -1,20 +1,33 @@
 // Editor Agent and Brainstorming Agent runs (AI_WORKFLOW §7, §9–§12; AGENT_DESIGN §2–§5; SYSTEM_PROMPT P-1/P-2).
-import { conflictsWithLocked, deriveTiming, propertyKeysOf, type OperationT } from '@expertmotion/composition-model';
+import { conflictsWithLocked, deriveTiming, propertyKeysOf, type ElementRefT, type OperationT } from '@expertmotion/composition-model';
 import { EmError, extractReplyText, type Issue } from '@expertmotion/shared';
 import { prompts } from './prompt-store.js';
 import { parseModelReply, validatePlan, extractJson, type PlanContext } from './plan.js';
+import { normalizeModelReply } from './plan-normalize.js';
 import { BrainstormTurn, type EditPlanT } from './schemas.js';
 import type { RewriteEnvelope } from './envelope.js';
 import type { ChatImage, ChatMessage, ChatProvider, ChatUsage } from './providers.js';
+import { compileIntents, createIntents, pickFromIntent } from './intents.js';
+import { opSignature } from './op-args.js';
+import { isOpName, type OpName } from '@expertmotion/composition-model';
 import { MAX_TOOL_ROUNDS, ReplyStreamer, asToolRequest, runTool, summarizeThread, toolResultMessage, toolsPromptBlock, BRAINSTORM_TOOL_NAMES, EDITOR_TOOL_NAMES, type BrainstormToolName, type ThreadSummary, type ToolCallRecord, type ToolHandlers } from './tools.js';
 
 export interface RunOptions {
   maxCorrections?: number; maxTokens?: number; temperature?: number; signal?: AbortSignal; timeoutMs?: number; budgetCheck?: () => void;
   /** FR-075: receives streamed text deltas when the provider can stream (otherwise never called). */
   onDelta?: (delta: string) => void;
+  /** FR-190: what the run is doing now (chat shows "Membaca proyek…", "Menyusun rencana…", "Memeriksa rencana…"). */
+  onProgress?: (p: RunProgress) => void;
 }
-export interface EditorRunResult { ok: true; plan: EditPlanT; issues: Issue[]; attempts: number; usage: ChatUsage[]; droppedOps: number; toolCalls: ToolCallRecord[]; predicted?: ReturnType<typeof validatePlan>['predicted'] }
-export interface EditorRunFailure { ok: false; error: EmError; attempts: number; usage: ChatUsage[]; toolCalls: ToolCallRecord[]; lastText?: string }
+export type RunPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool';
+export interface RunProgress { phase: RunPhase; attempt?: number; tool?: string }
+/**
+ * FR-190 diagnostics of one Editor Agent run, for the service log (never prompt text, user text or keys): how many replies,
+ * which repairs the lenient parser made, and the codes / paths of the last rejection.
+ */
+export interface EditorRunDiagnostics { attempts: number; toolRounds: number; repairs: number; repairKinds: string[]; parseFailures: number; lastIssues: Array<{ code: string; path: string }>; intentsReturned: boolean; fallbackQuestion?: boolean }
+export interface EditorRunResult { ok: true; plan: EditPlanT; issues: Issue[]; attempts: number; usage: ChatUsage[]; droppedOps: number; toolCalls: ToolCallRecord[]; predicted?: ReturnType<typeof validatePlan>['predicted']; diagnostics: EditorRunDiagnostics }
+export interface EditorRunFailure { ok: false; error: EmError; attempts: number; usage: ChatUsage[]; toolCalls: ToolCallRecord[]; lastText?: string; diagnostics: EditorRunDiagnostics }
 export interface EditorRunOptions extends RunOptions {
   /** FR-080: read-only tool handlers from the Local Service (AI_WORKFLOW §8); `composition.validateOps` is added here (dry run). */
   tools?: ToolHandlers;
@@ -24,8 +37,9 @@ export interface EditorRunOptions extends RunOptions {
 
 /** `composition.validateOps` (AI_WORKFLOW §8): dry run of operations against the plan base; never mutates. */
 export function dryRunOps(input: Record<string, unknown>, ctx: PlanContext & { planId: string; projectId: string }) {
-  if (typeof input['baseVersion'] === 'string' && input['baseVersion'] !== ctx.baseVersion) return { ok: false, issues: [{ code: 'EM-2301', severity: 'block', path: 'baseVersion', message: `The base version is ${ctx.baseVersion}.` }], predictedDiff: [], predictedDurationMs: null };
-  const ops = (input['ops'] ?? []) as OperationT[];
+  // The model's baseVersion echo is not trusted (it is the runtime's); ops are repaired like a plan reply (plan-normalize.ts).
+  const n = normalizeModelReply({ steps: [{ ops: Array.isArray(input['ops']) ? input['ops'] : [] }] }, { model: ctx.model, baseVersion: ctx.baseVersion, assets: ctx.assets });
+  const ops = (((n.value?.['steps'] as Array<{ ops: unknown[] }> | undefined)?.[0]?.ops) ?? []) as OperationT[];
   const v = validatePlan({ id: ctx.planId, projectId: ctx.projectId, baseVersion: ctx.baseVersion, origin: 'editor-agent', goal: 'dry run', steps: [{ n: 1, tool: 'composition.applyOps', ops, args: {}, expectedDiff: 'dry run', dependsOn: [] }], touchesLockedKeys: [], risks: [], status: 'draft', validation: [] }, ctx);
   return { ok: v.plan.status === 'valid', issues: v.issues.slice(0, 20).map((i) => ({ code: i.code, severity: i.severity, path: i.path, message: i.message })),
     predictedDiff: (v.predicted?.diff ?? []).slice(0, 50), predictedDurationMs: v.predicted ? deriveTiming(v.predicted.model).durationMs : null };
@@ -53,40 +67,99 @@ async function call(provider: ChatProvider, system: string, messages: ChatMessag
   }
 }
 
+/** Correction text for a rejected plan: each blocking issue with its step / op, plus the exact args signature of that op. */
+export function correctionMessage(plan: EditPlanT, blocking: readonly Issue[], fixes: readonly string[] = []): string {
+  const lines = blocking.slice(0, 8).map((i) => {
+    const m = /^steps\[(\d+)\]\.ops\[(\d+)\]/.exec(i.path);
+    const op = m ? plan.steps[Number(m[1])]?.ops[Number(m[2])] : undefined;
+    const where = m ? `step ${plan.steps[Number(m[1])]?.n ?? Number(m[1]) + 1}, op ${Number(m[2]) + 1}${op ? ` (${op.op})` : ''}` : i.path || 'plan';
+    const sig = op && isOpName(op.op) ? ` Expected: ${op.op} ${opSignature(op.op as OpName)}.` : '';
+    return `- ${where}: [${i.code}] ${i.message}${sig}`;
+  });
+  const dropped = fixes.filter((f) => f.includes('dropped unknown arg')).slice(0, 5);
+  return `The plan was rejected by validation:\n${lines.join('\n')}${dropped.length ? `\nIgnored argument names (not in the op's args): ${dropped.map((d) => d.replace(/^.*dropped unknown arg /, '')).join(', ')}.` : ''}\nFix only these problems, keep the rest of the plan, and reply with the whole EditPlan JSON only.`;
+}
+
+/** A short question instead of a failure when the Creator pointed at elements but the request was too vague (FR-189). */
+function askPlan(env: RewriteEnvelope, ctx: { planId: string; projectId: string; baseVersion: string }): EditPlanT {
+  const names = (env.targets ?? []).map((t) => t.label).slice(0, 3).join(', ');
+  const q = env.project.language === 'en' ? `What should I change on ${names}? For example: trim it, make it louder, add a title over it, or move it.` : `Apa yang ingin diubah pada ${names}? Misalnya: potong, keraskan suaranya, beri judul di atasnya, atau pindahkan.`;
+  return { id: ctx.planId, projectId: ctx.projectId, baseVersion: ctx.baseVersion, origin: 'editor-agent', goal: q.slice(0, 300), steps: [], touchesLockedKeys: [], risks: [{ code: 'needs-input', message: q, severity: 'block' }], status: 'valid', validation: [] };
+}
+
+/** Intents returned instead of a plan: the fully specified ones compile deterministically into one step (no second model call). */
+function compileReturnedIntents(raw: unknown[], ctx: PlanContext & { projectId: string }): OperationT[] | null {
+  const ops: OperationT[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== 'object') return null;
+    const p = x as Record<string, unknown>;
+    if (typeof p['presetId'] !== 'string' || p['needsInterpretation'] === true) return null;
+    const target = p['target'] as ElementRefT | undefined;
+    const r = createIntents({ projectId: ctx.projectId, source: 'chat', presetId: p['presetId'], ...(typeof p['category'] === 'string' ? { category: p['category'] as never } : {}), ...(p['params'] && typeof p['params'] === 'object' ? { params: p['params'] as Record<string, unknown> } : {}), ...(target ? { selection: [target] } : {}) },
+      { model: ctx.model, baseVersion: ctx.baseVersion, newId: ctx.newId });
+    if (!r.ok) return null;
+    const c = compileIntents(r.value, (i) => pickFromIntent(i), ctx.model);
+    if (!c.ok) return null;
+    ops.push(...c.value.map((o) => { const { intentId: _i, ...rest } = o; void _i; return rest; }));
+  }
+  return ops.length ? ops : null;
+}
+
 /** One Editor Agent run → a validated Edit Plan, or EM-4301 after 1 + maxCorrections invalid replies. */
 export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvider, ctx: PlanContext & { planId: string; projectId: string }, o: EditorRunOptions = {}): Promise<EditorRunResult | EditorRunFailure> {
   const usage: ChatUsage[] = []; const toolCalls: ToolCallRecord[] = [];
+  const diag: EditorRunDiagnostics = { attempts: 0, toolRounds: 0, repairs: 0, repairKinds: [], parseFailures: 0, lastIssues: [], intentsReturned: false };
+  const progress = (p: RunProgress) => { try { o.onProgress?.(p); } catch { /* UI hint only */ } };
   // FR-080: JSON-mode read-only tool loop (same protocol as the Brainstorm loop); tool rounds do not count as corrections.
   const handlers: ToolHandlers = o.tools ? { ...o.tools, 'composition.validateOps': (i) => dryRunOps(i, ctx) } : {};
   const names = o.tools ? EDITOR_TOOL_NAMES.filter((n) => !!handlers[n]) : [];
   const system = editorSystemPrompt(env) + toolsPromptBlock(names, 'reply with the EditPlan JSON only');
   const messages: ChatMessage[] = [{ role: 'user', content: JSON.stringify(env), ...(o.images?.length ? { images: o.images } : {}) }];
   const maxCorrections = o.maxCorrections ?? 2;
+  const norm = { model: ctx.model, baseVersion: ctx.baseVersion, assets: ctx.assets, language: env.project.language };
   let lockedRetryUsed = false; let lastText: string | undefined; let toolRounds = 0;
+  const fail = (error: EmError, attempts: number, text?: string): EditorRunFailure => ({ ok: false, error, attempts, usage, toolCalls, ...(text ? { lastText: text } : {}), diagnostics: { ...diag, attempts, toolRounds } });
+  progress({ phase: 'reading' });
   for (let attempt = 0; attempt <= maxCorrections + 1; attempt++) {
     let text: string;
+    progress(attempt === 0 ? { phase: 'planning' } : { phase: 'correcting', attempt });
     // FR-084: the plan's goal streams while the model writes it (first attempt only, so a correction never repeats it).
     const streamer = o.onDelta && attempt === 0 ? new ReplyStreamer('goal') : null;
-    const co: RunOptions = { ...o }; delete co.onDelta;
+    const co: RunOptions = { ...o }; delete co.onDelta; delete co.onProgress;
     if (streamer) co.onDelta = (d: string) => { const v = streamer.push(d); if (v) o.onDelta!(v); };
-    try { text = await call(provider, system, [...messages], co, usage); } catch (e) { return { ok: false, error: e as EmError, attempts: attempt + 1, usage, toolCalls }; }
+    try { text = await call(provider, system, [...messages], co, usage); } catch (e) { return fail(e as EmError, attempt + 1); }
     lastText = text;
     const req = names.length ? asToolRequest(extractJson(text)) : null;
     if (req) {
       messages.push({ role: 'assistant', content: text });
       if (toolRounds < MAX_TOOL_ROUNDS) {
         toolRounds++;
+        progress({ phase: 'tool', tool: req.name });
         const rec = await runTool(req.name, req.input, handlers, EDITOR_TOOL_NAMES);
         toolCalls.push(rec); messages.push(toolResultMessage(rec)); attempt--; continue;
       }
       messages.push({ role: 'user', content: 'No more tool calls. Reply with the EditPlan JSON only.' }); continue;
     }
-    const parsed = parseModelReply(text, { id: ctx.planId, projectId: ctx.projectId });
-    if (!parsed.plan) {
+    progress({ phase: 'checking' });
+    const parsed = parseModelReply(text, { id: ctx.planId, projectId: ctx.projectId }, norm);
+    if (parsed.fixes?.length) { diag.repairs += parsed.fixes.length; diag.repairKinds = [...new Set([...diag.repairKinds, ...parsed.fixes.map((f) => f.replace(/^step \d+( op \d+)?: /, '').replace(/ .*$/, ''))])].slice(0, 20); }
+    let planIn = parsed.plan;
+    if (parsed.intents) {
+      diag.intentsReturned = true;
+      const ops = compileReturnedIntents(parsed.intents, ctx);
+      if (ops) planIn = { id: ctx.planId, projectId: ctx.projectId, baseVersion: ctx.baseVersion, origin: 'editor-agent', goal: env.project.language === 'en' ? 'Apply the suggested changes' : 'Terapkan perubahan yang diusulkan', steps: [{ n: 1, tool: 'composition.applyOps', ops, args: {}, expectedDiff: '', dependsOn: [] }], touchesLockedKeys: [], risks: [], status: 'draft', validation: [] };
+      else {
+        if (attempt >= maxCorrections) break;
+        messages.push({ role: 'assistant', content: text }, { role: 'user', content: 'You returned intents, but the Editor Agent must return an EditPlan with operations. Translate each intent into ops from capabilities.ops (args as in capabilities.opArgs) and reply with {"goal", "steps": [{"n": 1, "tool": "composition.applyOps", "ops": [...], "expectedDiff"}], "risks"} only.' });
+        continue;
+      }
+    }
+    if (!planIn) {
+      diag.parseFailures++;
       if (attempt >= maxCorrections) break;
       messages.push({ role: 'assistant', content: text }, { role: 'user', content: parsed.problem! }); continue;
     }
-    let plan = parsed.plan; let dropped = 0;
+    let plan = planIn; let dropped = 0;
     let v = validatePlan(plan, ctx);
     if (v.plan.touchesLockedKeys.length) {
       if (!lockedRetryUsed && attempt < maxCorrections + 1) {
@@ -98,23 +171,25 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
       // lost operations is listed as an EM-2302 validation entry (path `droppedSteps[n]`) so the Plan Card shows it struck through.
       const locked = ctx.lockedKeys;
       const lost: Array<{ n: number; expectedDiff: string; keys: string[] }> = [];
-      plan = { ...plan, steps: plan.steps.map((s) => {
+      plan = { ...v.plan, status: 'draft', steps: v.plan.steps.map((s) => {
         const keys = new Set<string>();
         const keep = s.ops.filter((op) => { const hit = conflictsWithLocked(propertyKeysOf(op), locked); hit.forEach((k) => keys.add(k)); return hit.length === 0; });
         if (keep.length < s.ops.length) { dropped += s.ops.length - keep.length; lost.push({ n: s.n, expectedDiff: s.expectedDiff, keys: [...keys] }); }
         return { ...s, ops: keep };
-      }).filter((s) => s.ops.length > 0),
-        risks: [...plan.risks, { code: 'locked-key', message: `${dropped} change(s) to your own picks were left out.`, severity: 'info' }] };
+      }).filter((s) => s.ops.length > 0 || s.tool !== 'composition.applyOps'),
+        risks: [...v.plan.risks, { code: 'locked-key', message: `${dropped} change(s) to your own picks were left out.`, severity: 'info' }] };
       v = validatePlan(plan, ctx);
       v = { ...v, plan: { ...v.plan, validation: [...v.plan.validation, ...lost.map((d) => ({ path: `droppedSteps[${d.n}]`, code: 'EM-2302', message: `${d.n}. ${d.expectedDiff} (${d.keys.join(', ')})` }))] } };
     }
-    if (v.plan.status === 'valid') return { ok: true, plan: v.plan, issues: v.issues, attempts: attempt + 1, usage, droppedOps: dropped, toolCalls, ...(v.predicted ? { predicted: v.predicted } : {}) };
-    if (v.plan.status === 'stale') return { ok: false, error: new EmError('EM-2301', 'The composition changed while the agent was planning; plan again.'), attempts: attempt + 1, usage, toolCalls, lastText: text };
+    diag.lastIssues = v.issues.filter((i) => i.severity === 'block').slice(0, 8).map((i) => ({ code: i.code, path: i.path }));
+    if (v.plan.status === 'valid') return { ok: true, plan: v.plan, issues: v.issues, attempts: attempt + 1, usage, droppedOps: dropped, toolCalls, ...(v.predicted ? { predicted: v.predicted } : {}), diagnostics: { ...diag, attempts: attempt + 1, toolRounds } };
+    if (v.plan.status === 'stale') return fail(new EmError('EM-2301', 'The composition changed while the agent was planning; plan again.'), attempt + 1, text);
     if (attempt >= maxCorrections) break;
-    const blocking = v.issues.filter((i) => i.severity === 'block').slice(0, 8).map((i) => ({ code: i.code, path: i.path, message: i.message }));
-    messages.push({ role: 'assistant', content: text }, { role: 'user', content: `The plan was rejected by validation: ${JSON.stringify(blocking)}. Fix it and reply with the EditPlan JSON only.` });
+    messages.push({ role: 'assistant', content: text }, { role: 'user', content: correctionMessage(v.plan, v.issues.filter((i) => i.severity === 'block'), parsed.fixes) });
   }
-  return { ok: false, error: new EmError('EM-4301', 'The model could not produce a valid plan.'), attempts: maxCorrections + 1, usage, toolCalls, ...(lastText ? { lastText } : {}) };
+  // FR-189: the Creator pointed at elements but no plan came out — ask what to change instead of failing.
+  if (env.targets?.length) { diag.fallbackQuestion = true; return { ok: true, plan: askPlan(env, ctx), issues: [], attempts: maxCorrections + 1, usage, droppedOps: 0, toolCalls, diagnostics: { ...diag, attempts: maxCorrections + 1, toolRounds } }; }
+  return fail(new EmError('EM-4301', 'The model could not produce a valid plan.', { details: { lastIssues: diag.lastIssues.slice(0, 5) } }), maxCorrections + 1, lastText);
 }
 
 export interface BrainstormResult { ok: true; turn: ReturnType<typeof BrainstormTurn.parse>; usage: ChatUsage[]; toolCalls: ToolCallRecord[]; summary: ThreadSummary | null }
@@ -146,10 +221,12 @@ export async function runBrainstorm(history: ChatMessage[], contextBlock: unknow
   try {
     for (let round = 0; ; round++) {
       const streamer = o.onDelta ? new ReplyStreamer() : null;
+      try { o.onProgress?.({ phase: 'planning' }); } catch { /* UI hint only */ }
       const text = await call(provider, system, [...messages], { temperature: 0.4, ...o, ...(streamer ? { onDelta: (d: string) => { const v = streamer.push(d); if (v) o.onDelta!(v); } } : {}) }, usage);
       const json = extractJson(text);
       const req = asToolRequest(json);
       if (req && round < MAX_TOOL_ROUNDS && names.length) {
+        try { o.onProgress?.({ phase: 'tool', tool: req.name }); } catch { /* UI hint only */ }
         const rec = await runTool(req.name, req.input, o.tools ?? {});
         toolCalls.push(rec);
         messages.push({ role: 'assistant', content: text }, toolResultMessage(rec));

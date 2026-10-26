@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { scriptPages, type ToolModel } from '@expertmotion/agents';
 import { applyOperations, deriveTiming, type CompositionModelT, type GeneratedResult, type OperationT } from '@expertmotion/composition-model';
 import { compileDefaults } from '@expertmotion/catalogue';
 import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
@@ -61,6 +62,7 @@ export interface AudioPlacement { elementId: string; assetId: string; fromMs: nu
 export function audioPlacements(model: CompositionModelT, sourceMs: (assetId: string) => number | null, opts: { assetId?: string } = {}): AudioPlacement[] {
   const timing = deriveTiming(model); const out: AudioPlacement[] = [];
   for (const c of model.tracks.video) {
+    if (c.assetId === undefined) continue;                    // ADR-030 scene clips have no audio
     if (opts.assetId ? c.assetId !== opts.assetId : c.muted || c.volume === 0) continue;
     const w = timing.elementWindows[c.id]; if (!w || w.toMs <= w.fromMs) continue;
     out.push({ elementId: c.id, assetId: c.assetId, fromMs: w.fromMs, toMs: w.toMs, trimBeforeMs: c.trimBeforeMs, playbackRate: c.playbackRate });
@@ -290,6 +292,68 @@ export class GeneratorsService {
       return out;
     } });
     return toGenDto(this.get(id)!);
+  }
+  /** ADR-030: the model behind a generator plan step — an installed one for the language first (default first), else the default. */
+  async planToolModel(task: 'tts' | 'stt', language: 'id' | 'en'): Promise<ToolModel | null> {
+    const models = modelsServiceOf(this.ctx); const tier = this.ctx.hooks.tier();
+    const defKey = defaultModelFor(task, tier, { language });
+    const cands = models.defs().filter((d) => d.task === task && (task === 'stt' || !d.languages?.length || d.languages.includes(language))).sort((a, b) => Number(b.key === defKey) - Number(a.key === defKey));
+    for (const d of cands) if (await models.isInstalled(d.key)) return { installed: true, modelKey: d.key, label: displayNameOf(d)[language] };
+    const d = models.def(defKey) ?? cands[0];
+    return d ? { installed: false, modelKey: d.key, label: displayNameOf(d)[language] } : null;
+  }
+  /** Resolves when a job reaches done / failed / cancelled. */
+  private waitJob(id: string): Promise<GenRow | undefined> {
+    const final = (r: GenRow | undefined) => !r || ['done', 'failed', 'cancelled'].includes(r.status);
+    const now = this.get(id);
+    if (final(now)) return Promise.resolve(now);
+    return new Promise((resolve) => { const on = (jid: string) => { if (jid !== id) return; s2(this.ctx).events.off('generator.final', on); resolve(this.get(id)); }; s2(this.ctx).events.on('generator.final', on); });
+  }
+  /**
+   * ADR-030: generator steps of an executed plan, in order, in the background: `tts.generate` → a voice job inserted at atMs;
+   * `captions.generate` {source: voice} → after that voice job, caption pages from the script timed over the voice layer (no
+   * transcription model needed); {source: sequence} → a captions job over the Sequence audio. Failures are logged and reported
+   * as `service.notice` {kind: 'plan-step'}; they never undo the committed composition change.
+   */
+  runPlanSteps(projectId: string, planId: string, steps: Array<{ n: number; tool: string; args: Record<string, unknown>; dependsOn: number[] }>) {
+    const ctx = this.ctx;
+    const lang = (a: Record<string, unknown>): 'id' | 'en' => (a['language'] === 'en' ? 'en' : a['language'] === 'id' ? 'id' : ctx.hooks.composition(projectId).model.settings.language);
+    const notice = (n: number, tool: string, status: string, extra: Record<string, unknown> = {}) => emit(ctx, 'service.notice', { kind: 'plan-step', projectId, planId, step: n, tool, status, ...extra });
+    const voices = new Map<number, Promise<GenRow | undefined>>(); const voiceAt = new Map<Promise<GenRow | undefined>, number>();
+    const work = (async () => {
+      for (const st of steps) {
+        try {
+          if (st.tool === 'tts.generate') {
+            const language = lang(st.args);
+            const voiceId = String(st.args['voiceId'] ?? st.args['modelKey'] ?? (await this.planToolModel('tts', language))?.modelKey ?? '');
+            const job = await this.create(projectId, 'voice', { text: String(st.args['text'] ?? ''), voiceId, language, atMs: typeof st.args['atMs'] === 'number' ? st.args['atMs'] : 0, ...(typeof st.args['speed'] === 'number' ? { speed: st.args['speed'] } : {}), insert: true });
+            const wait = this.waitJob(String(job['id'])); voices.set(st.n, wait); voiceAt.set(wait, typeof st.args['atMs'] === 'number' ? st.args['atMs'] : 0);
+            notice(st.n, st.tool, 'started', { jobId: job['id'] });
+          } else if (st.tool === 'captions.generate' && st.args['source'] === 'sequence') {
+            const job = await this.create(projectId, 'captions', { source: 'sequence', language: lang(st.args), insert: true });
+            notice(st.n, st.tool, 'started', { jobId: job['id'] });
+          } else if (st.tool === 'captions.generate') {
+            const dep = st.dependsOn.map((n) => voices.get(n)).find(Boolean) ?? [...voices.values()][0];
+            const row = dep ? await dep : undefined;
+            const model = ctx.hooks.composition(projectId).model;
+            const same = row?.status === 'done' && row.result_asset_id ? model.tracks.audio.filter((a) => a.assetId === row.result_asset_id && a.role === 'voice') : [];
+            const layer = same.find((a) => a.atMs === (dep ? voiceAt.get(dep) : undefined)) ?? same.at(-1);
+            const from = layer?.atMs ?? 0, to = layer?.durationMs !== undefined ? from + layer.durationMs : deriveTiming(model).durationMs;
+            const pages = scriptPages(String(st.args['text'] ?? ''), from, Math.min(to, deriveTiming(model).durationMs));
+            if (!pages.length) { notice(st.n, st.tool, 'skipped', { code: 'EM-7103' }); continue; }
+            const ops = this.withCaptionStyle(projectId, [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT, ...(typeof st.args['presetId'] === 'string' ? [{ op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: st.args['presetId'] } } as OperationT] : [])]);
+            ctx.hooks.applyOps(projectId, ops, { kind: 'generator', ref: planId, summary: 'Captions from the script' });
+            notice(st.n, st.tool, 'done', { pages: pages.length, timedTo: layer ? 'voice' : 'video' });
+          }
+        } catch (e) {
+          const code = e instanceof EmError ? e.code : 'EM-7101';
+          ctx.log.warn({ projectId, planId, step: st.n, tool: st.tool, code }, 'plan generator step failed');
+          notice(st.n, st.tool, 'failed', { code });
+        }
+      }
+    })();
+    void work.catch(() => undefined);
+    return steps.map((st) => ({ n: st.n, tool: st.tool, status: 'started' as const }));
   }
   /** R-134: insert a finished job's result later (no re-run). Idempotent: a second call returns the same version with notice EM-2308. */
   /** FR-104: caption Insert also sets the default caption style when the project has none yet. */
@@ -532,7 +596,7 @@ export class GeneratorsService {
         }) };
       }
       const head = ctx.hooks.composition(projectId);
-      if (head.model.tracks.video.length === 0) throw em('EM-2202', 'Insert at least one asset first.');
+      if (deriveTiming(head.model).durationMs <= 1000 && head.model.tracks.video.length === 0 && head.model.tracks.text.length === 0) throw em('EM-2202', 'Add a scene or insert an asset first.');
       let model = structuredClone(head.model);
       const frameMs = typeof b['frameMs'] === 'number' ? b['frameMs'] : 0;
       if (title) {
@@ -540,7 +604,7 @@ export class GeneratorsService {
           { assets: listAssets(ctx, projectId).map(toFacts), tier, newId: ctx.newId });
         if (r.ok) model = r.value.model;
       }
-      const assetIds = [...new Set([...model.tracks.video.map((c) => c.assetId), ...model.tracks.audio.map((a) => a.assetId)])];
+      const assetIds = [...new Set([...model.tracks.video.flatMap((c) => (c.assetId ? [c.assetId] : [])), ...model.tracks.audio.map((a) => a.assetId)])];
       // candidates: the chosen frame first, then frames spread over the Sequence (still + title overlay each)
       const durationMs = Math.max(1, deriveTiming(model).durationMs);
       const times = [...new Set(Array.from({ length: count }, (_, i) => (i === 0 ? frameMs : Math.round((frameMs + (i * durationMs) / (count + 1)) % durationMs))))];

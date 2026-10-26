@@ -8,3 +8,6 @@ export * from './tools.js';
 export * from './shared-context.js';
 export { PROMPT_SET_VERSION } from './prompts.generated.js';
 export { installPromptSet, prompts, PROMPT_SET_KEYS, type PromptSet } from './prompt-store.js';
+export * from './plan-normalize.js';
+export * from './op-args.js';
+export * from './script-captions.js';

@@ -65,6 +65,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const [platform, setPlatform] = useState<'tiktok' | 'instagram' | 'youtube'>('tiktok');
   const [tone, setTone] = useState<(typeof HASHTAG_TONES)[number]>('casual');                    // FR-105
   const [style, setStyle] = useState<(typeof THUMBNAIL_STYLES)[number]>('bold');                  // FR-103
+  const [starting, setStarting] = useState(false);                                                 // R-130 request in flight (FR-186)
   // FR-104: the Sequence audio (default) or one Asset with audio
   const audioAssets = state.assets.filter((a) => (a.kind === 'video' || a.kind === 'audio') && a.status === 'ready' && a.hasAudio !== false);
   const [captionSource, setCaptionSource] = useState<string>('sequence');
@@ -107,7 +108,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   };
   const run = async () => {
     if (!state.project) return;
-    setError(null); setSaved(null); setPages(null);
+    setError(null); setSaved(null); setPages(null); setStarting(true);
     const modelKey = chosenKey && chosenKey !== 'frame-composite' ? { modelKey: chosenKey } : {};
     const frameOnly = chosenKey === 'frame-composite';
     const body: Record<string, unknown> = kind === 'captions' ? { ...(captionSource === 'sequence' ? { source: 'sequence' } : { source: 'asset', assetId: captionSource }), language, ...modelKey }
@@ -115,7 +116,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
         : kind === 'music' ? { prompt: input, durationMs: durationS * 1000, instrumental, language, ...modelKey }
           : kind === 'thumbnail' ? { frameMs: Math.round(state.playheadMs), ...(input.trim() ? { titleText: input } : {}), ...(!frameOnly && prompt.trim() ? { prompt } : {}), count, style, language, ...(chosenKey ? { modelKey: chosenKey } : {}) }
             : { language, platform, tone, count };
-    try { const j = await runtime.api.createGeneratorJob(state.project.id, kind, body); setJob(j); return j; } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); return null; }
+    try { const j = await runtime.api.createGeneratorJob(state.project.id, kind, body); setJob(j); return j; } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); return null; } finally { setStarting(false); }
   };
   const inserted = () => { void actions.refreshHead(); actions.toast('success', 'ui.scr.generate.inserted', { kind: t(`ui.lib.generator.${kind}.title`) }); onClose(); };
   useEffect(() => {
@@ -148,6 +149,10 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const caption = typeof job?.result?.['caption'] === 'string' ? String(job.result['caption']) : '';
   const candidates = (job?.result?.['candidates'] as Array<{ assetId: string; frameMs?: number }> | undefined) ?? (kind === 'thumbnail' && job?.resultAssetId ? [{ assetId: job.resultAssetId }] : []);
   const running = job?.status === 'running' || job?.status === 'queued';
+  // In-place status (FR-186): "Membuat suara… 45 %" while it runs, "Menunggu giliran…" while queued, "Memulai…" during the request.
+  const statusText = starting && !running ? t('ui.scr.generate.starting')
+    : job?.status === 'queued' ? t('ui.scr.generate.queued')
+      : job ? t(`ui.scr.generate.running.${kind}`, { percent: Math.round((job.progress ?? 0) * 100) }) : '';
   const textMissing = (kind === 'voice' || kind === 'music') && !input.trim();
   const tracks = state.head?.model?.tracks;
   const noAudio = kind === 'captions' && captionSource === 'sequence' && !(tracks?.video.length ?? 0) && !(tracks?.audio.some((a) => a.role !== 'bed') ?? false);
@@ -159,7 +164,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
     <Modal el={p} sheet width={520} title={t(`ui.lib.generator.${kind}.title`)} onClose={onClose}
       footer={<>
         {running && job && <Button variant="ghost" onClick={() => void runtime.api.cancelGeneratorJob(job.id).then(setJob).catch(actions.error)}>{t('ui.common.cancel')}</Button>}
-        <Button el={`${p}.run`} variant="primary" loading={running} disabledReason={runReason} onClick={() => void run()}>{t('ui.scr.generate.run')}</Button>
+        <Button el={`${p}.run`} variant="primary" loading={running || starting} disabledReason={runReason} onClick={() => void run()}>{t('ui.scr.generate.run')}</Button>
       </>}>
       <p className="mb-3 text-em-muted">{t(`ui.lib.generator.${kind}.subtitle`)}</p>
       {notEnabled && <div className="mb-3"><ErrorBox code="EM-9004" vars={{ feature: t(`ui.lib.generator.${kind}.title`) }} /></div>}
@@ -258,7 +263,13 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
         </>}
       </div>
 
-      {job && running && <div data-el={`${p}.progress`} className="mt-2"><Progress value={job.progress} label={t('ui.scr.generate.running')} /><span className="text-[12px] text-em-muted">{t('ui.scr.generate.keeprunning')}</span></div>}
+      {((job && running) || starting) && (
+        <div data-el={`${p}.progress`} className="mt-2 flex flex-col gap-1">
+          <span data-el={`${p}.progress.status`} role="status" className="text-em-text-2">{statusText}</span>
+          <Progress value={job && running && job.status !== 'queued' ? job.progress : null} label={statusText} />
+          {job && running && <span className="text-[12px] text-em-muted">{t('ui.scr.generate.keeprunning')}</span>}
+        </div>
+      )}
       {error && <div className="mt-2"><ErrorBox code={error} vars={{ tool: t(`ui.scr.generate.tool.${kind}`), model: chosen ? names.local(chosen) : t(`ui.scr.generate.tool.${kind}`) }} /></div>}
 
       {job?.status === 'done' && (

@@ -297,7 +297,7 @@ export class Projects {
     const remapModel = (json: string): CompositionModelT => {
       const m = JSON.parse(json) as CompositionModelT; m.projectId = nid;
       const ma = (x: string) => amap.get(x) ?? x;
-      for (const c of m.tracks.video) c.assetId = ma(c.assetId);
+      for (const c of m.tracks.video) if (c.assetId !== undefined) c.assetId = ma(c.assetId);
       for (const o of m.tracks.overlay) if (o.kind === 'image') o.assetId = ma(o.assetId);
       for (const a of m.tracks.audio) a.assetId = ma(a.assetId);
       if (m.tracks.caption.sourceAssetId) m.tracks.caption.sourceAssetId = ma(m.tracks.caption.sourceAssetId);

@@ -11,6 +11,7 @@ import { EmError, recommendedFor } from '@expertmotion/shared';
 import { ModelPicker, defaultModelFor, type PickerCategory } from '../components/ModelPicker.js';
 import type { BudgetFocus } from '../state/reducer.js';
 import { llmModelName } from '../state/model-names.js';
+import { keyRetryDelay, normalizeKey } from '../state/key-retry.js';
 
 const PROVIDERS: ProviderKind[] = ['openrouter', 'openai', 'anthropic', 'google', 'custom'];
 const AGENTS: AgentKind[] = ['brainstorm', 'editor'];
@@ -18,6 +19,30 @@ const AGENTS: AgentKind[] = ['brainstorm', 'editor'];
 const FALLBACK_KINDS: ProviderKindInfo[] = PROVIDERS.map((p) => ({ provider: p, enabled: p !== 'custom', priority: p === 'openrouter' ? 'P0' : p === 'custom' ? 'P2' : 'P1', termsUrl: null, keyPattern: null, keyExample: null }));
 type Budget = Awaited<ReturnType<ReturnType<typeof useStore>['runtime']['api']['getBudget']>>;
 const codeOf = (e: unknown) => (e instanceof EmError ? e.code : 'EM-9001');
+
+/**
+ * QA 2026-10-26 #3: a new key the provider has not activated yet is refused (EM-4002). Shows "New keys can take 1–2 minutes",
+ * retries automatically after ~20 s (at most 3 times, with a countdown) and offers "Try again" at once.
+ */
+export function KeyRetryNote({ attempt, onRetry, el = 'scr.providers.keyhint' }: { attempt: number; onRetry: (auto: boolean) => void; el?: string }) {
+  const { t } = useStore();
+  const delay = keyRetryDelay(attempt, 'EM-4002', true);
+  const [left, setLeft] = useState<number | null>(null);
+  useEffect(() => {
+    if (delay === null) { setLeft(null); return; }
+    const until = Date.now() + delay;
+    setLeft(Math.ceil(delay / 1000));
+    const tick = setInterval(() => setLeft(Math.max(0, Math.ceil((until - Date.now()) / 1000))), 1000);
+    const fire = setTimeout(() => onRetry(true), delay);
+    return () => { clearInterval(tick); clearTimeout(fire); };
+  }, [attempt]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div data-el={el} role="status" className="flex items-center gap-2 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
+      <span className="flex-1">{t('ui.agent.error.keyhint')}{left !== null ? ` ${t('ui.agent.error.keyhint.retry', { s: left })}` : ''}</span>
+      <Button size={28} onClick={() => onRetry(false)}>{t('ui.sys.toast.tryagain')}</Button>
+    </div>
+  );
+}
 const toLimit = (v: string): number | null => { const n = Number(v); return v.trim() && Number.isFinite(n) && n > 0 ? Math.min(n, 10_000) : null; };
 
 /** Deterministic "recommended for" hint from the Capability Table (unknown facts never qualify); lives in @expertmotion/shared. */
@@ -51,7 +76,7 @@ function ProviderKeyFields({ provider, setProvider, secret, setSecret, kinds }: 
   const { t } = useStore();
   const [show, setShow] = useState(false);
   const info = kinds.find((k) => k.provider === provider);
-  const shapeOk = !info?.keyPattern || !secret.trim() || new RegExp(info.keyPattern).test(secret.trim());
+  const shapeOk = !info?.keyPattern || !normalizeKey(secret) || new RegExp(info.keyPattern).test(normalizeKey(secret));
   return (
     <>
       <Field label={t('ui.scr.providers.provider')} htmlFor="em-provider">
@@ -70,7 +95,7 @@ function ProviderKeyFields({ provider, setProvider, secret, setSecret, kinds }: 
           : <span data-el="scr.providers.key.shape">{info?.keyExample ? `${t('ui.scr.providers.key.shape', { example: info.keyExample })} · ` : ''}{t('ui.scr.providers.key.where')}</span>}>
         <div className="flex gap-1">
           <input id="em-key" data-el="scr.providers.key.input" type={show ? 'text' : 'password'} autoComplete="off" spellCheck={false} value={secret} className={inputCls}
-            onChange={(e) => setSecret(e.target.value)} onPaste={(e) => { const v = e.clipboardData.getData('text'); if (v) { e.preventDefault(); setSecret(v.trim()); } }} />
+            onChange={(e) => setSecret(e.target.value)} onPaste={(e) => { const v = e.clipboardData.getData('text'); if (v) { e.preventDefault(); setSecret(normalizeKey(v)); } }} />
           <IconButton el="scr.providers.key.toggle" label={show ? t('ui.scr.providers.key.hide') : t('ui.scr.providers.key.show')} icon={show ? <EyeOff size={14} /> : <Eye size={14} />} onClick={() => setShow((v) => !v)} />
         </div>
       </Field>
@@ -80,29 +105,43 @@ function ProviderKeyFields({ provider, setProvider, secret, setSecret, kinds }: 
 
 /** Onboarding Provider step (FR-007): validates and stores in one go; the Providers screen uses AddConnectionForm instead. */
 export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => void }) {
-  const { state, actions, t } = useStore();
+  const { state, actions, t, runtime } = useStore();
   const kinds = useKinds();
   const [provider, setProvider] = useState<ProviderKind>('openrouter');
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  // QA 2026-10-26 #3: EM-4002 right after adding a key → the stored connection is validated again (no second connection).
+  const [keyFail, setKeyFail] = useState<{ attempt: number; connectionId: string | null } | null>(null);
+  const finish = (ok: boolean) => { setBusy(false); setResult(ok ? 'ok' : 'fail'); if (ok) { setKey(''); setKeyFail(null); } onConnected?.(ok); };
   const validate = async () => {
-    setBusy(true); setResult(null);
-    const ok = await actions.addConnection(provider, key.trim(), t(`ui.scr.providers.provider.${provider}`));
-    setBusy(false);
-    setResult(ok ? 'ok' : 'fail');
-    if (ok) setKey('');
-    onConnected?.(ok);
+    setBusy(true); setResult(null); setKeyFail(null);
+    let failed: EmError | null = null;
+    const ok = await actions.addConnection(provider, normalizeKey(key), t(`ui.scr.providers.provider.${provider}`), { onError: (e) => { failed = e; } });
+    const f = failed as EmError | null;
+    if (!ok && f?.code === 'EM-4002') setKeyFail({ attempt: 0, connectionId: String((f.details as { connectionId?: unknown } | undefined)?.connectionId ?? '') || null });
+    finish(ok);
+  };
+  const retryKey = async (auto: boolean) => {
+    const cur = keyFail; if (!cur) return;
+    if (!cur.connectionId) { await validate(); return; }
+    setBusy(true);
+    let ok = false;
+    try { ok = (await runtime.api.validateConnection(cur.connectionId)).status === 'valid'; } catch { ok = false; }
+    await actions.loadProviders();
+    if (ok) finish(true);
+    else { setBusy(false); setKeyFail({ ...cur, attempt: auto ? cur.attempt + 1 : cur.attempt }); }
   };
   return (
     <div data-el="scr.providers.add" className="flex flex-col gap-1 rounded-[8px] border border-em-line p-3">
       <ProviderKeyFields provider={provider} setProvider={setProvider} secret={key} setSecret={setKey} kinds={kinds} />
       <div className="flex items-center gap-2">
-        <Button el="scr.providers.validate" variant="primary" loading={busy} disabledReason={key.trim().length < 8 ? t('ui.scr.providers.key.short') : state.settings?.privateMode ? t('err.EM-8202.title') : null} onClick={() => void validate()}>
+        <Button el="scr.providers.validate" variant="primary" loading={busy} disabledReason={normalizeKey(key).length < 8 ? t('ui.scr.providers.key.short') : state.settings?.privateMode ? t('err.EM-8202.title') : null} onClick={() => void validate()}>
           {busy ? t('ui.scr.providers.validating') : t('ui.scr.providers.validate')}
         </Button>
         {result === 'ok' && <span className="flex items-center gap-1 text-em-success"><Check size={14} />{t('ui.scr.providers.valid')}</span>}
       </div>
+      {keyFail && <KeyRetryNote attempt={keyFail.attempt} onRetry={(auto) => void retryKey(auto)} />}
     </div>
   );
 }
@@ -301,26 +340,33 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState<'validate' | 'test' | 'save' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tested, setTested] = useState<ProbeResultDto[] | null>(null);
-  const reset = () => { setRows(null); setTested(null); setModelsCode(null); };
-  const validate = async () => {
-    setBusy('validate'); setError(null); reset();
+  const [keyAttempt, setKeyAttempt] = useState<number | null>(null);
+  const reset = () => { setRows(null); setTested(null); setModelsCode(null); setKeyAttempt(null); };
+  /** A dry run always uses a just-pasted key: EM-4002 gets the "new keys need a minute" retry (QA 2026-10-26 #3). */
+  const validate = async (retry?: { auto: boolean }) => {
+    const attempt = keyAttempt;
+    setBusy('validate'); setError(null); setRows(null); setTested(null); setModelsCode(null);
     try {
-      const r = await runtime.api.validateDraft(provider, secret.trim());
-      setRows(r.models); setModelsCode(r.modelsCode ?? null);
+      const r = await runtime.api.validateDraft(provider, normalizeKey(secret));
+      setRows(r.models); setModelsCode(r.modelsCode ?? null); setKeyAttempt(null);
       setAssign({ brainstorm: defaultModel(r.models, 'brainstorm'), editor: defaultModel(r.models, 'editor') });
-    } catch (e) { const c = codeOf(e); setError(c); if (c === 'EM-4002') document.getElementById('em-key')?.focus(); }
+    } catch (e) {
+      const c = codeOf(e); setError(c);
+      if (c === 'EM-4002') { setKeyAttempt(retry ? (retry.auto ? (attempt ?? 0) + 1 : attempt ?? 0) : 0); if (!retry) document.getElementById('em-key')?.focus(); }
+      else setKeyAttempt(null);
+    }
     setBusy(null);
   };
   const test = async () => {
     setBusy('test'); setError(null);
-    try { setTested((await runtime.api.testProviders({ draft: { provider, secret: secret.trim() }, brainstorm: assign.brainstorm || null, editor: assign.editor || null })).items); }
+    try { setTested((await runtime.api.testProviders({ draft: { provider, secret: normalizeKey(secret) }, brainstorm: assign.brainstorm || null, editor: assign.editor || null })).items); }
     catch (e) { setError(codeOf(e)); }
     setBusy(null);
   };
   const save = async () => {
     setBusy('save'); setError(null);
     try {
-      const c = await runtime.api.addConnection({ provider, label: label.trim() || t(`ui.scr.providers.provider.${provider}`), secret: secret.trim(), validateNow: true });
+      const c = await runtime.api.addConnection({ provider, label: label.trim() || t(`ui.scr.providers.provider.${provider}`), secret: normalizeKey(secret), validateNow: true });
       dispatch({ type: 'capabilities', connectionId: c.id, rows: rows ?? [] });
       const body: Parameters<typeof runtime.api.putAssignments>[0] = {};
       for (const a of AGENTS) if (assign[a]) body[a] = { agent: a, connectionId: c.id, modelId: assign[a], settings: {} };
@@ -342,7 +388,7 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
         </Field>
         <div className="flex items-center gap-2">
           <Button el="scr.providers.validate" variant="primary" loading={busy === 'validate'}
-            disabledReason={secret.trim().length < 8 ? t('ui.scr.providers.key.short') : state.settings?.privateMode ? t('err.EM-8202.title') : !kinds.find((k) => k.provider === provider)?.enabled ? t('err.EM-9004.title') : null}
+            disabledReason={normalizeKey(secret).length < 8 ? t('ui.scr.providers.key.short') : state.settings?.privateMode ? t('err.EM-8202.title') : !kinds.find((k) => k.provider === provider)?.enabled ? t('err.EM-9004.title') : null}
             onClick={() => void validate()}>{busy === 'validate' ? t('ui.scr.providers.validating') : t('ui.scr.providers.validate')}</Button>
           {validated && <span className="flex items-center gap-1 text-em-success"><Check size={14} />{t('ui.scr.providers.valid')}</span>}
         </div>
@@ -355,6 +401,7 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
         </>
       ) : <p data-el="scr.providers.locked" className="text-[12px] text-em-muted">{t('ui.scr.providers.locked')}</p>}
       {error && <ErrorBox code={error} vars={{ provider: t(`ui.scr.providers.provider.${provider}`), action: t('ui.scr.providers.validate') }} />}
+      {error === 'EM-4002' && keyAttempt !== null && <KeyRetryNote attempt={keyAttempt} onRetry={(auto) => void validate({ auto })} />}
       <div className="flex items-center gap-2">
         <Button el="scr.providers.test" loading={busy === 'test'} disabledReason={!validated ? t('ui.scr.providers.locked') : !assign.brainstorm && !assign.editor ? t('err.EM-4007.title', { agent: t('ui.scr.providers.agents') }) : null} onClick={() => void test()}>{t('ui.scr.providers.test')}</Button>
         <span className="flex-1" />
@@ -372,13 +419,13 @@ function EditConnection({ conn, onDone }: { conn: ConnectionDto; onDone: () => v
   const [secret, setSecret] = useState('');
   const [error, setError] = useState<string | null>(null);
   const save = async () => {
-    try { await runtime.api.patchConnection(conn.id, { label: label.trim() || conn.label, ...(secret.trim() ? { secret: secret.trim() } : {}) }); await actions.loadProviders(); onDone(); }
+    try { await runtime.api.patchConnection(conn.id, { label: label.trim() || conn.label, ...(normalizeKey(secret) ? { secret: normalizeKey(secret) } : {}) }); await actions.loadProviders(); onDone(); }
     catch (e) { setError(codeOf(e)); }
   };
   return (
     <div data-el="scr.providers.edit" className="mt-1 flex flex-col gap-1 rounded-[6px] border border-em-line p-2">
       <Field label={t('ui.scr.providers.label')} htmlFor={`em-edit-label-${conn.id}`}><input id={`em-edit-label-${conn.id}`} data-el="scr.providers.label.input" maxLength={60} value={label} onChange={(e) => setLabel(e.target.value)} className={inputCls} /></Field>
-      <Field label={t('ui.scr.providers.key.replace')} htmlFor={`em-edit-key-${conn.id}`}><input id={`em-edit-key-${conn.id}`} data-el="scr.providers.key.input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} onPaste={(e) => { const v = e.clipboardData.getData('text'); if (v) { e.preventDefault(); setSecret(v.trim()); } }} className={inputCls} /></Field>
+      <Field label={t('ui.scr.providers.key.replace')} htmlFor={`em-edit-key-${conn.id}`}><input id={`em-edit-key-${conn.id}`} data-el="scr.providers.key.input" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} onPaste={(e) => { const v = e.clipboardData.getData('text'); if (v) { e.preventDefault(); setSecret(normalizeKey(v)); } }} className={inputCls} /></Field>
       {error && <ErrorBox code={error} />}
       <div className="flex justify-end gap-2"><Button variant="ghost" size={28} onClick={onDone}>{t('ui.common.cancel')}</Button><Button el="scr.providers.edit.save" variant="primary" size={28} onClick={() => void save()}>{t('ui.common.save')}</Button></div>
     </div>

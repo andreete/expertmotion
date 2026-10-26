@@ -127,10 +127,12 @@ export class RenderService {
     checks.push({ check: 'dimensions', ok: dimOk, ...(dimOk ? {} : { code: 'EM-3103' }), details: dims });
 
     const timing = deriveTiming(model); const frames = deriveFrameTiming(model).durationInFrames;
-    const durOk = model.tracks.video.length > 0 && timing.durationMs >= 1000 && timing.durationMs <= 1_800_000;
-    checks.push({ check: 'duration', ok: durOk, ...(durOk ? {} : { code: model.tracks.video.length === 0 ? 'EM-2202' : 'EM-3104' }), details: { durationMs: timing.durationMs } });
+    // ADR-030: a video without media (scene clips, or only texts / shapes / a voice-over) renders too; only an empty one is refused.
+    const empty = model.tracks.video.length === 0 && model.tracks.text.length === 0 && model.tracks.overlay.length === 0 && !model.tracks.audio.some((a) => a.durationMs !== undefined);
+    const durOk = !empty && timing.durationMs >= 1000 && timing.durationMs <= 1_800_000;
+    checks.push({ check: 'duration', ok: durOk, ...(durOk ? {} : { code: empty ? 'EM-2202' : 'EM-3104' }), details: { durationMs: timing.durationMs } });
 
-    const assetIds = [...new Set([...model.tracks.video.map((c) => c.assetId), ...model.tracks.audio.map((a) => a.assetId),
+    const assetIds = [...new Set([...model.tracks.video.flatMap((c) => (c.assetId ? [c.assetId] : [])), ...model.tracks.audio.map((a) => a.assetId),
       ...model.tracks.overlay.map((o) => (o as { assetId?: string }).assetId).filter((x): x is string => typeof x === 'string')])];
     await ctx.hooks.mediaCheck?.(input.projectId).catch(() => undefined);    // FR-048: hash check before render (changed copies re-ingest)
     const missing = assetIds.filter((id) => {
@@ -384,7 +386,7 @@ export function failedFrameOf(e: unknown, lastFrame: number | null): number | nu
 
 /** FR-145: the Composition Model has audible audio (an audio layer, or an unmuted video clip whose asset has audio). */
 export function modelHasAudio(model: CompositionModelT, assetHasAudio: (assetId: string) => boolean): boolean {
-  return model.tracks.audio.some((a) => a.volume > 0) || model.tracks.video.some((c) => !c.muted && c.volume > 0 && assetHasAudio(c.assetId));
+  return model.tracks.audio.some((a) => a.volume > 0) || model.tracks.video.some((c) => !c.muted && c.volume > 0 && c.assetId !== undefined && assetHasAudio(c.assetId));
 }
 
 const probeRate = (r?: string): number => { if (!r) return 0; const [a, b] = r.split('/').map(Number); return b ? (a ?? 0) / b : Number(a ?? 0); };

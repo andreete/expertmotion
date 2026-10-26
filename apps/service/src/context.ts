@@ -2,7 +2,7 @@
 // module installs in its `start()`; defaults keep every module usable (and testable) on its own.
 import { EmError, newId as ulid, type EmCode, type Logger } from '@expertmotion/shared';
 import type { AssetFacts, CompositionModelT, ElementRefT, GeneratedResult, OperationT, Tier } from '@expertmotion/composition-model';
-import type { EditIntentT, EditPlanT } from '@expertmotion/agents';
+import type { EditIntentT, EditPlanT, PointedTarget, RunProgress, ToolModel } from '@expertmotion/agents';
 import type { ChatImage, ChatProvider, ChatUsage } from '@expertmotion/agents';
 import type { ServiceConfig, Paths } from './config.js';
 import type { DB } from './db/open.js';
@@ -49,7 +49,14 @@ export interface Hooks {
     /** FR-080 / FR-072 / FR-084: selection, playhead, attachment names and image parts for the envelope; plan-goal deltas. */
     selection?: ElementRefT[]; playheadMs?: number; attachments?: string[]; images?: ChatImage[]; onDelta?: (delta: string) => void;
     /** FR-080 / FR-067: enqueue the message as a chat Edit Intent (propertyKey chat:<messageId>) with the inspector target. */
-    chat?: { messageId: string; target?: ElementRefT } }): Promise<EditPlanT & { planId: string; runId?: string }>;
+    chat?: { messageId: string; target?: ElementRefT };
+    /** FR-189: what the Creator pointed at (chat chips); FR-190: run phases for the chat. */
+    targets?: PointedTarget[]; onProgress?: (p: RunProgress) => void }): Promise<EditPlanT & { planId: string; runId?: string }>;
+  /** generators module (S2, ADR-030): the local models behind plan generator steps (voice-over, transcription) and whether installed. */
+  planToolModels?(language: 'id' | 'en'): Promise<{ tts: ToolModel | null; stt: ToolModel | null }>;
+  /** generators module (S2, ADR-030): start the generator steps of an executed plan (voice-over, then captions timed over it);
+   *  returns at once with each step's start state; the jobs insert their results as later Composition Versions. */
+  runPlanSteps?(projectId: string, planId: string, steps: Array<{ n: number; tool: string; args: Record<string, unknown>; dependsOn: number[] }>): Array<{ n: number; tool: string; status: 'started' | 'skipped' | 'failed'; jobId?: string; code?: string }>;
   /** intents module (S1): enqueue intents (Brainstorm handoff, AI_WORKFLOW §6), persist, emit intent.updated; returns the queue. */
   enqueueIntents?(projectId: string, intents: EditIntentT[]): { queue: EditIntentT[] };
   /** assets module (FR-048): check the project's media copies (missing / changed → re-ingest); run on open and before render. */
