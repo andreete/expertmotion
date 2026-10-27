@@ -2,6 +2,7 @@
 // tier and used-by; the licence (name + link, engine notices) is in the expanded card;
 // expandable model card; filters; install (EM-7005 confirm above the Hardware Tier), pause / resume / cancel, remove with
 // confirmation; footer with disk use and free space (the per-engine "open folder" buttons were removed, Operator 2026-10-26). SEC-072 refusals: EM-7111.
+import { ExternalLink } from '../components/ExternalLink.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useStore } from '../state/store.js';
@@ -28,12 +29,12 @@ function ModelCard({ m }: { m: ModelStateDto }) {
     <dl data-el="scr.models.row.card" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-[6px] bg-em-panel-2 p-2 text-[12px]">
       <dt className="text-em-muted">{t('ui.scr.models.card.languages')}</dt><dd>{m.languages?.length ? m.languages.map((l) => t(`ui.common.lang.${l}`)).join(', ') : '—'}</dd>
       <dt className="text-em-muted">{t('ui.scr.models.card.licence')}</dt>
-      <dd><a data-el="scr.models.row.licence" href={m.licence.url} target="_blank" rel="noreferrer" className="text-em-accent underline">{m.licence.name}</a>{m.licenceDetail?.useRestrictions ? ` · ${m.licenceDetail.useRestrictions}` : ''} · <span className={commercial === 'yes' ? 'text-em-success' : 'text-em-warn'}>{t(`ui.scr.models.card.commercial.${commercial}`)}</span>
+      <dd><ExternalLink el="scr.models.row.licence" url={m.licence.url} label={m.licence.name} action={m.licence.name} />{m.licenceDetail?.useRestrictions ? ` · ${m.licenceDetail.useRestrictions}` : ''} · <span className={commercial === 'yes' ? 'text-em-success' : 'text-em-warn'}>{t(`ui.scr.models.card.commercial.${commercial}`)}</span>
         {m.licenceDetail?.redistribution === 'verify' && <> · <span className="text-em-warn">{t('ui.scr.models.card.verify')}</span></>}</dd>
       {notices.map(([licence, url]) => (
         <Fragment key={licence}>
           <dt className="text-em-muted">{t('ui.scr.models.card.engine')}</dt>
-          <dd data-el="scr.models.row.notice">{licence} · <a href={url} target="_blank" rel="noreferrer" className="text-em-accent underline">{t('ui.scr.providers.terms')}</a></dd>
+          <dd data-el="scr.models.row.notice">{licence} · <ExternalLink el="scr.models.row.notice.link" url={url} label={t('ui.scr.providers.terms')} action={t('ui.scr.providers.terms')} /></dd>
         </Fragment>
       ))}
     </dl>

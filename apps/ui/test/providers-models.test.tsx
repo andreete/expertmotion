@@ -28,7 +28,13 @@ describe('Providers screen (FR-109…FR-119)', () => {
     const openai = el('scr.providers.provider.select')!.querySelector('option[value="openai"]')!;
     expect(openai.textContent).toContain('Coming in a later version');
     expect(el('scr.providers.provider.disclosure')!.textContent).toMatch(/Sent to OpenRouter/);
-    expect(el('scr.providers.provider.disclosure')!.querySelector('a')!.getAttribute('href')).toBe('https://openrouter.ai/terms');
+    // Entry 28: the terms link opens in the system browser through the Shell (a raw target=_blank link is refused there)
+    const openExternal = vi.fn(async () => undefined);
+    (window as { expertmotion?: unknown }).expertmotion = { openExternal };
+    expect(el('scr.providers.provider.disclosure')!.querySelector('a')).toBeNull();
+    fireEvent.click(el('scr.providers.provider.disclosure')!.querySelector('[data-el="scr.providers.terms"]')!);
+    expect(openExternal).toHaveBeenCalledWith('https://openrouter.ai/terms');
+    delete (window as { expertmotion?: unknown }).expertmotion;
     const input = el('scr.providers.key.input') as HTMLInputElement;
     expect(input.type).toBe('password');
     fireEvent.click(el('scr.providers.key.toggle')!);

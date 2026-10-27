@@ -21,3 +21,7 @@ export * from './startup.js';
 export * from './integrity-hash.js';
 export * from './renderer-recovery.js';
 export * from './renderer-log.js';
+export * from './graphics-mode.js';
+export * from './heartbeat.js';
+export * from './diagnostic-report.js';
+export * from './escape-hatches.js';

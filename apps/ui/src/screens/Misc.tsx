@@ -219,7 +219,7 @@ export function BackupDialog({ mode, onClose }: { mode: 'backup' | 'restore'; on
 export const SHORTCUTS: Array<[string, string]> = [
   ['Space', 'ui.key.play'], ['← / →', 'ui.key.frame'], ['Shift+← / →', 'ui.key.second'], ['Home / End', 'ui.key.startend'], ['Ctrl+S', 'ui.key.save'], ['Ctrl+Z / Ctrl+Shift+Z', 'ui.key.undoredo'],
   ['Ctrl+Enter', 'ui.key.send'], ['Esc', 'ui.key.escape'], ['/', 'ui.key.search'], ['1 / 2 / 3', 'ui.key.modes'], ['Ctrl+E', 'ui.key.export'], ['Ctrl+I', 'ui.key.import'],
-  ['Ctrl+N / Ctrl+O', 'ui.key.newopen'], ['A', 'ui.key.ask'], ['Delete / Backspace', 'ui.key.delete'], ['Shift+F10', 'ui.key.menu'], ['F', 'ui.key.fullscreen'], ['Ctrl+B / Ctrl+Shift+B', 'ui.key.panels'], ['Shift+?', 'ui.key.sheet'],
+  ['Ctrl+N / Ctrl+O', 'ui.key.newopen'], ['A', 'ui.key.ask'], ['Delete / Backspace', 'ui.key.delete'], ['Shift+F10', 'ui.key.menu'], ['Ctrl+R / F5', 'ui.key.reload'], ['Ctrl+Shift+L', 'ui.key.logs'], ['F', 'ui.key.fullscreen'], ['Ctrl+B / Ctrl+Shift+B', 'ui.key.panels'], ['Shift+?', 'ui.key.sheet'],
 ];
 export function ShortcutSheet({ onClose }: { onClose: () => void }) {
   const { t } = useStore();

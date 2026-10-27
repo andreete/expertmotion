@@ -125,6 +125,8 @@ const PRESET_CATEGORY_TO_INTENT: Record<string, IntentCategory> = {
 export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Runtime; children: ReactNode; initialPrefs?: Partial<Prefs> }) {
   const [state, rawDispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
+  const providersLoad = useRef<{ running: Promise<void> | null; again: boolean }>({ running: null, again: false });
+  const modelsInFlight = useRef(new Set<string>());
   stateRef.current = state;
   const dispatch = useCallback((a: Action) => rawDispatch(a), []);
   const prefsRef = useRef<Prefs>({ ...loadPrefs(), ...(initialPrefs ?? {}) });
@@ -608,14 +610,30 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         try { const job = await api.createRender({ ...input, projectId: id }); dispatch({ type: 'renders', renders: [job, ...stateRef.current.renders.filter((j) => j.id !== job.id)] }); return job.id; } catch (e) { error(e); return null; }
       },
       async cancelRender(jobId) { try { const j = await api.cancelRender(jobId); dispatch({ type: 'renders', renders: stateRef.current.renders.map((x) => (x.id === j.id ? j : x)) }); } catch (e) { error(e); } },
-      async loadProviders() {
-        try {
-          const [c, a] = await Promise.all([api.listConnections(), api.getAssignments()]); dispatch({ type: 'providers', connections: c.items, assignments: a });
-          // Tier names ("Balanced") need the assigned connection's cached Capability Table (R-095 reads the cache, no provider call).
-          // Assigned connections plus every connection whose cached table is still empty (an Add may have raced the model fetch).
-          for (const cid of new Set([a.brainstorm?.connectionId, a.editor?.connectionId, ...c.items.map((x) => x.id)].filter((x): x is string => Boolean(x))))
-            if (!stateRef.current.capabilities[cid]?.length) void api.connectionModels(cid).then((r) => dispatch({ type: 'capabilities', connectionId: cid, rows: r.items })).catch(() => undefined);
-        } catch (e) { error(e); }
+      // Entry 28: one save fires several settings.changed {providers|assignments} events plus explicit reloads. Calls are coalesced:
+      // at most one request pair in flight and one trailing reload after it (never a burst of parallel refetches).
+      loadProviders() {
+        const run = async (): Promise<void> => {
+          try {
+            const [c, a] = await Promise.all([api.listConnections(), api.getAssignments()]);
+            const items = Array.isArray(c?.items) ? c.items : [];
+            const assignments = a && typeof a === 'object' ? a : null;
+            dispatch({ type: 'providers', connections: items, assignments });
+            // Tier names ("Balanced") need the assigned connection's cached Capability Table (R-095 reads the cache, no provider call).
+            // Assigned connections plus every connection whose cached table is still empty (an Add may have raced the model fetch).
+            for (const cid of new Set([assignments?.brainstorm?.connectionId, assignments?.editor?.connectionId, ...items.map((x) => x.id)].filter((x): x is string => Boolean(x))))
+              if (!stateRef.current.capabilities[cid]?.length && !modelsInFlight.current.has(cid)) {
+                modelsInFlight.current.add(cid);
+                void api.connectionModels(cid).then((r) => { if (Array.isArray(r?.items) && (r.items.length || stateRef.current.capabilities[cid] === undefined)) dispatch({ type: 'capabilities', connectionId: cid, rows: r.items }); })
+                  .catch(() => undefined).finally(() => modelsInFlight.current.delete(cid));
+              }
+          } catch (e) { error(e); }
+        };
+        const q = providersLoad.current;
+        if (q.running) { q.again = true; return q.running; }
+        const loop = async (): Promise<void> => { do { q.again = false; await run(); } while (q.again); q.running = null; };
+        q.running = loop();
+        return q.running;
       },
       async addConnection(provider, secret, label, opts = {}) {
         try {
@@ -668,7 +686,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         break;
       case 'settings.changed':                                       // FR-093: the Hardware Monitor re-detected; gating follows the new tier
         if (ev.data.scope === 'hardware') void runtime.api.hardwareProfile().then((hardware) => dispatch({ type: 'globals', hardware })).catch(() => undefined);
-        if (ev.data.scope === 'providers') void actions.loadProviders();       // FR-071: the status dot follows connection changes
+        if (ev.data.scope === 'providers' || ev.data.scope === 'assignments') void actions.loadProviders();   // FR-071: the status dot follows connection / assignment changes (coalesced)
         break;
       case 'agent.run.failed': if (ev.data.code === 'EM-8202') actions.toast('info', 'err.EM-8202.title', undefined, { code: 'EM-8202' }); break;
       case 'service.notice':

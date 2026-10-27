@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (Windows x64; Linux AppImage + deb x64 and macOS preparation in §17, ADR-029) |
 | Owner | DevSecOps engineer / desktop packaging |
-| Last updated | 2026-10-26 |
+| Last updated | 2026-10-27 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-004, 007, 008, 011, 013, 014, 017, 029), ARCHITECTURE.md (§5, §7, §8), ASSESSMENT.md (§4, §5, §10), PERFORMANCE.md (§5 budgets), SECURITY.md, LICENSE_OPERATIONS.md, BLUEPRINT.md (repo layout) |
 | Used by | ROADMAP.md, STAGE_MANAGEMENT.md, VULNERABILITY_CHECKLIST.md, POC_PLAN.md, TRD.md, DEVELOPMENT_WORKFLOW.md, QA_PROCESS.md |
 | Owner of | build pipeline, installer behaviour, update flow, release artefact naming, build-machine requirements, size budget |
@@ -137,6 +137,8 @@ publish:
 %APPDATA%\Expertmotion\                         data (ARCHITECTURE.md §8): data\expertmotion.db, data\keyring.bin, data\checkpoints\, media\, outputs\, models\, tmp\, logs\, settings.json
 ```
 
+Shortcuts written by `apps/desktop/installer/expertmotion.nsi`: Start menu `Expertmotion.lnk` and Desktop `Expertmotion.lnk` (→ `Expertmotion.exe`), and Start menu **`Expertmotion – Diagnostik.lnk`** (→ `Expertmotion.exe --diagnostics`, FR-199): it saves the native diagnostic report (SEC-105) to the Desktop and opens Explorer on it without opening the editor window, the Local Service or the GPU, and works while another copy is running with a black window (it does not take the single-instance lock). State files of the black-window defences (FR-196, FR-197) live in the data folder: `data\graphics.json` (safe graphics mode, 7-day expiry), `data\session.json` (clean-shutdown marker), `data\gpu-info.json` (GPU summary of the last start); none holds a secret or project content. One-launch switches: `--safe-graphics` (safe graphics mode without persisting it), `--diagnostics`.
+
 Everything under `%LOCALAPPDATA%\Programs\Expertmotion` is replaced by updates and never written by the running app; everything under `%APPDATA%\Expertmotion` belongs to the Creator and is never touched by the installer or updater (SEC-093) except on an explicit "delete my data" at uninstall.
 
 ## 6. Per-user install (decision)
@@ -261,6 +263,7 @@ Version scheme: semver; `MAJOR` for Composition Model schema breaks (with migrat
 | Keep | `%APPDATA%\Expertmotion` untouched; reinstall finds everything, including `keyring.bin` (same Windows user) |
 | Delete | folder removed recursively; `keyring.bin` gone, so the DB would be unrecoverable anyway |
 | Licence | the Licence Key remains valid for this Machine Fingerprint (LICENSE_OPERATIONS.md); the Creator is told to keep the key email |
+| Shortcuts | Start menu `Expertmotion.lnk`, `Expertmotion – Diagnostik.lnk` and Desktop `Expertmotion.lnk` are deleted |
 | Registry | only the uninstall entry and the `expertmotion://` protocol registration (if used for licence activation links) are removed |
 
 ## 14. Crash diagnostics (local only)
@@ -271,7 +274,11 @@ Version scheme: semver; `MAJOR` for Composition Model schema breaks (with migrat
 | Local Service | same; the Shell restarts it (backoff 1 s, 3 s, 9 s; then `sys.offline` with Repair/Restart actions) | `logs\crash-service-<ts>.txt` | never |
 | Editor renderer | `render-process-gone` event → reload once, then error page with EM-8xxx and "Open diagnostics" | `logs\shell.log` | never |
 | Chrome Headless Shell / FFmpeg | stderr tail (last 200 lines, redacted) attached to the failed Render Job | DB `render_jobs.error`, `logs\engine.log` | never |
+| GPU process | app `child-process-gone` (type GPU) → log EM-8010 + crash file, reload the window; second crash in 10 min → safe graphics mode + relaunch (FR-196) | `logs\shell-<date>.log`, `logs\crash-shell-<ts>.txt`, `data\graphics.json` | never |
+| Previous session | no clean-shutdown marker → "previous session did not shut down cleanly"; twice in a row → safe graphics mode (FR-197) | `logs\shell-<date>.log`, `data\session.json` | never |
+| Editor display | heartbeat watchdog: no beat / no frames > 10 s while visible, or no first paint in 45 s → log EM-8012 + crash file + native dialog (FR-198); every renderer console warning / error, `preload-error`, main `unhandledRejection` logged | `logs\shell-<date>.log` | never |
 | Creator action | Help ▸ Diagnostics → bundle with consent (SEC-102, SEC-103) | `logs\diagnostics-<ts>.zip` | only by the Creator's own means |
+| Creator action (no Editor needed) | tray "Simpan laporan diagnostik ke Desktop" or Start menu "Expertmotion – Diagnostik" (SEC-105, FR-199) | `Desktop\Expertmotion-diagnostik-<ts>.zip` (fallback `logs\`) | only by the Creator's own means |
 
 Electron's `crashReporter` is either not started or started with `uploadToServer: false`; minidumps stay in `%APPDATA%\Expertmotion\logs\crashpad\` and are pruned with the 7-day rotation.
 

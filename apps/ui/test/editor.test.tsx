@@ -11,6 +11,8 @@ afterEach(() => cleanup());
 
 /** Ids that cannot appear in a browser/mock session, with the reason (reported, not silently skipped). */
 const NOT_IN_MOCK: Record<string, string> = {
+  'sys.section.error': 'only when a panel throws (section-boundary.test.tsx)', 'sys.section.message': 'only when a panel throws (section-boundary.test.tsx)',
+  'sys.section.reload': 'only when a panel throws (section-boundary.test.tsx)', 'sys.section.close': 'only when a dialog throws (section-boundary.test.tsx)',
   'sys.fatal': 'Desktop Shell push only (EM-8002 / EM-6001; covered in service-restart.test.tsx)', 'sys.fatal.diagnostics': 'Desktop Shell push only', 'sys.fatal.quit': 'Desktop Shell push only',
   'sys.fatal.retry': 'Desktop Shell push only (EM-8002 with retryStartup; service-restart.test.tsx)',
   'lib.assets.importing': 'transient: mock ingest completes synchronously when delays are off (busy-feedback.test.tsx)',

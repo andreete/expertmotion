@@ -16,6 +16,7 @@ import { AgentErrorBubble, Bubble, ChatHeader, Composer, ModeTag, StreamingBubbl
 import { IntentQueue, targetText } from './IntentQueue.js';
 import { PlanCard, PlanSummary } from './PlanCard.js';
 import { ProposalCard, intentTitle } from './proposals.js';
+import { SectionBoundary } from '../startup/ErrorBoundary.js';
 
 /** FR-085: picks that compiled and applied without any model (Compile path), shown as a compact system line. */
 export function appliedDirectly(items: readonly EditIntent[]): EditIntent[] {
@@ -179,7 +180,7 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     <section data-el="agent.chat" data-mode={mode} data-maximized={layout.maximized ? 'true' : undefined} aria-label={t('ui.agent.chat.title')} className="flex min-h-0 flex-1 flex-col overflow-hidden" onKeyDown={onKeyDown}>
       <ChatHeader mode={mode} setMode={setMode} layout={layout} />
       <Thread label={t('a11y.agent.chat.thread')} empty={empty}>
-        {thread.rows.map((r) => r.node)}
+        <SectionBoundary section="chat.thread" className="p-2">{thread.rows.map((r) => r.node)}</SectionBoundary>
         <StreamingBubble agent="brainstorm" />
         <StreamingBubble agent="editor" />
         <AgentErrorBubble agent="brainstorm" onRetry={() => retry('brainstorm')} onRephrase={() => rephrase('brainstorm')} />

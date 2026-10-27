@@ -12,6 +12,8 @@ import { ModelPicker, defaultModelFor, type PickerCategory } from '../components
 import type { BudgetFocus } from '../state/reducer.js';
 import { llmModelName } from '../state/model-names.js';
 import { KEY_RETRY_MAX, keyRetryDelay, normalizeKey } from '../state/key-retry.js';
+import { SectionBoundary } from '../startup/ErrorBoundary.js';
+import { ExternalLink } from '../components/ExternalLink.js';
 
 export type ProviderBusy = 'validate' | 'models' | 'test' | 'save';
 /**
@@ -115,7 +117,7 @@ function ProviderKeyFields({ provider, setProvider, secret, setSecret, kinds }: 
       {provider !== 'custom' && (
         <p data-el="scr.providers.provider.disclosure" className="-mt-2 mb-3 text-[12px] text-em-text-2">
           {t(`ui.scr.providers.disclosure.${provider}`)}{' '}
-          {info?.termsUrl && <a href={info.termsUrl} target="_blank" rel="noreferrer" className="text-em-accent underline">{t('ui.scr.providers.terms')}</a>}
+          {info?.termsUrl && <ExternalLink el="scr.providers.terms" url={info.termsUrl} label={t('ui.scr.providers.terms')} action={t('ui.scr.providers.terms')} />}
         </p>
       )}
       <Field label={t('ui.scr.providers.key')} htmlFor="em-key"
@@ -210,8 +212,10 @@ function ModelAssign({ rows, assign, setAssign, onRefresh, loading, collapsed }:
           );
         })}
       </div>
-      <ModelPicker el="scr.providers.models" rows={rows} agent={agent} value={assign[agent]} onSelect={pick} onCategoryChange={onCategoryChange} loading={loading}
-        {...(onRefresh ? { onRefresh, refreshDisabledReason: state.settings?.privateMode ? t('err.EM-8202.title') : null } : {})} />
+      <SectionBoundary section="providers.models" className="p-2">
+        <ModelPicker el="scr.providers.models" rows={rows} agent={agent} value={assign[agent]} onSelect={pick} onCategoryChange={onCategoryChange} loading={loading}
+          {...(onRefresh ? { onRefresh, refreshDisabledReason: state.settings?.privateMode ? t('err.EM-8202.title') : null } : {})} />
+      </SectionBoundary>
       <div className="flex flex-wrap items-center gap-2">
         {agent === 'editor' && <p className="flex-1 text-[12px] text-em-muted">{t('ui.scr.providers.assign.editor.hint')}</p>}
         {canShare && <Button el="scr.providers.assign.both" size={28} variant="ghost" className="ml-auto" onClick={() => { touched.current[other] = true; setAssign((a) => ({ ...a, [other]: a[agent] })); }}>{t(`ui.scr.providers.assign.both.${other}`)}</Button>}
@@ -268,12 +272,30 @@ function TestResults({ items }: { items: ProbeResultDto[] }) {
   );
 }
 
+type AssignFormProps = { onSaved?: () => void; showBudgets?: boolean; connectionId?: string; focusField?: BudgetFocus['field']; collapseModels?: boolean };
+/** The connection an AssignForm edits: the given one, else the default, else the first. */
+const assignConn = (state: ReturnType<typeof useStore>['state'], connectionId?: string): ConnectionDto | undefined =>
+  state.connections.find((c) => c.id === (connectionId ?? state.assignments?.defaultConnectionId)) ?? state.connections[0];
+/**
+ * Entry 28 (found by poc/e2e/providers-flow.mjs): the picks start from the agents' assignments ON THIS connection only. Before, an
+ * assignment of another connection (an OpenRouter id such as `google/…`) was prefilled on a new Anthropic connection and Save
+ * failed with EM-4004; the form also kept stale picks when the connection changed. Keyed by connection id, so it starts fresh.
+ */
+export const assignedOn = (a: AssignmentsDtoLike | null | undefined, agent: AgentKind, connectionId: string | undefined): string =>
+  connectionId && a?.[agent]?.connectionId === connectionId ? a[agent]!.modelId ?? '' : '';
+type AssignmentsDtoLike = Partial<Record<AgentKind, { connectionId: string; modelId: string } | null>>;
+
 /** Assignments + budgets + Test for a stored connection (onboarding Models step and the Providers screen). */
-export function AssignForm({ onSaved, showBudgets = true, connectionId, focusField, collapseModels }: { onSaved?: () => void; showBudgets?: boolean; connectionId?: string; focusField?: BudgetFocus['field']; collapseModels?: boolean }) {
+export function AssignForm(props: AssignFormProps) {
+  const { state } = useStore();
+  const conn = assignConn(state, props.connectionId);
+  return <AssignFormFor key={conn?.id ?? 'none'} {...props} />;
+}
+function AssignFormFor({ onSaved, showBudgets = true, connectionId, focusField, collapseModels }: AssignFormProps) {
   const { state, runtime, actions, dispatch, t } = useStore();
-  const conn = state.connections.find((c) => c.id === (connectionId ?? state.assignments?.defaultConnectionId)) ?? state.connections[0];
+  const conn = assignConn(state, connectionId);
   const rows: CapabilityRow[] = conn ? state.capabilities[conn.id] ?? [] : [];
-  const [assign, setAssign] = useState<Record<AgentKind, string>>({ brainstorm: state.assignments?.brainstorm?.modelId ?? '', editor: state.assignments?.editor?.modelId ?? '' });
+  const [assign, setAssign] = useState<Record<AgentKind, string>>({ brainstorm: assignedOn(state.assignments, 'brainstorm', conn?.id), editor: assignedOn(state.assignments, 'editor', conn?.id) });
   const [budget, reloadBudget] = useBudget();
   const [month, setMonth] = useState(conn?.budgetMonthUsd != null ? String(conn.budgetMonthUsd) : '');
   const [projectBudget, setProjectBudget] = useState('');

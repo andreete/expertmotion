@@ -63,6 +63,15 @@ test/                Vitest unit tests of the pure lib (no `electron` import)
 `phase` / `progress` / `sinceMs` for the splash (FR-184). The window watches `render-process-gone`, `unresponsive` and
 `did-fail-load` (lib/renderer-recovery.ts, FR-185).
 
+Black-window defences (FR-196…FR-199), all in the main process so they work while the renderer or the GPU is dead:
+GPU `child-process-gone` → reload, twice in 10 min → safe graphics mode + relaunch (lib/graphics-mode.ts, `data/graphics.json`,
+7-day expiry, tray way back, `--safe-graphics` for one launch); clean-shutdown marker `data/session.json` → two abnormal ends
+in a row start in safe graphics mode; heartbeat watchdog (lib/heartbeat.ts) fed by the preload on the private send-only
+channels `em:heartbeat` / `em:renderer-signal` (NOT on `window.expertmotion`); every renderer console warning / error in the
+Shell log; Ctrl+R / F5 / Ctrl+Shift+L via `before-input-event` + hidden "Pemulihan" menu (lib/escape-hatches.ts); tray
+recovery menu; native diagnostic report (lib/diagnostic-report.ts, SEC-105) from the tray or `Expertmotion.exe --diagnostics`
+(Start menu "Expertmotion – Diagnostik").
+
 No generic `invoke(channel, …)`. Every IPC handler validates `event.senderFrame` against the
 `app://expertmotion/` main frame (plus the Vite dev origin when not packaged).
 

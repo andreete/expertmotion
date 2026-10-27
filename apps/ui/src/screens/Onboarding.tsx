@@ -37,6 +37,8 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
     else actions.setScreen({ kind: 'project.new' });
   };
   const id = STEPS[step]!;
+  // Entry 28: the Models step assigns models of the connection just made (the newest valid one), not of an older default.
+  const newest = [...state.connections].filter((c) => c.status === 'valid').sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))[0];
   const hw = state.hardware, tick = state.tick;
   // FR-006: the Hardware step shows free disk too; pull one live reading when it opens.
   useEffect(() => {
@@ -88,7 +90,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           )}
           {id === 'models' && (
             <>
-              {providerDone ? <AssignForm onSaved={() => go(STEPS.indexOf('hardware'))} /> : <p className="text-em-muted">{o('onb.models.skipped')}</p>}
+              {providerDone ? <AssignForm {...(newest ? { connectionId: newest.id } : {})} onSaved={() => go(STEPS.indexOf('hardware'))} /> : <p className="text-em-muted">{o('onb.models.skipped')}</p>}
               <Button variant="ghost" onClick={() => go(STEPS.indexOf('hardware'))}>{o('onb.models.defaults')}</Button>
             </>
           )}

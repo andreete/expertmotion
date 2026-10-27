@@ -11,6 +11,9 @@ ManifestDPIAware true
 !define APP_NAME "Expertmotion"
 !define APP_EXE "Expertmotion.exe"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.expertmotion.desktop"
+; FR-199: Start-menu shortcut that saves the diagnostic report to the Desktop without opening the editor window
+; (Expertmotion.exe --diagnostics; works while a black / hung copy is running). Removed by the uninstaller.
+!define DIAG_LNK "${APP_NAME} – Diagnostik.lnk"
 
 Name "${APP_NAME}"
 OutFile "${OUT_FILE}"
@@ -40,6 +43,9 @@ VIAddVersionKey "LegalCopyright" "Expertmotion"
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "Indonesian"
 
+LangString DiagDesc ${LANG_ENGLISH} "Save an Expertmotion diagnostic report (logs, no projects or keys) to the Desktop"
+LangString DiagDesc ${LANG_INDONESIAN} "Simpan laporan diagnostik Expertmotion (log, tanpa proyek atau kunci) ke Desktop"
+
 Function .onInit
   !insertmacro MUI_LANGDLL_DISPLAY
 FunctionEnd
@@ -67,6 +73,7 @@ Section "Install"
 
   CreateShortCut "$SMPROGRAMS\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
   CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+  CreateShortCut "$SMPROGRAMS\${DIAG_LNK}" "$INSTDIR\${APP_EXE}" "--diagnostics" "$INSTDIR\${APP_EXE}" 0 SW_SHOWNORMAL "" "$(DiagDesc)"
 
   WriteRegStr HKCU "Software\${APP_NAME}" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${APP_NAME}"
@@ -87,6 +94,7 @@ Section "Uninstall"
   !insertmacro CloseApp
   Delete "$SMPROGRAMS\${APP_NAME}.lnk"
   Delete "$DESKTOP\${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${DIAG_LNK}"
   RMDir /r "$INSTDIR"
   DeleteRegKey HKCU "${UNINST_KEY}"
   DeleteRegKey HKCU "Software\${APP_NAME}"

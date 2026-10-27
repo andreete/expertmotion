@@ -63,3 +63,16 @@ export function startingPush(phase: Exclude<StartupPhase, 'project'>, startedAt:
 export function shouldPushProgress(lastAt: number | null, now: number, done: number, total: number, everyMs = 250): boolean {
   return lastAt === null || done >= total || now - lastAt >= everyMs;
 }
+
+/**
+ * Startup phase timings (FR-196 / QA 2026-10-27): marks in ms since the Shell started, first mark of each name wins; main logs
+ * the summary once ("startup timings") when the Editor is mounted and the Service is ready (or after 90 s, whichever is first).
+ */
+export function createPhaseTimer(startedAt: number): { mark(name: string, now: number): boolean; summary(): Record<string, number>; has(name: string): boolean } {
+  const marks = new Map<string, number>();
+  return {
+    mark(name, now) { if (marks.has(name)) return false; marks.set(name, Math.max(0, Math.round(now - startedAt))); return true; },
+    has: (name) => marks.has(name),
+    summary: () => Object.fromEntries([...marks.entries()].sort((a, b) => a[1] - b[1])),
+  };
+}

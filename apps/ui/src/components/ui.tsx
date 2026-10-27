@@ -113,6 +113,8 @@ export function Segmented<V extends string>({ options, value, onChange, label, c
 }
 
 /** CMP-10 Modal: focus trapped, Esc closes (unless blocking), focus returns to the opener. */
+/** Open modals, innermost last (only the topmost handles Esc when focus is on <body>). */
+const MODAL_STACK: object[] = [];
 export function Modal({ el, title, children, footer, onClose, width = 560, blocking, sheet, labelledBy }: {
   el: string; title: ReactNode; children: ReactNode; footer?: ReactNode; onClose: () => void; width?: number; blocking?: boolean; sheet?: boolean; labelledBy?: string;
 }) {
@@ -126,6 +128,20 @@ export function Modal({ el, title, children, footer, onClose, width = 560, block
     (first ?? node)?.focus();
     return () => { opener?.focus?.(); };
   }, []);
+  // Entry 28: after Save / Test the pressed button is disabled and focus falls back to <body>, where the dialog's own onKeyDown
+  // never sees Esc. The topmost open modal closes on Esc then too (and takes focus back so Tab stays inside).
+  const closeRef = useRef(onClose); closeRef.current = onClose;
+  useEffect(() => {
+    const me = {}; MODAL_STACK.push(me);
+    const on = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || blocking || MODAL_STACK[MODAL_STACK.length - 1] !== me) return;
+      const a = document.activeElement;
+      if (a && a !== document.body && a !== document.documentElement) return;          // focus inside: handled by onKeyDown
+      e.preventDefault(); closeRef.current();
+    };
+    document.addEventListener('keydown', on);
+    return () => { document.removeEventListener('keydown', on); const i = MODAL_STACK.indexOf(me); if (i >= 0) MODAL_STACK.splice(i, 1); };
+  }, [blocking]);
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape' && !blocking) { e.stopPropagation(); onClose(); return; }
     if (e.key !== 'Tab' || !ref.current) return;

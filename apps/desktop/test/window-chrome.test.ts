@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { appMenuTemplate, rendererLogLine, showMenuBar } from '../src/lib/window-chrome.js';
+import { appMenuTemplate, showMenuBar } from '../src/lib/window-chrome.js';
 
 // QA 2026-10-25: Electron's default "File Edit View Window" menu bar showed above the Editor header on Windows.
 describe('window chrome', () => {
-  it('Windows / Linux: one hidden Edit menu with the standard edit roles only (accelerators keep working in inputs)', () => {
+  it('Windows / Linux: one hidden Edit menu with the standard edit roles only (accelerators keep working in inputs); no default reload role', () => {
     for (const p of ['win32', 'linux'] as const) {
       const t = appMenuTemplate(p);
       expect(t).toHaveLength(1);
@@ -20,15 +20,8 @@ describe('window chrome', () => {
   });
   it('main.ts installs the menu and hides the bar instead of removing the menu', () => {
     const src = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
-    expect(src).toContain('Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform)))');
+    expect(src).toContain('Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, {');   // + the FR-199 recovery menu
     expect(src).toContain('win.setMenuBarVisibility(false)');
     expect(src).not.toMatch(/removeMenu\(\)|setApplicationMenu\(null\)/);
-  });
-  it('forwards only tagged renderer warnings / errors to the Shell log, capped', () => {
-    expect(rendererLogLine('warning', '[em] player: preview still loading (head-missing)')).toEqual({ level: 'warn', msg: '[em] player: preview still loading (head-missing)' });
-    expect(rendererLogLine('error', '[em] x')?.level).toBe('error');
-    expect(rendererLogLine('info', '[em] x')).toBeNull();
-    expect(rendererLogLine('warning', 'some library warning')).toBeNull();
-    expect(rendererLogLine('error', `[em] ${'a'.repeat(900)}`)!.msg).toHaveLength(500);
   });
 });

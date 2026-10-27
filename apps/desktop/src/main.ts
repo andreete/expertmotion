@@ -15,15 +15,19 @@
  *   - crash/diagnostic logs with secret redaction (SEC-100…104)
  *   - electron-updater wiring, disabled in Private Mode (SEC-090…096)
  *   - startup phases for the Editor splash (FR-184) and Editor window recovery: crash / hang / failed load (FR-185)
+ *   - black-window defences that need no working renderer (FR-196…FR-199): GPU-crash handling + safe graphics mode, the
+ *     crash-loop guard (clean-shutdown marker), the heartbeat watchdog with its native dialog, renderer console capture,
+ *     Ctrl+R / F5 / Ctrl+Shift+L, the tray recovery menu, the native diagnostic report (`--diagnostics`), GPU info + timings
  *
  * The decision logic is in ./lib/* (pure, unit-tested on Linux). This file wires Electron to it.
  * Electron cannot run on the Linux dev server, so this file is typecheck-only here; see README.
  */
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, safeStorage, screen, session, shell, Tray, utilityProcess } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, powerMonitor, protocol, safeStorage, screen, session, shell, Tray, utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import { randomBytes, createPublicKey, verify as nodeVerify } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { arch, cpus, homedir, release, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { redact } from '@expertmotion/shared';
 import {
@@ -36,7 +40,7 @@ import { initialRestartState, onFailure, onReady, type RestartState } from './li
 import { buildCsp } from './lib/csp.js';
 import { resolveAppUrl } from './lib/protocol.js';
 import { isTrustedSender } from './lib/ipc.js';
-import { appMenuTemplate, rendererLogLine, showMenuBar } from './lib/window-chrome.js';
+import { appMenuTemplate, showMenuBar } from './lib/window-chrome.js';
 import { buildServiceEnv } from './lib/child-env.js';
 import { IpcPath, OpenUrlArg, parseIpc, PickFilesArgs, PickFolderArgs, PickSaveArgs, UpdateActionArg } from './lib/ipc-schemas.js';
 import { crashFileName, dataLayout, directoriesToCreate, type DataLayout } from './lib/data-dir.js';
@@ -48,12 +52,21 @@ import { DOWNLOAD_RETRY_MS, downloadDecision, installDecision, nextUpdateState, 
 import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, remainingMs, type ShutdownAnswer } from './lib/close-flow.js';
 import { verifyManifest, type SignedManifest } from './lib/integrity.js';
 import { allowPermission, originOf } from './lib/permissions.js';
-import { shouldPushProgress, startingPush, type ServiceStatePush } from './lib/startup.js';
+import { createPhaseTimer, shouldPushProgress, startingPush, type ServiceStatePush } from './lib/startup.js';
 import { hashManifestFiles, sha256File as streamSha256 } from './lib/integrity-hash.js';
 import {
   didFailLoadEntry, goneChoice, initialCrashState, onRendererGone, RENDERER_GONE_DIALOG, UNRESPONSIVE_DIALOG, unresponsiveChoice, type CrashState,
 } from './lib/renderer-recovery.js';
-import { createRateLimiter, rendererLogFields } from './lib/renderer-log.js';
+import { consoleLogEntry, createCountingLimiter, createRateLimiter, rendererLogFields } from './lib/renderer-log.js';
+import {
+  cleanMarker, decideStartup, defaultGraphicsState, disableSafeMode, enableSafeMode, initialGpuCrashState, onChildProcessGone, parseGraphicsState,
+  parseSessionMarker, runningMarker, safeModeChoice, safeModeDialog, type GpuCrashState, type GraphicsState, type SafeModeReason, type SessionMarker, type StartupDecision,
+} from './lib/graphics-mode.js';
+import {
+  displayStallDialog, initialWatchState, onBeat, onLoadStart, onSignal, onTick, parseBeat, parseSignal, stallChoice, WATCHDOG_TICK_MS, type StallKind, type WatchState,
+} from './lib/heartbeat.js';
+import { buildReportEntries, createZip, DIAGNOSTICS_SWITCH, gpuLogFields, readSmallJson, reportFileName, summarizeGpuInfo } from './lib/diagnostic-report.js';
+import { createDebounce, recoveryKey, reportFailedDialog, reportSavedDialog, trayItems, type RecoveryAction, type TrayAction } from './lib/escape-hatches.js';
 
 /** Build-time constants injected by esbuild `define` (see scripts/build-main.mjs). */
 declare const __EM_FEED_URL__: string;
@@ -103,6 +116,23 @@ const shellStartedAt = Date.now();
 let crashState: CrashState = initialCrashState;
 /** FR-185: at most 20 Editor error lines per minute reach the Shell log. */
 const rendererLogAllowed = createRateLimiter(20, 60_000);
+/** FR-198: at most 30 renderer console warnings / errors per minute; the next allowed line says how many were dropped. */
+const consoleLogAllowed = createCountingLimiter(30, 60_000);
+/** FR-196 / FR-197: graphics mode of this launch, decided in boot() before app ready. */
+let graphicsState: GraphicsState = { ...defaultGraphicsState };
+let startupDecision: StartupDecision | null = null;
+let gpuCrashState: GpuCrashState = initialGpuCrashState;
+let sessionMarker: SessionMarker | null = null;
+/** FR-198 heartbeat watchdog state of the Editor window. */
+let watch: WatchState = initialWatchState;
+/** One recovery dialog at a time (renderer gone, hang, display stall): the open one, abortable. */
+let recoveryDialog: { kind: 'gone' | 'unresponsive' | 'display'; ctl: AbortController } | null = null;
+/** A renderer killed on purpose (recovery reload) must not count as a crash. */
+let expectRendererGone = false;
+/** Startup phase timings (FR-196), logged once. */
+const phases = createPhaseTimer(shellStartedAt);
+let phasesLogged = false;
+const keyDebounce = createDebounce();
 const triedPorts = new Set<number>();
 const stderrTail: string[] = [];
 
@@ -133,7 +163,7 @@ async function acquireDbKey(): Promise<{ keyHex: string; restoreBackup: boolean 
     logLine('error', 'keyring unavailable', { code: gate.code, reason: gate.reason, backend: facts.backend });
     pushServiceState({ status: 'failed', code: gate.code, logsDir: layout.logs });
     fatalDialog(gate.code, keyringRefusalMessage(gate, facts));
-    app.exit(1);
+    exitApp(1);
     return null;
   }
   if (!existsSync(layout.keyring)) return { keyHex: createDbKey(), restoreBackup: false };
@@ -208,6 +238,8 @@ async function startService(): Promise<void> {
     await ready;
     restartState = onReady(restartState, Date.now());
     logLine('info', 'service ready', { port });
+    phases.mark('service-ready', Date.now());
+    maybeLogPhases();
     pushServiceState({ status: 'ready', bootstrap: { port, token } });
     startMetrics(proc);
   } catch (err) {
@@ -379,29 +411,67 @@ function createWindow(): void {
     },
   });
   mainWindow = win;
+  phases.mark('window-created', Date.now());
   // QA 2026-10-25: no native menu bar inside the window on Windows / Linux (the Editor header is the menu). The Edit-roles
   // menu stays attached (Menu.setApplicationMenu in whenReady), so its accelerators keep working while hidden.
   if (!showMenuBar(process.platform)) win.setMenuBarVisibility(false);
-  win.webContents.on('console-message', (e) => { const l = rendererLogLine(e.level, e.message); if (l) logLine(l.level, 'renderer', { message: l.msg }); });
+  // FR-198: every renderer console warning / error reaches the Shell log (rate-limited, query strings / e-mails removed, redacted).
+  win.webContents.on('console-message', (e) => {
+    const entry = consoleLogEntry(e.level, e.message, e.sourceId, e.lineNumber);
+    if (entry === null) return;
+    const gate = consoleLogAllowed(Date.now());
+    if (gate.ok) logLine(entry.level, entry.msg, gate.dropped > 0 ? { ...entry.fields, dropped: gate.dropped } : entry.fields);
+  });
+  win.webContents.on('preload-error', (_e, _path, error) => {
+    logLine('error', 'preload error', { code: EM.editorError, error: error.message.slice(0, 500), stack: (error.stack ?? '').split('\n').slice(0, 10).join('\n') });
+  });
+  // FR-199: recovery keys are read here, in the browser process, before the page sees them: they work on a black window.
+  win.webContents.on('before-input-event', (e, input) => {
+    const action = recoveryKey(input, process.platform);
+    if (action === null) return;
+    e.preventDefault();
+    runRecovery(action, 'key');
+  });
 
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(`${APP_ORIGIN}/`) && !devRules.devOrigins.some((o) => url.startsWith(o))) e.preventDefault(); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-attach-webview', (e) => e.preventDefault());
-  win.once('ready-to-show', () => { if (saved.maximized) win.maximize(); win.show(); scheduleUpdateCheck(); });
+  let shown = false;
+  const showNow = (why: 'ready-to-show' | 'fallback') => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    phases.mark('window-shown', Date.now());
+    if (why === 'fallback') logLine('warn', 'window shown before its first paint', { afterMs: Date.now() - shellStartedAt });
+    if (saved.maximized) win.maximize();
+    win.show();
+    scheduleUpdateCheck();
+    maybeNotifySafeMode(win);
+  };
+  win.once('ready-to-show', () => showNow('ready-to-show'));
+  // FR-198: `ready-to-show` needs a first paint; a dead GPU never paints, and a window that never appears looks like
+  // "nothing happens" (the Creator starts it again and gets the same). Show it anyway after 10 s; the watchdog then asks.
+  const showFallback = setTimeout(() => showNow('fallback'), 10_000);
+  showFallback.unref();
   let saveTimer: NodeJS.Timeout | undefined;
   const saveSoon = () => { if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(() => writeWindowState(win), 500); };
   win.on('resize', saveSoon); win.on('move', saveSoon); win.on('maximize', saveSoon); win.on('unmaximize', saveSoon);
   win.on('close', () => { if (saveTimer) clearTimeout(saveTimer); writeWindowState(win); });
-  win.on('closed', () => { mainWindow = null; });
-  win.webContents.on('did-finish-load', () => { win.webContents.send(IPC.serviceState, lastServiceState); });
+  win.on('closed', () => { clearTimeout(showFallback); if (mainWindow === win) mainWindow = null; });
+  // Windows log-off / shutdown with the window open is not a crash (FR-197).
+  win.on('session-end', () => { logLine('info', 'windows session ends'); markSessionClean(); });
+  win.webContents.on('did-finish-load', () => { phases.mark('did-finish-load', Date.now()); win.webContents.send(IPC.serviceState, lastServiceState); });
   watchRenderer(win);
 
+  watch = onLoadStart(watch, Date.now());
   void win.loadURL(editorEntryUrl(app.isPackaged, process.env));
 }
 
 /**
  * FR-185: a crashed, hung or failed Editor never leaves a silent black window. The Local Service keeps running; a reloaded
  * Editor reconnects through getBootstrap and the re-sent service state. Decisions in lib/renderer-recovery.ts.
+ * FR-198: the heartbeat watchdog (lib/heartbeat.ts) covers what Electron does not report: a window that is alive but paints
+ * nothing (GPU / compositor), a JS thread that stopped beating before `unresponsive`, and no first paint at all.
+ * One recovery dialog at a time (`recoveryDialog`); the hang dialog and the display dialog never stack.
  */
 function watchRenderer(win: BrowserWindow): void {
   const wc = win.webContents;
@@ -409,43 +479,115 @@ function watchRenderer(win: BrowserWindow): void {
     const entry = didFailLoadEntry(errorCode, errorDescription, validatedURL, isMainFrame);
     if (entry) logLine(entry.level, entry.msg, entry.fields);
   });
-  let killedForReload = false;                                         // "Reload" on a hang kills the renderer first
+  wc.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) watch = onLoadStart(watch, Date.now());
+  });
   wc.on('render-process-gone', (_e, details) => {
-    if (killedForReload) { killedForReload = false; logLine('info', 'editor renderer restarted after a hang'); return; }
+    if (expectRendererGone) { expectRendererGone = false; logLine('info', 'editor renderer restarted for a recovery reload'); return; }
     const decision = onRendererGone(crashState, { reason: details.reason, exitCode: details.exitCode }, Date.now(), shuttingDown);
     if (decision.action === 'ignore') return;
     crashState = decision.state;
     logLine('error', 'editor renderer gone', { code: EM.rendererCrashed, reason: details.reason, exitCode: details.exitCode, action: decision.action });
     writeCrashFile('shell', `renderer gone: ${details.reason} (exit ${details.exitCode})`);
     if (win.isDestroyed()) return;
+    closeRecoveryDialog();                                                // a stall dialog for a renderer that is gone is moot
     if (decision.action === 'reload') { wc.reload(); return; }
-    void dialog.showMessageBox(win, { type: 'error', ...RENDERER_GONE_DIALOG, buttons: [...RENDERER_GONE_DIALOG.buttons] }).then(({ response }) => {
-      if (win.isDestroyed()) return;
-      if (goneChoice(response) === 'reload') wc.reload(); else win.close();
+    void askRecovery(win, 'gone', { type: 'error', ...RENDERER_GONE_DIALOG, buttons: [...RENDERER_GONE_DIALOG.buttons] }).then((response) => {
+      if (response === null || win.isDestroyed()) return;
+      if (goneChoice(response) === 'reload') wc.reload(); else void quitGracefully('renderer-gone-close');
     });
   });
-  let hang: AbortController | null = null;
   win.on('unresponsive', () => {
-    if (hang !== null || win.isDestroyed()) return;                      // one dialog per episode
+    if (win.isDestroyed()) return;
     logLine('warn', 'editor unresponsive', { code: EM.rendererCrashed });
-    const ctl = new AbortController();
-    hang = ctl;
-    void dialog.showMessageBox(win, { type: 'warning', ...UNRESPONSIVE_DIALOG, buttons: [...UNRESPONSIVE_DIALOG.buttons], signal: ctl.signal })
-      .then(({ response }) => {
-        if (ctl.signal.aborted || win.isDestroyed()) return;
-        const choice = unresponsiveChoice(response);
-        logLine('info', 'editor unresponsive choice', { choice });
-        if (choice === 'reload') { killedForReload = true; wc.forcefullyCrashRenderer(); wc.reload(); } else if (choice === 'close') win.close();
-      })
-      .catch(() => undefined)
-      .finally(() => { if (hang === ctl) hang = null; });
+    if (recoveryDialog !== null) return;                                  // one dialog per episode, never two at once
+    void askRecovery(win, 'unresponsive', { type: 'warning', ...UNRESPONSIVE_DIALOG, buttons: [...UNRESPONSIVE_DIALOG.buttons] }).then((response) => {
+      if (response === null || win.isDestroyed()) return;
+      const choice = unresponsiveChoice(response);
+      logLine('info', 'editor unresponsive choice', { choice });
+      if (choice === 'reload') reloadWindow('unresponsive-dialog', true); else if (choice === 'close') void quitGracefully('unresponsive-close');
+    });
   });
   win.on('responsive', () => {
-    if (hang === null) return;
+    if (recoveryDialog?.kind !== 'unresponsive') return;
     logLine('info', 'editor responsive again');
-    hang.abort();
-    hang = null;
+    closeRecoveryDialog();
   });
+  const tick = setInterval(() => {
+    if (win.isDestroyed() || shuttingDown || quitting || relaunching) return;   // no stall dialogs while Expertmotion closes
+    const r = onTick(watch, { visible: win.isVisible(), minimized: win.isMinimized(), focused: win.isFocused(), dialogOpen: recoveryDialog !== null }, Date.now());
+    watch = r.state;
+    if (r.decision.action === 'recovered') {
+      logLine('info', 'display responsive again', { kind: r.decision.kind, stalledMs: r.decision.stalledMs });
+      if (recoveryDialog?.kind === 'display') closeRecoveryDialog();
+    } else if (r.decision.action === 'ask') {
+      onDisplayStall(win, r.decision.kind, r.decision.stalledMs);
+    }
+  }, WATCHDOG_TICK_MS);
+  tick.unref();
+  win.on('closed', () => clearInterval(tick));
+}
+
+/** Shows one recovery dialog; resolves the button index, or null when it was dismissed because the cause went away. */
+async function askRecovery(win: BrowserWindow, kind: 'gone' | 'unresponsive' | 'display', opts: Electron.MessageBoxOptions): Promise<number | null> {
+  closeRecoveryDialog();
+  const ctl = new AbortController();
+  const entry = { kind, ctl };
+  recoveryDialog = entry;
+  try {
+    const { response } = await dialog.showMessageBox(win, { ...opts, signal: ctl.signal });
+    return ctl.signal.aborted ? null : response;
+  } catch { return null; } finally { if (recoveryDialog === entry) recoveryDialog = null; }
+}
+function closeRecoveryDialog(): void {
+  const d = recoveryDialog;
+  recoveryDialog = null;
+  d?.ctl.abort();
+}
+
+/** FR-198: the watchdog found a stalled display. Log it (with the window facts), then ask once per episode. */
+function onDisplayStall(win: BrowserWindow, kind: StallKind, stalledMs: number): void {
+  logLine('error', 'display not responding', {
+    code: EM.displayStalled, kind, stalledMs, sinceLoadMs: watch.loadStartedAt === null ? null : Date.now() - watch.loadStartedAt,
+    firstPaint: watch.firstPaintAt !== null, mounted: watch.mountedAt !== null, safeGraphics: startupDecision?.safe ?? false,
+  });
+  writeCrashFile('shell', `display not responding: ${kind} (${stalledMs} ms)`);
+  void askRecovery(win, 'display', { type: 'warning', ...displayStallDialog(kind) }).then((response) => {
+    if (response === null || win.isDestroyed()) return;
+    const choice = stallChoice(response);
+    logLine('info', 'display stall choice', { kind, choice });
+    if (choice === 'reload') reloadWindow('display-stall', kind === 'no-heartbeat');
+    else if (choice === 'safe-mode') void restartWithGraphics(true, 'display-stall');
+    else if (choice === 'logs') openLogFolder();
+    else if (choice === 'close') void quitGracefully('display-stall-close');
+  });
+}
+
+/**
+ * Recovery reload (keys, tray, dialogs). A hung renderer is killed first (`forcefullyCrashRenderer`, not counted as a crash),
+ * otherwise a plain reload; no window at all → a new one. The Local Service is untouched.
+ */
+function reloadWindow(reason: string, hung?: boolean): void {
+  const win = mainWindow;
+  if (win === null || win.isDestroyed()) { logLine('info', 'recovery: new window', { reason }); if (app.isReady()) createWindow(); return; }
+  const wc = win.webContents;
+  const isHung = hung ?? (watch.stalled === 'no-heartbeat' || recoveryDialog?.kind === 'unresponsive');
+  logLine('info', 'recovery reload', { reason, hung: isHung, crashed: wc.isCrashed() });
+  closeRecoveryDialog();
+  if (!win.isVisible()) win.show();
+  if (win.isMinimized()) win.restore();
+  if (isHung && !wc.isCrashed()) { expectRendererGone = true; wc.forcefullyCrashRenderer(); }
+  wc.reload();
+}
+
+function openLogFolder(): void {
+  void shell.openPath(layout.logs).then((err) => { if (err) logLine('warn', 'open log folder failed', { code: EM.openFolderFailed, error: err }); });
+}
+
+function runRecovery(action: RecoveryAction, via: 'key' | 'menu'): void {
+  if (!keyDebounce(action, Date.now())) return;
+  logLine('info', 'recovery action', { action, via });
+  if (action === 'reload') reloadWindow(`${via}-reload`); else openLogFolder();
 }
 
 function hardenSession(): void {
@@ -464,7 +606,7 @@ function hardenSession(): void {
 // ---------------------------------------------------------------------------------------------
 // IPC handlers (SEC-030, SEC-031). Sender validated; a foreign frame is ignored.
 // ---------------------------------------------------------------------------------------------
-function senderOk(event: Electron.IpcMainInvokeEvent): boolean {
+function senderOk(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): boolean {
   const frame = event.senderFrame;
   if (frame === null) return false;
   return isTrustedSender({ url: frame.url, isMainFrame: frame.parent === null }, { devOrigins: devRules.devOrigins });
@@ -553,6 +695,22 @@ function registerIpc(): void {
     pushServiceState(startingPush('service', shellStartedAt, Date.now()));
     void startService();
     return true;
+  });
+
+  // FR-198: preload liveness (send-only channels; the sender is checked like every handler, the payload validated).
+  ipcMain.on(IPC.heartbeat, (event, raw: unknown) => {
+    if (!senderOk(event) || event.sender !== mainWindow?.webContents) return;
+    const beat = parseBeat(raw);
+    if (beat !== null) watch = onBeat(watch, beat, Date.now());
+  });
+  ipcMain.on(IPC.rendererSignal, (event, raw: unknown) => {
+    if (!senderOk(event) || event.sender !== mainWindow?.webContents) return;
+    const sig = parseSignal(raw);
+    if (sig === null) return;
+    const now = Date.now();
+    watch = onSignal(watch, sig, now);
+    if (phases.mark(sig.kind, now)) logLine('info', `editor ${sig.kind}`, { sinceStartMs: now - shellStartedAt, ...(sig.atMs !== undefined ? { pageMs: sig.atMs } : {}) });
+    maybeLogPhases();
   });
 
   ipcMain.handle(IPC.getUpdateState, (event) => (senderOk(event) ? updateState : null));
@@ -666,6 +824,7 @@ async function onUpdateAction(action: UpdateAction): Promise<void> {
   updateStage = 'install';
   try { writeFileSync(pendingUpdateFile(), JSON.stringify({ fromVersion: app.getVersion(), toVersion: updateState.version ?? '', at: Date.now() })); } catch { /* best effort */ }
   await shutdownService('update').catch(() => undefined);
+  markSessionClean();
   autoUpdater.quitAndInstall(false, true);
 }
 
@@ -710,14 +869,30 @@ function scheduleUpdateCheck(): void {
 function createTray(): void {
   try {
     tray = new Tray(join(app.getAppPath(), 'build', 'tray.png'));
-    tray.setToolTip('Expertmotion');
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Show Expertmotion', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
-      { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
-    ]));
+    tray.setToolTip(startupDecision?.safe ? 'Expertmotion (mode grafis aman)' : 'Expertmotion');
+    // FR-199: the tray menu works while the window is black or hung (it is drawn by the OS, not the renderer).
+    const run = (action: TrayAction) => () => onTrayAction(action);
+    tray.setContextMenu(Menu.buildFromTemplate(trayItems(startupDecision?.safe ?? false).map((i) => (i === null ? { type: 'separator' as const } : { label: i.label, click: run(i.action) }))));
+    tray.on('click', () => onTrayAction('show'));
   } catch (err) {
     logLine('warn', 'tray unavailable', { error: (err as Error).message });
+  }
+}
+
+function onTrayAction(action: TrayAction): void {
+  if (action !== 'show') logLine('info', 'tray action', { action });
+  switch (action) {
+    case 'show':
+      if (mainWindow === null || mainWindow.isDestroyed()) { if (app.isReady()) createWindow(); return; }
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show(); mainWindow.focus();
+      return;
+    case 'reload': reloadWindow('tray'); return;
+    case 'safe-graphics-on': void restartWithGraphics(true, 'user'); return;
+    case 'safe-graphics-off': void restartWithGraphics(false, 'user'); return;
+    case 'open-logs': openLogFolder(); return;
+    case 'diagnostics': void saveDiagnosticReport('tray'); return;
+    case 'quit': void quitGracefully('tray-quit'); return;
   }
 }
 
@@ -732,6 +907,225 @@ function writeCrashFile(proc: 'shell' | 'service', detail: string): void {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Safe graphics mode, clean-shutdown marker, GPU crashes (FR-196, FR-197; lib/graphics-mode.ts).
+// ---------------------------------------------------------------------------------------------
+const graphicsFile = (): string => join(layout.data, 'graphics.json');
+const sessionFile = (): string => join(layout.data, 'session.json');
+const gpuInfoFile = (): string => join(layout.data, 'gpu-info.json');
+
+/** Atomic small JSON write (tmp + rename); never throws. */
+function writeJsonAtomic(file: string, value: unknown): void {
+  try { const tmp = `${file}.tmp`; writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600 }); renameSync(tmp, file); } catch (err) { logLine('warn', 'state file write failed', { file: file.split(/[\\/]/).pop(), error: (err as Error).message }); }
+}
+
+/** Runs in boot() before app ready: reads the marker + graphics state, decides, persists, disables the GPU when needed. */
+function decideGraphicsMode(): void {
+  const previous = parseSessionMarker(readJson(sessionFile()));
+  const decision = decideStartup({ graphics: parseGraphicsState(readJson(graphicsFile())), previous, now: Date.now(), argv: process.argv });
+  startupDecision = decision;
+  graphicsState = decision.next;
+  writeJsonAtomic(graphicsFile(), graphicsState);
+  sessionMarker = runningMarker(Date.now(), app.getVersion(), decision.safe);
+  writeJsonAtomic(sessionFile(), sessionMarker);
+  if (decision.events.includes('previous-abnormal')) logLine('warn', 'previous session did not shut down cleanly', { previousStartedAt: previous ? new Date(previous.startedAt).toISOString() : null, previousVersion: previous?.version ?? null, previousSafeGraphics: previous?.safeGraphics ?? false, streak: decision.next.abnormalStreak });
+  if (decision.events.includes('safe-mode-expired')) logLine('info', 'safe graphics mode expired; trying hardware acceleration again');
+  if (decision.safe) {
+    app.disableHardwareAcceleration();
+    logLine('warn', 'safe graphics mode on (hardware acceleration disabled)', { code: EM.safeGraphics, reason: decision.reason, since: graphicsState.since ? new Date(graphicsState.since).toISOString() : null, events: decision.events });
+  } else logLine('info', 'graphics mode', { mode: 'hardware' });
+}
+
+function markSessionClean(): void {
+  if (sessionMarker === null || sessionMarker.state === 'clean') return;
+  sessionMarker = cleanMarker(sessionMarker);
+  writeJsonAtomic(sessionFile(), sessionMarker);
+}
+
+/** Every deliberate exit goes through here so it is never counted as a crash (FR-197). */
+function exitApp(code: number): void {
+  markSessionClean();
+  app.exit(code);
+}
+
+/** Persists the graphics mode and restarts Expertmotion (the Service is stopped gracefully first). */
+async function restartWithGraphics(safe: boolean, reason: SafeModeReason): Promise<void> {
+  graphicsState = safe ? enableSafeMode(graphicsState, reason, Date.now()) : disableSafeMode();
+  writeJsonAtomic(graphicsFile(), graphicsState);
+  logLine('warn', safe ? 'restarting in safe graphics mode' : 'restarting with hardware acceleration', { code: EM.safeGraphics, reason });
+  await relaunch();
+}
+
+let relaunching = false;
+async function relaunch(): Promise<void> {
+  if (relaunching) return;
+  relaunching = true;
+  closeRecoveryDialog();
+  const hard = setTimeout(() => { app.relaunch({ args: relaunchArgs() }); exitApp(0); }, 15_000);
+  hard.unref();
+  if (mainWindow !== null && !mainWindow.isDestroyed()) writeWindowState(mainWindow);
+  const r = await shutdownService('window-closed').catch(() => 'stopped' as const);
+  if (r === 'kept') { relaunching = false; clearTimeout(hard); return; }   // a render is running and the Creator kept it
+  clearTimeout(hard);
+  app.relaunch({ args: relaunchArgs() });
+  exitApp(0);
+}
+const relaunchArgs = (): string[] => process.argv.slice(1).filter((a) => a !== '--safe-graphics' && a !== DIAGNOSTICS_SWITCH);
+
+/** Quit that works with a hung renderer: stop the Service gracefully, then exit (no `beforeunload` round trip). */
+let quitting = false;
+async function quitGracefully(reason: string): Promise<void> {
+  if (quitting) return;
+  quitting = true;
+  logLine('info', 'quit', { reason });
+  closeRecoveryDialog();
+  const hard = setTimeout(() => { logLine('warn', 'shutdown stalled; exiting'); exitApp(0); }, 20_000);
+  if (mainWindow !== null && !mainWindow.isDestroyed()) writeWindowState(mainWindow);
+  const r = await shutdownService('window-closed').catch(() => 'stopped' as const);
+  if (r === 'kept') { quitting = false; clearTimeout(hard); return; }
+  clearTimeout(hard);
+  exitApp(0);
+}
+
+/** FR-196 rule 1: GPU process crashes (and every other child process that is gone, logged). */
+function onChildGone(details: Electron.Details): void {
+  const d = { type: details.type, reason: details.reason, exitCode: details.exitCode, name: details.name, serviceName: details.serviceName };
+  const decision = onChildProcessGone(gpuCrashState, d, Date.now(), { shuttingDown: shuttingDown || quitting || relaunching, safeMode: startupDecision?.safe ?? false });
+  gpuCrashState = decision.state;
+  if (decision.action === 'ignore') return;
+  const fields = { type: d.type, reason: d.reason, exitCode: d.exitCode, ...(d.name ? { name: d.name } : {}), ...(d.serviceName ? { serviceName: d.serviceName } : {}) };
+  if (decision.action === 'log') { logLine('warn', 'child process gone', fields); return; }
+  logLine('error', 'gpu process gone', { code: EM.gpuCrashed, ...fields, crashesIn10Min: decision.crashesInWindow, action: decision.action, safeGraphics: startupDecision?.safe ?? false });
+  writeCrashFile('shell', `gpu process gone: ${d.reason} (exit ${d.exitCode}); crashes in 10 min: ${decision.crashesInWindow}; action: ${decision.action}`);
+  if (decision.action === 'safe-mode') { void restartWithGraphics(true, 'gpu-crash'); return; }
+  // A GPU crash leaves a black but "alive" window: give Chromium a moment to start the new GPU process, then redraw.
+  setTimeout(() => reloadWindow('gpu-crash'), 1_500).unref();
+}
+
+/** First window in safe graphics mode: say so once (native dialog, Indonesian), offer the way back. */
+function maybeNotifySafeMode(win: BrowserWindow): void {
+  if (!startupDecision?.notify || graphicsState.mode !== 'safe') return;
+  graphicsState = { ...graphicsState, notified: true };
+  writeJsonAtomic(graphicsFile(), graphicsState);
+  const copy = safeModeDialog(graphicsState.reason ?? 'user');
+  void dialog.showMessageBox(win, { type: 'info', ...copy }).then(({ response }) => {
+    const choice = safeModeChoice(response);
+    logLine('info', 'safe graphics notice', { choice });
+    if (choice === 'disable') void restartWithGraphics(false, 'user');
+  }).catch(() => undefined);
+}
+
+/** FR-196: GPU facts in the Shell log at startup (and gpu-info.json for the `--diagnostics` run, which has no GPU). */
+let lastFeatureStatus = '';
+let gpuUpdates = 0;
+async function logGpuInfo(): Promise<void> {
+  let featureStatus: unknown = null;
+  try { featureStatus = app.getGPUFeatureStatus(); } catch { /* not available */ }
+  let info: unknown = null;
+  try {
+    info = await Promise.race([app.getGPUInfo('basic'), new Promise((resolve) => { setTimeout(() => resolve(null), 5_000).unref(); })]);
+  } catch (err) { logLine('warn', 'gpu info unavailable', { error: (err as Error).message }); }
+  const summary = summarizeGpuInfo(info);
+  lastFeatureStatus = JSON.stringify(featureStatus);
+  logLine('info', 'gpu info', { ...gpuLogFields(summary, featureStatus), safeGraphics: startupDecision?.safe ?? false });
+  writeJsonAtomic(gpuInfoFile(), { at: new Date().toISOString(), safeGraphics: startupDecision?.safe ?? false, featureStatus, summary });
+}
+function onGpuInfoUpdate(): void {
+  let fs: unknown = null;
+  try { fs = app.getGPUFeatureStatus(); } catch { return; }
+  const text = JSON.stringify(fs);
+  if (text === lastFeatureStatus || gpuUpdates >= 20) return;               // the event is frequent; log changes only
+  lastFeatureStatus = text;
+  gpuUpdates += 1;
+  logLine('info', 'gpu feature status changed', gpuLogFields(null, fs));
+}
+
+function maybeLogPhases(force = false): void {
+  if (phasesLogged) return;
+  if (!force && !(phases.has('editor-mounted') && phases.has('service-ready'))) return;
+  phasesLogged = true;
+  logLine('info', 'startup timings', { ms: phases.summary(), safeGraphics: startupDecision?.safe ?? false, complete: !force });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Native diagnostic report (FR-199, SEC-105; lib/diagnostic-report.ts). Works without the Editor and without the Service.
+// ---------------------------------------------------------------------------------------------
+async function systemFacts(live: boolean): Promise<Record<string, unknown>> {
+  let featureStatus: unknown = null;
+  let gpu: unknown = null;
+  if (live) {
+    try { featureStatus = app.getGPUFeatureStatus(); } catch { /* none */ }
+    try { gpu = summarizeGpuInfo(await Promise.race([app.getGPUInfo('basic'), new Promise((resolve) => { setTimeout(() => resolve(null), 3_000).unref(); })])); } catch { /* none */ }
+  }
+  const c = cpus();
+  return {
+    createdAt: new Date().toISOString(),
+    app: { version: app.getVersion(), packaged: app.isPackaged, electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+    os: { platform: process.platform, arch: arch(), release: release(), locale: app.getLocale() },
+    cpu: { model: c[0]?.model ?? null, count: c.length },
+    ramTotalMb: Math.round(totalmem() / 1048576),
+    enginesPlatform: app.isPackaged ? readSmallJson(join(process.resourcesPath, 'engines', 'PLATFORM.json')) : null,
+    graphics: { ...graphicsState, safeThisLaunch: startupDecision?.safe ?? null, events: startupDecision?.events ?? [] },
+    session: readSmallJson(sessionFile()),
+    gpuLive: live ? { featureStatus, summary: gpu } : null,
+    gpuLastStartup: readSmallJson(gpuInfoFile()),
+    display: live ? { firstPaint: watch.firstPaintAt !== null, mounted: watch.mountedAt !== null, stalled: watch.stalled, lastBeatAgoMs: watch.lastBeatAt === null ? null : Date.now() - watch.lastBeatAt } : null,
+    startupMs: phases.summary(),
+  };
+}
+
+/** Writes the report to the Desktop (fallback: the logs folder) and reveals it in Explorer. Returns the path or null. */
+async function writeDiagnosticReport(live: boolean): Promise<string> {
+  const now = new Date();
+  const entries = buildReportEntries({ logsDir: layout.logs, homeDir: homedir(), now: now.getTime(), system: await systemFacts(live) });
+  const zip = createZip(entries, now);
+  const name = reportFileName(now);
+  const targets = [(() => { try { return app.getPath('desktop'); } catch { return null; } })(), layout.logs].filter((d): d is string => d !== null);
+  let lastErr: Error | null = null;
+  for (const dir of targets) {
+    try { const file = join(dir, name); writeFileSync(file, zip, { mode: 0o600 }); logLine('info', 'diagnostic report written', { files: entries.length, bytes: zip.length, toDesktop: dir !== layout.logs }); return file; } catch (err) { lastErr = err as Error; }
+  }
+  throw lastErr ?? new Error('no folder to write to');
+}
+
+async function saveDiagnosticReport(via: 'tray'): Promise<void> {
+  try {
+    const file = await writeDiagnosticReport(true);
+    shell.showItemInFolder(file);
+    const box = { type: 'info' as const, ...reportSavedDialog(file.split(/[\\/]/).pop() ?? file) };
+    void (mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, box) : dialog.showMessageBox(box)).catch(() => undefined);
+  } catch (err) {
+    logLine('error', 'diagnostic report failed', { code: EM.diagnosticReportFailed, via, error: (err as Error).message });
+    void dialog.showMessageBox({ type: 'error', ...reportFailedDialog((err as Error).message) }).catch(() => undefined);
+  }
+}
+
+/**
+ * `Expertmotion.exe --diagnostics` (Start menu "Expertmotion – Diagnostik"): no single-instance lock (a black, running copy
+ * must not swallow it), no window, no Service, no GPU (hardware acceleration off, own temporary userData). Writes the report,
+ * opens Explorer on it, exits.
+ */
+function runDiagnosticsMode(): void {
+  try { app.setPath('userData', join(app.getPath('temp'), 'Expertmotion-diagnostics')); } catch { /* keep default */ }
+  app.disableHardwareAcceleration();
+  layout = dataLayout(app.getPath('appData'), process.platform === 'win32' ? '\\' : '/');
+  try { mkdirSync(layout.logs, { recursive: true }); } catch { /* reported below */ }
+  shellLog = createRotatingLog(layout.logs, 'shell');
+  logLine('info', 'diagnostics mode');
+  app.on('window-all-closed', () => undefined);
+  void app.whenReady().then(async () => {
+    try {
+      const file = await writeDiagnosticReport(false);
+      shell.showItemInFolder(file);
+      setTimeout(() => app.exit(0), 1_500);                                // let Explorer start before the process goes
+    } catch (err) {
+      logLine('error', 'diagnostic report failed', { code: EM.diagnosticReportFailed, via: 'shortcut', error: (err as Error).message });
+      await dialog.showMessageBox({ type: 'error', ...reportFailedDialog((err as Error).message) }).catch(() => undefined);
+      app.exit(1);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 // Boot sequence (DEPLOYMENT §8).
 // ---------------------------------------------------------------------------------------------
 function boot(): void {
@@ -739,6 +1133,8 @@ function boot(): void {
     { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, codeCache: true } },
   ]);
   app.enableSandbox();
+  // FR-199: the Start-menu "Diagnostik" shortcut. Before the single-instance lock: it must work while a black copy runs.
+  if (process.argv.includes(DIAGNOSTICS_SWITCH)) { runDiagnosticsMode(); return; }
 
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) { app.quit(); return; }
@@ -755,12 +1151,23 @@ function boot(): void {
   shellLog = createRotatingLog(layout.logs, 'shell');
   pruneOldLogs(layout.logs);
   devRules = resolveDevRules(app.isPackaged, process.env);
+  logLine('info', 'shell start', { version: app.getVersion(), platform: process.platform, arch: arch(), os: release(), ramMb: Math.round(totalmem() / 1048576), argv: process.argv.slice(1).filter((a) => a.startsWith('--')).slice(0, 10) });
+  decideGraphicsMode();                                                     // FR-196 / FR-197: before app ready
 
   process.on('uncaughtException', (err) => { logLine('error', 'uncaughtException', { error: err.message }); writeCrashFile('shell', err.stack ?? err.message); });
+  process.on('unhandledRejection', (reason) => { const err = reason instanceof Error ? reason : new Error(String(reason)); logLine('error', 'unhandledRejection', { error: err.message.slice(0, 500), stack: (err.stack ?? '').split('\n').slice(0, 10).join('\n') }); });
+  app.on('child-process-gone', (_e, details) => onChildGone(details));
+  app.on('gpu-info-update', () => onGpuInfoUpdate());
+  app.on('will-quit', () => markSessionClean());
 
 
   void app.whenReady().then(() => {
-    Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform)));   // Edit roles only (window-chrome.ts)
+    phases.mark('app-ready', Date.now());
+    // Edit roles + the hidden recovery menu (window-chrome.ts; FR-199 Ctrl+R / F5 / Ctrl+Shift+L)
+    Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, { reload: () => runRecovery('reload', 'menu'), openLogs: () => runRecovery('open-logs', 'menu') })));
+    powerMonitor.on('shutdown', () => { logLine('info', 'system shutdown'); markSessionClean(); });   // Linux / macOS (Windows: session-end)
+    setTimeout(() => maybeLogPhases(true), 90_000).unref();
+    void logGpuInfo();
     hardenSession();
     registerAppProtocol();
     registerIpc();
@@ -770,9 +1177,11 @@ function boot(): void {
     // FR-184: every step is pushed to the Editor splash (the window already shows it; nothing here blocks painting).
     pushServiceState(startingPush('integrity', shellStartedAt, Date.now()));
     void checkIntegrity().then(async (ok) => {
+      phases.mark('integrity-done', Date.now());
       if (ok) {
         pushServiceState(startingPush('keyring', shellStartedAt, Date.now()));
         const key = await acquireDbKey();                    // after the window exists: EM-6001 is shown in the Editor too
+        phases.mark('keyring-done', Date.now());
         if (key === null) return;
         dbKeyHex = key.keyHex;
         restoreBackupPending = key.restoreBackup;
@@ -788,7 +1197,7 @@ function boot(): void {
 
   app.on('window-all-closed', () => {
     // Never linger without a window: if the graceful path stalls, exit anyway (the Service is killed by its own deadline).
-    const hardExit = setTimeout(() => { logLine('warn', 'shutdown stalled; exiting'); app.exit(0); }, 20_000);
+    const hardExit = setTimeout(() => { logLine('warn', 'shutdown stalled; exiting'); exitApp(0); }, 20_000);
     void (async () => {
       const r = await shutdownService('window-closed').catch(() => 'stopped' as const);
       if (r === 'stopped') app.quit(); else clearTimeout(hardExit);

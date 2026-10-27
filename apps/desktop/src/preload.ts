@@ -20,10 +20,14 @@
  *   readClipboardText()        → string     (system clipboard text, ≤ 8 KB; used by the licence Paste button)
  *   logError(entry)            → void       (FR-185: Editor error → Shell log; validated, rate-limited and size-capped in main)
  *   retryStartup()             → boolean    (FR-184: splash "Coba lagi" after EM-8002; main restarts the Service once more)
+ *
+ * Not on the bridge (FR-198): the preload itself sends liveness to main on IPC.heartbeat / IPC.rendererSignal (send only, no
+ * reply, nothing from the Editor goes through them) — see lib/heartbeat.ts for the watchdog that reads them.
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from './lib/constants.js';
 import { parseServiceStatePush, type ServiceStatePush } from './lib/startup.js';
+import { EDITOR_MOUNT_SELECTOR, HEARTBEAT_MS } from './lib/heartbeat.js';
 
 export interface Bootstrap {
   port: number;
@@ -91,3 +95,33 @@ const api = {
 contextBridge.exposeInMainWorld('expertmotion', Object.freeze(api));
 
 export type ExpertmotionBridge = typeof api;
+
+/**
+ * FR-198 liveness: after DOMContentLoaded, ask for ONE animation frame; when it runs, the first frame was produced
+ * (`first-paint`). Then every HEARTBEAT_MS send `{seq, framed, visible}` and ask for the next single frame — never a
+ * continuous requestAnimationFrame loop (that would keep the GPU busy on a low-end laptop). A hung JS thread stops the beats;
+ * a dead / hung GPU or compositor stops the frames while the beats continue. Errors here never reach the Editor.
+ */
+function startLiveness(): void {
+  let painted = false, framed = false, pending = false, mounted = false, seq = 0;
+  const send = (channel: string, payload: unknown): void => { try { ipcRenderer.send(channel, payload); } catch { /* main gone */ } };
+  const askFrame = (): void => {
+    if (pending) return;
+    pending = true;
+    try {
+      requestAnimationFrame(() => {
+        pending = false; framed = true;
+        if (!painted) { painted = true; send(IPC.rendererSignal, { kind: 'first-paint', atMs: performance.now() }); }
+      });
+    } catch { pending = false; }
+  };
+  const beat = (): void => {
+    if (!mounted && document.querySelector(EDITOR_MOUNT_SELECTOR) !== null) { mounted = true; send(IPC.rendererSignal, { kind: 'editor-mounted', atMs: performance.now() }); }
+    if (painted) { seq += 1; send(IPC.heartbeat, { seq, framed, visible: document.visibilityState === 'visible' }); }
+    framed = false;
+    askFrame();
+  };
+  const start = (): void => { askFrame(); setInterval(beat, HEARTBEAT_MS); };
+  if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', start, { once: true }); else start();
+}
+try { startLiveness(); } catch { /* never break the bridge */ }

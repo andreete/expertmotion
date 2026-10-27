@@ -68,6 +68,9 @@ export const IPC = {
   logError: 'em:log-error',
   /** FR-184: "Coba lagi" on the startup splash after EM-8002 restarts the Local Service with a fresh restart budget. */
   retryStartup: 'em:retry-startup',
+  /** FR-198: preload-only liveness channels (ipcRenderer.send, not on window.expertmotion): beats every 2 s and one-off signals. */
+  heartbeat: 'em:heartbeat',
+  rendererSignal: 'em:renderer-signal',
 } as const;
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];
 
@@ -106,6 +109,10 @@ export const EM = {
   integrityFailed: 'EM-8007',
   rendererCrashed: 'EM-8008',
   editorError: 'EM-8009',
+  gpuCrashed: 'EM-8010',
+  safeGraphics: 'EM-8011',
+  displayStalled: 'EM-8012',
+  diagnosticReportFailed: 'EM-8013',
   updateCheckFailed: 'EM-8101',
   updateDownloadFailed: 'EM-8102',
   updateNotTrusted: 'EM-8103',

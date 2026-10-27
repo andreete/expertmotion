@@ -8,6 +8,7 @@ import { EventBus } from './http/events.js';
 import { createApp } from './http/app.js';
 import { GrantStore } from './services/grants.js';
 import { createEgress, customBaseUrlHost } from './services/egress.js';
+import { devProviderStubOrigin, withDevProviderStub } from './s3/dev-provider-stub.js';
 import { SettingsStore } from './services/settings.js';
 import { createLogger, pruneLogs } from './services/logger.js';
 import type { ServiceModule } from './modules/types.js';
@@ -60,9 +61,12 @@ export async function boot(cfg: ServiceConfig, opts: { resources?: Resources; mo
   const { db, openedVia, migrated } = openDatabase(p.db, cfg.dbKeyHex);
   log.info({ openedVia, migrated, ms: Date.now() - dbStart }, 'database opened');
   const settings = new SettingsStore(db);
+  // Dev-only provider stub (Entry 28): dead code in release builds (build.mjs defines EM_DEV_PROVIDER_STUB as undefined).
+  const stub = devProviderStubOrigin(cfg.dev, process.env.EM_DEV_PROVIDER_STUB);
+  if (stub) log.warn({ stub }, 'DEV provider stub active: provider calls go to the local stub server');
   const ctx: ServiceContext = {
     cfg, paths: p, db, bus: new EventBus(), grants: new GrantStore(cfg.mediaGrantTtlMs), settings, log,
-    egress: createEgress({ isPrivate: () => settings.get().privateMode, customProviderHosts: () => customProviderHosts(db) }),
+    egress: createEgress({ isPrivate: () => settings.get().privateMode, customProviderHosts: () => customProviderHosts(db), ...(stub ? { impl: withDevProviderStub(globalThis.fetch, stub) } : {}) }),
     resources: opts.resources ?? defaultResources(), hooks: defaultHooks(), newId, now: nowIso, mediaOrigins: new Set<string>(),
   };
   const modules = opts.modules ?? MODULES;

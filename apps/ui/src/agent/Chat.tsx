@@ -15,6 +15,7 @@ import { useModelNames } from '../state/use-model-names.js';
 import { copyText } from '../api/client.js';
 import { ModelText, modelReplyText } from './ModelText.js';
 import { ModelPopover } from './ModelPopover.js';
+import { SectionBoundary } from '../startup/ErrorBoundary.js';
 
 /** FR-072: largest image the composer attaches from disk (EM-1002 above it). */
 export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
@@ -423,7 +424,7 @@ export function ChatHeader({ mode, setMode, layout }: { mode: AgentKind; setMode
               <span className="truncate">{t('ui.agent.chat.model.label', { model: label || t('ui.agent.footer.nomodel') })}</span>
               {warn && <TriangleAlert size={12} className="shrink-0 text-em-warn" aria-hidden />}<span aria-hidden className="text-em-muted">▾</span>
             </button>}
-        {picker && <ModelPopover agent={agent} onClose={closePicker} />}
+        {picker && <SectionBoundary section="chat.model-popover" onClose={closePicker} className="absolute left-0 top-full z-30 mt-1 w-[340px]"><ModelPopover agent={agent} onClose={closePicker} /></SectionBoundary>}
       </span>
       {agent === 'editor' && cap && !cap.toolCalling && <span className="shrink-0 rounded-[4px] border border-em-line px-1 text-[10px] text-em-muted" title={t('ui.agent.footer.jsonmode')}>JSON</span>}
       {a && <span data-el="agent.chat.usage" data-tone={tone} role="status" title={usageTip} aria-label={`${t('a11y.agent.footer.ctx', { used: formatTokens(used, lang), limit: limit ? formatTokens(limit, lang) : 'n/a' })}. ${t('ui.agent.footer.ctx.cost', { cost })}`}

@@ -2,19 +2,27 @@
 // leave a black window; now the Creator sees "Something went wrong — Reload" with the EM-8009 code and the error message,
 // and the error (with stack) goes to the Shell log through the preload's logError bridge (validated and capped in main).
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { AlertTriangle, RefreshCw, RotateCcw } from 'lucide-react';
 import { translate } from '../i18n/index.js';
 import { AppMark } from '../components/AppMark.js';
 import { startupLang } from './progress.js';
 
 export const EDITOR_ERROR_CODE = 'EM-8009';
 
-/** Sends one Editor error to the Shell log (no bridge in the browser dev build: console instead). Never throws. */
-export function logEditorError(err: unknown, source: 'error-boundary' | 'window-error' | 'unhandled-rejection', extraStack?: string): void {
+/** Key-like strings never leave the Editor in a log line (provider keys, Licence Keys, bearer tokens); the Shell redacts again. */
+export function redactLogText(s: string): string {
+  return s.replace(/sk-(?:ant-|or-v1-|proj-)?[A-Za-z0-9_-]{8,}/g, 'sk-[REDACTED]').replace(/AIza[A-Za-z0-9_-]{8,}/g, 'AIza[REDACTED]')
+    .replace(/EM1-[A-Za-z0-9_.-]{12,}/g, 'EM1-[REDACTED]').replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, '$1[REDACTED]').replace(/([?&]token=)[^&\s'")]+/gi, '$1[REDACTED]');
+}
+
+/** Sends one Editor error to the Shell log (no bridge in the browser dev build: console instead). Never throws.
+ *  `section` names the panel whose boundary caught it (FR-200); it travels as a message prefix (the Shell's schema is strict). */
+export function logEditorError(err: unknown, source: 'error-boundary' | 'window-error' | 'unhandled-rejection', extraStack?: string, section?: string): void {
   try {
     const e = err instanceof Error ? err : new Error(typeof err === 'string' ? err : 'non-error thrown');
-    const stack = [e.stack ?? '', extraStack ?? ''].filter(Boolean).join('\n--- component stack ---\n');
-    const entry = { level: 'error' as const, code: EDITOR_ERROR_CODE, message: `${e.name}: ${e.message}`.slice(0, 4000), source, ...(stack ? { stack: stack.slice(0, 20_000) } : {}) };
+    const stack = redactLogText([e.stack ?? '', extraStack ?? ''].filter(Boolean).join('\n--- component stack ---\n'));
+    const message = redactLogText(`${section ? `[section:${section}] ` : ''}${e.name}: ${e.message}`);
+    const entry = { level: 'error' as const, code: EDITOR_ERROR_CODE, message: message.slice(0, 4000), source, ...(stack ? { stack: stack.slice(0, 20_000) } : {}) };
     const bridge = typeof window !== 'undefined' ? window.expertmotion : undefined;
     if (bridge?.logError) void Promise.resolve(bridge.logError(entry)).catch(() => undefined);
     else console.error('[em] editor error', entry.message);
@@ -54,3 +62,40 @@ export class ErrorBoundary extends Component<{ children: ReactNode; onReload?: (
     );
   }
 }
+
+/**
+ * sys.section (FR-200): a boundary around one Editor panel (Library, Player, Timeline, assistant chat, Providers, dialogs). A
+ * render error inside it shows an inline card "This part failed to load — Reload part" while the rest of the Editor keeps
+ * working; Reload part remounts only that panel (it never remounts by itself, so a panel that keeps failing cannot loop).
+ * Every hit goes to the Shell log (component stack, redacted) with the section name. The top-level ErrorBoundary stays as the
+ * last resort.
+ */
+export class SectionBoundary extends Component<{ section: string; children: ReactNode; className?: string; onClose?: () => void }, { error: Error | null; nonce: number }> {
+  override state = { error: null as Error | null, nonce: 0 };
+  static getDerivedStateFromError(error: unknown): Partial<{ error: Error | null }> { return { error: error instanceof Error ? error : new Error(String(error)) }; }
+  override componentDidCatch(error: unknown, info: ErrorInfo): void {
+    logEditorError(error, 'error-boundary', info.componentStack ?? undefined, this.props.section);
+  }
+  private reload = () => this.setState((s) => ({ error: null, nonce: s.nonce + 1 }));
+  override render(): ReactNode {
+    const { error, nonce } = this.state;
+    if (!error) return <SectionKey key={nonce}>{this.props.children}</SectionKey>;
+    const t = (k: string) => translate(startupLang(), k);
+    return (
+      <div data-el="sys.section.error" data-section={this.props.section} role="alert" className={this.props.className ?? 'flex h-full w-full min-h-[96px] items-center justify-center p-3'}>
+        <div className="flex max-w-[360px] flex-col gap-1.5 rounded-[8px] border-l-2 border-em-danger bg-em-panel-2 px-3 py-2 text-[12px] text-em-text">
+          <div className="flex items-center gap-1.5 text-em-danger"><AlertTriangle size={14} aria-hidden /><span className="flex-1 font-semibold">{t('ui.sys.section.title')}</span>
+            <span className="t-mono text-em-muted select-all">{EDITOR_ERROR_CODE}</span></div>
+          <p data-el="sys.section.message" className="t-mono max-h-[48px] overflow-auto break-words text-[11px] text-em-muted select-all">{redactLogText(`${error.name}: ${error.message}`).slice(0, 200)}</p>
+          <div className="flex justify-end gap-2">
+            {this.props.onClose && <button type="button" data-el="sys.section.close" onClick={this.props.onClose} className="h-7 rounded-[6px] px-2 text-em-text-2 hover:bg-em-panel">{t('ui.common.close')}</button>}
+            <button type="button" data-el="sys.section.reload" onClick={this.reload}
+              className="inline-flex h-7 items-center gap-1 rounded-[6px] bg-em-accent px-2 font-semibold text-em-accent-ink hover:bg-em-accent-hover"><RefreshCw size={12} aria-hidden />{t('ui.sys.section.reload')}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+/** Keyed wrapper so "Reload part" remounts the panel with fresh state. */
+function SectionKey({ children }: { children: ReactNode }) { return <>{children}</>; }
