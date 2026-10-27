@@ -804,7 +804,9 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('POST', '/projects/:id/assets', (m, b, _q, init) => {
     const p = proj(m[1]!);
     const form = init.body as unknown;
-    const files: File[] = form && typeof (form as FormData).getAll === 'function' ? ((form as FormData).getAll('file').filter((f) => typeof f === 'object') as File[]) : [];
+    const rawName = (() => { const h = (init.headers ?? {}) as Record<string, string>; const v = h['X-Expertmotion-Filename'] ?? h['x-expertmotion-filename']; try { return v ? decodeURIComponent(v) : ''; } catch { return ''; } })();
+    const files: File[] = form && typeof (form as FormData).getAll === 'function' ? ((form as FormData).getAll('file').filter((f) => typeof f === 'object') as File[])
+      : typeof Blob !== 'undefined' && form instanceof Blob ? [form instanceof File ? form : new File([form], rawName || 'upload', { type: form.type })] : [];
     const paths = Array.isArray(obj(b)['paths']) ? (obj(b)['paths'] as unknown[]).map(String) : [];
     const entries: Array<{ name: string; bytes: number; url: string | null; type: string }> = [
       ...files.map((f) => ({ name: f.name, bytes: f.size, url: typeof URL.createObjectURL === 'function' ? URL.createObjectURL(f) : null, type: f.type })),

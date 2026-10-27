@@ -85,7 +85,7 @@ describe('Output Settings (FR-087…FR-097)', () => {
     await connect(runtime);
     fireEvent.change(chatComposer('brainstorm'), { target: { value: 'ide intro energik untuk video kopi' } });
     await act(async () => { fireEvent.keyDown(chatComposer('brainstorm'), { key: 'Enter' }); });
-    await waitFor(() => { if (!document.body.textContent?.includes('Asking')) throw new Error('not streaming'); });
+    await waitFor(() => { if (!el('agent.chat.streaming')) throw new Error('not streaming'); });
     await act(async () => { fireEvent.click(el('agent.output.private')!); });
     expect(el('scr.confirm')?.textContent).toContain('This stops the current request.');
     await act(async () => { fireEvent.click(within(el('scr.confirm')!).getByRole('button', { name: 'Turn on and stop' })); });
@@ -252,9 +252,12 @@ describe('Agent Panel (FR-071…FR-086)', () => {
     const big = new File(['x'], 'big.png', { type: 'image/png' }); Object.defineProperty(big, 'size', { value: 11 * 1024 * 1024 });
     await act(async () => { fireEvent.change(input, { target: { files: [big] } }); });
     expect(el('agent.chat.attach.error')?.textContent).toContain('EM-1002');
+    // FR-213: a small PNG for the text-only model is not refused: the composer says only the file name will be sent (EM-4307 note)
     await act(async () => { fireEvent.change(input, { target: { files: [new File(['png'], 'logo.png', { type: 'image/png' })] } }); });
-    await waitFor(() => { if (!el('agent.chat.attach.error')?.textContent?.includes('EM-4307')) throw new Error(String(el('agent.chat.attach.error')?.textContent)); });
-    expect(el('agent.chat.send')?.getAttribute('aria-disabled')).toBe('true');
+    await waitFor(() => { if (el('agent.chat.attach.note')?.getAttribute('data-code') !== 'EM-4307') throw new Error('no name-only note'); });
+    expect(el('agent.chat.attach.note')!.textContent).toMatch(/only the file name is sent/);
+    expect(el('agent.chat.attach.chip')?.textContent).toContain('logo.png');
+    await waitFor(() => { if (el('agent.chat.send')?.getAttribute('aria-disabled') === 'true') throw new Error('send still blocked'); }, { timeout: 8000 });
   }, 20_000);
 
   it('FR-081/FR-085: plan steps show ops counts and the model; a direct pick appears as an "Applied directly" line', async () => {

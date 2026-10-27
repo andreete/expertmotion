@@ -1,6 +1,7 @@
 // Shared context between the Brainstorming and Editor Agents (one assistant chat, two modes; AI_WORKFLOW §10.1). This file
 // only reads rows; packages/agents (buildDiscussionContext / buildEditsContext) decides what fits the token budget.
 import { buildDiscussionContext, buildEditsContext, discussionBudgetChars, type DiscussionContext, type DiscussionEntry, type EditEntry, type EditsContext } from '@expertmotion/agents';
+import { stripToolMarkup } from '@expertmotion/shared';
 import type { ServiceContext } from '../context.js';
 
 type Block = { type: string; text?: string; intents?: unknown[]; handoffState?: string };
@@ -9,8 +10,9 @@ type Block = { type: string; text?: string; intents?: unknown[]; handoffState?: 
 export function messageText(blocksJson: string): string {
   let blocks: Block[] = [];
   try { blocks = JSON.parse(blocksJson) as Block[]; } catch { return ''; }
-  return blocks.flatMap((b) => (b.type === 'text' && typeof b.text === 'string' ? [b.text]
-    : b.type === 'proposed_intents' && Array.isArray(b.intents) ? [`(proposed ${b.intents.length} change(s); ${b.handoffState ?? 'pending'})`] : [])).join('\n').trim();
+  if (!Array.isArray(blocks)) return '';
+  return blocks.flatMap((b) => (b && b.type === 'text' && typeof b.text === 'string' ? [stripToolMarkup(b.text)]
+    : b && b.type === 'proposed_intents' && Array.isArray(b.intents) ? [`(proposed ${b.intents.length} change(s); ${b.handoffState ?? 'pending'})`] : [])).join('\n').trim();
 }
 
 /** The Editor Agent's `discussion`: the newest Brainstorming messages of the project (at most 40 read). */

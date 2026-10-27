@@ -85,9 +85,10 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
     mem = 1e9;
     const low = await s.api('/renders/estimate', { method: 'POST', json: { projectId: pid, outputProfile: profile, performanceProfile: 'standard' } });
     expect(low.status).toBe(200);
-    expect((await json<{ ok: boolean; checks: Array<{ check: string; code?: string }> }>(low)).checks.find((c) => c.check === 'memory')!.code).toBe('EM-3101');
-    const blocked = await create();
-    expect(blocked.status).toBe(422); expect((await json<{ error: { code: string } }>(blocked)).error.code).toBe('EM-3101');
+    const lowBody = await json<{ ok: boolean; checks: Array<{ check: string; ok: boolean; code?: string }> }>(low);
+    // FR-204: low memory is an info note (EM-3107), never a block; the job waits and then runs in low-memory mode.
+    expect(lowBody.ok).toBe(true);
+    expect(lowBody.checks.find((c) => c.check === 'memory')).toMatchObject({ ok: true, code: 'EM-3107' });
     mem = 8e9;
     expect((await s.api('/renders/estimate', { method: 'POST', json: { projectId: '01ARZ3NDEKTSV4RRFFQ69G5FAV', outputProfile: profile, performanceProfile: 'standard' } })).status).toBe(404);
   });
@@ -304,5 +305,70 @@ describe('output validation with ffprobe (FR-145, SEC-068)', () => {
       expect((await json<Job>(await s.api(`/renders/${job.id}`))).errorCode).toBe('EM-3205');
       expect(fs.existsSync(path.join(s.ctx.paths.outputs, '_failed', `${job.id}.mp4`))).toBe(true);
     } finally { await s.close(); }
+  });
+});
+
+describe('low free memory never blocks an export (FR-204, QA 2026-10-27)', () => {
+  let s: S2Service; let pid: string; let mem = 5e8;
+  const fake = fakeRenderer({ mode: 'ok', steps: 2, stepMs: 10 });
+  const bundle = tempDir('em-bundle-lowmem-');
+  beforeAll(async () => {
+    fs.writeFileSync(path.join(bundle, 'index.html'), '<html></html>');
+    s = await startS2([health, createAssetsModule(), mediaModule, createRendersModule({ renderer: async () => fake.r, freeMemBytes: () => mem, remotionPort: async () => 4133, maxStartsPerMinute: 100, acceptUnvalidated: true, lowMemWaitMs: 300, lowMemPollMs: 20 })]);
+    s.ctx.resources.engineBundle = bundle;
+    s.ctx.resources.ffprobe = '/nonexistent/ffprobe'; s.ctx.resources.ffmpeg = '/nonexistent/ffmpeg';
+    pid = s.project();
+    s.ctx.hooks.applyOps(pid, [{ op: 'op:text.add', target: { kind: 'sequence' }, args: { text: 'Halo', variant: 'preset:text.title', atMs: 0, durationMs: 2000 } }], { kind: 'system', summary: 'seed' });
+  });
+  afterAll(async () => { await s.close(); });
+  const p720 = { ratio: '16:9', resolution: '720p', fps: 30, format: 'mp4', alpha: false };
+  const create = async () => json<Job>(await s.api('/renders', { method: 'POST', json: { projectId: pid, outputProfile: p720, performanceProfile: 'standard' } }));
+  const waitFinal = (id: string) => s.waitEvent((e) => ['render.done', 'render.failed', 'render.cancelled'].includes(e.name) && e.data['jobId'] === id);
+
+  it('0.5 GB free: the job is accepted, waits with EM-3107, then renders in low-memory mode (concurrency 1, small cache)', async () => {
+    mem = 5e8;
+    const j = await create();
+    expect(j.status).toBe('queued');
+    const fin = await waitFinal(j.id);
+    expect(fin.name).toBe('render.done');
+    expect(s.events.some((e) => e.name === 'render.queued' && e.data['jobId'] === j.id && ((e.data['job'] as Job).notices ?? []).includes('EM-3107'))).toBe(true);
+    const call = fake.seen.calls.at(-1)!;
+    expect(call['concurrency']).toBe(1); expect(call['offthreadVideoCacheSizeInBytes']).toBe(64 * 1024 ** 2);
+  });
+  it('memory that frees up while waiting starts the job normally', async () => {
+    mem = 5e8;
+    const j = await create();
+    setTimeout(() => { mem = 8e9; }, 60);
+    expect((await waitFinal(j.id)).name).toBe('render.done');
+    expect(fake.seen.calls.at(-1)!['offthreadVideoCacheSizeInBytes']).toBe(256 * 1024 ** 2);
+  });
+  it('below the 300 MB floor after the wait: failed with EM-3108 (close other programs), never a hang', async () => {
+    mem = 1e8;
+    const j = await create();
+    const fin = await waitFinal(j.id);
+    expect(fin.name).toBe('render.failed'); expect(fin.data['code']).toBe('EM-3108');
+    mem = 8e9;
+  });
+});
+
+describe('Windows output folders (FR-205)', () => {
+  it('the default export folder is <Videos>/Expertmotion when the Shell reported Videos, else the app outputs folder', async () => {
+    const { defaultOutputFolder, outputRoots } = await import('../../src/s2/render-repo.js');
+    const ctx = { cfg: { videosDir: path.join(path.sep, 'x', 'Video Saya') }, paths: { outputs: path.join(path.sep, 'data', 'outputs') } } as unknown as ServiceContext;
+    expect(defaultOutputFolder(ctx, 'p1')).toBe(path.join(path.sep, 'x', 'Video Saya', 'Expertmotion'));
+    expect(outputRoots(ctx)).toContain(path.join(path.sep, 'x', 'Video Saya'));
+    const plain = { cfg: {}, paths: ctx.paths } as unknown as ServiceContext;
+    expect(defaultOutputFolder(plain, 'p1')).toBe(path.join(path.sep, 'data', 'outputs', 'p1'));
+  });
+  it('a redirected Videos folder outside the profile is an allowed output folder; other folders still EM-8302', async () => {
+    const { checkOutputFolder } = await import('../../src/modules/settings.js');
+    const home = tempDir('em-home-'); const videos = tempDir('em-videos-');
+    expect(checkOutputFolder(path.join(videos, 'Expertmotion'), home, [videos])).toBe(path.join(fs.realpathSync(videos), 'Expertmotion'));
+    expect(() => checkOutputFolder(path.join(tempDir('em-elsewhere-'), 'x'), home, [videos])).toThrow(/user profile/);
+  });
+  it('Windows device names never become a file name', async () => {
+    const { sanitizeFilename } = await import('@expertmotion/shared');
+    expect(sanitizeFilename('CON')).toBe('video-CON'); expect(sanitizeFilename('nul.mp4')).toBe('video-nul'); expect(sanitizeFilename('Promo Kopi')).toBe('Promo-Kopi');
+    expect(sanitizeFilename('Kopi Susu Gula Aren')).toBe('Kopi-Susu-Gula-Aren');
   });
 });

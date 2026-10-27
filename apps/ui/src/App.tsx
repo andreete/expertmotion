@@ -31,6 +31,8 @@ import { layoutOf, type PanelSizes } from './prefs.js';
 import { Splash } from './startup/Splash.js';
 import { rememberLang, startupLang } from './startup/progress.js';
 import { SectionBoundary } from './startup/ErrorBoundary.js';
+import { SafeModeBanner, SafeModePlaceholder, StartScreen } from './screens/StartScreen.js';
+import { revealInSafeMode, setSafeMode, useSafeMode } from './startup/session-guard.js';
 
 function useWindowWidth(): number {
   const [w, setW] = useState(typeof window === 'undefined' ? 1440 : window.innerWidth);
@@ -79,6 +81,8 @@ export function App() {
   useEffect(() => { if (tiny && !warned.current) { warned.current = true; actions.toast('info', 'ui.window.small'); } }, [tiny, actions]);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
   const settingsLoaded = state.settings !== null;
+  const safe = useSafeMode();
+  const safeActive = safe.on && state.project !== null && state.project.id === safe.projectId;   // FR-202 safe open
   useEffect(() => { if (settingsLoaded) rememberLang(lang); }, [lang, settingsLoaded]);   // FR-184: the next splash speaks it
 
   if (state.boot === 'no-service') return <I18nContext.Provider value={i18n}>{state.fatal ? <FatalOverlay /> : <NoService />}</I18nContext.Provider>;
@@ -93,11 +97,29 @@ export function App() {
       </I18nContext.Provider>
     );
   }
+  // FR-202: no project open (a launch, or the open project was deleted / failed to open) → the Start screen, not an empty Editor.
+  if (state.boot === 'ready' && state.project === null) {
+    return (
+      <I18nContext.Provider value={i18n}>
+        <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ minWidth: 1024 }}>
+          <SectionBoundary section="header" className="flex h-12 items-center px-3"><Header /></SectionBoundary>
+          <Banners />
+          <SectionBoundary section="start"><StartScreen /></SectionBoundary>
+          <SectionBoundary section="toasts" className="hidden"><Toasts /></SectionBoundary>
+          <LiveRegion />
+          <Screens />
+          <LifecycleEffects />
+          {state.fatal && <FatalOverlay />}
+        </div>
+      </I18nContext.Provider>
+    );
+  }
   return (
     <I18nContext.Provider value={i18n}>
       <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ minWidth: 1024 }}>
         <SectionBoundary section="header" className="flex h-12 items-center px-3"><Header /></SectionBoundary>
         <Banners />
+        {safeActive && <SafeModeBanner onExit={() => setSafeMode(false)} />}
         <main className="relative flex min-h-0 flex-1">
           {libCollapsed ? (
             <Rail side="left" onExpand={() => (narrow ? setLibOverlay((o) => !o) : setPrefs({ libCollapsed: false }))} />
@@ -112,7 +134,7 @@ export function App() {
             <div className="absolute bottom-0 left-12 top-0 z-30 w-[300px] border-r border-em-line" style={{ boxShadow: 'var(--sh-2)' }} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setLibOverlay(false); }}><SectionBoundary section="library"><LibraryPanel /></SectionBoundary></div>
           )}
           <div ref={stageRef} data-region="stage" aria-label={store.t('a11y.region.stage')} className="flex min-w-[640px] flex-1 flex-col gap-1 p-2">
-            <SectionBoundary section="player" className="flex min-h-[160px] flex-1 items-center justify-center p-3"><StagePlayer /></SectionBoundary>
+            <SectionBoundary section="player" className="flex min-h-[160px] flex-1 items-center justify-center p-3">{safeActive && !safe.preview ? <SafeModePlaceholder part="preview" onShow={() => revealInSafeMode('preview')} /> : <StagePlayer />}</SectionBoundary>
             <Splitter el="stage.divider" orientation="horizontal" invert value={tlHeight} min={LAYOUT.timeline.min} max={tlMax} label={store.t('a11y.layout.divider.timeline')}
               onChange={resize('timeline', LAYOUT.timeline.min, tlMax)} onReset={reset('timeline')} />
             <SectionBoundary section="timeline" className="flex items-center justify-center p-3"><TimelineView height={tlHeight} /></SectionBoundary>
@@ -121,7 +143,7 @@ export function App() {
             <>
               <Splitter el="agent.divider" orientation="vertical" invert value={cols.agent} min={LAYOUT.agent.min} max={cols.agentMax} label={store.t('a11y.layout.divider.agent')}
                 onChange={resize('agent', LAYOUT.agent.min, cols.agentMax)} onReset={reset('agent')} />
-              <div className="shrink-0" style={{ width: cols.agent }}><SectionBoundary section="chat"><AgentPanel /></SectionBoundary></div>
+              <div className="shrink-0" style={{ width: cols.agent }}><SectionBoundary section="chat">{safeActive && !safe.chat ? <SafeModePlaceholder part="chat" onShow={() => revealInSafeMode('chat')} /> : <AgentPanel />}</SectionBoundary></div>
             </>
           )}
         </main>

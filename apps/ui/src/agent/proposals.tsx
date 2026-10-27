@@ -13,28 +13,30 @@ import { targetText } from './IntentQueue.js';
 
 export function intentTitle(i: Pick<EditIntent, 'category' | 'presetId' | 'instruction' | 'params'>, t: (k: string, v?: Record<string, string | number>) => string, lang: 'en' | 'id'): string {
   const cat = t(`ui.agent.category.${i.category}`);
-  const out = i.params['__output'] as { kind?: string; value?: unknown; customRatio?: { w: number; h: number } } | undefined;
+  // FR-212: a proposal or intent from the Service may lack params (stored by an older build): never read a field of undefined.
+  const params: Record<string, unknown> = i.params && typeof i.params === 'object' ? i.params : {};
+  const out = params['__output'] as { kind?: string; value?: unknown; customRatio?: { w: number; h: number } } | undefined;
   if (out?.kind) {                                                              // Output Settings picks (FR-097)
     if (out.kind === 'autoRatio') return t(out.value === true ? 'ui.agent.output.ratio.auto.on' : 'ui.agent.output.ratio.auto.off');
     if (out.kind === 'performanceProfile') return t('ui.agent.intent.output.performanceProfile', { value: t(`ui.agent.output.profile.${String(out.value)}`) });   // FR-090
     const v = out.kind === 'ratio' && out.value === 'custom' && out.customRatio ? `${out.customRatio.w}:${out.customRatio.h}` : String(out.value);
     return t(`ui.agent.intent.output.${out.kind}`, { value: v });
   }
-  const sp = i.params['__splitEdit'] as { atMs?: number; items?: unknown[] } | undefined;
+  const sp = params['__splitEdit'] as { atMs?: number; items?: unknown[] } | undefined;
   if (sp) return t('ui.agent.intent.element.split', { count: Math.max(1, sp.items?.length ?? 1) });   // ADR-028 cut at the playhead
-  const it = i.params['__itemsEdit'] as { action?: string; items?: unknown[] } | undefined;   // ADR-031 Delete / Duplicate
+  const it = params['__itemsEdit'] as { action?: string; items?: unknown[] } | undefined;   // ADR-031 Delete / Duplicate
   if (it) return t(it.action === 'duplicate' ? 'ui.agent.intent.element.duplicate' : 'ui.agent.intent.element.remove', { count: Math.max(1, it.items?.length ?? 1) });
-  if (i.params['__transformEdit']) return t('ui.agent.intent.element.transform');                // ADR-028 Player handles / Inspector fields
-  const el = i.params['__elementEdit'] as { atMs?: number; layer?: number; move?: string } | undefined;
+  if (params['__transformEdit']) return t('ui.agent.intent.element.transform');                // ADR-028 Player handles / Inspector fields
+  const el = params['__elementEdit'] as { atMs?: number; layer?: number; move?: string } | undefined;
   if (el) {                                                                     // ADR-027 Timeline drag / trim / lane / layer key
     if (el.atMs !== undefined) return el.layer !== undefined ? t('ui.agent.intent.element.timinglayer', { n: el.layer + 1 }) : t('ui.agent.intent.element.timing');
     return el.move ? t(`ui.agent.intent.element.move.${el.move}`) : t('ui.agent.intent.element.layer', { n: (el.layer ?? 0) + 1 });
   }
-  const ins = i.params['__insert'] as { count?: number } | undefined;
+  const ins = params['__insert'] as { count?: number } | undefined;
   if (ins && typeof ins.count === 'number') return t('ui.agent.intent.insert', { count: ins.count });   // FR-049 "Insert 3 clips"
   if (i.presetId) return `${cat} · ${getPreset(i.presetId)?.label[lang] ?? i.presetId}`;
   if (i.instruction) return `“${i.instruction}”`;
-  const p = Object.entries(i.params).filter(([k]) => k !== 'text' && k !== 'targetLabel' && !k.startsWith('__')).map(([k, v]) => `${t(`ui.agent.param.${k}`)} ${String(v)}`).join(', ');
+  const p = Object.entries(params).filter(([k]) => k !== 'text' && k !== 'targetLabel' && !k.startsWith('__')).map(([k, v]) => `${t(`ui.agent.param.${k}`)} ${String(v)}`).join(', ');
   return p ? `${cat} · ${p}` : cat;
 }
 

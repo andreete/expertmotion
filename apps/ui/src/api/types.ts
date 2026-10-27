@@ -52,6 +52,8 @@ export interface RenderJobDto {
   createdAt: Iso; startedAt: Iso | null; finishedAt: Iso | null; notices?: string[];
   /** FR-143: frame the job failed at (null = unknown / not failed). */
   failedFrame?: number | null;
+  /** FR-204: the last `render.progress` stage (preparing / rendering / encoding / validating), for the progress line. */
+  stage?: string;
 }
 export interface OutputDto {
   id: Id; projectId: Id; renderJobId: Id; kind: 'video' | 'gif' | 'still' | 'audio'; fileName: string; bytes: number; width: number | null; height: number | null;
@@ -137,12 +139,13 @@ export type MessageBlock =
   | { type: 'tool_call'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; output: unknown }
   | { type: 'proposed_intents'; intents: EditIntent[]; handoffState: 'pending' | 'sent' | 'dismissed' }
-  | { type: 'attachment'; assetId?: Id; mime: string; name: string }
+  | { type: 'attachment'; assetId?: Id; mime: string; name: string; /** FR-213: `name` = the model cannot read images; only the file name was sent */ sent?: 'image' | 'name' }
   | { type: 'targets'; items: ChatTarget[] };
 /** QA 2026-10-26 #6 (pointing): an asset or Timeline element the Creator pointed the assistant at ("@Klip 2"). */
 export type ChatTargetKind = 'asset' | 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut';
 export interface ChatTarget { kind: ChatTargetKind; id?: string; index?: number; label: string }
-export type AgentPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool' | 'waiting';
+/** FR-214: `sending` = Send pressed, the Service has not answered yet; `thinking` / `writing` come from the provider stream. */
+export type AgentPhase = 'sending' | 'reading' | 'planning' | 'checking' | 'correcting' | 'tool' | 'waiting' | 'thinking' | 'writing';
 export interface MessageDto { id: Id; role: 'user' | 'assistant' | 'system' | 'tool'; blocks: MessageBlock[]; agentRunId: Id | null; createdAt: Iso }
 export interface ConversationDto {
   conversationId: Id; agent: AgentKind; summary: unknown; assignment: AssignmentDto | null; contextUsage: { usedTokens: number; contextLength: number } | null; messages: Page<MessageDto>;

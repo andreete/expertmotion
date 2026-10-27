@@ -42,7 +42,7 @@ export function hostOriginGuard(cfg: ServiceConfig, mediaOrigins: ReadonlySet<st
     if (sfs !== undefined && !['same-origin', 'none'].includes(String(sfs)) && !editorOrigin) return err(res, 403, 'EM-8005', 'Request refused.');
     if (editorOrigin) {
       res.setHeader('Access-Control-Allow-Origin', origin!); res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Expertmotion-Caller, Idempotency-Key, Last-Event-ID');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Expertmotion-Caller, X-Expertmotion-Filename, Idempotency-Key, Last-Event-ID');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE');
       res.setHeader('Access-Control-Max-Age', '600');
       if (req.headers['access-control-request-private-network'] === 'true') res.setHeader('Access-Control-Allow-Private-Network', 'true');

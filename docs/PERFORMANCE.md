@@ -19,7 +19,7 @@ Detected at startup by the Hardware Monitor and re-checked on demand. The tier d
 | **T1** GPU ≥ 4 GB | discrete or integrated GPU with ≥ 4 GB VRAM reported | Profile Accelerated available; `gl: 'angle'`; 2K enabled, 4K enabled with warning; whisper large-v3-turbo; SD 1.5 for thumbnails (FLUX.1-schnell q4 needs ≈ 7 GB + encoders → T2); ACE-Step small |
 | **T2** GPU ≥ 8 GB | ≥ 8 GB VRAM | Profile Turbo available; `hardwareAcceleration: 'if-possible'` (NVENC on NVIDIA driver ≥ 525); all presets; FLUX.1-schnell; ACE-Step full |
 
-RAM gates independent of tier: total RAM < 8 GB → warn at startup; free RAM < 2 GB before render → block render with `EM-3101`.
+RAM gates independent of tier: total RAM < 8 GB → warn at startup. Free RAM never blocks a render (FR-204, 2026-10-27, QA on an 8 GB T0 laptop with 0.5–1.1 GB available): below the comfortable amount the preflight shows `EM-3107`, the job waits up to 90 s for memory and then runs in low-memory mode (concurrency 1, 64 MB video cache, no parallel encoding); below 300 MB after the wait it fails with `EM-3108`.
 
 ## 2. Performance Profiles (what Standard / Accelerated / Turbo actually do)
 
@@ -102,7 +102,7 @@ Development-server note: on the shared 1.9 GB Linux server only headless parts m
 | Check | Rule | Error |
 |---|---|---|
 | Disk | free space ≥ 3 × estimated output size + 500 MB | EM-3102 |
-| Memory | free RAM ≥ 2 GB (Standard) / 3 GB (Accelerated) / 4 GB (Turbo) | EM-3101 |
+| Memory (info, never blocks; FR-204) | comfortable free RAM: Standard 0.9 GB (≤ 720p) / 1.2 GB (≤ 1080p) / 2 GB (larger), Accelerated 3 GB, Turbo 4 GB; below it the job waits ≤ 90 s, then low-memory mode; < 300 MB after the wait fails | EM-3107 (note), EM-3108 (failed) |
 | Dimensions | even, within 240 … 4096 per side, matches table | EM-3103 |
 | Duration | 1 s … 30 min; transitions overlap already subtracted | EM-3104 |
 | Assets | all referenced assets present and probed | EM-1301 |

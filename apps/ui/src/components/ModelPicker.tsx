@@ -7,7 +7,7 @@
 // selected one shows an inline warning with "Use recommended instead".
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { assessModelQuality, recommendedFor, resolveFreeModel, resolveModelTiers, type ModelQuality } from '@expertmotion/shared';
+import { assessModelQuality, providerDefaultModel, recommendedFor, resolveFreeModel, resolveModelTiers, type ModelQuality } from '@expertmotion/shared';
 import type { AgentKind, CapabilityRow } from '../api/types.js';
 import { useStore } from '../state/store.js';
 import { formatMoney } from '../i18n/index.js';
@@ -46,7 +46,7 @@ export function betterPick(rows: readonly CapabilityRow[], agent: AgentKind, cur
 }
 /** The default model for an agent: Balanced (or the free pick when Free is on), '' when the table has no usable model. */
 export function defaultModelFor(rows: readonly CapabilityRow[], agent: AgentKind, freeOn = false): string {
-  return (freeOn ? resolveFreeModel(rows) : null) ?? resolveModelTiers(rows, agent).balanced ?? '';
+  return (freeOn ? resolveFreeModel(rows) : null) ?? (freeOn ? null : providerDefaultModel(rows, agent)) ?? resolveModelTiers(rows, agent).balanced ?? '';
 }
 
 const priceSum = (r: CapabilityRow): number | null => (isFreeModel(r) ? 0 : r.pricePerMInput === null || r.pricePerMOutput === null ? null : r.pricePerMInput + r.pricePerMOutput);

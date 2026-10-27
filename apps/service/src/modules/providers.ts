@@ -11,7 +11,7 @@ import { route } from '../http/route.js';
 import { customBaseUrlProblem } from '../services/egress.js';
 import { createSecretBox, secretHint, type SecretBox } from '../s3/crypto.js';
 import { keyIsRecent, markKeyChanged, normalizeKey } from '../s3/keys.js';
-import { chatProviderFor, DEFAULT_CALL_TIMEOUT_MS, listModels, VALIDATE_TIMEOUT_MS, validateKey } from '../s3/adapters.js';
+import { chatProviderFor, DEFAULT_CALL_TIMEOUT_MS, listModels, toolsRefused, VALIDATE_TIMEOUT_MS, validateKey } from '../s3/adapters.js';
 import { dumpAgentCall } from '../s3/agent-dump.js';
 import { Agent, AssignmentDto, AssignmentSettings, audit, emit, Id, monthOf, ProviderKind, requireProject, type AgentT, type AssignmentDtoT, type CapabilityRowT, type ProviderKindT } from '../s3/dto.js';
 import { budgetCheck, budgetState, cachedModels, connectionMonthSpend, projectConnectionMonthSpend, projectMonthSpend, recordUsage } from '../s3/usage-store.js';
@@ -92,6 +92,10 @@ async function validateConn(ctx: ServiceContext, id: string): Promise<{ status: 
     throw em;
   }
   ctx.db.prepare("UPDATE provider_connections SET status='valid', validated_at=?, updated_at=? WHERE id=?").run(at, at, id);
+  // FR-215: a working connection replaces a default whose key was refused (e.g. an Anthropic key first tried as OpenAI).
+  const d = defaultConnection(ctx);
+  const dStatus = d ? (ctx.db.prepare('SELECT status FROM provider_connections WHERE id = ?').get(d) as { status: string } | undefined)?.status : undefined;
+  if (!d || !dStatus || dStatus === 'invalid') setDefault(ctx, id);
   changed(ctx, 'providers');
   return { status: 'valid', validatedAt: at };
 }
@@ -195,7 +199,11 @@ function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
   if (!conn) throw new EmError('EM-4001', 'Connect an AI provider to use the Brainstorming and Editor Agents.', { status: 503 });
   if (conn.provider === 'custom') throw new EmError('EM-9004', '"Custom provider connections" is not available in this version of Expertmotion yet.', { status: 422 });
   const st = s3(ctx);
-  // One call through the egress module; streaming when the adapter can (OpenRouter), so a reasoning model that thinks for minutes
+  // AI_WORKFLOW §8.1 / FR-211: native tool calling for Anthropic, OpenAI and Gemini, and for OpenRouter models whose Capability
+  // Table row reports tools; a model that refused the tools parameter this session falls back to the JSON-mode protocol.
+  const cap = cachedModels(ctx, conn.id)?.find((m) => m.modelId === a.modelId);
+  const nativeTools = !toolsRefused(conn.provider, a.modelId) && (conn.provider === 'openrouter' ? cap?.toolCalling === true : true);
+  // One call through the egress module; streaming for every adapter (FR-210), so a reasoning model that thinks for minutes
   // is limited by silence (no chunk), not by the whole answer time. Dev builds can dump each call (agent-dump.ts).
   const send = async (req: ChatRequest, onDelta?: (d: string) => void): Promise<ChatResult> => {
     if (ctx.egress.isPrivate()) throw new EmError('EM-8202', 'Private Mode is on, so the agent request was not sent to the internet.');
@@ -206,7 +214,7 @@ function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
       ...(a.settings.temperature !== undefined ? { temperature: a.settings.temperature } : {}), ...(a.settings.maxTokens !== undefined ? { maxTokens: a.settings.maxTokens } : {}) };
     const t0 = Date.now();
     try {
-      const inner = chatProviderFor(conn.provider, keyOf(ctx, getConn(ctx, conn.id)), a.modelId, egressFetch(ctx));
+      const inner = chatProviderFor(conn.provider, keyOf(ctx, getConn(ctx, conn.id)), a.modelId, egressFetch(ctx), undefined, { nativeTools });
       const r = onDelta && inner.stream ? await inner.stream(full, onDelta) : await inner.complete(full);
       dumpAgentCall(meta, full, { result: r, ms: Date.now() - t0 });
       return r;
@@ -216,7 +224,7 @@ function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
       throw e;
     } finally { st.providerCalls.delete(ac); }
   };
-  return { id: conn.provider, model: a.modelId, complete: (req) => send(req), stream: (req, onDelta) => send(req, onDelta) };
+  return { id: conn.provider, model: a.modelId, ...(nativeTools ? { nativeTools: true } : {}), complete: (req) => send(req), stream: (req, onDelta) => send(req, onDelta) };
 }
 
 function budgetView(ctx: ServiceContext, month = monthOf(ctx.now())) {

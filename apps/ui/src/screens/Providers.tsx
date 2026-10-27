@@ -101,6 +101,32 @@ function Note({ code, el, tone = 'warn', vars }: { code: string; el?: string; to
   return <p data-el={el} data-code={code} role="status" className={cx('text-[12px]', tone === 'warn' ? 'text-em-warn' : 'text-em-text-2')}>{t(`err.${code}.title`, vars)} · {t(`err.${code}.body`, vars)} <span className="t-mono text-em-muted">{code}</span></p>;
 }
 
+/**
+ * FR-215 (QA 2026-10-27: an `sk-ant-…` key validated as OpenAI → EM-4002): the provider a key obviously belongs to, from its prefix.
+ * Only unambiguous prefixes: `sk-ant-` Anthropic, `sk-or-` OpenRouter, `AIza` Gemini, `sk-proj-` / other `sk-` OpenAI. null otherwise.
+ */
+export function providerOfKey(key: string): ProviderKind | null {
+  const k = key.trim();
+  if (/^sk-ant-/i.test(k)) return 'anthropic';
+  if (/^sk-or-/i.test(k)) return 'openrouter';
+  if (/^AIza[0-9A-Za-z_-]{10,}/.test(k)) return 'google';
+  if (/^sk-(proj-|svcacct-|admin-)?[A-Za-z0-9_-]{10,}/.test(k)) return 'openai';
+  return null;
+}
+/** "This is an Anthropic key — switch the provider to Anthropic?" with a one-click switch (shown before and after Validate). */
+function KeyProviderHint({ provider, secret, setProvider, kinds }: { provider: ProviderKind; secret: string; setProvider: (p: ProviderKind) => void; kinds: ProviderKindInfo[] }) {
+  const { t } = useStore();
+  const guess = providerOfKey(normalizeKey(secret));
+  if (!guess || guess === provider || !kinds.find((k) => k.provider === guess)?.enabled) return null;
+  const name = t(`ui.scr.providers.provider.${guess}`);
+  return (
+    <div data-el="scr.providers.key.mismatch" data-provider={guess} role="alert" className="-mt-2 mb-3 flex flex-wrap items-center gap-2 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
+      <span className="flex-1">{t('ui.scr.providers.key.mismatch', { provider: name })}</span>
+      <Button el="scr.providers.key.mismatch.switch" size={28} variant="primary" onClick={() => setProvider(guess)}>{t('ui.scr.providers.key.mismatch.switch', { provider: name })}</Button>
+    </div>
+  );
+}
+
 /** Provider select + disclosure + terms (FR-111) and the masked key with show/hide and the expected shape (FR-112). */
 function ProviderKeyFields({ provider, setProvider, secret, setSecret, kinds }: { provider: ProviderKind; setProvider: (p: ProviderKind) => void; secret: string; setSecret: (s: string) => void; kinds: ProviderKindInfo[] }) {
   const { t } = useStore();
@@ -129,6 +155,7 @@ function ProviderKeyFields({ provider, setProvider, secret, setSecret, kinds }: 
           <IconButton el="scr.providers.key.toggle" label={show ? t('ui.scr.providers.key.hide') : t('ui.scr.providers.key.show')} icon={show ? <EyeOff size={14} /> : <Eye size={14} />} onClick={() => setShow((v) => !v)} />
         </div>
       </Field>
+      <KeyProviderHint provider={provider} secret={secret} setProvider={setProvider} kinds={kinds} />
     </>
   );
 }
@@ -145,7 +172,11 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
   const [keyFail, setKeyFail] = useState<{ attempt: number; connectionId: string | null } | null>(null);
   const finish = (ok: boolean) => { setBusy(false); setResult(ok ? 'ok' : 'fail'); if (ok) { setKey(''); setKeyFail(null); } onConnected?.(ok); };
   const validate = async () => {
-    setBusy(true); setResult(null); setKeyFail(null);
+    setBusy(true); setResult(null);
+    // FR-215: a connection this form stored with a refused key (wrong provider or a mistyped key) is removed before the next try,
+    // so it cannot stay behind as the default connection with an empty model list.
+    const stale = keyFail?.connectionId; setKeyFail(null);
+    if (stale) { await runtime.api.deleteConnection(stale).catch(() => undefined); }
     let failed: EmError | null = null;
     const ok = await actions.addConnection(provider, normalizeKey(key), t(`ui.scr.providers.provider.${provider}`), { onError: (e) => { failed = e; } });
     const f = failed as EmError | null;
@@ -272,10 +303,13 @@ function TestResults({ items }: { items: ProbeResultDto[] }) {
   );
 }
 
-type AssignFormProps = { onSaved?: () => void; showBudgets?: boolean; connectionId?: string; focusField?: BudgetFocus['field']; collapseModels?: boolean };
+type AssignFormProps = { onSaved?: () => void; showBudgets?: boolean; connectionId?: string; focusField?: BudgetFocus['field']; collapseModels?: boolean; /** FR-215: label of a "Use defaults" button (onboarding) */ useDefaultsLabel?: string };
 /** The connection an AssignForm edits: the given one, else the default, else the first. */
-const assignConn = (state: ReturnType<typeof useStore>['state'], connectionId?: string): ConnectionDto | undefined =>
-  state.connections.find((c) => c.id === (connectionId ?? state.assignments?.defaultConnectionId)) ?? state.connections[0];
+const assignConn = (state: ReturnType<typeof useStore>['state'], connectionId?: string): ConnectionDto | undefined => {
+  const c = state.connections.find((x) => x.id === (connectionId ?? state.assignments?.defaultConnectionId)) ?? state.connections[0];
+  // FR-215: never edit a connection whose key was refused while a working one exists (it has no model list).
+  return c?.status === 'invalid' ? state.connections.find((x) => x.status === 'valid') ?? c : c;
+};
 /**
  * Entry 28 (found by poc/e2e/providers-flow.mjs): the picks start from the agents' assignments ON THIS connection only. Before, an
  * assignment of another connection (an OpenRouter id such as `google/…`) was prefilled on a new Anthropic connection and Save
@@ -291,7 +325,7 @@ export function AssignForm(props: AssignFormProps) {
   const conn = assignConn(state, props.connectionId);
   return <AssignFormFor key={conn?.id ?? 'none'} {...props} />;
 }
-function AssignFormFor({ onSaved, showBudgets = true, connectionId, focusField, collapseModels }: AssignFormProps) {
+function AssignFormFor({ onSaved, showBudgets = true, connectionId, focusField, collapseModels, useDefaultsLabel }: AssignFormProps) {
   const { state, runtime, actions, dispatch, t } = useStore();
   const conn = assignConn(state, connectionId);
   const rows: CapabilityRow[] = conn ? state.capabilities[conn.id] ?? [] : [];
@@ -316,32 +350,40 @@ function AssignFormFor({ onSaved, showBudgets = true, connectionId, focusField, 
     }, 60);
     return () => clearTimeout(h);
   }, [focusField, showBudgets, conn?.id, state.project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Empty table = not loaded: read the cache, and when the cache is empty too ask the provider once (not in Private Mode).
+  // Empty table = not loaded: read the cache, and when the cache is empty too ask the provider once (not in Private Mode). FR-215:
+  // the table shows "Loading the model list…" for the whole time (the onboarding Models step was left on "No model list yet / 0 of 0").
   const autoFetched = useRef<string | null>(null);
   useEffect(() => {
     if (!conn || state.capabilities[conn.id]?.length) return;
+    let live = true;
+    setFetching(true);
     void runtime.api.connectionModels(conn.id).then(async (r) => {
-      let rows = r.items;
+      let rows = Array.isArray(r?.items) ? r.items : [];
       if (!rows.length && autoFetched.current !== conn.id && !state.settings?.privateMode && conn.status === 'valid') {
         autoFetched.current = conn.id;
-        setFetching(true);
-        rows = (await runtime.api.refreshConnectionModels(conn.id).catch(() => ({ items: [] as typeof rows }))).items;
-        setFetching(false);
+        rows = (await runtime.api.refreshConnectionModels(conn.id).catch(() => ({ items: [] as typeof rows }))).items ?? [];
       }
       if (rows.length) dispatch({ type: 'capabilities', connectionId: conn.id, rows });
-    }).catch(() => undefined);
-  }, [conn, runtime, dispatch, state.capabilities, state.settings?.privateMode]);
+    }).catch(() => undefined).finally(() => { if (live) setFetching(false); });
+    return () => { live = false; };
+  }, [conn?.id, conn?.status, runtime, dispatch, state.capabilities, state.settings?.privateMode]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!rows.length) return;
     setAssign((a) => ({ brainstorm: a.brainstorm || defaultModel(rows, 'brainstorm'), editor: a.editor || defaultModel(rows, 'editor') }));
   }, [rows.length]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!conn) return <p className="text-em-muted">{t('ui.scr.providers.none')}</p>;
-  const save = async () => {
+  const save = async (picks: Record<AgentKind, string> = assign) => {
     setError(null); setSaving(true);
-    try { await saveInner(); } finally { setSaving(false); }
+    try { await saveInner(picks); } finally { setSaving(false); }
   };
-  const saveInner = async () => {
-    const mk = (agent: AgentKind): AssignmentDto | null => (assign[agent] ? { agent, connectionId: conn.id, modelId: assign[agent], settings: {} } : null);
+  /** FR-215: "Use defaults" stores the default model of each agent (it only moved to the next step before, leaving no model). */
+  const useDefaults = () => {
+    const picks = { brainstorm: assign.brainstorm || defaultModel(rows, 'brainstorm'), editor: assign.editor || defaultModel(rows, 'editor') };
+    setAssign(picks);
+    if (picks.brainstorm || picks.editor) void save(picks); else onSaved?.();
+  };
+  const saveInner = async (picks: Record<AgentKind, string>) => {
+    const mk = (agent: AgentKind): AssignmentDto | null => (picks[agent] ? { agent, connectionId: conn.id, modelId: picks[agent], settings: {} } : null);
     try {
       const a = await runtime.api.putAssignments({ brainstorm: mk('brainstorm'), editor: mk('editor'), defaultConnectionId: state.assignments?.defaultConnectionId ?? conn.id });
       dispatch({ type: 'providers', assignments: a });
@@ -375,6 +417,7 @@ function AssignFormFor({ onSaved, showBudgets = true, connectionId, focusField, 
       <div className="flex items-center gap-2">
         <Button el="scr.providers.test" loading={testing} disabledReason={state.settings?.privateMode ? t('err.EM-8202.title') : !assign.brainstorm && !assign.editor ? t('err.EM-4007.title', { agent: t('ui.scr.providers.agents') }) : null} onClick={() => void test()}>{t('ui.scr.providers.test')}</Button>
         <span className="flex-1" />
+        {useDefaultsLabel && <Button el="scr.providers.defaults" variant="ghost" disabledReason={fetching ? t('ui.scr.providers.busy.models') : null} onClick={useDefaults}>{useDefaultsLabel}</Button>}
         <Button el="scr.providers.save" variant="primary" loading={saving} onClick={() => void save()}>{t('ui.common.save')}</Button>
       </div>
     </div>

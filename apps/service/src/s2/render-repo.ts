@@ -23,7 +23,9 @@ export const getJob = (ctx: ServiceContext, id: string): RenderJobRow | undefine
 export const getOutput = (ctx: ServiceContext, id: string): OutputRow | undefined => ctx.db.prepare('SELECT * FROM outputs WHERE id = ?').get(id) as OutputRow | undefined;
 
 /** Where Outputs may live: the app outputs folder and the user profile (TR-081; Creator-chosen folders). */
-export const outputRoots = (ctx: ServiceContext): string[] => [ctx.paths.outputs, os.homedir()];
+export const outputRoots = (ctx: ServiceContext): string[] => [ctx.paths.outputs, os.homedir(), ...(ctx.cfg.videosDir ? [ctx.cfg.videosDir] : [])];   // FR-205: a redirected Videos folder too
+/** FR-205 / FR-009: the default export folder: `<Videos>/Expertmotion` when the Shell reported the Videos folder, else the app outputs folder. */
+export const defaultOutputFolder = (ctx: ServiceContext, projectId: string): string => (ctx.cfg.videosDir ? path.join(ctx.cfg.videosDir, 'Expertmotion') : path.join(ctx.paths.outputs, projectId));
 /** outputs.path is relative to the outputs root; files in a Creator-chosen folder elsewhere are stored absolute. */
 export const outputAbsPath = (ctx: ServiceContext, p: string): string => (path.isAbsolute(p) ? p : path.resolve(ctx.paths.outputs, p));
 export const outputRelPath = (ctx: ServiceContext, abs: string): string => {

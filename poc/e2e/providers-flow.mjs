@@ -67,7 +67,10 @@ const PROBE = `(() => {
   const ce = console.error.bind(console);
   console.error = (...a) => { try { w.__em.errors.push(a.map((x) => (x && x.stack) ? x.stack : String(x)).join(' ').slice(0, 3000)); } catch {} ce(...a); };
   const f = w.fetch.bind(w); w.fetch = (...a) => { try { if (String(a[0].url ?? a[0]).includes('/api/v1/')) w.__em.requests++; } catch {} return f(...a); };
-  document.addEventListener('DOMContentLoaded', () => new MutationObserver((m) => { w.__em.mutations += m.length; }).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true }));
+  w.__em.mutBy = {};
+  document.addEventListener('DOMContentLoaded', () => new MutationObserver((m) => { w.__em.mutations += m.length;
+    for (const x of m) { const t = x.target.nodeType === 1 ? x.target : x.target.parentElement; const k = t?.closest?.('[data-el]')?.getAttribute('data-el') ?? '?'; w.__em.mutBy[k] = (w.__em.mutBy[k] ?? 0) + 1; } })
+    .observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true }));
 })()`;
 
 let chrome; let page;
@@ -106,11 +109,18 @@ const count = async (sel) => page.evaluate(`document.querySelectorAll(${q(sel)})
 const exceptions = () => page.consoleLines.filter((l) => l.startsWith('EXCEPTION'));
 /** Idle render-loop detector: DOM mutations and service requests over `ms` with nothing happening. */
 const idle = async (label, ms = 4000) => {
-  const a = await page.evaluate('({ m: window.__em.mutations, r: window.__em.requests })'); await sleep(ms);
-  const b = await page.evaluate('({ m: window.__em.mutations, r: window.__em.requests })');
-  const row = { label, ms, mutations: b.m - a.m, requests: b.r - a.r }; log({ idle: row });
+  const a = await page.evaluate('({ m: window.__em.mutations, r: window.__em.requests, by: { ...window.__em.mutBy } })'); await sleep(ms);
+  const b = await page.evaluate('({ m: window.__em.mutations, r: window.__em.requests, by: { ...window.__em.mutBy } })');
+  const by = Object.entries(b.by).map(([k, v]) => [k, v - (a.by[k] ?? 0)]).filter(([, v]) => v > 0).sort((x, y) => y[1] - x[1]).slice(0, 6);
+  const row = { label, ms, mutations: b.m - a.m, requests: b.r - a.r, by }; log({ idle: row });
   return row;
 };
+/**
+ * Entry 30: idle = no render loop. The Editor has periodic, legitimate updates (rotating search suggestion, catalogue preview loops,
+ * hardware tick, open dialogs) whose count depends on timing (HEAD build: 61 in 5 s with Providers open), so the check is per element:
+ * a loop shows up as one element mutating many times.
+ */
+const calm = (row) => row.mutations < 120 && row.by.every(([, n]) => n <= 30);
 /** Waits until no element matching `sel` is present (busy line gone). */
 const settle = async (ms = 600) => { await waitFor(`!document.querySelector('[data-el="scr.providers.busy"], [data-el="agent.chat.model.loading"]')`, 20000); await sleep(ms); };
 
@@ -130,7 +140,10 @@ try {
   await step('editor', async () => {
     check('editor rendered', await waitFor(`!!document.querySelector('[data-el="hdr.menu.file"]')`, 30000));
     await page.evaluate(`(() => { for (const el of document.querySelectorAll('[data-el="tour.skip"], [data-el$=".skip"]')) el.click(); })()`).catch(() => {});
-    check('project open', await waitFor(`document.body.innerText.includes('E2E Providers')`, 15000));
+    // FR-202 (Entry 29): a launch shows the Start screen; open the project from its row (older builds open it by themselves).
+    await waitFor(`!document.querySelector('[data-el="sys.splash"]') && (!!document.querySelector('[data-el="scr.start.item.open"]') || !!document.querySelector('[data-el="agent.chat"]'))`, 30000);
+    if (!(await count('[data-el="agent.chat"]'))) { await sleep(500); await realClick('[data-el="scr.start.item.open"]'); }
+    check('project open', await waitFor(`!!document.querySelector('[data-el="agent.chat"]') && document.body.innerText.includes('E2E Providers')`, 15000));
   });
 
   // ── Providers: add Anthropic ──
@@ -173,7 +186,7 @@ try {
     check('assignments stored', a.brainstorm?.modelId === 'claude-sonnet-5-5' && a.editor?.modelId === 'claude-opus-5-5', { a: JSON.stringify(a).slice(0, 300) });
   });
   const afterConnect = await idle('after connecting Anthropic', 5000);
-  check('no render loop after connecting (idle mutations < 50)', afterConnect.mutations < 50, afterConnect);
+  check('no render loop after connecting (idle: no element > 30 mutations / 5 s, total < 120)', calm(afterConnect), afterConnect);
   check('no refetch storm after connecting (idle requests < 6)', afterConnect.requests < 6, afterConnect);
   await step('assignform', async () => {
     check('assign form shown', await waitFor(`!!document.querySelector('[data-el="scr.providers.models.all"]')`));
@@ -193,7 +206,7 @@ try {
     check('providers closed', await waitFor(`!document.querySelector('[data-el="scr.providers"]')`));
   });
   const afterClose = await idle('editor after closing Providers', 5000);
-  check('editor idle after closing (mutations < 50)', afterClose.mutations < 50, afterClose);
+  check('editor idle after closing (no element > 30 mutations / 5 s, total < 120)', calm(afterClose), afterClose);
 
   // ── chat ModelPopover ──
   await step('popover-brainstorm', async () => {
@@ -295,7 +308,7 @@ try {
     if (await count('[data-el="agent.chat.model.popover"]')) await key('Escape', 'Escape', 27);
   });
   const afterOr = await idle('editor after OpenRouter', 5000);
-  check('editor idle after OpenRouter (mutations < 50)', afterOr.mutations < 50, afterOr);
+  check('editor idle after OpenRouter (no element > 30 mutations / 5 s, total < 120)', calm(afterOr), afterOr);
 
   // ── still interactive ──
   await step('interactive', async () => {

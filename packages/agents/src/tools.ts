@@ -3,7 +3,8 @@
 // Local Service supplies the handlers. Inputs are Zod-validated; failures go back to the model as {error:{code,message}}.
 import { z } from 'zod';
 import { Operation } from '@expertmotion/composition-model';
-import type { ChatMessage } from './providers.js';
+import { parseToolMarkup, stripToolMarkup } from '@expertmotion/shared';
+import type { ChatMessage, ToolSpec } from './providers.js';
 
 export const BRAINSTORM_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate'] as const;
 export type BrainstormToolName = (typeof BRAINSTORM_TOOL_NAMES)[number];
@@ -29,14 +30,54 @@ export interface ToolCallRecord { name: string; input: unknown; output: unknown;
 const MAX_RESULT_CHARS = 16_000;
 export const MAX_TOOL_ROUNDS = 4;
 
-/** Appended to the Brainstorming system prompt: the JSON-mode tool protocol (AI_WORKFLOW §12 "Model lacks tool calling"). */
-export function toolsPromptBlock(names: readonly ToolName[], finalReply = 'reply normally'): string {
+/** Catalogue categories `catalogue.search` accepts (the Local Service also maps plural / case slips). */
+export const CATALOGUE_SEARCH_CATEGORIES = ['transition', 'caption', 'background', 'motion', 'shape', 'easing', 'effect', 'audio', 'text', 'texteffect', 'font', 'palette', 'fontpair'] as const;
+const NO_INPUT = { type: 'object', properties: {}, additionalProperties: false } as const;
+/** AI_WORKFLOW §8.1: description + JSON Schema of each read-only tool, as offered through a provider's native tools API. */
+export const TOOL_DEFINITIONS: Record<ToolName, { description: string; inputSchema: Record<string, unknown> }> = {
+  'composition.get': { description: 'Read the current video project: scenes, texts, images, audio, captions, transitions and duration (compact summary). Read-only.', inputSchema: NO_INPUT },
+  'assets.list': { description: 'List the media the Creator imported into this project (id, kind, name, duration, size). Read-only.', inputSchema: NO_INPUT },
+  'assets.probe': { description: 'Technical facts of one imported asset: fps, codecs, audio channels and sample rate, duration. Read-only.',
+    inputSchema: { type: 'object', properties: { assetId: { type: 'string', description: 'Asset id from assets.list' } }, required: ['assetId'], additionalProperties: false } },
+  'catalogue.search': { description: 'Search the design catalogue (transitions, captions, backgrounds, motions, shapes, effects, texts, fonts, palettes) for preset ids. Read-only.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'A few words, e.g. "gradient calm" or "slide"' }, category: { type: 'string', enum: [...CATALOGUE_SEARCH_CATEGORIES], description: 'Optional catalogue category (singular)' } }, required: ['query'], additionalProperties: false } },
+  'hardware.profile': { description: 'The Creator\'s computer tier, CPU threads, RAM and GPU. Read-only.', inputSchema: NO_INPUT },
+  'project.settings.get': { description: 'Project settings: ratio, resolution, fps, language. Read-only.', inputSchema: NO_INPUT },
+  'render.estimate': { description: 'Estimate render time and file size for this project. Read-only.',
+    inputSchema: { type: 'object', properties: { resolution: { type: 'string', enum: ['720p', '1080p', '2k', '2160p'] }, performanceProfile: { type: 'string', enum: ['standard', 'accelerated', 'turbo'] } }, additionalProperties: false } },
+  'composition.validateOps': { description: 'Dry run: check operations against the current project without changing it. Returns ok, issues, predictedDiff, predictedDurationMs.',
+    inputSchema: { type: 'object', properties: { ops: { type: 'array', description: 'Operation objects {op, target, args}', items: { type: 'object' } } }, required: ['ops'], additionalProperties: false } },
+};
+/** Provider-safe tool name: providers accept [A-Za-z0-9_-] only, so `catalogue.search` is offered as `catalogue_search`. */
+export const wireToolName = (name: string): string => name.replace(/[^A-Za-z0-9_-]/g, '_');
+/** The registry name of a tool name a model used (wire name, dotted name, or a near spelling), or the name unchanged. */
+export function fromWireToolName(name: string, allowed: readonly string[] = EDITOR_TOOL_NAMES): string {
+  const n = String(name ?? '').trim();
+  return allowed.find((a) => a === n || wireToolName(a) === n || wireToolName(a).toLowerCase() === wireToolName(n).toLowerCase()) ?? n;
+}
+/** Native tool specs for the offered tools. */
+export function toolSpecs(names: readonly ToolName[]): ToolSpec[] {
+  return names.map((n) => ({ name: wireToolName(n), description: TOOL_DEFINITIONS[n].description, inputSchema: TOOL_DEFINITIONS[n].inputSchema }));
+}
+
+/**
+ * Appended to the agent system prompt. `json` (AI_WORKFLOW §12 "Model lacks tool calling"): the JSON-mode protocol. `native`
+ * (AI_WORKFLOW §8.1): the tools come through the provider's tools API; the prompt only says when to use them and forbids
+ * writing tool syntax into the answer (Claude otherwise imitated the protocol in its own XML style, QA 2026-10-27).
+ */
+export function toolsPromptBlock(names: readonly ToolName[], finalReply = 'reply normally', mode: 'json' | 'native' = 'json'): string {
   if (!names.length) return '';
+  if (mode === 'native') {
+    return ['', '## Read-only tools', `You can call these read-only tools through the tools interface of this request before answering: ${names.join(', ')}.`,
+      `Use them only when they help. At most ${MAX_TOOL_ROUNDS} rounds of tool calls per answer; then ${finalReply}. Tools never change the project.`,
+      'Never write tool calls, XML tags or tool JSON into your answer text: the Creator reads it.'].join('\n');
+  }
   const sig = (n: ToolName) => (n === 'catalogue.search' ? '{"query": string, "category"?: string}' : n === 'render.estimate' ? '{"resolution"?: "720p"|"1080p"|"2k"|"2160p", "performanceProfile"?: "standard"|"accelerated"|"turbo"}'
     : n === 'assets.probe' ? '{"assetId": string} (fps, codecs, audio channels and sample rate, duration)' : n === 'composition.validateOps' ? '{"ops": Operation[]} (dry run against baseVersion: ok, issues, predictedDiff, predictedDurationMs)' : '{}');
   const lines = names.map((n) => `- ${n} ${sig(n)}`);
   return ['', '## Read-only tools', 'Before answering you may look things up. To call a tool, reply with only this JSON and nothing else:',
-    '{"tool": "<name>", "input": { ... }}', `You will receive {"toolResult": ...}. At most ${MAX_TOOL_ROUNDS} tool calls per answer; then ${finalReply}. Tools never change the project.`, ...lines].join('\n');
+    '{"tool": "<name>", "input": { ... }}', `You will receive {"toolResult": ...}. At most ${MAX_TOOL_ROUNDS} tool calls per answer; then ${finalReply}. Tools never change the project.`,
+    'Write only that JSON object for a tool call, in no other format.', ...lines].join('\n');
 }
 
 /** A tool request when the reply is exactly a {"tool", "input"} object without a "reply". */
@@ -45,6 +86,15 @@ export function asToolRequest(json: unknown): { name: string; input: unknown } |
   const o = json as Record<string, unknown>;
   if (typeof o['tool'] !== 'string' || 'reply' in o) return null;
   return { name: o['tool'], input: o['input'] ?? {} };
+}
+/**
+ * Every tool request in a JSON-mode reply: the {"tool", "input"} object, or tool calls the model wrote as markup instead
+ * (<invoke>, <function_calls>, <tool_call>, …; QA 2026-10-27). Names are mapped back to registry names.
+ */
+export function toolRequestsOf(text: string, json: unknown, allowed: readonly string[] = EDITOR_TOOL_NAMES): Array<{ name: string; input: unknown }> {
+  const one = asToolRequest(json);
+  if (one) return [{ name: fromWireToolName(one.name, allowed), input: one.input }];
+  return parseToolMarkup(text).map((c) => ({ name: fromWireToolName(c.name, allowed), input: c.input ?? {} }));
 }
 
 /** Runs one tool call through the closed registry. Never throws; unknown or disallowed tools return EM-4501 / EM-4502. */
@@ -68,6 +118,12 @@ export async function runTool(name: string, input: unknown, handlers: ToolHandle
   }
 }
 
+/** The result text of one tool call for a native tool_result (same body as the JSON-mode message, ≤ 16 KB). */
+export function toolResultContent(rec: ToolCallRecord): string {
+  const body = JSON.stringify(rec.ok ? rec.output ?? null : rec.output);
+  return body.length > MAX_RESULT_CHARS ? `${body.slice(0, MAX_RESULT_CHARS)}…(truncated)` : body;
+}
+
 export function toolResultMessage(rec: ToolCallRecord): ChatMessage {
   let body = JSON.stringify({ toolResult: { tool: rec.name, ...(rec.ok ? { output: rec.output } : (rec.output as object)) } });
   if (body.length > MAX_RESULT_CHARS) body = `${body.slice(0, MAX_RESULT_CHARS)}…(truncated)`;
@@ -86,15 +142,21 @@ export class ReplyStreamer {
   private pos = -1;           // index in raw just after the opening quote of "reply"
   private done = false;
   private escape = false;
+  private shown = '';
   push(delta: string): string {
     this.raw += delta;
     if (this.mode === 'unknown') {
       const s = this.raw.replace(/^\s+/, '');
       if (!s) return '';
       if (s.startsWith('{') || s.startsWith('`')) this.mode = 'json';
-      else { this.mode = 'prose'; return this.raw.replace(/^\s+/, ''); }
+      else this.mode = 'prose';
     }
-    if (this.mode === 'prose') return delta;
+    if (this.mode === 'prose') {
+      // QA 2026-10-27: tool-call markup a model writes into its prose is never shown, not even while it streams.
+      const visible = stripToolMarkup(this.raw.replace(/^\s+/, ''), { partial: true });
+      if (!visible.startsWith(this.shown)) return '';
+      const out = visible.slice(this.shown.length); this.shown = visible; return out;
+    }
     if (this.done) return '';
     if (this.pos < 0) {
       const m = new RegExp(`"${this.key}"\\s*:\\s*"`).exec(this.raw);

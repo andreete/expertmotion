@@ -113,3 +113,26 @@ export function tierOfModel(rows: readonly TierCapabilityRow[], modelId: string 
   const t = resolveModelTiers(rows, agent);
   return (['balanced', 'fast', 'best', 'free'] as const).find((k) => t[k] === modelId) ?? null;
 }
+
+/** Version number of a model family id part: "5-5" / "5.5" → 5.5, "4-6" → 4.6, "5" → 5 (dated snapshots → their major only). */
+function familyVersion(s: string): number {
+  const m = /^(\d{1,2})(?:[.-](\d{1,2}))?(?!\d)/.exec(s);
+  return m ? Number(m[1]) + (m[2] ? Number(`0.${m[2]}`) : 0) : -1;
+}
+/**
+ * FR-215 (QA 2026-10-27, "Choose your models" stayed empty): a sensible default per agent for the direct provider APIs, by family
+ * and newest version: Anthropic → the newest Claude Sonnet (fast, strong JSON; Opus when no Sonnet is listed), OpenAI → the newest
+ * full GPT model, Gemini → the newest Flash (Diskusi) / Pro (Edit). Dated snapshot ids lose to their alias. null when the table is
+ * not one of these providers (OpenRouter ids `vendor/model` use the tier resolution).
+ */
+export function providerDefaultModel(rows: readonly TierCapabilityRow[], agent: TierAgent): string | null {
+  const ids = rows.map((r) => r.modelId).filter((id) => !id.includes('/'));
+  const best = (cands: Array<{ id: string; v: number }>) => cands.sort((a, b) => b.v - a.v || Number(/\d{8}$/.test(a.id)) - Number(/\d{8}$/.test(b.id)) || a.id.length - b.id.length)[0]?.id ?? null;
+  const claude = (fam: string) => best(ids.flatMap((id) => { const m = new RegExp(`^claude-${fam}-(.+)$`).exec(id); return m ? [{ id, v: familyVersion(m[1]!) }] : []; }).filter((x) => x.v >= 0));
+  if (ids.some((id) => id.startsWith('claude-'))) return claude('sonnet') ?? claude('opus') ?? claude('haiku');
+  const gpt = best(ids.flatMap((id) => { const m = /^gpt-(\d+(?:\.\d+)?)$/.exec(id); return m ? [{ id, v: Number(m[1]) }] : []; }));
+  if (gpt) return gpt;
+  const gem = (kind: string) => best(ids.flatMap((id) => { const m = new RegExp(`^gemini-(\\d+(?:\\.\\d+)?)-${kind}$`).exec(id); return m ? [{ id, v: Number(m[1]) }] : []; }));
+  if (ids.some((id) => id.startsWith('gemini-'))) return agent === 'editor' ? gem('pro') ?? gem('flash') : gem('flash') ?? gem('pro');
+  return null;
+}

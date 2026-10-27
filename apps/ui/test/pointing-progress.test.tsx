@@ -72,7 +72,17 @@ describe('pure helpers', () => {
     expect(progressText({ phase: 'planning' }, t)).toBe('Drafting the plan…');
     expect(progressText({ phase: 'checking' }, t)).toBe('Checking the plan…');
     expect(progressText({ phase: 'correcting', attempt: 2 }, t)).toBe('Fixing the plan (attempt 2)…');
-    expect(progressText({ phase: 'tool', tool: 'assets.list' }, t)).toBe('Looking at assets.list…');
+    expect(progressText({ phase: 'tool', tool: 'assets.list' }, t)).toBe('Looking at your media…');
+    // FR-214: per-tool and per-agent words, and the state between Send and the first event
+    expect(progressText({ phase: 'tool', tool: 'catalogue.search' }, t)).toBe('Searching the catalogue…');
+    expect(progressText({ phase: 'tool', tool: 'some.newTool' }, t)).toBe('Looking at some.newTool…');
+    expect(progressText({ phase: 'planning' }, t, 'brainstorm')).toBe('Looking for content ideas…');
+    expect(progressText({ phase: 'thinking' }, t, 'brainstorm')).toBe('Thinking about ideas…');
+    expect(progressText({ phase: 'writing' }, t, 'editor')).toBe('Writing the plan…');
+    expect(progressText({}, t)).toBe('Sending…');
+    expect(progressText({ phase: 'sending', attaching: true }, t)).toBe('Preparing the image…');
+    expect(translate('id', 'ui.agent.progress.tool.catalogue')).toBe('Mencari di katalog…');
+    expect(translate('id', 'ui.agent.composer.working')).toBe('Agent sedang bekerja…');
     expect(translate('id', 'ui.agent.progress.planning')).toBe('Menyusun rencana…');
     expect(translate('id', 'ui.agent.plan.state.executing.changes', { n: 4 })).toBe('Menjalankan 4 perubahan…');
   });

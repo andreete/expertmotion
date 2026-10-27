@@ -9,7 +9,7 @@ import type {
   AgentKind, AssetDto, ChatTarget, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, ItemsEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
 } from '../api/types.js';
-import { initialState, reducer, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
+import { initialState, PENDING_RUN, reducer, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
 import type { Runtime } from './runtime.js';
 import { loadPrefs, savePrefs, type Prefs } from '../prefs.js';
 /** Window event that opens the Hardware Monitor popover (Header listens; FR-128 low-disk banner action). */
@@ -18,6 +18,7 @@ import { translate, type Lang } from '../i18n/index.js';
 import { localModelByRef, localModelName } from './model-names.js';
 import { normalizeKey } from './key-retry.js';
 import { itemsCategory } from '../stage/items.js';
+import { bootDecision, noteProjectClosed, noteProjectOpening } from '../startup/session-guard.js';
 
 export interface Actions {
   openProject(id: string): Promise<void>;
@@ -128,7 +129,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   const providersLoad = useRef<{ running: Promise<void> | null; again: boolean }>({ running: null, again: false });
   const modelsInFlight = useRef(new Set<string>());
   stateRef.current = state;
-  const dispatch = useCallback((a: Action) => rawDispatch(a), []);
+  const dispatch = useCallback((a: Action) => { if (a.type === 'projectClosed') noteProjectClosed(); rawDispatch(a); }, []);
   const prefsRef = useRef<Prefs>({ ...loadPrefs(), ...(initialPrefs ?? {}) });
   const [prefsVersion, forcePrefs] = useReducer((x: number) => x + 1, 0);
   const setPrefs = useCallback((p: Partial<Prefs>) => { prefsRef.current = { ...prefsRef.current, ...p }; savePrefs(prefsRef.current); forcePrefs(); }, []);
@@ -167,6 +168,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     };
     const openProject = async (id: string, keepView = false) => {
       try {
+        if (!keepView) noteProjectOpening(id);                                 // FR-202: crash-loop guard + Reload reopens it
         const open = await api.openProject(id);
         const [assets, brainstorm, editor] = await Promise.all([
           api.listAssets(id, { limit: 200 }).then((p) => p.items),
@@ -205,7 +207,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         }
         if (res.intent.status === 'held') {
           // FR-037: the Service holds the pick (EM-2104) until the model is installed; it then applies by itself (model.installed).
-          const flag = String(res.intent.params['__heldFor'] ?? '');
+          const flag = String(res.intent.params?.['__heldFor'] ?? '');
           const model = flag.startsWith('model:') ? flag.slice(6) : '';
           toast('warn', 'err.EM-2104.title', undefined, { code: 'EM-2104', action: { labelKey: 'err.EM-2104.action', run: () => setScreen({ kind: 'models', ...(model ? { focus: model } : {}) }) } });
           const L = stateRef.current.settings?.uiLanguage ?? 'en';
@@ -519,6 +521,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const id = pid(); if (!id) return false;
         try {
           dispatch({ type: 'agentError', agent, code: null });
+          // FR-214: the working state shows at once (no silent gap while the Service accepts the message or waits for an image).
+          dispatch({ type: 'streamingStart', agent, runId: PENDING_RUN, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '', ...(attachments.length ? { attaching: true } : {}) });
           const s0 = stateRef.current;
           const editorCtx = agent === 'editor' ? { ...(target ? { target } : {}), ...(s0.selection.length ? { selection: s0.selection.slice(0, 50) } : {}), playheadMs: Math.max(0, Math.round(s0.playheadMs)) } : {};
           const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), baseVersion: headHash(), ...editorCtx, ...(targets.length ? { targets: targets.slice(0, 12) } : {}) });
@@ -771,10 +775,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         await actions.loadProviders();
         await actions.loadModels();
         const recent = await runtime.api.recentProjects().catch(() => ({ items: [] }));
-        const target = recent.items[0]?.id ?? runtime.seededProjectId ?? (await runtime.api.listProjects({ limit: 1 }).catch(() => ({ items: [] }))).items[0]?.id;
-        if (target) await actions.openProject(target);
+        const last = recent.items[0]?.id ?? null;
+        // FR-202 (QA 2026-10-27 #7): a launch shows the Start screen; only an in-window Reload of a project that did not crash
+        // repeatedly reopens it. Runtimes without `startScreen` (mock, tests, demo) keep opening the most recent / seeded project.
+        const fallback = async () => last ?? runtime.seededProjectId ?? (await runtime.api.listProjects({ limit: 1 }).catch(() => ({ items: [] }))).items[0]?.id ?? null;
+        const decision = runtime.startScreen ? bootDecision({ seed: null, lastProjectId: last }) : { open: await fallback(), action: null };
+        if (decision.open) await actions.openProject(decision.open);
         if (!cancelled) {
           dispatch({ type: 'boot', boot: 'ready' });
+          if (decision.action === 'new') void actions.newProject();
           // FR-004: the onboarding record lives server-side (settings.onboardingDone); prefs mirror it for older services and the mock.
           if (!prefsRef.current.onboardingDone && settings.onboardingDone !== true) dispatch({ type: 'screen', screen: { kind: 'onboarding' } });
         }

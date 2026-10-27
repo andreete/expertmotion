@@ -106,7 +106,7 @@ export async function resolveBootstrap(env: Record<string, string | undefined> =
 
 export const toEmCode = (code: string): EmCode => (EM_CODE_RE.test(code) ? (code as EmCode) : 'EM-9001');
 
-interface ReqOpts { query?: Record<string, string | number | boolean | undefined>; headers?: Record<string, string>; body?: unknown; form?: FormData }
+interface ReqOpts { query?: Record<string, string | number | boolean | undefined>; headers?: Record<string, string>; body?: unknown; form?: FormData; /** raw request body (Content-Type set by the caller) */ raw?: Blob }
 
 export class ApiClient {
   private base: string;
@@ -137,6 +137,7 @@ export class ApiClient {
     const headers: Record<string, string> = { Authorization: `Bearer ${this.token}`, Accept: 'application/json', ...(opts.headers ?? {}) };
     let body: BodyInit | undefined;
     if (opts.form) body = opts.form;
+    else if (opts.raw) body = opts.raw;
     else if (opts.body !== undefined) { headers['Content-Type'] = 'application/json; charset=utf-8'; body = JSON.stringify(opts.body); }
     let res: Response;
     try {
@@ -199,10 +200,19 @@ export class ApiClient {
   importAssetPaths(id: Id, paths: string[], copy = true): Promise<{ items: AssetDto[]; notices: Array<{ code: string; assetId?: Id }> }> {   // R-030 (Shell)
     return this.post(`/projects/${id}/assets`, { paths, copy }, { 'X-Expertmotion-Caller': 'shell' });
   }
-  uploadAssets(id: Id, files: readonly File[]): Promise<{ items: AssetDto[]; notices: Array<{ code: string; assetId?: Id }> }> {             // R-030 (dev multipart)
-    const form = new FormData();
-    for (const f of files) form.append('file', f, f.name);
-    return this.request('POST', `/projects/${id}/assets`, { form });
+  /**
+   * R-030 browser upload (development builds only; the packaged Editor imports by path through the Shell, importAssetPaths). The
+   * Service takes one raw body per file (application/octet-stream + X-Expertmotion-Filename); multipart is refused with EM-9002,
+   * which is what the chat attachment hit in the QA of 2026-10-27.
+   */
+  async uploadAssets(id: Id, files: readonly File[]): Promise<{ items: AssetDto[]; notices: Array<{ code: string; assetId?: Id }> }> {
+    const items: AssetDto[] = []; const notices: Array<{ code: string; assetId?: Id }> = [];
+    for (const f of files) {
+      const r = await this.request<{ items: AssetDto[]; notices: Array<{ code: string; assetId?: Id }> }>('POST', `/projects/${id}/assets`,
+        { raw: f, headers: { 'Content-Type': 'application/octet-stream', 'X-Expertmotion-Filename': encodeURIComponent(f.name) } });
+      items.push(...(r?.items ?? [])); notices.push(...(r?.notices ?? []));
+    }
+    return { items, notices };
   }
   listAssets(id: Id, query: { kind?: string; status?: string; limit?: number; cursor?: string } = {}): Promise<Page<AssetDto>> { return this.get(`/projects/${id}/assets`, query); } // R-031
   getAsset(id: Id, assetId: Id, probe = false): Promise<AssetDto> { return this.get(`/projects/${id}/assets/${assetId}`, probe ? { probe: true } : undefined); } // R-032

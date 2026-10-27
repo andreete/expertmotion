@@ -8,6 +8,19 @@ import type {
   SettingsDto, VersionDto,
 } from '../api/types.js';
 import type { StreamStatus } from '../api/events.js';
+import { normalizeMessageDto } from '@expertmotion/shared';
+
+/** FR-214: run id of the working state shown from Send until the Service answers with the real run id. */
+export const PENDING_RUN = 'pending';
+/** FR-212: a message from the Service with blocks every reader can rely on (stored by any build). */
+export const safeMessage = (m: MessageDto): MessageDto => normalizeMessageDto(m ?? ({} as MessageDto)) as unknown as MessageDto;
+/** FR-212: queue intents always carry `params` (an object) and `resolvedTargets` (an array). */
+export function safeQueue(q: IntentQueueDto): IntentQueueDto {
+  if (!q || typeof q !== 'object') return q;
+  const fix = (i: EditIntent): EditIntent => ({ ...i, params: i.params && typeof i.params === 'object' && !Array.isArray(i.params) ? i.params : {}, resolvedTargets: Array.isArray(i.resolvedTargets) ? i.resolvedTargets : [] });
+  const items = (q as { items?: unknown }).items;
+  return Array.isArray(items) ? { ...q, items: (items as EditIntent[]).filter((i) => i && typeof i === 'object').map(fix) } : q;
+}
 
 export type LibMode = 'home' | 'design' | 'tools';
 export type ToastKind = 'info' | 'success' | 'warn' | 'danger';
@@ -26,7 +39,7 @@ export type Screen =
   /** FR-002: closing while a Render Job runs: "Cancel render and close" / "Keep rendering". */
   | { kind: 'close.render'; jobId: string; then: () => void };
 
-export interface Streaming { runId: string; text: string; modelId: string; /** agent.run.progress (QA 2026-10-26 #5) */ phase?: AgentPhase; attempt?: number; of?: number; tool?: string; /** when the run started (elapsed seconds in the progress line) */ since?: number }
+export interface Streaming { runId: string; text: string; modelId: string; /** FR-214: Send pressed with an image attachment */ attaching?: boolean; /** agent.run.progress (QA 2026-10-26 #5) */ phase?: AgentPhase; attempt?: number; of?: number; tool?: string; /** when the run started (elapsed seconds in the progress line) */ since?: number }
 /** agent.run.failed `message` / `details` (QA 2026-10-26 #3/#5): the reason shown in the error bubble; `details.recentKey` = new key. */
 export interface AgentErrorDetail { message?: string; details?: Record<string, unknown> }
 
@@ -130,7 +143,7 @@ export type Action =
   | { type: 'messageAdded'; agent: AgentKind; message: MessageDto }
   | { type: 'agentError'; agent: AgentKind; code: string | null; detail?: AgentErrorDetail | null }
   | { type: 'chatTargets'; targets: ChatTarget[] }
-  | { type: 'streamingStart'; agent: AgentKind; runId: string; modelId: string }
+  | { type: 'streamingStart'; agent: AgentKind; runId: string; modelId: string; /** FR-214: the message carries an image still being imported */ attaching?: boolean }
   | { type: 'streamingStop'; agent: AgentKind }
   | { type: 'providers'; connections?: ConnectionDto[]; assignments?: AssignmentsDto | null }
   | { type: 'capabilities'; connectionId: string; rows: CapabilityRow[] }
@@ -200,7 +213,7 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
       return { ...state, head, project, canUndo: ev.data.canUndo, canRedo: ev.data.canRedo, plan, headLoading: state.headLoading || (state.head !== null && state.head.id !== v.id), pulse: ev.data.diff.length ? { diff: ev.data.diff, at: Date.now() } : state.pulse };
     }
     case 'render.queued': return { ...state, renders: upsert(state.renders, [ev.data.job], true) };
-    case 'render.progress': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'rendering', progress: ev.data.progress, renderedFrames: ev.data.renderedFrames, totalFrames: ev.data.totalFrames, etaMs: ev.data.etaMs } : j)) };
+    case 'render.progress': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'rendering', progress: ev.data.progress, renderedFrames: ev.data.renderedFrames, totalFrames: ev.data.totalFrames, etaMs: ev.data.etaMs, ...(ev.data.stage ? { stage: ev.data.stage } : {}) } : j)) };
     case 'render.done': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'done', progress: 1, outputId: ev.data.output.id, etaMs: 0 } : j)), outputs: upsert(state.outputs, [ev.data.output], true) };
     case 'render.failed': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'failed', errorCode: ev.data.code, progress: ev.data.percent / 100, failedFrame: ev.data.frame ?? j.failedFrame ?? null } : j)) };
     case 'render.cancelled': return { ...state, renders: state.renders.map((j) => (j.id === ev.data.jobId ? { ...j, status: 'cancelled' } : j)) };
@@ -209,20 +222,29 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     // FR-041: EM-1006 = the same content is already in the project; the Service dropped the row, so the card goes (a toast says why).
     case 'ingest.failed': if (ev.data.code === 'EM-1006') return { ...state, assets: state.assets.filter((a) => a.id !== ev.data.assetId), assetSelection: state.assetSelection.filter((id) => id !== ev.data.assetId) };
       return { ...state, assets: state.assets.map((a) => (a.id === ev.data.assetId ? { ...a, status: 'failed', errorCode: ev.data.code } : a)) };
-    case 'agent.run.started': return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.run.id, text: '', modelId: ev.data.modelId } }, agentError: { ...state.agentError, [ev.data.agent]: null } };
-    case 'agent.run.delta': {
+    // FR-214: the run's state is continuous from Send to the answer: a pending entry (Send pressed, request not answered yet) is
+    // adopted by the real run id, keeping its start time; text / phase already received for this run are kept.
+    case 'agent.run.started': {
+      if (state.doneRuns.includes(ev.data.run.id)) return state;
       const s = state.streaming[ev.data.agent];
-      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { ...(s?.runId === ev.data.runId ? s : {}), runId: ev.data.runId, modelId: s?.modelId ?? '', text: `${s?.text ?? ''}${ev.data.delta}` } } };
+      const keep = s && (s.runId === ev.data.run.id || s.runId === PENDING_RUN) ? s : null;
+      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { ...(keep ?? {}), runId: ev.data.run.id, text: keep?.text ?? '', modelId: ev.data.modelId, since: keep?.since ?? Date.now(), phase: keep?.phase && keep.phase !== 'sending' ? keep.phase : 'reading' } }, agentError: { ...state.agentError, [ev.data.agent]: null } };
+    }
+    case 'agent.run.delta': {
+      if (state.doneRuns.includes(ev.data.runId)) return state;
+      const s = state.streaming[ev.data.agent];
+      const same = s && (s.runId === ev.data.runId || s.runId === PENDING_RUN);
+      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { ...(same ? s : {}), runId: ev.data.runId, modelId: s?.modelId ?? '', since: (same ? s?.since : undefined) ?? Date.now(), text: `${same ? s?.text ?? '' : ''}${ev.data.delta}` } } };
     }
     case 'agent.run.done': {
       const agent = ev.data.run.agent;
-      const msgs = state.messages[agent].some((m) => m.id === ev.data.message.id) ? state.messages[agent] : [...state.messages[agent], ev.data.message];
+      const msgs = state.messages[agent].some((m) => m.id === ev.data.message.id) ? state.messages[agent] : [...state.messages[agent], safeMessage(ev.data.message)];
       return { ...state, doneRuns: [ev.data.run.id, ...state.doneRuns].slice(0, 20), messages: { ...state.messages, [agent]: msgs }, streaming: { ...state.streaming, [agent]: null }, contextUsage: { ...state.contextUsage, [agent]: ev.data.contextUsage ?? state.contextUsage[agent] }, lastUsage: { ...state.lastUsage, [agent]: ev.data.usage ?? state.lastUsage[agent] } };
     }
     case 'agent.run.progress': {
       if (state.doneRuns.includes(ev.data.runId)) return state;
       const s = state.streaming[ev.data.agent];
-      if (s && s.runId !== ev.data.runId) return state;
+      if (s && s.runId !== ev.data.runId && s.runId !== PENDING_RUN) return state;
       return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.runId, text: s?.text ?? '', modelId: s?.modelId ?? '', phase: ev.data.phase, since: s?.since ?? Date.now(), ...(ev.data.attempt !== undefined ? { attempt: ev.data.attempt } : {}), ...(ev.data.of !== undefined ? { of: ev.data.of } : {}), ...(ev.data.tool ? { tool: ev.data.tool } : {}) } } };
     }
     case 'agent.run.failed': return { ...state, doneRuns: [ev.data.runId, ...state.doneRuns].slice(0, 20), streaming: { ...state.streaming, [ev.data.agent]: null }, agentError: { ...state.agentError, [ev.data.agent]: ev.data.code },
@@ -291,15 +313,15 @@ export function reducer(state: AppState, action: Action): AppState {
     // An import response can arrive after its own `ingest.done` event: never let the older `ingesting` snapshot win.
     case 'assetsUpsert': return { ...state, assets: upsert(state.assets, action.assets.map((a) => { const cur = state.assets.find((x) => x.id === a.id); return cur && cur.status !== 'ingesting' && a.status === 'ingesting' && cur.updatedAt >= a.updatedAt ? cur : a; })) };
     case 'assetRemoved': return { ...state, assets: state.assets.filter((a) => a.id !== action.assetId), assetSelection: state.assetSelection.filter((id) => id !== action.assetId) };
-    case 'queue': return { ...state, queue: action.queue, pending: [] };
+    case 'queue': return { ...state, queue: safeQueue(action.queue), pending: [] };
     case 'optimisticIntent': return { ...state, pending: [action.intent, ...state.pending] };
     case 'dropOptimistic': return { ...state, pending: state.pending.filter((p) => p.id !== action.id) };
     case 'plan': return setPlan(state, action.plan);
     case 'renders': return { ...state, renders: action.renders };
     case 'outputs': return { ...state, outputs: action.outputs };
-    case 'messages': return { ...state, messages: { ...state.messages, [action.agent]: action.messages }, ...(action.contextUsage !== undefined ? { contextUsage: { ...state.contextUsage, [action.agent]: action.contextUsage } } : {}) };
+    case 'messages': return { ...state, messages: { ...state.messages, [action.agent]: (Array.isArray(action.messages) ? action.messages : []).map(safeMessage) }, ...(action.contextUsage !== undefined ? { contextUsage: { ...state.contextUsage, [action.agent]: action.contextUsage } } : {}) };
     case 'messageAdded': {
-      const list = state.messages[action.agent], m = action.message;
+      const list = state.messages[action.agent], m = safeMessage(action.message);
       if (list.some((x) => x.id === m.id)) return state;
       // The reply's SSE event can overtake the 202 that carries the Creator's own message: keep creation order (FR-086).
       let at = list.findIndex((x) => x.createdAt > m.createdAt || (x.createdAt === m.createdAt && m.role === 'user' && x.role !== 'user' && x.agentRunId !== null));
@@ -308,8 +330,14 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case 'chatTargets': return { ...state, chatTargets: action.targets.slice(0, 12) };
     case 'agentError': return { ...state, agentError: { ...state.agentError, [action.agent]: action.code }, agentErrorDetail: { ...state.agentErrorDetail, [action.agent]: action.code ? action.detail ?? null : null }, ...(action.code ? { streaming: { ...state.streaming, [action.agent]: null } } : {}) };
-    case 'streamingStart': if (state.doneRuns.includes(action.runId)) return state;
-      return { ...state, streaming: { ...state.streaming, [action.agent]: state.streaming[action.agent] ?? { runId: action.runId, text: '', modelId: action.modelId } } };
+    case 'streamingStart': {
+      if (state.doneRuns.includes(action.runId)) return { ...state, streaming: { ...state.streaming, [action.agent]: state.streaming[action.agent]?.runId === PENDING_RUN ? null : state.streaming[action.agent] } };
+      const cur = state.streaming[action.agent];
+      // FR-214: Send shows the working state at once (PENDING_RUN, phase `sending`); the 202 swaps in the real run id.
+      if (cur && cur.runId !== PENDING_RUN && action.runId !== PENDING_RUN) return state;
+      return { ...state, streaming: { ...state.streaming, [action.agent]: { ...(cur ?? {}), runId: action.runId === PENDING_RUN && cur ? cur.runId : action.runId, text: cur?.text ?? '', modelId: action.modelId || cur?.modelId || '',
+        since: cur?.since ?? Date.now(), phase: cur?.phase ?? 'sending', ...(action.attaching ? { attaching: true } : {}) } } };
+    }
     case 'streamingStop': return { ...state, streaming: { ...state.streaming, [action.agent]: null } };
     case 'providers': return { ...state, ...(action.connections ? { connections: action.connections } : {}), ...(action.assignments !== undefined ? { assignments: action.assignments } : {}) };
     case 'capabilities': return { ...state, capabilities: { ...state.capabilities, [action.connectionId]: action.rows } };

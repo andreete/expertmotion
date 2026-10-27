@@ -2,8 +2,9 @@
 // Brainstorming Agent, "Edit" = Editor Agent): CMP-13 bubbles tagged with their agent, the thread, the composer with the
 // mode switch, and the header with "Model: <label> ▾" (per mode), status and compact usage.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AtSign, CircleHelp, Clapperboard, Copy, ImagePlus, Lightbulb, Loader, Maximize2, Minimize2, Paperclip, Scissors, SendHorizontal, ShieldCheck, TriangleAlert, X } from 'lucide-react';
+import { AtSign, CircleHelp, Clapperboard, Copy, ImagePlus, Info, Lightbulb, Loader, Maximize2, Minimize2, Paperclip, Scissors, SendHorizontal, ShieldCheck, Square, TriangleAlert, X } from 'lucide-react';
 import { errCode, useStore } from '../state/store.js';
+import { PENDING_RUN } from '../state/reducer.js';
 import type { AgentKind, CapabilityRow, ChatTarget, MessageDto } from '../api/types.js';
 import type { AgentErrorDetail } from '../state/reducer.js';
 import { isRecentKey, keyRetryDelay } from '../state/key-retry.js';
@@ -86,7 +87,11 @@ export function Bubble({ m, agent, children, onRetry, onApply, text: override, h
       {shown && (user
         ? <div className="max-w-[92%] whitespace-pre-wrap rounded-[8px] border-l-2 border-em-accent bg-em-panel-2 px-2.5 py-1.5">{shown}</div>
         : <div className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={shown} raw /></div>)}
-      {attachments.map((a, i) => a.type === 'attachment' && <span key={i} className="rounded-[4px] border border-em-line px-1 text-[11px] text-em-muted">📎 {a.name}</span>)}
+      {attachments.map((a, i) => a.type === 'attachment' && (
+        <span key={i} data-el="agent.chat.message.attachment" data-sent={a.sent} className="flex max-w-[92%] flex-col items-end">
+          <span className="rounded-[4px] border border-em-line px-1 text-[11px] text-em-muted">📎 {a.name}</span>
+          {a.sent === 'name' && <span className="text-[11px] text-em-muted">{t('ui.agent.message.attach.nameonly')}</span>}
+        </span>))}
       {m.blocks.map((b, i) => (b.type === 'targets' && b.items.length ? (
         <span key={`t${i}`} data-el="agent.chat.message.targets" className="flex max-w-[92%] flex-wrap justify-end gap-1">
           {b.items.map((x) => <span key={targetKey(x)} data-kind={x.kind} className="inline-flex items-center gap-0.5 rounded-full border border-em-accent/50 px-1.5 text-[11px] text-em-accent"><AtSign size={10} aria-hidden />{x.label}</span>)}
@@ -115,28 +120,43 @@ export function Thread({ label, children, empty }: { label: string; children: Re
   );
 }
 
-/** Seconds since the run started, after 5 s, so a long reasoning model never looks frozen (Entry 25b). */
+/** Seconds since Send, from 2 s on, for the whole run, so a long reasoning model never looks frozen (Entry 25b, FR-214). */
 function Elapsed({ since }: { since?: number | undefined }) {
   const { t } = useStore();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => { if (!since) return; const h = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(h); }, [since]);
   const s = since ? Math.floor((now - since) / 1000) : 0;
-  return s >= 5 ? <span data-elapsed={s} className="t-mono text-em-muted"> · {t('ui.agent.progress.elapsed', { s })}</span> : null;
+  return s >= 2 ? <span data-elapsed={s} className="t-mono text-em-muted"> · {t('ui.agent.progress.elapsed', { s })}</span> : null;
 }
 
+/** FR-214: stops the agent's current run (also before the Service answered the send: then only the local state is cleared). */
+export function useStopRun(agent: AgentKind): () => void {
+  const { state, actions, runtime } = useStore();
+  return useCallback(() => {
+    const s = state.streaming[agent]; if (!s) return;
+    if (s.runId !== PENDING_RUN) void runtime.api.cancelAgentRun(s.runId).catch(() => undefined);
+    if (agent === 'editor') void actions.cancelPlan(); else actions.stopStreaming(agent);
+  }, [state.streaming, agent, actions, runtime]);
+}
+
+/**
+ * The running agent in the thread (FR-214, QA 2026-10-27 "dikira error"): from Send to the answer it shows the agent tag, an animated
+ * typing indicator, what the agent is doing now ("Mencari di katalog…", "Memikirkan ide…") with the elapsed seconds, Stop, and the
+ * answer text as it streams. There is no moment between Send and the answer without it.
+ */
 export function StreamingBubble({ agent }: { agent: AgentKind }) {
-  const { state, actions, t, runtime } = useStore();
-  const names = useModelNames();
+  const { state, t } = useStore();
+  const stop = useStopRun(agent);
   const s = state.streaming[agent];
   if (!s) return null;
   const shown = s.text ? modelReplyText(s.text) : '';                          // QA #16: a streamed JSON wrapper is never shown either
   return (
-    <div data-el="agent.chat.streaming" data-agent={agent} className="flex flex-col items-start gap-1">
+    <div data-el="agent.chat.streaming" data-agent={agent} data-phase={s.phase ?? 'sending'} role="status" aria-live="polite" className="flex flex-col items-start gap-1">
       <ModeTag agent={agent} />
-      <div className="text-[12px] text-em-muted">{s.phase
-        ? <span data-el="agent.chat.progress" data-phase={s.phase} role="status" className="inline-flex items-center gap-1"><Loader size={12} className="em-spin" aria-hidden />{progressText(s, t)}<Elapsed since={s.since} /></span>
-        : t('ui.agent.common.asking', { model: names.llm(s.modelId, agent) || t('ui.agent.common.model') })}
-        <button type="button" className="ml-2 underline" onClick={() => { void runtime.api.cancelAgentRun(s.runId).catch(() => undefined); if (agent === 'editor') void actions.cancelPlan(); else actions.stopStreaming(agent); }}>{t('ui.common.cancel')}</button>
+      <div className="flex max-w-[92%] items-center gap-2 rounded-[8px] bg-em-panel-2 px-2.5 py-1.5 text-[12px] text-em-text-2">
+        <span data-el="agent.chat.typing" aria-hidden className="em-typing inline-flex items-center gap-0.5"><i /><i /><i /></span>
+        <span data-el="agent.chat.progress" data-phase={s.phase ?? 'sending'} className="inline-flex items-center gap-1">{progressText(s, t, agent)}<Elapsed since={s.since} /></span>
+        <button type="button" data-el="agent.chat.progress.stop" className="ml-1 underline" onClick={stop}>{t('ui.agent.composer.stop')}</button>
       </div>
       {shown && <div aria-hidden className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={shown} raw /><span className="em-skeleton ml-0.5 inline-block h-3 w-1.5 align-middle" /></div>}
     </div>
@@ -153,16 +173,25 @@ export function useAgentErrorVars(agent: AgentKind): Record<string, string> {
   return { ...(conn?.label ? { provider: conn.label, connection: conn.label } : {}), ...(model ? { model } : {}), agent: t(`ui.agent.${agent}.title`) };
 }
 
-/** QA 2026-10-26 #5: what the running agent is doing (agent.run.progress), in the Creator's words. */
-export function progressText(p: { phase?: string | undefined; attempt?: number | undefined; of?: number | undefined; tool?: string | undefined }, t: (k: string, v?: Record<string, string | number>) => string): string {
+/** Read-only tools in the Creator's words while the agent uses them (FR-214). */
+const TOOL_PROGRESS: Record<string, string> = {
+  'catalogue.search': 'ui.agent.progress.tool.catalogue', 'composition.get': 'ui.agent.progress.reading', 'assets.list': 'ui.agent.progress.tool.assets', 'assets.probe': 'ui.agent.progress.tool.probe',
+  'hardware.profile': 'ui.agent.progress.tool.hardware', 'project.settings.get': 'ui.agent.progress.tool.settings', 'render.estimate': 'ui.agent.progress.tool.estimate', 'composition.validateOps': 'ui.agent.progress.tool.validate',
+};
+/** QA 2026-10-26 #5 / FR-214: what the running agent is doing (agent.run.progress), in the Creator's words, per agent. */
+export function progressText(p: { phase?: string | undefined; attempt?: number | undefined; of?: number | undefined; tool?: string | undefined; attaching?: boolean | undefined }, t: (k: string, v?: Record<string, string | number>) => string, agent: AgentKind = 'editor'): string {
+  const b = agent === 'brainstorm';
   switch (p.phase) {
+    case undefined: case 'sending': return t(p.attaching ? 'ui.agent.progress.attaching' : 'ui.agent.progress.sending');
     case 'reading': return t('ui.agent.progress.reading');
-    case 'planning': return t('ui.agent.progress.planning');
+    case 'planning': return t(b ? 'ui.agent.progress.brainstorm.planning' : 'ui.agent.progress.planning');
+    case 'thinking': return t(b ? 'ui.agent.progress.brainstorm.thinking' : 'ui.agent.progress.editor.thinking');
+    case 'writing': return t(b ? 'ui.agent.progress.brainstorm.writing' : 'ui.agent.progress.editor.writing');
     case 'checking': return t('ui.agent.progress.checking');
     case 'correcting': return p.of ? t('ui.agent.progress.correcting.of', { n: p.attempt ?? 2, of: p.of }) : t('ui.agent.progress.correcting', { n: p.attempt ?? 2 });
     case 'waiting': return t('ui.agent.progress.waiting', { n: p.attempt ?? 1, of: p.of ?? 2 });
-    case 'tool': return t('ui.agent.progress.tool', { tool: p.tool ?? '…' });
-    default: return t('ui.agent.progress.planning');
+    case 'tool': return p.tool && TOOL_PROGRESS[p.tool] ? t(TOOL_PROGRESS[p.tool]!) : t('ui.agent.progress.tool', { tool: p.tool ?? '…' });
+    default: return t(b ? 'ui.agent.progress.brainstorm.planning' : 'ui.agent.progress.planning');
   }
 }
 /** The recovery actions of an agent failure, by EM code (QA 2026-10-26 #5). `retry` is always offered unless a fix comes first. */
@@ -255,6 +284,9 @@ export function ModeSwitch({ mode, setMode }: { mode: AgentKind; setMode: (m: Ag
   );
 }
 
+/** FR-213: image types the composer attaches (the Service sends PNG / JPEG / WebP / GIF as image parts). */
+const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+
 export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTarget, value, setValue, onSend }: {
   mode: AgentKind; setMode: (m: AgentKind) => void; placeholder: string; value: string; setValue: (v: string) => void; onSend: (attachments: string[]) => void;
   /** QA 2026-10-26 #6: the pointed assets / Timeline elements, sent as `targets` with the next message (removable chips). */
@@ -263,25 +295,56 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
   const { state, t, runtime, dispatch } = useStore();
   const agent = mode;
   const { reason } = useAgentAvailability(agent);
+  const stop = useStopRun(agent);
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [attachError, setAttachError] = useState<{ code: string; vars?: Record<string, string | number> } | null>(null);
+  const [importing, setImporting] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
   const cap = useAssignedCapability(agent);
-  const imageBlocked = attachments.length > 0 && cap !== null && cap.imageInput === false;     // FR-072: EM-4307 before anything is sent
+  const attached = attachments.map((id) => state.assets.find((a) => a.id === id)).filter((a): a is NonNullable<typeof a> => Boolean(a));
+  // FR-213: a model without image input still gets the message, with the file name instead of the picture (said here before Send).
+  const nameOnly = attached.some((a) => a.kind === 'image') && cap?.imageInput === false;
+  const preparing = importing || attached.some((a) => a.status === 'ingesting');
+  const failed = attached.find((a) => a.status === 'failed');
+  useEffect(() => {                                                                 // an attachment whose import failed is removed with its reason
+    if (!failed) return;
+    setAttachments((x) => x.filter((y) => y !== failed.id));
+    setAttachError({ code: failed.errorCode && /^EM-\d{4}$/.test(failed.errorCode) ? failed.errorCode : 'EM-1003', vars: { name: failed.name } });
+  }, [failed?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Imports one image into the project (Shell: by path, the packaged way; browser development: raw upload) and attaches it. */
+  const importImage = async (run: () => Promise<{ items: Array<{ id: string; status: string; errorCode?: string | null; name: string }>; notices: Array<{ code: string; assetId?: string }> }>) => {
+    setImporting(true); setAttachError(null);
+    try {
+      const res = await run();
+      dispatch({ type: 'assetsUpsert', assets: res.items as never });
+      const item = res.items[0]; const dup = res.notices.find((n) => n.code === 'EM-1006' && n.assetId);
+      const id = item && item.status !== 'failed' ? item.id : dup?.assetId;
+      if (item?.status === 'failed') setAttachError({ code: item.errorCode && /^EM-\d{4}$/.test(item.errorCode) ? item.errorCode : 'EM-1003', vars: { name: item.name } });
+      else if (id) setAttachments((x) => [...new Set([...x, id])].slice(0, 4));
+      else if (res.notices[0]) setAttachError({ code: res.notices[0].code });
+    } catch (e) { setAttachError({ code: errCode(e) }); } finally { setImporting(false); }
+  };
+  const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
+  const pickImage = async () => {
+    setAttachOpen(false);
+    const projectId = state.project?.id; if (!projectId) return;
+    if (runtime.mode === 'live' && shell?.pickFiles) {
+      const paths = await shell.pickFiles({ filters: [{ name: t('ui.agent.composer.attach.images'), extensions: IMAGE_EXTS }], multiple: false }).catch(() => [] as string[]);
+      if (paths[0]) await importImage(() => runtime.api.importAssetPaths(projectId, paths.slice(0, 1)));
+      return;
+    }
+    file.current?.click();
+  };
   const attachFile = async (f: File | undefined) => {
     if (!f) return;
     setAttachOpen(false);
     if (!f.type.startsWith('image/')) { setAttachError({ code: 'EM-1002', vars: { size: f.name, limit: 'PNG/JPEG/WebP' } }); return; }
     if (f.size > MAX_ATTACH_BYTES) { setAttachError({ code: 'EM-1002', vars: { size: `${(f.size / 1048576).toFixed(1)} MB`, limit: '10 MB' } }); return; }
     const projectId = state.project?.id; if (!projectId) return;
-    try {
-      const res = await runtime.api.uploadAssets(projectId, [f]);
-      dispatch({ type: 'assetsUpsert', assets: res.items });
-      const id = res.items[0]?.id;
-      if (id) { setAttachError(null); setAttachments((x) => [...new Set([...x, id])].slice(0, 4)); }
-    } catch (e) { setAttachError({ code: errCode(e) }); }
+    const paths = runtime.mode === 'live' ? shell?.getPathsForFiles?.([f]) ?? [] : [];
+    await importImage(() => (paths[0] ? runtime.api.importAssetPaths(projectId, paths.slice(0, 1)) : runtime.api.uploadAssets(projectId, [f])));
   };
   const reasonId = 'composer-chat-reason';
   const busy = Boolean(state.streaming[agent]);
@@ -301,7 +364,7 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
     window.addEventListener('em:focus-composer', focus);
     return () => window.removeEventListener('em:focus-composer', focus);
   }, [setMode]);
-  const send = () => { const v = value.trim(); if (!v || reason || busy || imageBlocked) return; onSend(attachments); setAttachments([]); setAttachError(null); };
+  const send = () => { const v = value.trim(); if (!v || reason || busy || preparing) return; onSend(attachments); setAttachments([]); setAttachError(null); };
   const images = state.assets.filter((a) => a.kind === 'image' && a.status === 'ready');
   return (
     <div className="shrink-0 border-t border-em-line p-2">
@@ -315,21 +378,29 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
           ))}
         </div>
       )}
-      {attachments.length > 0 && <div className="mb-1 flex flex-wrap gap-1">{attachments.map((id) => (
-        <span key={id} className="inline-flex items-center gap-1 rounded-[4px] border border-em-line px-1 text-[11px]">📎 {state.assets.find((a) => a.id === id)?.name}
-          <button type="button" aria-label={t('ui.agent.composer.attach.remove')} onClick={() => setAttachments((x) => x.filter((y) => y !== id))}><X size={10} /></button></span>))}</div>}
-      {(imageBlocked || attachError) && (
+      {(attached.length > 0 || importing) && <div className="mb-1 flex flex-wrap gap-1">{attached.map((a) => (
+        <span key={a.id} data-el="agent.chat.attach.chip" data-status={a.status} className="inline-flex items-center gap-1 rounded-[4px] border border-em-line px-1 text-[11px]">
+          {a.status === 'ingesting' ? <Loader size={10} className="em-spin" aria-hidden /> : <ImagePlus size={10} aria-hidden />}{a.name}
+          <button type="button" aria-label={t('ui.agent.composer.attach.remove')} onClick={() => setAttachments((x) => x.filter((y) => y !== a.id))}><X size={10} /></button></span>))}
+        {preparing && <span data-el="agent.chat.attach.preparing" role="status" className="inline-flex items-center gap-1 text-[11px] text-em-text-2"><Loader size={10} className="em-spin" aria-hidden />{t('ui.agent.composer.attach.preparing')}</span>}
+      </div>}
+      {nameOnly && (
+        <div data-el="agent.chat.attach.note" data-code="EM-4307" role="status" className="mb-1 flex items-start gap-1.5 rounded-[6px] border-l-2 border-em-info bg-em-panel-2 px-2 py-1 text-[12px] text-em-text-2">
+          <Info size={12} className="mt-0.5 shrink-0 text-em-info" aria-hidden /><span className="flex-1">{t('ui.agent.composer.attach.nameonly', { model: cap?.label ?? cap?.modelId ?? '' })}</span>
+          <button type="button" className="shrink-0 underline" onClick={() => openModelPicker(agent)}>{t('ui.agent.common.switchmodel')}</button>
+        </div>
+      )}
+      {attachError && (
         <div data-el="agent.chat.attach.error" role="alert" className="mb-1 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
-          <div className="flex items-center gap-1.5"><TriangleAlert size={12} className="text-em-warn" /><span className="flex-1">{imageBlocked ? t('err.EM-4307.title') : t(`err.${attachError!.code}.title`)}</span><span className="t-mono text-em-muted">{imageBlocked ? 'EM-4307' : attachError!.code}</span></div>
-          <div className="text-em-text-2">{imageBlocked ? t('err.EM-4307.body', { model: cap?.label ?? cap?.modelId ?? '' }) : t(`err.${attachError!.code}.body`, attachError!.vars ?? {})}</div>
+          <div className="flex items-center gap-1.5"><TriangleAlert size={12} className="text-em-warn" /><span className="flex-1">{t(`err.${attachError.code}.title`)}</span><span className="t-mono text-em-muted">{attachError.code}</span></div>
+          <div className="text-em-text-2">{t(`err.${attachError.code}.body`, attachError.vars ?? {})}</div>
           <div className="mt-1 flex gap-2">
-            <Button size={28} onClick={() => { setAttachments([]); setAttachError(null); }}>{t('ui.agent.composer.attach.remove')}</Button>
-            {imageBlocked && <Button size={28} variant="ghost" onClick={() => openModelPicker(agent)}>{t('ui.agent.common.switchmodel')}</Button>}
+            <Button size={28} onClick={() => setAttachError(null)}>{t('ui.common.close')}</Button>
           </div>
         </div>
       )}
-      <div className={cx('flex flex-col gap-1 rounded-[8px] border border-em-line bg-em-panel-2 p-1', reason && 'opacity-80')}>
-        <textarea ref={ref} data-el="agent.chat.composer" data-mode={mode} rows={1} value={value} placeholder={reason ?? placeholder} aria-label={t(`a11y.agent.${agent}.composer`)} aria-describedby={reason ? reasonId : undefined}
+      <div className={cx('flex flex-col gap-1 rounded-[8px] border border-em-line bg-em-panel-2 p-1', reason && 'opacity-80', busy && 'border-em-accent/50')}>
+        <textarea ref={ref} data-el="agent.chat.composer" data-mode={mode} data-busy={busy ? 'true' : undefined} rows={1} value={value} placeholder={reason ?? (busy ? t('ui.agent.composer.working') : placeholder)} aria-label={t(`a11y.agent.${agent}.composer`)} aria-describedby={reason ? reasonId : undefined}
           readOnly={Boolean(reason)} onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send(); }   /* Enter or Ctrl+Enter sends (FR-153) */
@@ -343,16 +414,18 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
             <IconButton el="agent.chat.attach" data-popover-trigger="" label={t('ui.agent.composer.attach')} icon={<Paperclip size={16} />} size={28} disabledReason={reason} onClick={() => setAttachOpen((o) => !o)} />
             {attachOpen && (
               <Popover onClose={() => setAttachOpen(false)} width={220} label={t('ui.agent.composer.attach')}>
-                <button type="button" data-el="agent.chat.attach.file" className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => file.current?.click()}><ImagePlus size={14} />{t('ui.agent.composer.attach.file')}</button>
+                <button type="button" data-el="agent.chat.attach.file" className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickImage()}><ImagePlus size={14} />{t('ui.agent.composer.attach.file')}</button>
                 <div className="my-1 border-t border-em-line" />
                 {images.length === 0 ? <div className="p-2 text-em-muted">{t('ui.agent.composer.attach.none')}</div>
-                  : images.map((a) => <button key={a.id} type="button" className="block w-full truncate rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => { setAttachments((x) => [...new Set([...x, a.id])].slice(0, 4)); setAttachOpen(false); }}>{a.name}</button>)}
+                  : images.map((a) => <button key={a.id} type="button" data-el="agent.chat.attach.asset" className="block w-full truncate rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => { setAttachments((x) => [...new Set([...x, a.id])].slice(0, 4)); setAttachOpen(false); }}>{a.name}</button>)}
               </Popover>
             )}
-            <input ref={file} type="file" accept="image/png,image/jpeg,image/webp" hidden aria-hidden tabIndex={-1} onChange={(e) => { void attachFile(e.target.files?.[0]); e.target.value = ''; }} />
+            <input ref={file} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden aria-hidden tabIndex={-1} onChange={(e) => { void attachFile(e.target.files?.[0]); e.target.value = ''; }} />
           </span>
           <span className="flex-1" />
-          <IconButton el="agent.chat.send" label={t('ui.agent.composer.send')} icon={<SendHorizontal size={16} />} size={28} disabledReason={reason ?? (busy ? t('ui.agent.composer.busy') : imageBlocked ? t('err.EM-4307.title') : null)} onClick={send} />
+          {busy
+            ? <IconButton el="agent.chat.stop" label={t('ui.agent.composer.stop')} icon={<Square size={14} />} size={28} onClick={stop} />
+            : <IconButton el="agent.chat.send" label={t('ui.agent.composer.send')} icon={<SendHorizontal size={16} />} size={28} disabledReason={reason ?? (preparing ? t('ui.agent.composer.attach.preparing') : null)} onClick={send} />}
         </div>
       </div>
       {reason && <span id={reasonId} className="sr-only">{reason}</span>}

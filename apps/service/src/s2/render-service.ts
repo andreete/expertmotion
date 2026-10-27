@@ -14,7 +14,7 @@ import { getAsset } from './assets-repo.js';
 import { ffprobe, type ProbeJson } from './probe.js';
 import { moveFile } from './ingest.js';
 import { getEngineLog, runTool } from './proc.js';
-import { getJob, getOutput, outputRelPath, outputRoots, profileDims, toJobDto, toOutputDto, type OutputProfileT, type RenderJobRow } from './render-repo.js';
+import { defaultOutputFolder, getJob, getOutput, outputRelPath, outputRoots, profileDims, toJobDto, toOutputDto, type OutputProfileT, type RenderJobRow } from './render-repo.js';
 import { s2 } from './state.js';
 import { engineBrowserOf, type BrowserLike } from '../services/engine-browser.js';
 import { engineStatus } from './engine-check.js';
@@ -53,10 +53,27 @@ export interface RenderOptions {
   maxStartsPerMinute?: number;
   /** Dev/tests only: when ffprobe cannot run, keep the Output with `validated: false` instead of failing it (FR-145 default: fail). */
   acceptUnvalidated?: boolean;
+  /** FR-204: how long a job waits for free memory before it starts in low-memory mode (default 90 s), and the poll step (3 s). */
+  lowMemWaitMs?: number;
+  lowMemPollMs?: number;
 }
 
 const COMPOSITION_ID = 'ExpertmotionTimeline';
+// FR-204 (QA 2026-10-27, T0 laptop with 0.5–1.1 GB available): free memory never blocks an export any more. Below the
+// comfortable amount the job waits (queued, EM-3107) for up to LOW_MEM_WAIT_MS, then renders in low-memory mode (one frame at
+// a time, small video cache); only below MEM_FLOOR after the wait it fails with EM-3108 and the next action. Measured on the
+// 1.9 GB server: a 6 s 720p render peaks ≈ 700 MB for the whole Service + Chrome Headless Shell + compositor.
+const MB = 1024 ** 2;
 const MEM_NEED: Record<PerfProfile, number> = { standard: 2 * 1024 ** 3, accelerated: 3 * 1024 ** 3, turbo: 4 * 1024 ** 3 };
+/** Comfortable free memory for the Standard profile by output size (≤ 720p, ≤ 1080p, larger); faster profiles keep MEM_NEED. */
+export function memoryNeed(profile: PerfProfile, dims: { width: number; height: number }): number {
+  if (profile !== 'standard') return MEM_NEED[profile];
+  const px = dims.width * dims.height;
+  return px <= 1280 * 720 ? 900 * MB : px <= 1920 * 1080 ? 1200 * MB : MEM_NEED.standard;
+}
+export const MEM_FLOOR = 300 * MB;
+const LOW_MEM_WAIT_MS = 90_000;
+const LOW_MEM_CACHE = 64 * MB;
 const EXT: Record<OutputProfileT['format'], string> = { mp4: 'mp4', webm: 'webm', gif: 'gif', png: 'png', wav: 'wav' };
 const KIND: Record<OutputProfileT['format'], 'video' | 'gif' | 'still' | 'audio'> = { mp4: 'video', webm: 'video', gif: 'gif', png: 'still', wav: 'audio' };
 const PROFILE_POLICY: Record<PerfProfile, { cache: number; parallelEncoding: boolean }> = {
@@ -158,8 +175,9 @@ export class RenderService {
     // EM_TEST_FREE_MEM_MB: development-only fault injection (GOLDEN_SCENARIOS §1 EM_TEST_*), ignored in packaged builds.
     const testMem = ctx.cfg.dev ? Number(process.env['EM_TEST_FREE_MEM_MB'] ?? NaN) : NaN;
     const mem = Number.isFinite(testMem) ? testMem * 1048576 : (this.opts.freeMemBytes ?? availableMemBytes)();
-    const needMem = MEM_NEED[input.performanceProfile];
-    checks.push({ check: 'memory', ok: mem >= needMem, ...(mem >= needMem ? {} : { code: 'EM-3101' }), details: { needBytes: needMem, freeBytes: mem } });
+    const needMem = memoryNeed(input.performanceProfile, dims);
+    // FR-204: an info note, never a block — the job waits for memory and then runs in low-memory mode.
+    checks.push({ check: 'memory', ok: true, ...(mem >= needMem ? {} : { code: 'EM-3107' }), details: { needBytes: needMem, freeBytes: mem } });
     if (this.queue.size > 0) notices.push('EM-3208');
     const projectName = (ctx.db.prepare('SELECT name FROM projects WHERE id = ?').get(input.projectId) as { name: string } | undefined)?.name ?? 'video';
     return { model, versionId, profile, dims, frames, durationMs: timing.durationMs, assetIds, checks, warnings, notices, estimate,
@@ -180,7 +198,7 @@ export class RenderService {
   }
   private folderFor(input: RenderInput): string {
     const chosen = input.folder ?? this.projectFolder(input.projectId) ?? this.ctx.settings.get().outputFolder;
-    return chosen ? path.resolve(chosen) : path.join(this.ctx.paths.outputs, input.projectId);
+    return chosen ? path.resolve(chosen) : defaultOutputFolder(this.ctx, input.projectId);
   }
 
   /** R-111. Returns the job DTO (+ notices) and whether it was an idempotent repeat. */
@@ -255,6 +273,32 @@ export class RenderService {
     this.cancels.set(jobId, ctl);
     await s2(ctx).heavy.run(async () => {
       if (ctl.reason) { this.cancels.delete(jobId); this.finish(getJob(ctx, jobId)!, 'cancelled', null); return; }
+      // FR-204: wait (queued, EM-3107) for free memory, then start anyway in low-memory mode; fail only below MEM_FLOOR.
+      const testMem = ctx.cfg.dev ? Number(process.env['EM_TEST_FREE_MEM_MB'] ?? NaN) : NaN;
+      const freeMem = () => (Number.isFinite(testMem) ? testMem * MB : (this.opts.freeMemBytes ?? availableMemBytes)());
+      const need = memoryNeed(input.performanceProfile, prep.dims);
+      let mem = freeMem(); let lowMem = false;
+      if (mem < need) {
+        const waitMs = this.opts.lowMemWaitMs ?? LOW_MEM_WAIT_MS; const pollMs = this.opts.lowMemPollMs ?? 3000;
+        ctx.log.info({ jobId, freeMb: Math.round(mem / MB), needMb: Math.round(need / MB), waitMs }, 'render waiting for free memory');
+        // Sent now and again after each poll that is still short (≤ every 10 s): the POST /renders answer, which carries no
+        // notice, can reach the Editor after the first one (found in the packaged e2e run, Entry 29).
+        const waiting = () => emit(ctx, 'render.queued', { projectId: input.projectId, jobId, job: { ...toJobDto(getJob(ctx, jobId)!), notices: ['EM-3107'] } });
+        waiting();
+        const until = Date.now() + waitMs; let lastSent = Date.now(); let polls = 0;
+        while (Date.now() < until && !ctl.reason && mem < need) {
+          await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(1, until - Date.now()))));
+          mem = freeMem(); polls++;
+          if (mem < need && (polls === 1 || Date.now() - lastSent >= 10_000)) { waiting(); lastSent = Date.now(); }
+        }
+        if (ctl.reason) { this.cancels.delete(jobId); this.finish(getJob(ctx, jobId)!, 'cancelled', null); return; }
+        if (mem < MEM_FLOOR) {
+          ctx.log.warn({ jobId, freeMb: Math.round(mem / MB), floorMb: Math.round(MEM_FLOOR / MB) }, 'render not started: not enough free memory');
+          this.cancels.delete(jobId); this.finish(getJob(ctx, jobId)!, 'failed', 'EM-3108', 'low-memory'); return;
+        }
+        lowMem = mem < need;
+        if (lowMem) ctx.log.info({ jobId, freeMb: Math.round(mem / MB) }, 'render starts in low-memory mode');
+      }
       const startedAt = Date.now();
       ctx.db.prepare("UPDATE render_jobs SET status = 'rendering', started_at = ? WHERE id = ?").run(ctx.now(), jobId);
       const grant = ctx.grants.issueRender(input.projectId, jobId, prep.assetIds);
@@ -294,7 +338,7 @@ export class RenderService {
         const inputProps = { model: prep.model, assets, quality: 'full' };
         const tier = ctx.hooks.tier(); const pol = PROFILE_POLICY[input.performanceProfile];
         const threads = os.cpus().length;
-        const concurrency = input.performanceProfile === 'standard' ? 1 : Math.max(1, Math.min(input.performanceProfile === 'turbo' ? 4 : 2, Math.floor(threads / 2)));
+        const concurrency = input.performanceProfile === 'standard' || lowMem ? 1 : Math.max(1, Math.min(input.performanceProfile === 'turbo' ? 4 : 2, Math.floor(threads / 2)));
         const common: Record<string, unknown> = { serveUrl: ctx.resources.engineBundle, inputProps, port, logLevel: 'error', timeoutInMilliseconds: 60_000,
           chromiumOptions: { gl: tier === 'T0' ? 'swangle' : 'angle' }, ...(ctx.resources.browserExecutable ? { browserExecutable: ctx.resources.browserExecutable } : {}),
           ...(ctx.resources.binariesDirectory ? { binariesDirectory: ctx.resources.binariesDirectory } : {}) };
@@ -314,7 +358,7 @@ export class RenderService {
           await R.renderMedia({ ...common, composition, codec, outputLocation: mediaOut, cancelSignal, concurrency,
             imageFormat: prep.profile.alpha ? 'png' : 'jpeg', ...(prep.profile.alpha && f === 'webm' ? { pixelFormat: 'yuva420p' } : {}),
             ...(f === 'mp4' || f === 'webm' ? { crf: prep.profile.crf ?? 18 } : {}), ...(f === 'gif' ? { crf: 12, muted: true } : {}),
-            ...(f === 'mp4' ? { audioBitrate: '192k' } : {}), offthreadVideoCacheSizeInBytes: pol.cache, disallowParallelEncoding: !pol.parallelEncoding,
+            ...(f === 'mp4' ? { audioBitrate: '192k' } : {}), offthreadVideoCacheSizeInBytes: lowMem ? LOW_MEM_CACHE : pol.cache, disallowParallelEncoding: lowMem || !pol.parallelEncoding,
             ...(tier === 'T2' && input.performanceProfile !== 'standard' ? { hardwareAcceleration: 'if-possible' } : {}),
             onProgress: (p: { progress: number; renderedFrames?: number; stitchStage?: string }) => report(p.progress * (f === 'gif' ? 0.9 : 0.97), p.renderedFrames ?? null, p.stitchStage === 'muxing' ? 'encoding' : 'rendering') });
           if (f === 'gif') {

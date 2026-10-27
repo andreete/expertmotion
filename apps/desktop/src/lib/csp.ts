@@ -8,7 +8,7 @@ export const PRODUCTION_CSP_DIRECTIVES: ReadonlyArray<readonly [string, string]>
   ['script-src', "'self'"],
   ['style-src', "'self' 'unsafe-inline'"],
   ['img-src', "'self' blob: data: http://127.0.0.1:*"],
-  ['media-src', "'self' blob: http://127.0.0.1:*"],
+  ['media-src', "'self' blob: data: http://127.0.0.1:*"],   // data: Remotion Player's silent audio unlock (Entry 29, FR-203)
   ['font-src', "'self'"],
   ['connect-src', 'http://127.0.0.1:*'],
   ['worker-src', "'self' blob:"],

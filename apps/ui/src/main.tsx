@@ -11,6 +11,7 @@ import { createLiveRuntime, createMockRuntime, withReplay, type Runtime, type Se
 import { ApiClient } from './api/client.js';
 import { Boot } from './startup/Boot.js';
 import { ErrorBoundary, logEditorError } from './startup/ErrorBoundary.js';
+import { noteLogsDir, notePageHidden } from './startup/session-guard.js';
 
 const env = import.meta.env as Record<string, string | undefined>;
 // Subscribe to the Shell's service state before anything else, so the push sent when the page finished loading is kept.
@@ -19,6 +20,9 @@ const bridge = withReplay(typeof window !== 'undefined' ? window.expertmotion : 
 // Errors outside React (event handlers, promises) reach the Shell log too; a benign ResizeObserver notice is not an error.
 window.addEventListener('error', (e) => { if (!/ResizeObserver loop/.test(e.message ?? '')) logEditorError(e.error ?? e.message, 'window-error'); });
 window.addEventListener('unhandledrejection', (e) => logEditorError(e.reason, 'unhandled-rejection'));
+// FR-202: a normal close / reload is not an abnormal end of the open project; the crash card's "Open log folder" needs the folder.
+window.addEventListener('pagehide', () => notePageHidden());
+bridge?.onServiceState?.((raw) => { const d = (raw as { logsDir?: unknown } | null)?.logsDir; if (typeof d === 'string') noteLogsDir(d); });
 
 async function start(onService: (s: ServiceStatus) => void): Promise<Runtime> {
   if (env['VITE_EM_MOCK'] === '1') return createMockRuntime({ seed: 'sample', delays: true });

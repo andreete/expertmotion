@@ -2,6 +2,8 @@
 // fence, add prose around it, stop mid-string, double-encode it or send literal "\n" escapes. Pure, no dependencies; shared by
 // the agents runner (what is stored) and the Editor UI (what is shown, including messages stored before this fix).
 
+import { stripToolMarkup } from './tool-markup.js';
+
 const FENCE_RE = /```[ \t]*([A-Za-z0-9_-]*)[ \t]*\r?\n?([\s\S]*?)(?:```|$)/g;
 /** Keys a model may use for the chat text when it does not follow the BrainstormTurn schema exactly. */
 export const REPLY_KEYS = ['reply', 'message', 'response', 'answer', 'content', 'text'] as const;
@@ -164,7 +166,7 @@ export interface ModelReplyText {
  * as plain text with a wrapping code fence removed and literal escapes undone.
  */
 export function extractReplyText(raw: string, keys: readonly string[] = REPLY_KEYS, depth = 0): ModelReplyText {
-  const t = (raw ?? '').replace(/^﻿/, '').trim();
+  const t = stripToolMarkup(raw ?? '').replace(/^﻿/, '').trim();
   if (!t) return { text: '', source: 'plain' };
   const json = parseLooseJson(t);
   const field = stringField(json, keys);

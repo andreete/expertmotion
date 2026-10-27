@@ -437,7 +437,7 @@ apps/desktop/src/
 | **API DTOs** | service ↔ ui | API_SPECIFICATION.md | JSON over loopback HTTP | Zod at the route boundary; generated TS types in `shared/dto` |
 | **SSE events** | service → ui | API_SPECIFICATION.md §7 | `GET /events`, `GET /renders/:id/events` | `seq` monotonic per connection |
 | **Shell bootstrap** | desktop → ui | this document §3.8 | preload `getBootstrap()` | — |
-| **Service bootstrap** | desktop → service | ARCHITECTURE.md §5, SEC-002 | `utilityProcess` `postMessage({type:'bootstrap', token, port, dataDir, dbKeyHex})`; Service answers `{type:'ready', port}` or `{type:'fatal', code}` on `parentPort` | Zod in `main.ts` |
+| **Service bootstrap** | desktop → service | ARCHITECTURE.md §5, SEC-002 | `utilityProcess` `postMessage({type:'bootstrap', token, port, dataDir, dbKeyHex, promptKeyHalf?, videosDir?})` (`videosDir`: the OS Videos folder, not secret, FR-205); Service answers `{type:'ready', port}` or `{type:'fatal', code}` on `parentPort` | Zod in `main.ts` |
 | **Media grant** | service → ui (preview) / service → Engine (render) | API_SPECIFICATION.md §2.2, SEC-010 | path segment of `/media/<grant>/…`; preview grant returned by `POST /projects/:id/open`, render grant created per Render Job and revoked at its end | grant table in memory; unknown or revoked → 404 |
 | **Asset facts** | service → composition-model, agents | DATABASE_SCHEMA.md `assets` | `AssetFacts { id, kind, durationMs, width, height, fps, hasAudio, status }` | CM-001/002 |
 | **Catalogue** | `packages/catalogue` → composition-model, agents, engine, service, ui | DESIGN_CATALOGUE.md | module import; `GET /catalogue` adds tier/model availability | registry frozen; lint against DESIGN_CATALOGUE rows and `engine/presets/index.ts` |

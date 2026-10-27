@@ -1,17 +1,17 @@
 // Editor Agent and Brainstorming Agent runs (AI_WORKFLOW §7, §9–§12; AGENT_DESIGN §2–§5; SYSTEM_PROMPT P-1/P-2).
 import { conflictsWithLocked, deriveTiming, propertyKeysOf, type ElementRefT, type OperationT } from '@expertmotion/composition-model';
-import { EmError, extractReplyText, type Issue } from '@expertmotion/shared';
+import { EmError, extractReplyText, stripToolMarkup, type Issue } from '@expertmotion/shared';
 import { prompts } from './prompt-store.js';
 import { parseModelReply, validatePlan, extractJson, type PlanContext } from './plan.js';
 import { normalizeModelReply, presetParamShape } from './plan-normalize.js';
 import { listPresets } from '@expertmotion/catalogue';
-import { BrainstormTurn, type EditPlanT } from './schemas.js';
+import { BrainstormTurn, normalizeProposedIntents, type EditPlanT } from './schemas.js';
 import type { RewriteEnvelope } from './envelope.js';
-import type { ChatImage, ChatMessage, ChatProvider, ChatUsage } from './providers.js';
+import type { ChatActivity, ChatImage, ChatMessage, ChatProvider, ChatRequest, ChatUsage, ToolCall, ToolResultPart } from './providers.js';
 import { compileIntents, createIntents, pickFromIntent } from './intents.js';
 import { describeSchema, opSignature } from './op-args.js';
 import { isOpName, type OpName } from '@expertmotion/composition-model';
-import { MAX_TOOL_ROUNDS, ReplyStreamer, asToolRequest, runTool, summarizeThread, toolResultMessage, toolsPromptBlock, BRAINSTORM_TOOL_NAMES, EDITOR_TOOL_NAMES, type BrainstormToolName, type ThreadSummary, type ToolCallRecord, type ToolHandlers } from './tools.js';
+import { MAX_TOOL_ROUNDS, ReplyStreamer, fromWireToolName, runTool, summarizeThread, toolRequestsOf, toolResultContent, toolResultMessage, toolSpecs, toolsPromptBlock, BRAINSTORM_TOOL_NAMES, EDITOR_TOOL_NAMES, type BrainstormToolName, type ThreadSummary, type ToolCallRecord, type ToolHandlers, type ToolName } from './tools.js';
 
 export interface RunOptions {
   maxCorrections?: number; maxTokens?: number; temperature?: number; signal?: AbortSignal; timeoutMs?: number; budgetCheck?: () => void;
@@ -20,7 +20,8 @@ export interface RunOptions {
   /** FR-190: what the run is doing now (chat shows "Membaca proyek…", "Menyusun rencana…", "Memeriksa rencana…"). */
   onProgress?: (p: RunProgress) => void;
 }
-export type RunPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool' | 'waiting';
+/** `thinking` / `writing`: the provider stream shows the model reasoning / writing its answer (native streams only). */
+export type RunPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool' | 'waiting' | 'thinking' | 'writing';
 /** `attempt` of `of` (correcting: reply n of the allowed replies; waiting: rate-limit retry n of m, `waitMs` before it). */
 export interface RunProgress { phase: RunPhase; attempt?: number; of?: number; tool?: string; waitMs?: number }
 /** Output budget of one Editor plan reply: reasoning models count their thinking here, and a 5-scene plan is ~2–3k tokens. */
@@ -52,20 +53,23 @@ export function dryRunOps(input: Record<string, unknown>, ctx: PlanContext & { p
 const langName = (l: 'id' | 'en') => (l === 'id' ? 'Bahasa Indonesia' : 'English');
 export const editorSystemPrompt = (env: RewriteEnvelope) => prompts().EDITOR_SYSTEM.replaceAll('{{language_name}}', langName(env.project.language)).replaceAll('{{base_version}}', env.baseVersion);
 
+type CallResult = { text: string; finishReason?: string; toolCalls?: ToolCall[]; providerRaw?: unknown };
 async function call(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[]): Promise<string> {
   return (await callFull(provider, system, messages, o, usage)).text;
 }
-async function callFull(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[]): Promise<{ text: string; finishReason?: string }> {
+/** `extra`: native tools / tool choice / wire activity for this call (AI_WORKFLOW §8.1). */
+async function callFull(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[], extra: Pick<ChatRequest, 'tools' | 'toolChoice' | 'onActivity'> = {}): Promise<CallResult> {
   o.budgetCheck?.();
   for (let attempt = 0; ; attempt++) {
     try {
       const onRetry = o.onProgress ? (r: { n: number; of: number; waitMs: number }) => { try { o.onProgress!({ phase: 'waiting', attempt: r.n, of: r.of, waitMs: r.waitMs }); } catch { /* hint */ } } : undefined;
-      const req = { system, messages, maxTokens: o.maxTokens ?? 4000, temperature: o.temperature ?? 0.2, ...(o.signal ? { signal: o.signal } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}), ...(onRetry ? { onRetry } : {}) };
+      const req: ChatRequest = { system, messages, maxTokens: o.maxTokens ?? 4000, temperature: o.temperature ?? 0.2, ...(o.signal ? { signal: o.signal } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}), ...(onRetry ? { onRetry } : {}),
+        ...(extra.tools?.length && provider.nativeTools ? { tools: extra.tools, toolChoice: extra.toolChoice ?? 'auto' } : {}), ...(extra.onActivity ? { onActivity: extra.onActivity } : {}) };
       let streamed = false;
       const r = o.onDelta && provider.stream ? await provider.stream(req, (d) => { streamed = true; o.onDelta!(d); }).catch((e: unknown) => { throw Object.assign(e as object, { streamed }); })
         : await provider.complete(req);
       usage.push(r.usage);
-      return { text: r.text, ...(r.finishReason ? { finishReason: r.finishReason } : {}) };
+      return { text: r.text, ...(r.finishReason ? { finishReason: r.finishReason } : {}), ...(r.toolCalls?.length ? { toolCalls: r.toolCalls } : {}), ...(r.providerRaw !== undefined ? { providerRaw: r.providerRaw } : {}) };
     } catch (e) {
       const em = e instanceof EmError ? e : new EmError('EM-4003', String(e));
       const partial = (e as { streamed?: boolean })?.streamed === true;                                       // text already shown: never replay it
@@ -75,6 +79,34 @@ async function callFull(provider: ChatProvider, system: string, messages: ChatMe
       throw em;
     }
   }
+}
+
+/** Wire activity → progress (each kind once per call; a tool is named by its registry name). */
+function activityProgress(progress: (p: RunProgress) => void, allowed: readonly string[]): (a: ChatActivity) => void {
+  const seen = new Set<string>();
+  return (a) => {
+    const key = a.type === 'tool' ? `tool:${a.name}` : a.type;
+    if (seen.has(key)) return; seen.add(key);
+    if (a.type === 'thinking') progress({ phase: 'thinking' });
+    else if (a.type === 'text') progress({ phase: 'writing' });
+    else progress({ phase: 'tool', tool: fromWireToolName(a.name, allowed) });
+  };
+}
+
+/**
+ * Runs the tool calls of one reply (native or written as text) through the closed registry, in order. Native calls get one
+ * tool_result each (errors flagged), so the next request carries every result in one user message.
+ */
+async function runToolCalls(calls: ReadonlyArray<{ id?: string; name: string; input: unknown }>, handlers: ToolHandlers, allowed: readonly ToolName[], progress: (p: RunProgress) => void, records: ToolCallRecord[]): Promise<ToolResultPart[]> {
+  const out: ToolResultPart[] = [];
+  for (const c of calls.slice(0, 8)) {
+    const name = fromWireToolName(c.name, allowed);
+    progress({ phase: 'tool', tool: name });
+    const rec = await runTool(name, c.input, handlers, allowed);
+    records.push(rec);
+    out.push({ id: c.id ?? '', name: c.name, content: toolResultContent(rec), ...(rec.ok ? {} : { isError: true }) });
+  }
+  return out;
 }
 
 /** Correction text for a rejected plan: each blocking issue with its step / op, plus the exact args signature of that op. */
@@ -150,7 +182,10 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
   // FR-080: JSON-mode read-only tool loop (same protocol as the Brainstorm loop); tool rounds do not count as corrections.
   const handlers: ToolHandlers = o.tools ? { ...o.tools, 'composition.validateOps': (i) => dryRunOps(i, ctx) } : {};
   const names = o.tools ? EDITOR_TOOL_NAMES.filter((n) => !!handlers[n]) : [];
-  const system = editorSystemPrompt(env) + toolsPromptBlock(names, 'reply with the EditPlan JSON only');
+  // AI_WORKFLOW §8.1: providers with a tools API get the tools natively; others keep the JSON-mode protocol (§12).
+  const native = !!provider.nativeTools && names.length > 0;
+  const specs = native ? toolSpecs(names) : undefined;
+  const system = editorSystemPrompt(env) + toolsPromptBlock(names, 'reply with the EditPlan JSON only', native ? 'native' : 'json');
   const messages: ChatMessage[] = [{ role: 'user', content: JSON.stringify(env), ...(o.images?.length ? { images: o.images } : {}) }];
   const maxCorrections = o.maxCorrections ?? 2;
   const replies = maxCorrections + 1;
@@ -169,17 +204,28 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
     co.onProgress = (p) => progress(p.phase === 'waiting' ? p : { phase: attempt === 0 ? 'planning' : 'correcting', attempt: attempt + 1, of: replies });
     if (streamer) co.onDelta = (d: string) => { const v = streamer.push(d); if (v) o.onDelta!(v); };
     else if (o.onDelta) co.onDelta = () => { /* streamed for liveness only */ };
-    let finishReason: string | undefined;
-    try { const r = await callFull(provider, system, [...messages], co, usage); text = r.text; finishReason = r.finishReason; } catch (e) { return fail(e as EmError, attempt + 1); }
+    let finishReason: string | undefined; let r: CallResult;
+    const extra = { ...(specs ? { tools: specs, toolChoice: toolRounds >= MAX_TOOL_ROUNDS ? 'none' as const : 'auto' as const } : {}), onActivity: activityProgress(progress, EDITOR_TOOL_NAMES) };
+    try { r = await callFull(provider, system, [...messages], co, usage, extra); text = r.text; finishReason = r.finishReason; } catch (e) { return fail(e as EmError, attempt + 1); }
     lastText = text; used = attempt + 1;
-    const req = names.length ? asToolRequest(extractJson(text)) : null;
-    if (req) {
+    if (r.toolCalls?.length) {                                          // native tool calls (AI_WORKFLOW §8.1)
+      const turn: ChatMessage = { role: 'assistant', content: text, toolCalls: r.toolCalls, ...(r.providerRaw !== undefined ? { providerRaw: r.providerRaw } : {}) };
+      if (toolRounds < MAX_TOOL_ROUNDS) {
+        toolRounds++;
+        messages.push(turn, { role: 'user', content: '', toolResults: await runToolCalls(r.toolCalls, handlers, EDITOR_TOOL_NAMES, progress, toolCalls) });
+        attempt--; continue;
+      }
+      messages.push(turn, { role: 'user', content: 'No more tool calls. Reply with the EditPlan JSON only.', toolResults: r.toolCalls.map((c) => ({ id: c.id, name: c.name, content: '{"error":{"message":"No more tool calls in this answer."}}', isError: true })) });
+      continue;
+    }
+    const reqs = names.length ? toolRequestsOf(text, extractJson(text), EDITOR_TOOL_NAMES) : [];
+    if (reqs.length) {                                                  // JSON-mode protocol, or tool calls written as markup
       messages.push({ role: 'assistant', content: text });
       if (toolRounds < MAX_TOOL_ROUNDS) {
         toolRounds++;
-        progress({ phase: 'tool', tool: req.name });
-        const rec = await runTool(req.name, req.input, handlers, EDITOR_TOOL_NAMES);
-        toolCalls.push(rec); messages.push(toolResultMessage(rec)); attempt--; continue;
+        const recs: ToolCallRecord[] = [];
+        await runToolCalls(reqs, handlers, EDITOR_TOOL_NAMES, progress, recs);
+        toolCalls.push(...recs); messages.push({ role: 'user', content: recs.map((x) => toolResultMessage(x).content).join('\n') }); attempt--; continue;
       }
       messages.push({ role: 'user', content: 'No more tool calls. Reply with the EditPlan JSON only.' }); continue;
     }
@@ -260,31 +306,58 @@ export function threadBudgetChars(contextLength: number | null | undefined, syst
 export async function runBrainstorm(history: ChatMessage[], contextBlock: unknown, language: 'id' | 'en', provider: ChatProvider, o: BrainstormOptions = {}): Promise<BrainstormResult | { ok: false; error: EmError; usage: ChatUsage[]; toolCalls: ToolCallRecord[] }> {
   const usage: ChatUsage[] = []; const toolCalls: ToolCallRecord[] = [];
   const names = BRAINSTORM_TOOL_NAMES.filter((n): n is BrainstormToolName => !!o.tools?.[n]);
-  const system = prompts().BRAINSTORM_SYSTEM.replaceAll('{{language_name}}', langName(language)).replaceAll('{{language_code}}', language).replaceAll('{{context_block}}', JSON.stringify(contextBlock)) + toolsPromptBlock(names);
+  // AI_WORKFLOW §8.1: tools through the provider's tools API when it has one (Claude wrote the JSON-mode protocol as its own XML
+  // markup, QA 2026-10-27); the JSON-mode protocol otherwise, where markup the model writes is read as tool calls too.
+  const native = !!provider.nativeTools && names.length > 0;
+  const specs = native ? toolSpecs(names) : undefined;
+  const system = prompts().BRAINSTORM_SYSTEM.replaceAll('{{language_name}}', langName(language)).replaceAll('{{language_code}}', language).replaceAll('{{context_block}}', JSON.stringify(contextBlock)) + toolsPromptBlock(names, 'reply normally', native ? 'native' : 'json');
   const w = windowThread(history, threadBudgetChars(o.contextLength, system.length, o.maxTokens ?? 4000));
   const messages = [...w.messages];
   const lastUser = messages.map((m) => m.role).lastIndexOf('user');
   if (o.images?.length && lastUser >= 0) messages[lastUser] = { ...messages[lastUser]!, images: o.images };
+  const progress = (p: RunProgress) => { try { o.onProgress?.(p); } catch { /* UI hint only */ } };
+  let rounds = 0; let forced = false; let shownAny = false;
   try {
-    for (let round = 0; ; round++) {
+    for (;;) {
+      // Each round streams its visible prose; a later round starts on a new paragraph in the live bubble.
       const streamer = o.onDelta ? new ReplyStreamer() : null;
-      try { o.onProgress?.({ phase: 'planning' }); } catch { /* UI hint only */ }
-      const text = await call(provider, system, [...messages], { temperature: 0.4, ...o, ...(streamer ? { onDelta: (d: string) => { const v = streamer.push(d); if (v) o.onDelta!(v); } } : {}) }, usage);
-      const json = extractJson(text);
-      const req = asToolRequest(json);
-      if (req && round < MAX_TOOL_ROUNDS && names.length) {
-        try { o.onProgress?.({ phase: 'tool', tool: req.name }); } catch { /* UI hint only */ }
-        const rec = await runTool(req.name, req.input, o.tools ?? {});
-        toolCalls.push(rec);
-        messages.push({ role: 'assistant', content: text }, toolResultMessage(rec));
+      let first = true;
+      progress({ phase: 'planning' });
+      const extra = { ...(specs ? { tools: specs, toolChoice: rounds >= MAX_TOOL_ROUNDS ? 'none' as const : 'auto' as const } : {}), onActivity: activityProgress(progress, BRAINSTORM_TOOL_NAMES) };
+      const r = await callFull(provider, system, [...messages], { temperature: 0.4, ...o, ...(streamer ? { onDelta: (d: string) => {
+        const v = streamer.push(d); if (!v) return;
+        o.onDelta!(first && shownAny ? `\n\n${v.replace(/^\s+/, '')}` : v); first = false; shownAny = true;
+      } } : {}) }, usage, extra);
+      if (r.toolCalls?.length) {                                         // native tool calls
+        const turn: ChatMessage = { role: 'assistant', content: r.text, toolCalls: r.toolCalls, ...(r.providerRaw !== undefined ? { providerRaw: r.providerRaw } : {}) };
+        if (rounds < MAX_TOOL_ROUNDS) {
+          rounds++;
+          messages.push(turn, { role: 'user', content: '', toolResults: await runToolCalls(r.toolCalls, o.tools ?? {}, BRAINSTORM_TOOL_NAMES, progress, toolCalls) });
+          continue;
+        }
+        if (!forced) {
+          forced = true;
+          messages.push(turn, { role: 'user', content: 'No more tool calls. Answer the Creator now with the BrainstormTurn JSON only (reply, optional proposedIntents / questions).',
+            toolResults: r.toolCalls.map((c) => ({ id: c.id, name: c.name, content: '{"error":{"message":"No more tool calls in this answer."}}', isError: true })) });
+          continue;
+        }
+      }
+      const reqs = names.length ? toolRequestsOf(r.text, extractJson(r.text), BRAINSTORM_TOOL_NAMES) : [];
+      if (reqs.length && rounds < MAX_TOOL_ROUNDS) {                     // JSON-mode protocol, or tool calls written as markup
+        rounds++;
+        const recs: ToolCallRecord[] = [];
+        await runToolCalls(reqs, o.tools ?? {}, BRAINSTORM_TOOL_NAMES, progress, recs);
+        toolCalls.push(...recs);
+        messages.push({ role: 'assistant', content: r.text }, { role: 'user', content: recs.map((x) => toolResultMessage(x).content).join('\n') });
         continue;
       }
       // Tool rounds used up and the model still asks for a tool: one last call that must answer (never a bare "…" reply).
-      if (req && names.length && round === MAX_TOOL_ROUNDS) {
-        messages.push({ role: 'assistant', content: text }, { role: 'user', content: 'No more tool calls. Answer the Creator now with the BrainstormTurn JSON only (reply, optional proposedIntents / questions).' });
+      if (reqs.length && !forced) {
+        forced = true;
+        messages.push({ role: 'assistant', content: r.text }, { role: 'user', content: 'No more tool calls. Answer the Creator now with the BrainstormTurn JSON only (reply, optional proposedIntents / questions).' });
         continue;
       }
-      const turn = req ? { reply: '…' } : parseBrainstormReply(text);
+      const turn = parseBrainstormReply(r.text);
       return { ok: true, turn, usage, toolCalls, summary: w.summary };
     }
   } catch (e) { return { ok: false, error: e as EmError, usage, toolCalls }; }
@@ -300,17 +373,15 @@ type BrainstormTurnT = ReturnType<typeof BrainstormTurn.parse>;
 export function parseBrainstormReply(text: string): BrainstormTurnT {
   const r = extractReplyText(text);
   const json = r.json ?? (() => { const j = extractJson(text); return j && typeof j === 'object' && !Array.isArray(j) ? j as Record<string, unknown> : undefined; })();
-  const reply = (r.text || (json ? '' : text.trim())).slice(0, 4000);
-  const whole = json ? BrainstormTurn.safeParse({ ...json, reply }) : undefined;
-  const turn: BrainstormTurnT = whole?.success ? whole.data : { reply };
-  if (json && !whole?.success) {
+  const reply = (r.text || (json ? '' : stripToolMarkup(text).trim())).slice(0, 4000);
+  const turn: BrainstormTurnT = { reply };
+  if (json) {
     const shape = BrainstormTurn.shape;
-    const q = shape.questions.safeParse(Array.isArray(json['questions']) ? json['questions'].filter((x) => typeof x === 'string').slice(0, 2) : undefined);
+    const q = shape.questions.safeParse(Array.isArray(json['questions']) ? json['questions'].filter((x) => typeof x === 'string' && x.trim()).slice(0, 2) : undefined);
     if (q.success && q.data?.length) turn.questions = q.data;
-    if (Array.isArray(json['proposedIntents'])) {
-      const items = json['proposedIntents'].flatMap((p) => { const v = shape.proposedIntents.unwrap().element.safeParse(p); return v.success ? [v.data] : []; }).slice(0, 12);
-      if (items.length) turn.proposedIntents = items;
-    }
+    // QA 2026-10-27: every proposal is normalised (params default {}, invalid items dropped) before it is stored.
+    const items = normalizeProposedIntents(json['proposedIntents'] ?? json['proposed_intents'] ?? json['proposals']);
+    if (items.length) turn.proposedIntents = items;
     const n = shape.suggestedNextStep.safeParse(json['suggestedNextStep']);
     if (n.success && n.data) turn.suggestedNextStep = n.data;
   }

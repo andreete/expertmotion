@@ -90,7 +90,7 @@ export function NewProjectDialog({ onClose, saveAs }: { onClose: () => void; sav
 }
 
 /** FR-010: project thumbnail (R-027), fetched with the Service Token and shown from a blob URL. */
-function ProjectThumb({ id }: { id: string }) {
+export function ProjectThumb({ id }: { id: string }) {
   const { runtime } = useStore();
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {

@@ -11,6 +11,9 @@ afterEach(() => cleanup());
 
 /** Ids that cannot appear in a browser/mock session, with the reason (reported, not silently skipped). */
 const NOT_IN_MOCK: Record<string, string> = {
+  'agent.chat.typing': 'only while an agent runs (pointing-progress.test.tsx, FR-214)', 'agent.chat.progress.stop': 'only while an agent runs (FR-214)', 'agent.chat.stop': 'only while an agent runs (stage-agent.test.tsx, FR-214)',
+  'agent.chat.attach.chip': 'after attaching an image (stage-agent.test.tsx, FR-213)', 'agent.chat.attach.preparing': 'while an attached image imports (FR-213)', 'agent.chat.attach.note': 'image + model without image input (stage-agent.test.tsx, FR-213)', 'agent.chat.attach.asset': 'attach menu with image assets (FR-213)',
+  'agent.chat.message.attachment': 'a sent message with an attachment (assistant-chat.test.tsx, FR-213)', 'scr.providers.key.mismatch': 'a key of another provider pasted (providers-models.test.tsx, FR-215)', 'scr.providers.key.mismatch.switch': 'see scr.providers.key.mismatch', 'scr.providers.defaults': 'onboarding Models step (providers-models.test.tsx, FR-215)',
   'sys.section.error': 'only when a panel throws (section-boundary.test.tsx)', 'sys.section.message': 'only when a panel throws (section-boundary.test.tsx)',
   'sys.section.reload': 'only when a panel throws (section-boundary.test.tsx)', 'sys.section.close': 'only when a dialog throws (section-boundary.test.tsx)',
   'sys.fatal': 'Desktop Shell push only (EM-8002 / EM-6001; covered in service-restart.test.tsx)', 'sys.fatal.diagnostics': 'Desktop Shell push only', 'sys.fatal.quit': 'Desktop Shell push only',
@@ -22,6 +25,9 @@ const NOT_IN_MOCK: Record<string, string> = {
   'sys.splash.retry': 'startup failure (startup.test.tsx)', 'sys.splash.logs': 'startup failure (startup.test.tsx)',
   'sys.crash': 'error boundary after a render exception (startup.test.tsx)', 'sys.crash.code': 'error boundary (startup.test.tsx)',
   'sys.crash.message': 'error boundary (startup.test.tsx)', 'sys.crash.reload': 'error boundary (startup.test.tsx)',
+  'sys.crash.pick': 'error boundary (start-screen.test.tsx)', 'sys.crash.new': 'error boundary (start-screen.test.tsx)', 'sys.crash.logs': 'error boundary inside the Shell (start-screen.test.tsx)',
+  'sys.safe.banner': 'safe open from the Start screen (start-screen.test.tsx)', 'sys.safe.exit': 'safe open (start-screen.test.tsx)',
+  'sys.safe.chat': 'safe open (start-screen.test.tsx)', 'sys.safe.chat.show': 'safe open', 'sys.safe.preview': 'safe open (start-screen.test.tsx)', 'sys.safe.preview.show': 'safe open (start-screen.test.tsx)',
   'lib.catalogue.card.badge.model': 'no P0/P1 preset carries a model: flag in packages/catalogue',
   'lib.catalogue.card.selected': 'state variant: expressed as data-selected/aria-pressed on lib.catalogue.card',
   'lib.assets.card.state.ingesting': 'transient: mock ingest completes synchronously when delays are off',
@@ -30,7 +36,7 @@ const NOT_IN_MOCK: Record<string, string> = {
   'stage.player.state.loading': 'transient state before the first composition arrives',
   'stage.player.state.loading.retry': 'only after 8 s without a composition (qa-2026-10-25.test.tsx)',
   'stage.player.state.empty': 'empty project only (qa-2026-10-25.test.tsx)', 'stage.player.state.empty.import': 'empty project only (qa-2026-10-25.test.tsx)',
-  'stage.player.state.noproject': 'no project open (qa-2026-10-25.test.tsx)', 'stage.player.state.noproject.new': 'no project open', 'stage.player.state.noproject.open': 'no project open',
+  'stage.player.state.noproject': 'no project open: the App shows the Start screen instead since FR-202 (Player-level state kept)', 'stage.player.state.noproject.new': 'no project open', 'stage.player.state.noproject.open': 'no project open',
   'stage.player.state.error': 'Player error fallback (Player is mocked in jsdom)',
   'stage.player.state.error.reload': 'Player error fallback', 'stage.player.state.error.recovery': 'Player error fallback',
   'stage.timeline.element.generated': 'needs a generator result on the timeline (covered in stage-agent.test.tsx)',

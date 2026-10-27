@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Router } from 'express';
 import { z } from 'zod';
-import { EmError, errorMessage } from '@expertmotion/shared';
+import { EmError, errorMessage, normalizeMessageBlocks, stripToolMarkup } from '@expertmotion/shared';
 import { ElementRef, hashModel, summarizeForAgent, type CompositionModelT, type ElementRefT } from '@expertmotion/composition-model';
 import { BrainstormTurn, createIntents, resolvePointedTargets, runBrainstorm, type PointedTarget, type RunProgress, type ChatImage, type ChatMessage, type ChatUsage, type DesignPick, type EditIntentT, type IntentCategory, type ToolHandlers } from '@expertmotion/agents';
 import { availableOnTier, searchPresets, type Category } from '@expertmotion/catalogue';
@@ -27,12 +27,16 @@ export interface HandoffHooks { enqueueIntents(projectId: string, intents: EditI
 
 type Proposal = NonNullable<z.infer<typeof BrainstormTurn>['proposedIntents']>[number] & { id: string };
 type Block = { type: 'text'; text: string } | { type: 'tool_call'; name: string; input: unknown } | { type: 'tool_result'; name: string; output: unknown }
-  | { type: 'proposed_intents'; intents: Proposal[]; handoffState: 'pending' | 'sent' | 'dismissed' } | { type: 'attachment'; assetId?: string; mime: string; name: string }
+  | { type: 'proposed_intents'; intents: Proposal[]; handoffState: 'pending' | 'sent' | 'dismissed' }
+  /** `sent`: FR-213 — `image` = the picture went to the model; `name` = the model cannot read images, only the file name was sent. */
+  | { type: 'attachment'; assetId?: string; mime: string; name: string; sent?: 'image' | 'name' }
   | { type: 'targets'; items: PointedTarget[] };
 interface MsgRow { id: string; conversation_id: string; role: 'user' | 'assistant' | 'system' | 'tool'; blocks_json: string; agent_run_id: string | null; created_at: string }
 interface RunRow { id: string; project_id: string; agent: AgentT; connection_id: string | null; model_id: string; status: 'running' | 'done' | 'failed' | 'cancelled'; error_code: string | null; started_at: string; finished_at: string | null; plan_id: string | null }
 
-const msgDto = (m: MsgRow) => ({ id: m.id, role: m.role, blocks: JSON.parse(m.blocks_json) as Block[], agentRunId: m.agent_run_id, createdAt: m.created_at });
+/** FR-212: blocks as stored, made safe to read (a proposal stored without `params` by an older build crashed the chat on every open). */
+const blocksOf = (json: string): Block[] => normalizeMessageBlocks(json) as Block[];
+const msgDto = (m: MsgRow) => ({ id: m.id, role: m.role, blocks: blocksOf(m.blocks_json), agentRunId: m.agent_run_id, createdAt: m.created_at });
 const contextLengthOf = (ctx: ServiceContext, connId: string | null, modelId: string): number | null => (connId ? cachedModels(ctx, connId)?.find((m) => m.modelId === modelId)?.contextLength ?? null : null);
 
 function runDto(ctx: ServiceContext, r: RunRow) {
@@ -116,8 +120,10 @@ const matchesBase = (h: { versionId: string; hash: string }, base: string) => ba
 function historyOf(ctx: ServiceContext, convId: string): ChatMessage[] {
   const rows = ctx.db.prepare("SELECT role, blocks_json FROM messages WHERE conversation_id = ? AND role IN ('user','assistant') ORDER BY created_at, id").all(convId) as Array<{ role: 'user' | 'assistant'; blocks_json: string }>;
   return rows.flatMap((r) => {
-    const text = (JSON.parse(r.blocks_json) as Block[]).flatMap((b) => (b.type === 'text' ? [b.text] : b.type === 'proposed_intents' ? [`(proposed ${b.intents.length} change(s); ${b.handoffState})`]
-      : b.type === 'targets' ? [`(pointed at: ${b.items.map((t) => `@${t.label}`).join(', ')})`] : [])).join('\n');
+    // Tool-call markup an older build stored in an answer is not sent back (it taught the model to write more of it).
+    const text = blocksOf(r.blocks_json).flatMap((b) => (b.type === 'text' ? [r.role === 'assistant' ? stripToolMarkup(b.text) : b.text] : b.type === 'proposed_intents' ? [`(proposed ${b.intents.length} change(s); ${b.handoffState})`]
+      : b.type === 'targets' ? [`(pointed at: ${b.items.map((t) => `@${t.label}`).join(', ')})`]
+      : b.type === 'attachment' ? [b.sent === 'name' ? `(attached image "${b.name}" — this model cannot see images, so only the file name was sent; ask the Creator to describe it if needed)` : `(attached ${b.mime.startsWith('image') ? 'image' : 'file'} "${b.name}"${b.assetId ? `, asset id ${b.assetId}` : ''})`] : [])).join('\n');
     return text ? [{ role: r.role, content: text }] : [];
   });
 }
@@ -200,15 +206,54 @@ function imagePart(ctx: ServiceContext, projectId: string, assetId: string): Cha
   return { mediaType, data: data.toString('base64'), name: r.name };
 }
 
+/** FR-213: how long a send waits for a just-uploaded attachment to finish importing before it answers EM-4308. */
+export const ATTACHMENT_READY_WAIT_MS = 20_000;
+type AttRow = { id: string; name: string; kind: string; status: string; error_code: string | null };
+/** The attached assets once they are ready: missing → EM-9003, failed import → its code, still importing after the wait → EM-4308. */
+async function waitForAttachments(ctx: ServiceContext, projectId: string, ids: readonly string[], waitMs = ATTACHMENT_READY_WAIT_MS): Promise<AttRow[]> {
+  const read = () => ids.map((id) => ctx.db.prepare('SELECT id, name, kind, status, error_code FROM assets WHERE id = ? AND project_id = ?').get(id, projectId) as AttRow | undefined);
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const rows = read();
+    if (rows.some((r) => !r)) throw new EmError('EM-9003', 'An attached asset no longer exists.', { path: 'body.attachments' });
+    const failed = rows.find((r) => r!.status === 'failed');
+    if (failed) throw new EmError((failed.error_code && /^EM-1\d{3}$/.test(failed.error_code) ? failed.error_code : 'EM-1003') as EmError['code'], `"${failed.name}" could not be imported, so it was not attached.`, { status: 422, path: 'body.attachments', details: { fileName: failed.name } });
+    if (rows.every((r) => r!.status === 'ready')) return rows as AttRow[];
+    if (Date.now() >= until) throw new EmError('EM-4308', 'The attached image is still being prepared. Send the message again in a moment.', { status: 409, path: 'body.attachments', details: { assetIds: rows.filter((r) => r!.status !== 'ready').map((r) => r!.id) } });
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+/** A provider refusal that names the image part (model without vision behind an unknown capability). */
+const isImageRefusal = (e: unknown): boolean => { const x = e as { code?: unknown; details?: { reason?: unknown } } | undefined; return x?.code === 'EM-4105' && /image|vision|multimodal|media[_ ]?type|inline_?data|image_url/i.test(String(x?.details?.reason ?? '')); };
+/** FR-213: after such a refusal the stored user message says the image was sent as its name only, and the cached row learns imageInput false. */
+function markImagesNotRead(ctx: ServiceContext, runId: string, connectionId: string | null, modelId: string) {
+  try {
+    const m = ctx.db.prepare("SELECT id, blocks_json FROM messages WHERE agent_run_id = ? AND role = 'user'").get(runId) as { id: string; blocks_json: string } | undefined;
+    if (m) ctx.db.prepare('UPDATE messages SET blocks_json = ? WHERE id = ?').run(JSON.stringify(blocksOf(m.blocks_json).map((b) => (b.type === 'attachment' && b.sent === 'image' ? { ...b, sent: 'name' } : b))), m.id);
+    if (connectionId) {
+      const r = ctx.db.prepare('SELECT models_json FROM provider_connections WHERE id = ?').get(connectionId) as { models_json: string | null } | undefined;
+      const rows = r?.models_json ? JSON.parse(r.models_json) as Array<{ modelId: string; imageInput: boolean | null }> : null;
+      if (rows?.some((x) => x.modelId === modelId)) ctx.db.prepare('UPDATE provider_connections SET models_json = ? WHERE id = ?').run(JSON.stringify(rows.map((x) => (x.modelId === modelId ? { ...x, imageInput: false } : x))), connectionId);
+    }
+  } catch (e) { ctx.log.warn({ runId, err: errorMessage(e) }, 'image fallback not recorded'); }
+}
+
 async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: string, project: { id: string; name: string; language: 'id' | 'en' }, signal: AbortSignal, images: ChatImage[] = [], targets: PointedTarget[] = []) {
   const provider = ctx.hooks.providerFor('brainstorm', project.id);
   const deltas = deltaEmitter(ctx, project.id, run.id, 'brainstorm');
   const progress = progressEmitter(ctx, project.id, run.id, 'brainstorm');
   progress({ phase: 'reading' });
-  const r = await runBrainstorm(historyOf(ctx, convId), brainstormContext(ctx, project, targets), project.language, provider, {
+  const ask = (imgs: ChatImage[]) => runBrainstorm(historyOf(ctx, convId), brainstormContext(ctx, project, targets), project.language, provider, {
     signal, budgetCheck: () => ctx.hooks.budgetCheck(project.id), contextLength: contextLengthOf(ctx, run.connection_id, run.model_id),
-    tools: brainstormTools(ctx, project.id, project.language), onDelta: (d) => { if (!signal.aborted) deltas.push(d); }, ...(images.length ? { images } : {}), onProgress: progress,
-  }).finally(() => deltas.flush());
+    tools: brainstormTools(ctx, project.id, project.language), onDelta: (d) => { if (!signal.aborted) deltas.push(d); }, ...(imgs.length ? { images: imgs } : {}), onProgress: progress,
+  });
+  let r = await ask(images);
+  if (!r.ok && images.length && isImageRefusal(r.error) && !signal.aborted) {      // FR-213: the model refused the picture → names only
+    record(ctx, project.id, 'brainstorm', run.id, r.usage);
+    markImagesNotRead(ctx, run.id, run.connection_id, run.model_id);
+    r = await ask([]);
+  }
+  deltas.flush();
   record(ctx, project.id, 'brainstorm', run.id, r.usage);
   if (signal.aborted) return;
   if (!r.ok) return failRun(ctx, run, convId, r.error);
@@ -228,11 +273,17 @@ async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: strin
 interface EditorTurn { messageId: string; text: string; target?: ElementRefT | undefined; selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images: ChatImage[]; attachments: string[]; targets: PointedTarget[] }
 async function executeEditor(ctx: ServiceContext, run: RunRow, convId: string, projectId: string, turn: EditorTurn, signal: AbortSignal) {
   const deltas = deltaEmitter(ctx, projectId, run.id, 'editor');
-  const plan = await ctx.hooks.createPlan(projectId, { instruction: turn.text, mode: 'agent', signal, runId: run.id, chat: { messageId: turn.messageId, ...(turn.target ? { target: turn.target } : {}) },
+  const ask = (images: ChatImage[]) => ctx.hooks.createPlan(projectId, { instruction: turn.text, mode: 'agent', signal, runId: run.id, chat: { messageId: turn.messageId, ...(turn.target ? { target: turn.target } : {}) },
     ...(turn.selection?.length || turn.target ? { selection: turn.target ? [turn.target, ...(turn.selection ?? [])] : turn.selection! } : {}), ...(turn.playheadMs !== undefined ? { playheadMs: turn.playheadMs } : {}),
-    ...(turn.attachments.length ? { attachments: turn.attachments } : {}), ...(turn.images.length ? { images: turn.images } : {}), onDelta: (d) => { if (!signal.aborted) deltas.push(d); },
-    ...(turn.targets.length ? { targets: turn.targets } : {}), onProgress: progressEmitter(ctx, projectId, run.id, 'editor') })
-    .finally(() => deltas.flush()) as Awaited<ReturnType<ServiceContext['hooks']['createPlan']>> & { runId?: string };
+    ...(turn.attachments.length ? { attachments: turn.attachments } : {}), ...(images.length ? { images } : {}), onDelta: (d) => { if (!signal.aborted) deltas.push(d); },
+    ...(turn.targets.length ? { targets: turn.targets } : {}), onProgress: progressEmitter(ctx, projectId, run.id, 'editor') }) as Promise<Awaited<ReturnType<ServiceContext['hooks']['createPlan']>> & { runId?: string }>;
+  let plan = await ask(turn.images);
+  const refused = plan.validation?.[0];
+  if (turn.images.length && plan.steps.length === 0 && refused?.code === 'EM-4105' && /image|vision|multimodal|media[_ ]?type|inline_?data|image_url/i.test(refused.message ?? '') && !signal.aborted) {
+    markImagesNotRead(ctx, run.id, run.connection_id, run.model_id);                // FR-213: the model refused the picture → names only
+    plan = await ask([]);
+  }
+  deltas.flush();
   // Usage is recorded by the intents module under this run (FR-074); only a module without a run id leaves it to us.
   if (plan.usage && !plan.runId) record(ctx, projectId, 'editor', run.id, [plan.usage]);
   if (signal.aborted) return;
@@ -289,7 +340,7 @@ export const agentsModule: ServiceModule = {
         contextUsage: contextUsage(ctx, params.id, params.agent), messages: { items: page.map(msgDto), nextCursor: more && page[0] ? page[0].id : null, total } };
     });
 
-    route(router, 'post', '/projects/:id/conversations/:agent/messages', { params: AgentParams, body: SendBody, status: 202 }, ({ params, body }) => {
+    route(router, 'post', '/projects/:id/conversations/:agent/messages', { params: AgentParams, body: SendBody, status: 202 }, async ({ params, body }) => {
       const project = requireProject(ctx, params.id);
       const agent = params.agent;
       if (ctx.egress.isPrivate()) throw new EmError('EM-4401', 'Private Mode blocks all internet use, so the agents are unavailable.');
@@ -299,20 +350,20 @@ export const agentsModule: ServiceModule = {
       const a = getAssignment(ctx, agent);
       const cap = a ? cachedModels(ctx, a.connectionId)?.find((m) => m.modelId === a.modelId) : undefined;
       if (cap?.contextLength && Math.ceil(body.text.length / 4) > 0.6 * cap.contextLength) throw new EmError('EM-4306', `This message does not fit the model's memory (${cap.contextLength} tokens). Shorten it or start a new chat.`, { status: 422 });
-      // FR-072: image attachments go to the model only when its Capability Table row says it has image input (unknown counts as no).
-      const kinds = body.attachments.map((x) => (ctx.db.prepare('SELECT kind FROM assets WHERE id = ? AND project_id = ?').get(x.assetId, project.id) as { kind: string } | undefined)?.kind);
-      if (kinds.some((k) => k === 'image') && cap?.imageInput !== true) throw new EmError('EM-4307', `"${provider.model}" cannot read images. Describe the image in words, or switch to a model with image input.`, { status: 422, details: { modelId: provider.model, attachmentKind: 'image' } });
+      // FR-072 / FR-213: an attached image must be imported (ready) first; the composer uploads it, so the route waits briefly for
+      // ingest. It goes to the model as an image part unless the Capability Table says the model cannot read images (imageInput
+      // false): then only the file name is sent and the chat says so. Unknown (null) is tried; a provider that refuses the image
+      // part gets the request again with the names only (executeBrainstorm / executeEditor).
+      const attRows = await waitForAttachments(ctx, project.id, body.attachments.map((x) => x.assetId));
+      if (activeRun(ctx, project.id, agent)) throw new EmError('EM-4305', 'Wait for the current answer to finish, or cancel it, before sending another message.', { status: 409 });
+      const sendImages = cap?.imageInput !== false;
       if (agent === 'editor') {
         let head: { versionId: string; hash: string } | null = null;
         try { head = headOf(ctx, project.id); } catch { /* composition module absent: createPlan checks the base */ }
         if (head !== null && !matchesBase(head, body.baseVersion)) throw new EmError('EM-2301', 'The composition changed after this message was written. Send it again.', { status: 409, details: { baseVersion: body.baseVersion, headVersion: head.hash }, path: 'body.baseVersion' });
       }
-      const attachments: Block[] = body.attachments.map((x) => {
-        const as = ctx.db.prepare('SELECT name, kind FROM assets WHERE id = ? AND project_id = ?').get(x.assetId, project.id) as { name: string; kind: string } | undefined;
-        if (!as) throw new EmError('EM-9003', 'An attached asset no longer exists.', { path: 'body.attachments' });
-        return { type: 'attachment', assetId: x.assetId, mime: as.kind === 'image' ? 'image/*' : `${as.kind}/*`, name: as.name };
-      });
-      const images = body.attachments.filter((_, i) => kinds[i] === 'image').map((x) => imagePart(ctx, project.id, x.assetId));
+      const attachments: Block[] = attRows.map((as) => ({ type: 'attachment', assetId: as.id, mime: as.kind === 'image' ? 'image/*' : `${as.kind}/*`, name: as.name, ...(as.kind === 'image' ? { sent: sendImages ? 'image' as const : 'name' as const } : {}) }));
+      const images = sendImages ? attRows.filter((a) => a.kind === 'image').map((a) => imagePart(ctx, project.id, a.id)) : [];
       const convId = conversationId(ctx, project.id, agent);
       const runId = ctx.newId(); const now = ctx.now();
       const run: RunRow = { id: runId, project_id: project.id, agent, connection_id: a?.connectionId ?? null, model_id: provider.model, status: 'running', error_code: null, started_at: now, finished_at: null, plan_id: null };
@@ -335,7 +386,7 @@ export const agentsModule: ServiceModule = {
       const project = requireProject(ctx, params.id);
       const convId = conversationId(ctx, project.id, 'brainstorm');
       const m = ctx.db.prepare("SELECT * FROM messages WHERE id = ? AND conversation_id = ? AND role = 'assistant'").get(body.messageId, convId) as MsgRow | undefined;
-      const blocks = m ? (JSON.parse(m.blocks_json) as Block[]) : [];
+      const blocks = m ? blocksOf(m.blocks_json) : [];
       const block = blocks.find((b): b is Extract<Block, { type: 'proposed_intents' }> => b.type === 'proposed_intents');
       if (!m || !block || block.handoffState !== 'pending') throw new EmError('EM-9003', 'These suggestions are no longer available.', { path: 'body.messageId' });
       const head = headOf(ctx, project.id);

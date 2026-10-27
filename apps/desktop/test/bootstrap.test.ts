@@ -43,3 +43,13 @@ describe('Shell memory report (FR-127)', () => {
     expect(m).toEqual({ type: 'metrics', shellMb: 350 });
   });
 });
+
+describe('bootstrap videosDir (FR-205)', () => {
+  const base = { token: 'x'.repeat(43), port: 42300, dataDir: 'C:/d', dbKeyHex: key };
+  it('passes an absolute Videos folder (Windows drive, UNC, POSIX; spaces and non-ASCII kept)', () => {
+    for (const v of ['C:\\Users\\Budi Santoso\\OneDrive\\Video', 'D:\\Videos', '\\\\nas\\share\\Video', '/home/budi/Video Saya']) expect(buildBootstrap({ ...base, videosDir: v }).videosDir).toBe(v);
+  });
+  it('drops a relative, empty, NUL-containing or oversized value instead of failing the start', () => {
+    for (const v of ['Videos', '', 'C:\\a\0b', `C:\\${'a'.repeat(1100)}`, undefined]) expect(buildBootstrap({ ...base, videosDir: v }).videosDir).toBeUndefined();
+  });
+});

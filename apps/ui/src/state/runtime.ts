@@ -25,6 +25,9 @@ export interface Runtime {
   seededProjectId?: string | null;
   /** Live inside the Desktop Shell: service state pushes (offline / ready with a new port+token / failed EM-8002, EM-6001). */
   service?: ServiceChannel;
+  /** FR-202: a launch shows the Start screen and the crash-loop guard decides what reopens (the real live runtime); without it
+   *  (mock, tests) the most recent / seeded project opens at once as before. */
+  startScreen?: boolean;
 }
 
 export function createMockRuntime(opts: MockOptions = {}): Runtime {
@@ -101,7 +104,7 @@ export async function createLiveRuntime(bridge: ShellBridge | undefined = typeof
     api = new ApiClient({ baseUrl: boot.baseUrl, token: boot.token });
   }
   return {
-    mode: 'live', api,
+    mode: 'live', api, startScreen: true,
     ...(service ? { service } : {}),
     healthCheck: async () => {
       try {

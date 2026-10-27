@@ -32,12 +32,12 @@ function sizeOf(p: string, depth = 0): number {
 }
 
 /** Output folder must be absolute and inside the user's profile (EM-8302, SEC/TR-081). Returns the canonical form. */
-export function checkOutputFolder(folder: string, home = os.homedir()): string {
+export function checkOutputFolder(folder: string, home = os.homedir(), extraRoots: readonly string[] = []): string {
   if (!path.isAbsolute(folder)) throw new EmError('EM-8302', 'Expertmotion can only save to folders inside your user profile or removable drives. Choose another folder.', { status: 403, path: 'body.outputFolder' });
   let abs = path.resolve(folder);
   try { abs = fs.realpathSync(abs); } catch { /* created later by the renders module */ }
-  const rel = path.relative(fs.realpathSync(home), abs);
-  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new EmError('EM-8302', 'Expertmotion can only save to folders inside your user profile or removable drives. Choose another folder.', { status: 403, path: 'body.outputFolder' });
+  const inside = (root: string) => { let r = root; try { r = fs.realpathSync(root); } catch { /* not created yet */ } const rel = path.relative(r, abs); return !(rel.startsWith('..') || path.isAbsolute(rel)); };
+  if (![home, ...extraRoots].some(inside)) throw new EmError('EM-8302', 'Expertmotion can only save to folders inside your user profile or removable drives. Choose another folder.', { status: 403, path: 'body.outputFolder' });
   return abs;
 }
 
@@ -74,7 +74,7 @@ export const settingsModule: ServiceModule = {
     route(router, 'put', '/settings', { body: z.record(z.string(), z.unknown()) }, ({ body }) => {
       const patch = Object.fromEntries(Object.entries(body).filter(([, v]) => v !== undefined)) as Record<string, unknown>;
       for (const k of Object.keys(patch)) if (!(k in SettingsSchema.shape)) throw new EmError('EM-9002', `Invalid request: unknown setting "${k}".`, { status: 400, path: `body.${k}` });
-      if (typeof patch['outputFolder'] === 'string') patch['outputFolder'] = checkOutputFolder(patch['outputFolder']);
+      if (typeof patch['outputFolder'] === 'string') patch['outputFolder'] = checkOutputFolder(patch['outputFolder'], undefined, ctx.cfg.videosDir ? [ctx.cfg.videosDir] : []);
       const parsed = SettingsSchema.safeParse({ ...ctx.settings.get(), ...patch });
       if (!parsed.success) { const i = parsed.error.issues[0]; throw new EmError('EM-9002', `Invalid request: ${i?.message ?? 'bad setting'}`, { status: 400, path: ['body', ...(i?.path ?? []).map(String)].join('.') }); }
       const before = ctx.settings.get().privateMode;

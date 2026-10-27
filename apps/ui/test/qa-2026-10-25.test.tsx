@@ -134,12 +134,13 @@ describe('Player states', () => {
     expect(isEmptyComposition({ ...base, tracks: { ...base.tracks, text: [{}] } } as never)).toBe(false);
     expect(isEmptyComposition({ ...base, background: { kind: 'color' } } as never)).toBe(false);
   });
-  it('no Project open: an empty state with New Project and Open', async () => {
+  it('no Project open: the Start screen (FR-202, replaced the empty Player state) with New Project and Open', async () => {
     const runtime = createMockRuntime({ delays: false });
     render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
-    await waitFor(() => { if (!el('stage.player.state.noproject')) throw new Error('no state'); });
+    await waitFor(() => { if (!document.querySelector('[data-el="scr.start"]')) throw new Error('no start screen'); });
     expect(el('stage.player.state.loading')).toBeNull();
-    fireEvent.click(el('stage.player.state.noproject.new')!);
+    expect(document.querySelector('[data-el="scr.start.open"]')).not.toBeNull();
+    fireEvent.click(document.querySelector('[data-el="scr.start.new"]')!);
     await waitFor(() => { if (el('hdr.title')?.textContent !== 'Untitled') throw new Error('not created'); });
     expect(el('stage.player.state.empty')).not.toBeNull();
   });

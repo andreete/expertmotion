@@ -8,3 +8,5 @@ export * from './text/fit.js';
 export * from './model-tiers.js';
 export * from './model-quality.js';
 export * from './model-reply.js';
+export * from './tool-markup.js';
+export * from './chat-blocks.js';

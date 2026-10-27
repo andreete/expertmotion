@@ -84,13 +84,16 @@ describe('Editor Chat → chat Edit Intent → Editor Agent (FR-080)', () => {
     expect(chatStatus(message.id)).toBe('removed');
   });
 
-  it('FR-072: an image to a model without image input → 422 EM-4307 before any provider call', async () => {
+  it('FR-213: an image to a model without image input is sent as its file name only (no refusal, no image part)', async () => {
     setCap(false);
-    const prov = fakeProvider([planReply]); provider = prov;
+    const prov = fakeProvider([planReply]); provider = prov; events.length = 0;
     const r = await s.api(`/projects/${pid}/conversations/editor/messages`, { method: 'POST', json: { text: 'lihat logo', baseVersion: head(), attachments: [{ assetId: imageId }] } });
-    expect(r.status).toBe(422);
-    expect((await body<{ error: { code: string } }>(r)).error.code).toBe('EM-4307');
-    expect(prov.calls).toHaveLength(0);
+    expect(r.status).toBe(202);
+    const sent = await body<{ message: { blocks: Array<{ type: string; sent?: string; name?: string }> } }>(r);
+    expect(sent.message.blocks.find((b) => b.type === 'attachment')).toMatchObject({ sent: 'name' });
+    await waitFor(() => events.some((x) => x.name === 'agent.run.done' || x.name === 'agent.run.failed'), 5000);
+    expect(prov.calls.length).toBeGreaterThan(0);
+    expect(prov.calls.every((c) => c.messages.every((m) => !m.images?.length))).toBe(true);
     setCap(true);
   });
 

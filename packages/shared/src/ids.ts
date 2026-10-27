@@ -58,6 +58,8 @@ export function sanitizeFilename(input: string, fallback = 'video'): string {
     .replace(/\.{2,}/g, '.')
     .replace(/^[-._]+|[-._]+$/g, '')
     .slice(0, 80);
+  // Windows reserved device names (CON, PRN, AUX, NUL, COM1…9, LPT1…9) cannot be file names even with an extension (FR-205).
+  if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i.test(cleaned)) return `${fallback}-${cleaned}`;
   return cleaned || fallback;
 }
 

@@ -114,7 +114,7 @@ export function Header() {
         ) : (
           <button type="button" data-el="hdr.title" aria-label={t('a11y.hdr.title')} aria-describedby={p?.dirty ? 'em-dirty' : undefined} disabled={!p}
             onClick={() => { setDraft(p?.name ?? ''); setEditing(true); }} className="max-w-[320px] truncate rounded-[6px] px-2 py-1 text-[14px] font-medium hover:bg-em-panel-2">
-            {p?.isSample === true ? (() => { const st = sampleTitle(p.name, p.language); return <><span data-el="hdr.title.sample" className="font-semibold text-em-accent">{st.marker}</span>{' · '}{st.rest}</>; })() : (p?.name ?? t('ui.hdr.title.untitled'))}
+            {p?.isSample === true ? (() => { const st = sampleTitle(p.name, p.language); return <><span data-el="hdr.title.sample" className="font-semibold text-em-accent">{st.marker}</span>{' · '}{st.rest}</>; })() : (p?.name ?? '')}
           </button>
         )}
         {p?.dirty && <span id="em-dirty" data-el="hdr.title.dirty" title={t('ui.hdr.title.dirty')} className="h-1.5 w-1.5 rounded-full bg-em-accent"><span className="sr-only">{t('ui.hdr.title.dirty')}</span></span>}

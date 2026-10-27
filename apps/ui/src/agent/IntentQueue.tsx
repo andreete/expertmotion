@@ -17,7 +17,7 @@ import { intentTitle } from './proposals.js';
 type T = (k: string, v?: Record<string, string | number>) => string;
 
 export function targetText(i: EditIntent, model: CompositionModelT | undefined, t: T): string {
-  const r = i.resolvedTargets;
+  const r = (Array.isArray(i.resolvedTargets) ? i.resolvedTargets : []).filter((x): x is NonNullable<typeof x> => !!x && typeof x === 'object');   // FR-204
   if (!r.length) return i.category === 'text' && i.presetId ? t('ui.agent.target.newtext') : i.status === 'rejected' ? '?' : t('ui.agent.target.auto');
   if (r.every((x) => x.kind === 'cut')) {
     const total = Math.max(0, (model?.tracks.video.length ?? 0) - 1);
@@ -58,7 +58,7 @@ export function groupQueue(top: EditIntent[], all: EditIntent[]): QueueRow[] {
 export function IntentQueue({ hidden }: { hidden?: boolean } = {}) {
   const { state, actions, t, prefs, setPrefs } = useStore();
   const expanded = prefs.picksOpen;
-  const all = visibleQueue(state).filter((i) => i.source !== 'system' || i.params['__output'] !== undefined);   // FR-097: Output Settings changes (incl. Reset) stay visible
+  const all = visibleQueue(state).filter((i) => i.source !== 'system' || i.params?.['__output'] !== undefined);   // FR-097: Output Settings changes (incl. Reset) stay visible
   const top = all.filter((i) => !i.parentIntentId);
   const queuedCount = top.filter((i) => i.status === 'queued' || i.status === 'superseded' || i.status === 'rejected').length;
   const needsAgent = all.some((i) => i.status === 'queued' && (i.needsInterpretation || !i.parentIntentId));
@@ -142,7 +142,7 @@ function IntentItem({ intent: i, all, child }: { intent: EditIntent; all: EditIn
     case 'rejected': chip = { icon: <OctagonAlert size={12} />, text: rejectionCode ? t(`err.${rejectionCode}.title`) : t('ui.agent.intent.rejected'), tone: 'text-em-danger' }; break;
     case 'superseded': chip = { icon: <History size={12} />, text: t('ui.agent.intent.replacedby', { label: replacedLabel || '…' }), tone: 'text-em-muted' }; break;
     // FR-037: held until the model is installed (EM-2104); it applies by itself after the Model Manager installs it.
-    case 'held': chip = { icon: <DownloadCloud size={12} />, text: t('ui.agent.intent.held', { model: heldName(String(i.params['__heldFor'] ?? '')) }), tone: 'text-em-info' }; break;
+    case 'held': chip = { icon: <DownloadCloud size={12} />, text: t('ui.agent.intent.held', { model: heldName(String(i.params?.['__heldFor'] ?? '')) }), tone: 'text-em-info' }; break;
     default: chip = { icon: null, text: i.status, tone: 'text-em-muted' };
   }
   if (i.undone && (i.status === 'executed' || i.status === 'compiled')) chip = { icon: <Undo2 size={12} />, text: t('ui.agent.intent.undone'), tone: 'text-em-muted' };   // FR-167

@@ -38,7 +38,7 @@ export class Projects {
       if (!input.fixedDurationMs) throw new EmError('EM-9002', 'Invalid request: a fixed duration needs fixedDurationMs.', { status: 400, path: 'body.fixedDurationMs' });
       model.durationPolicy = 'fixed'; model.fixedDurationMs = input.fixedDurationMs;
     }
-    const folder = input.outputFolder ? checkOutputFolder(input.outputFolder) : null;
+    const folder = input.outputFolder ? checkOutputFolder(input.outputFolder, undefined, this.ctx.cfg.videosDir ? [this.ctx.cfg.videosDir] : []) : null;
     this.insertProject(id, input.name.trim(), model, input.language, now, folder ? () => {
       this.ctx.db.prepare("UPDATE projects SET settings_json = json_set(settings_json, '$.outputFolder', ?) WHERE id = ?").run(folder, id);
     } : undefined);
@@ -245,7 +245,7 @@ export class Projects {
       if (body.durationPolicy !== head.model.durationPolicy || (fixedMs !== undefined && fixedMs !== head.model.fixedDurationMs))
         picks.push({ projectId: id, source: 'system', output: { kind: 'durationPolicy', value: body.durationPolicy, ...(fixedMs !== undefined ? { fixedMs } : {}) } });
     }
-    const folder = body.outputFolder === undefined ? undefined : body.outputFolder === null || body.outputFolder === '' ? null : checkOutputFolder(body.outputFolder);
+    const folder = body.outputFolder === undefined ? undefined : body.outputFolder === null || body.outputFolder === '' ? null : checkOutputFolder(body.outputFolder, undefined, this.ctx.cfg.videosDir ? [this.ctx.cfg.videosDir] : []);
     let version = null;
     if (picks.length) {
       const incoming: EditIntentT[] = [];

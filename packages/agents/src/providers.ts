@@ -1,25 +1,48 @@
 // Provider layer (MCP_AND_TOOLING §5): one interface; OpenRouter first (PRD-010) through Vercel AI SDK v6.
 // All network access goes through an injected `fetch` — the Local Service's single egress module with the Private Mode gate.
-import { generateText, streamText } from 'ai';
+import { generateText, jsonSchema, streamText, tool, type ModelMessage, type ToolSet } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { EmError } from '@expertmotion/shared';
 
 /** FR-072: an image attached by the Creator, sent as an image part only to models with image input (Capability Table). */
 export interface ChatImage { mediaType: string; /** base64, no data: prefix */ data: string; name?: string }
-export interface ChatMessage { role: 'user' | 'assistant'; content: string; images?: ChatImage[] }
+/**
+ * AI_WORKFLOW §8.1 native tool calling: a read-only tool offered through the provider's own tools API. `name` is the wire name
+ * (letters, digits, `_`, `-`: providers refuse dots), `inputSchema` a JSON Schema object (validation stays with Zod in runTool).
+ */
+export interface ToolSpec { name: string; description: string; inputSchema: Record<string, unknown> }
+/** A tool call the model made through the native tools API (`id` echoes back in the result). */
+export interface ToolCall { id: string; name: string; input: unknown }
+export interface ToolResultPart { id: string; name: string; /** JSON text of the result (≤ 16 KB) */ content: string; isError?: boolean }
+export interface ChatMessage {
+  role: 'user' | 'assistant'; content: string; images?: ChatImage[];
+  /** assistant: the native tool calls of this turn. */
+  toolCalls?: ToolCall[];
+  /** user: the results of the previous turn's tool calls (one message carries all of them). */
+  toolResults?: ToolResultPart[];
+  /** assistant: the provider's own content of this turn (thinking blocks with signatures, tool_use …), replayed unchanged. */
+  providerRaw?: unknown;
+}
+/** Progress the adapter sees on the wire (thinking started, a tool call being written); hints only. */
+export type ChatActivity = { type: 'thinking' } | { type: 'tool'; name: string } | { type: 'text' };
 export interface ChatRequest { system: string; messages: ChatMessage[]; maxTokens: number; temperature: number; signal?: AbortSignal; timeoutMs?: number;
   /** Called before a rate-limit retry waits (withRateLimitRetry): retry n of `of`, waiting `waitMs` (progress text only). */
-  onRetry?: (r: { n: number; of: number; waitMs: number; code: string }) => void }
+  onRetry?: (r: { n: number; of: number; waitMs: number; code: string }) => void;
+  /** Native tools (only for providers with `nativeTools`); `toolChoice: 'none'` = answer now, no further calls. */
+  tools?: ToolSpec[]; toolChoice?: 'auto' | 'none';
+  onActivity?: (a: ChatActivity) => void }
 export interface ChatUsage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean }
 /**
  * `finishReason` / `reasoningTokens` are reported when the provider gives them ('length' = the reply hit maxTokens, so a JSON
- * reply is truncated); diagnostics only, never shown to the Creator.
+ * reply is truncated); diagnostics only, never shown to the Creator. `toolCalls` / `providerRaw`: native tool calling.
  */
-export interface ChatResult { text: string; usage: ChatUsage; finishReason?: string; reasoningTokens?: number }
+export interface ChatResult { text: string; usage: ChatUsage; finishReason?: string; reasoningTokens?: number; toolCalls?: ToolCall[]; providerRaw?: unknown }
 export interface ChatProvider {
   readonly id: string; readonly model: string; complete(req: ChatRequest): Promise<ChatResult>;
   /** FR-075: same as complete, but text deltas are reported as they arrive (provider stream). Optional: callers fall back to complete. */
   stream?(req: ChatRequest, onDelta: (delta: string) => void): Promise<ChatResult>;
+  /** AI_WORKFLOW §8.1: the adapter sends `req.tools` through the provider's tools API and returns `toolCalls`. */
+  readonly nativeTools?: boolean;
 }
 
 /** Price per million tokens (USD) for providers that do not report cost; values come from the Capability Table, labelled approximate. */
@@ -115,71 +138,102 @@ export function withRateLimitRetry(p: ChatProvider, o: RateLimitRetry = {}): Cha
     }
   };
   return {
-    id: p.id, model: p.model,
+    id: p.id, model: p.model, ...(p.nativeTools ? { nativeTools: true } : {}),
     complete: (req) => run(req, () => p.complete(req), () => false),
     ...(p.stream ? { stream: (req: ChatRequest, onDelta: (d: string) => void) => { let shown = false; return run(req, () => p.stream!(req, (d) => { shown = true; onDelta(d); }), () => shown); } } : {}),
   };
 }
 
-/** AI SDK message list: a user message with images becomes text + image parts; everything else stays a plain string. */
-export function toSdkMessages(messages: readonly ChatMessage[]) {
-  return messages.map((m) => (m.role === 'user' && m.images?.length
-    ? { role: 'user' as const, content: [{ type: 'text' as const, text: m.content }, ...m.images.map((i) => ({ type: 'image' as const, image: i.data, mediaType: i.mediaType }))] }
-    : m.role === 'assistant' ? { role: 'assistant' as const, content: m.content } : { role: 'user' as const, content: m.content }));
+/**
+ * AI SDK message list: a user message with images becomes text + image parts; native tool turns become tool-call parts (or the
+ * provider's own response messages when kept) and `tool` messages with tool-result parts; everything else stays a plain string.
+ */
+export function toSdkMessages(messages: readonly ChatMessage[]): ModelMessage[] {
+  return messages.flatMap((m): ModelMessage[] => {
+    if (m.role === 'assistant') {
+      if (Array.isArray(m.providerRaw) && m.providerRaw.length) return m.providerRaw as ModelMessage[];
+      if (m.toolCalls?.length) return [{ role: 'assistant', content: [...(m.content ? [{ type: 'text' as const, text: m.content }] : []), ...m.toolCalls.map((c) => ({ type: 'tool-call' as const, toolCallId: c.id, toolName: c.name, input: c.input ?? {} }))] }];
+      return [{ role: 'assistant', content: m.content }];
+    }
+    const out: ModelMessage[] = [];
+    if (m.toolResults?.length) out.push({ role: 'tool', content: m.toolResults.map((r) => ({ type: 'tool-result' as const, toolCallId: r.id, toolName: r.name, output: r.isError ? { type: 'error-text' as const, value: r.content } : { type: 'text' as const, value: r.content } })) });
+    if (m.images?.length) out.push({ role: 'user', content: [{ type: 'text', text: m.content }, ...m.images.map((i) => ({ type: 'image' as const, image: i.data, mediaType: i.mediaType }))] });
+    else if (m.content || !m.toolResults?.length) out.push({ role: 'user', content: m.content });
+    return out;
+  });
+}
+/** AI SDK tool set for native tool calling (no `execute`: the runner runs the read-only tools itself). */
+export function toSdkTools(tools: readonly ToolSpec[] | undefined) {
+  if (!tools?.length) return undefined;
+  return Object.fromEntries(tools.map((t) => [t.name, tool({ description: t.description, inputSchema: jsonSchema<Record<string, unknown>>(t.inputSchema as Parameters<typeof jsonSchema>[0]) })])) as ToolSet;
 }
 
 /** Streamed calls: no chunk for this long = timeout (EM-4101); total limit = call timeout × factor. */
 export const STREAM_CHUNK_MS = 90_000, STREAM_TOTAL_FACTOR = 3;
 
-export function openRouterProvider(opts: { apiKey: string; model: string; fetch: typeof fetch; baseURL?: string; appName?: string }): ChatProvider {
+export function openRouterProvider(opts: { apiKey: string; model: string; fetch: typeof fetch; baseURL?: string; appName?: string; /** Capability Table `toolCalling === true` */ nativeTools?: boolean }): ChatProvider {
   const or = createOpenRouter({ apiKey: opts.apiKey, fetch: opts.fetch, ...(opts.baseURL ? { baseURL: opts.baseURL } : {}), appName: opts.appName ?? 'Expertmotion' });
+  const toolOpts = (req: ChatRequest) => {
+    const tools = opts.nativeTools ? toSdkTools(req.tools) : undefined;
+    return tools ? { tools, toolChoice: req.toolChoice ?? 'auto' } : {};
+  };
+  const usageOf = (u: { inputTokens?: number | undefined; outputTokens?: number | undefined }, meta: unknown) => {
+    const m = ((meta as Record<string, unknown> | undefined)?.['openrouter'] ?? {}) as { usage?: { cost?: number } };
+    const cost = typeof m.usage?.cost === 'number' ? m.usage.cost : null;
+    return { model: opts.model, inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0, costUsd: cost, approximate: cost === null };
+  };
   return {
-    id: 'openrouter', model: opts.model,
+    id: 'openrouter', model: opts.model, ...(opts.nativeTools ? { nativeTools: true } : {}),
     async complete(req) {
       try {
-        const r = await generateText({ model: or.chat(opts.model), system: req.system, messages: toSdkMessages(req.messages), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0,
+        const r = await generateText({ model: or.chat(opts.model), system: req.system, messages: toSdkMessages(req.messages), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0, ...toolOpts(req),
           ...(req.signal ? { abortSignal: req.signal } : {}), ...(req.timeoutMs ? { timeout: req.timeoutMs } : {}) });
-        const meta = (r.providerMetadata?.['openrouter'] ?? {}) as { usage?: { cost?: number } };
-        const cost = typeof meta.usage?.cost === 'number' ? meta.usage.cost : null;
         const rt = r.usage.outputTokenDetails?.reasoningTokens ?? r.usage.reasoningTokens;
-        return { text: r.text, usage: { model: opts.model, inputTokens: r.usage.inputTokens ?? 0, outputTokens: r.usage.outputTokens ?? 0, costUsd: cost, approximate: cost === null },
-          finishReason: String(r.finishReason), ...(typeof rt === 'number' ? { reasoningTokens: rt } : {}) };
+        const calls = r.toolCalls.map((c) => ({ id: c.toolCallId, name: c.toolName, input: c.input }));
+        return { text: r.text, usage: usageOf(r.usage, r.providerMetadata), finishReason: String(r.finishReason), ...(typeof rt === 'number' ? { reasoningTokens: rt } : {}),
+          ...(calls.length ? { toolCalls: calls, providerRaw: r.response.messages } : {}) };
       } catch (e) { throw mapProviderError(e); }
     },
     async stream(req, onDelta) {
       try {
         // Streaming: reasoning models think for minutes before the first text; the stream stays alive (reasoning chunks), so
         // the limit is a silence of chunkMs, and the whole answer may take STREAM_TOTAL_FACTOR × the call timeout.
-        const r = streamText({ model: or.chat(opts.model), system: req.system, messages: toSdkMessages(req.messages), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0,
+        const r = streamText({ model: or.chat(opts.model), system: req.system, messages: toSdkMessages(req.messages), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0, ...toolOpts(req),
           ...(req.signal ? { abortSignal: req.signal } : {}), ...(req.timeoutMs ? { timeout: { totalMs: req.timeoutMs * STREAM_TOTAL_FACTOR, chunkMs: Math.min(req.timeoutMs, STREAM_CHUNK_MS) } } : {}) });
-        let text = '';
+        let text = ''; const calls: ToolCall[] = [];
         for await (const part of r.fullStream) {
           if (part.type === 'text-delta') { text += part.text; onDelta(part.text); }
+          else if (part.type === 'reasoning-start') req.onActivity?.({ type: 'thinking' });
+          else if (part.type === 'tool-input-start') req.onActivity?.({ type: 'tool', name: part.toolName });
+          else if (part.type === 'tool-call') calls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
           else if (part.type === 'error') throw part.error;
         }
         const [usage, metaAll, finish] = await Promise.all([r.usage, r.providerMetadata, r.finishReason]);
-        const meta = (metaAll?.['openrouter'] ?? {}) as { usage?: { cost?: number } };
-        const cost = typeof meta.usage?.cost === 'number' ? meta.usage.cost : null;
         const rt = usage.outputTokenDetails?.reasoningTokens ?? usage.reasoningTokens;
-        return { text, usage: { model: opts.model, inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0, costUsd: cost, approximate: cost === null },
-          finishReason: String(finish), ...(typeof rt === 'number' ? { reasoningTokens: rt } : {}) };
+        const raw = calls.length ? (await r.response).messages : undefined;
+        return { text, usage: usageOf(usage, metaAll), finishReason: String(finish), ...(typeof rt === 'number' ? { reasoningTokens: rt } : {}), ...(calls.length ? { toolCalls: calls, providerRaw: raw } : {}) };
       } catch (e) { throw mapProviderError(e); }
     },
   };
 }
 
-/** Scripted provider for tests and golden-scenario replay (GOLDEN_SCENARIOS §4b). */
-export function fakeProvider(replies: Array<string | ((req: ChatRequest, attempt: number) => string) | Error>, model = 'fake/model'): ChatProvider & { calls: ChatRequest[] } {
+/** A scripted reply: text, or (native tool calling) text plus tool calls. */
+export type FakeReply = string | { text?: string; toolCalls?: ToolCall[] };
+/** Scripted provider for tests and golden-scenario replay (GOLDEN_SCENARIOS §4b). `nativeTools` makes it a tools-capable provider. */
+export function fakeProvider(replies: Array<FakeReply | ((req: ChatRequest, attempt: number) => FakeReply) | Error>, model = 'fake/model', opts: { nativeTools?: boolean } = {}): ChatProvider & { calls: ChatRequest[] } {
   const calls: ChatRequest[] = [];
   const complete = async (req: ChatRequest): Promise<ChatResult> => {
-    const i = calls.length; calls.push(req);
+    const i = calls.length; calls.push({ ...req, messages: [...req.messages] });
     const r = replies[Math.min(i, replies.length - 1)];
     if (r instanceof Error) throw mapProviderError(r);
-    const text = typeof r === 'function' ? r(req, i) : String(r);
-    return { text, usage: { model, inputTokens: Math.ceil(JSON.stringify(req).length / 4), outputTokens: Math.ceil(text.length / 4), costUsd: 0, approximate: false } };
+    const v = typeof r === 'function' ? r(req, i) : r!;
+    const text = typeof v === 'string' ? v : v.text ?? '';
+    const toolCalls = typeof v === 'string' ? undefined : v.toolCalls;
+    return { text, usage: { model, inputTokens: Math.ceil(JSON.stringify(req).length / 4), outputTokens: Math.ceil(text.length / 4), costUsd: 0, approximate: false },
+      ...(toolCalls?.length ? { toolCalls, providerRaw: [{ fake: true, text, toolCalls }] } : {}) };
   };
   // Streams the scripted reply in 8-character chunks so streaming consumers can be tested without a network.
-  return { id: 'fake', model, calls, complete, async stream(req, onDelta) {
+  return { id: 'fake', model, calls, complete, ...(opts.nativeTools ? { nativeTools: true } : {}), async stream(req, onDelta) {
     const res = await complete(req);
     for (let k = 0; k < res.text.length; k += 8) { if (req.signal?.aborted) throw new EmError('EM-4303', 'Cancelled.'); onDelta(res.text.slice(k, k + 8)); }
     return res;

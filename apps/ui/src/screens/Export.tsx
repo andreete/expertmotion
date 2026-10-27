@@ -177,7 +177,15 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       {job && running && (
         <div className="flex flex-col gap-2">
           <Progress el="scr.export.progress" value={job.progress} label={t('ui.scr.export.progress', { frame: job.renderedFrames ?? 0, total: job.totalFrames ?? 0, percent: Math.round(job.progress * 100) })} />
-          <span>{job.status === 'queued' ? t('err.EM-3208.title') : t('ui.scr.export.progress', { frame: job.renderedFrames ?? 0, total: job.totalFrames ?? 0, percent: Math.round(job.progress * 100) })}</span>
+          {/* FR-204: say what is happening — waiting for memory (EM-3107), another render first (EM-3208), engine start, encoding, checking. */}
+          {job.status === 'queued' && job.notices?.includes('EM-3107') ? (
+            <div data-el="scr.export.waiting.memory" role="status" className="flex flex-col gap-0.5"><span className="font-semibold">{t('err.EM-3107.title')}</span><span className="text-[12px] text-em-text-2">{t('err.EM-3107.body')}</span></div>
+          ) : (
+            <span data-el="scr.export.stage">{job.status === 'queued' ? (state.renders.some((j) => j.id !== job.id && j.status === 'rendering') ? t('err.EM-3208.title') : t('ui.scr.export.stage.preparing'))
+              : job.stage === 'preparing' || (job.progress === 0 && !job.renderedFrames) ? t('ui.scr.export.stage.preparing')
+                : job.stage === 'encoding' ? t('ui.scr.export.stage.encoding') : job.stage === 'validating' ? t('ui.scr.export.stage.validating')
+                  : t('ui.scr.export.progress', { frame: job.renderedFrames ?? 0, total: job.totalFrames ?? 0, percent: Math.round(job.progress * 100) })}</span>
+          )}
           <div className="flex gap-4">
             <span data-el="scr.export.eta" className="text-em-muted">{job.etaMs ? t('ui.scr.export.eta', { time: formatDuration(job.etaMs) }) : t('ui.scr.export.estimating')}</span>
             <span data-el="scr.export.elapsed" className="text-em-muted">{t('ui.scr.export.elapsed', { time: formatDuration(elapsedMs) })}</span>
@@ -199,8 +207,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           {output && <code className="t-mono max-w-full truncate text-[11px] text-em-muted select-all">{output.path}</code>}
         </div>
       )}
-      {job && job.status === 'failed' && <ErrorBox code={job.errorCode ?? 'EM-3201'} vars={{ percent: Math.round(job.progress * 100), name }} actions={<>
-        <Button size={28} onClick={() => setJobId(null)}>{t('ui.sys.toast.tryagain')}</Button>
+      {job && job.status === 'failed' && <ErrorBox code={job.errorCode ?? 'EM-3201'} vars={{ percent: Math.round(job.progress * 100), name, folder: folder || '…', need: '…', have: '…' }} actions={<>
+        <Button el="scr.export.failed.retry" size={28} onClick={() => setJobId(null)}>{t('ui.sys.toast.tryagain')}</Button>
         <Button el="scr.export.diagnostics" size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'diagnostics' })}>{t('ui.scr.export.fix.diagnostics')}</Button>
       </>} />}
       {job && job.status === 'failed' && typeof job.failedFrame === 'number' && (   // FR-143: the frame the render stopped at

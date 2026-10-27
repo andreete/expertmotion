@@ -7,6 +7,8 @@ import path from 'node:path';
 export interface ServiceConfig {
   port: number; token: string; dataDir: string; dbKeyHex: string; dev: boolean; uiOrigin?: string;
   version: string; mediaGrantTtlMs: number;
+  /** FR-205: the OS Videos folder from the Shell (dev: EM_VIDEOS_DIR); default export folder `<videosDir>/Expertmotion`. */
+  videosDir?: string;
 }
 export const VERSION = '0.1.0';
 export const PROD_PORT_RANGE = [42300, 42399] as const;
@@ -20,13 +22,15 @@ export function devConfig(env: NodeJS.ProcessEnv = process.env): ServiceConfig {
   let dbKeyHex = env['EM_DB_KEY'];
   if (!dbKeyHex) { if (!fs.existsSync(keyFile)) fs.writeFileSync(keyFile, crypto.randomBytes(32).toString('hex'), { mode: 0o600 }); dbKeyHex = fs.readFileSync(keyFile, 'utf8').trim(); }
   const uiOrigin = env['EM_UI_ORIGIN'] ?? `http://127.0.0.1:${env['EM_UI_PORT'] ?? 4120}`;
-  return { port: Number(env['EM_PORT'] ?? 4110), token, dataDir, dbKeyHex, dev: true, uiOrigin, version: VERSION, mediaGrantTtlMs: Number(env['EM_MEDIA_GRANT_TTL_H'] ?? 12) * 3_600_000 };
+  const videosDir = env['EM_VIDEOS_DIR'] && path.isAbsolute(env['EM_VIDEOS_DIR']) ? env['EM_VIDEOS_DIR'] : undefined;
+  return { port: Number(env['EM_PORT'] ?? 4110), token, dataDir, dbKeyHex, dev: true, uiOrigin, version: VERSION, mediaGrantTtlMs: Number(env['EM_MEDIA_GRANT_TTL_H'] ?? 12) * 3_600_000, ...(videosDir ? { videosDir } : {}) };
 }
 
-export interface Bootstrap { type: 'bootstrap'; token: string; port: number; dataDir: string; dbKeyHex: string; promptKeyHalf?: string }
+export interface Bootstrap { type: 'bootstrap'; token: string; port: number; dataDir: string; dbKeyHex: string; promptKeyHalf?: string; videosDir?: string }
 export function prodConfig(b: Bootstrap): ServiceConfig {
   if (!/^[A-Za-z0-9_-]{43}$/.test(b.token) || !/^[0-9a-f]{64}$/.test(b.dbKeyHex) || b.port < PROD_PORT_RANGE[0] || b.port > PROD_PORT_RANGE[1]) throw new Error('invalid bootstrap');
-  return { port: b.port, token: b.token, dataDir: b.dataDir, dbKeyHex: b.dbKeyHex, dev: false, version: VERSION, mediaGrantTtlMs: 12 * 3_600_000 };
+  const videosDir = typeof b.videosDir === 'string' && b.videosDir.length <= 1024 && path.isAbsolute(b.videosDir) ? b.videosDir : undefined;
+  return { port: b.port, token: b.token, dataDir: b.dataDir, dbKeyHex: b.dbKeyHex, dev: false, version: VERSION, mediaGrantTtlMs: 12 * 3_600_000, ...(videosDir ? { videosDir } : {}) };
 }
 
 /** Data directory layout (ARCHITECTURE §8). */

@@ -1,10 +1,15 @@
 // Local provider stub for end-to-end runs (dev only; process.md Entry 28). The Service, started with EM_DEV=1 and
 // EM_DEV_PROVIDER_STUB=http://127.0.0.1:<port>, sends every provider call here (apps/service/src/s3/dev-provider-stub.ts):
 //   /anthropic/v1/models (paginated: limit, after_id, before_id; has_more / first_id / last_id), /anthropic/v1/messages
-//   (thinking + text blocks), /openai/v1/models + /chat/completions, /gemini/v1beta/models + :generateContent,
+//   (Entry 30: Claude's behaviour of QA 2026-10-27 — validated like the Messages API (tool_use ↔ tool_result pairing, thinking
+//   block before tool_use, tool names, image blocks, no temperature, no prefill), native tool_use, SSE streaming per the
+//   streaming docs (message_start, content_block_* with thinking / signature / text / input_json deltas, ping, message_delta,
+//   message_stop, error events), Brainstorm proposals WITHOUT params, image input (a text-only model refuses images), and
+//   `mode: 'xml'` = tool calls written as <invoke> markup in plain text), /openai/v1/models + /chat/completions, /gemini/v1beta/models + :generateContent,
 //   /openrouter/api/v1/key + /models (450 rows, or E2E_OR_MODELS=<real list JSON>) + /chat/completions (JSON or SSE stream).
 // Shapes mirror the real APIs as read by apps/service/src/s3/adapters.ts. Keys containing "bad" get 401. Faults are set per
-// provider with POST /__stub/config {provider, fault: null|'401'|'429'|'529'|'500', delayMs, times}; GET /__stub/log lists calls.
+// provider with POST /__stub/config {provider, fault: null|'401'|'429'|'529'|'500', delayMs, times, mode: 'native'|'xml', thinkMs};
+// GET /__stub/log lists calls (Anthropic calls also record tools / images / tool results / stream / validation errors).
 // Usage: import { startProviderStub } from './provider-stub.mjs'; const stub = await startProviderStub(4140);
 //        or standalone: node poc/e2e/provider-stub.mjs 4140
 import fs from 'node:fs';
@@ -27,9 +32,10 @@ export const ANTHROPIC_MODELS = [
   ['claude-sonnet-4-6', 'Claude Sonnet 4.6', '2025-11-24T00:00:00Z', 1_000_000, 64_000],
   ['claude-haiku-4-5', 'Claude Haiku 4.5', '2025-10-15T00:00:00Z', 200_000, 64_000],
   ['claude-opus-4-5-20251101', 'Claude Opus 4.5', '2025-11-01T00:00:00Z', 200_000, 64_000],
+  ['claude-text-stub', 'Claude Text Stub (no images)', '2025-01-01T00:00:00Z', 200_000, 64_000],
 ].map(([id, display_name, created_at, max_input_tokens, max_tokens]) => ({
   type: 'model', id, display_name, created_at, max_input_tokens, max_tokens,
-  capabilities: { thinking: { supported: true }, image_input: { supported: true }, pdf_input: { supported: true }, structured_outputs: { supported: !String(id).includes('haiku') } },
+  capabilities: { thinking: { supported: true }, image_input: { supported: id !== 'claude-text-stub' }, pdf_input: { supported: true }, structured_outputs: { supported: !String(id).includes('haiku') } },
 }));
 
 /** 450 OpenRouter-shaped rows (or the real list from E2E_OR_MODELS). */
@@ -73,6 +79,98 @@ function errorBody(provider, status) {
   return { error: { message: msg, code: status, type: status === 401 ? 'invalid_api_key' : 'rate_limit_exceeded' } };
 }
 
+// ── Anthropic Messages API behaviour (validation + answers), mirrored from platform.claude.com/docs (messages, tool use, vision,
+//    streaming). The QA of 2026-10-27 used Claude Sonnet 5.5 with a direct key. ──
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+const blocksOf = (m) => (Array.isArray(m?.content) ? m.content : typeof m?.content === 'string' ? [{ type: 'text', text: m.content }] : []);
+const anthropicImages = (body) => (body.messages ?? []).flatMap((m) => blocksOf(m).filter((b) => b.type === 'image').map((b) => ({ mediaType: b.source?.media_type, bytes: Math.floor(String(b.source?.data ?? '').length * 0.75) })));
+const anthropicToolResults = (body) => (body.messages ?? []).flatMap((m) => blocksOf(m).filter((b) => b.type === 'tool_result').map((b) => b.tool_use_id));
+/** The 400 reason the real API gives for a malformed request, or null. */
+export function anthropicProblem(body) {
+  const msgs = Array.isArray(body.messages) ? body.messages : null;
+  if (!msgs?.length) return 'messages: at least one message is required';
+  if (!Number.isInteger(body.max_tokens)) return 'max_tokens: Field required';
+  if (msgs[0].role !== 'user') return 'messages: first message must use the "user" role';
+  if (msgs.at(-1).role !== 'user') return 'This model does not support assistant message prefill. The conversation must end with a user message.';
+  const hasToolBlocks = msgs.some((m) => blocksOf(m).some((b) => b.type === 'tool_use' || b.type === 'tool_result'));
+  if (hasToolBlocks && !(body.tools ?? []).length) return 'Requests which include `tool_use` or `tool_result` blocks must define tools.';
+  for (const t of body.tools ?? []) {
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(String(t.name))) return `tools.${t.name}.name: String should match pattern '^[a-zA-Z0-9_-]{1,64}$'`;
+    if (t.input_schema?.type !== 'object') return `tools.${t.name}.input_schema.type: Input should be 'object'`;
+  }
+  for (let i = 0; i < msgs.length; i++) {
+    const b = blocksOf(msgs[i]);
+    if (msgs[i].role === 'assistant') {
+      const uses = b.filter((x) => x.type === 'tool_use');
+      if (uses.length && b[0]?.type !== 'thinking' && b[0]?.type !== 'redacted_thinking') return `messages.${i}.content.0.type: Expected \`thinking\` or \`redacted_thinking\`, but found \`${b[0]?.type}\`. When \`thinking\` is enabled, a final \`assistant\` message must start with a thinking block.`;
+      if (uses.some((u) => b.some((x) => x.type === 'thinking' && !x.signature))) return `messages.${i}.content: thinking block without signature`;
+      if (uses.length) {
+        const next = blocksOf(msgs[i + 1]); const ids = next.filter((x) => x.type === 'tool_result').map((x) => x.tool_use_id);
+        if (msgs[i + 1]?.role !== 'user' || uses.some((u) => !ids.includes(u.id))) return `messages.${i + 1}: \`tool_use\` ids were found without \`tool_result\` blocks immediately after: ${uses.map((u) => u.id).join(', ')}. Each \`tool_use\` block must have a corresponding \`tool_result\` block in the next message.`;
+        const firstNonResult = next.findIndex((x) => x.type !== 'tool_result');
+        if (firstNonResult >= 0 && next.slice(firstNonResult).some((x) => x.type === 'tool_result')) return `messages.${i + 1}: tool_result blocks must come first`;
+      }
+    }
+    for (const x of b) if (x.type === 'image') {
+      if (x.source?.type !== 'base64' || !IMAGE_TYPES.includes(x.source?.media_type) || !/^[A-Za-z0-9+/]+=*$/.test(String(x.source?.data ?? ''))) return `messages.${i}.content: invalid image source`;
+      if (body.model === 'claude-text-stub') return `messages.${i}.content: image input is not supported for this model`;
+    }
+  }
+  return null;
+}
+const QA_INVOKE = '<invoke>\n<parameter name="input">{"query": "gradient", "category": "backgrounds"}</parameter>\n<parameter name="tool">catalogue.search</parameter>\n</invoke>';
+/** Claude-like answers: Brainstorm calls catalogue_search first (native tool_use, or <invoke> markup in `xml` mode), then answers
+ *  with a BrainstormTurn whose proposals have NO params (the shape that crashed the chat); the Editor reads the project first. */
+export function anthropicAnswer(body, c = {}) {
+  const system = typeof body.system === 'string' ? body.system : (body.system ?? []).map((x) => x.text ?? '').join('\n');
+  const thinking = { type: 'thinking', thinking: '', signature: 'EqQBCgIYAhIMstub' + 'x'.repeat(48) };
+  const msgs = body.messages ?? [];
+  const results = msgs.some((m) => blocksOf(m).some((b) => b.type === 'tool_result' || (b.type === 'text' && String(b.text).includes('"toolResult"'))));
+  const tools = (body.tools ?? []).map((t) => t.name);
+  const lastImages = blocksOf(msgs.at(-1)).filter((b) => b.type === 'image');
+  if (/connection test/i.test(system)) return [thinking, { type: 'text', text: '{"reply":"OK"}' }];
+  if (/^You are the Editor Agent/.test(system)) {
+    if (tools.includes('composition_get') && !results && body.tool_choice?.type !== 'none') return [thinking, { type: 'text', text: 'Saya baca proyeknya dulu.' }, { type: 'tool_use', id: `toolu_stub_${Date.now()}`, name: 'composition_get', input: {} }];
+    return [thinking, { type: 'text', text: EDITOR_PLAN }];
+  }
+  if (!results && (c.mode === 'xml' || (!tools.length && /Read-only tools/.test(system)))) return [thinking, { type: 'text', text: `${QA_INVOKE}\n<invoke>\n<parameter name="name">catalogue.search</parameter>\n</invoke>` }];
+  if (!results && tools.includes('catalogue_search') && body.tool_choice?.type !== 'none') return [thinking, { type: 'text', text: 'Saya cek katalog dulu.' }, { type: 'tool_use', id: `toolu_stub_${Date.now()}`, name: 'catalogue_search', input: { query: 'gradient', category: 'background' } }];
+  const seen = msgs.flatMap((m) => blocksOf(m).filter((b) => b.type === 'image'));
+  const img = lastImages[0] ?? seen.at(-1);
+  const asked = [...msgs].reverse().flatMap((m) => (m.role === 'user' ? blocksOf(m).filter((b) => b.type === 'text' && !String(b.text).includes('"toolResult"')).map((b) => String(b.text)) : []))[0] ?? '';
+  const topic = asked.replace(/\s+/g, ' ').trim().slice(0, 60);
+  const reply = `Ide konten untuk "${topic}": hook "Data center Indonesia tumbuh pesat", 6 adegan dengan latar gradasi, CTA di akhir.${img ? ` Gambar diterima (${img.source.media_type}).` : ''}`;
+  return [thinking, { type: 'text', text: JSON.stringify({ reply, suggestedNextStep: 'send-to-editor', proposedIntents: [
+    { category: 'asset', needsInterpretation: true, instruction: 'Pakai gambar yang dilampirkan sebagai CTA di adegan terakhir', source: 'brainstorm' },
+    { category: 'text', needsInterpretation: true, instruction: 'Teks CTA "Bangun Bersama Kami"', source: 'brainstorm' },
+  ] }) }];
+}
+/** SSE per the Messages streaming docs; `thinkMs` keeps the thinking block open (with pings) like a long adaptive think. */
+async function streamAnthropic(res, model, content, stop, outTokens, c) {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'request-id': `req_stub_${Date.now()}` });
+  const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+  ev('message_start', { message: { id: `msg_stub_${Date.now()}`, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1200, output_tokens: 1 } } });
+  for (const [i, b] of content.entries()) {
+    if (b.type === 'thinking') {
+      ev('content_block_start', { index: i, content_block: { type: 'thinking', thinking: '', signature: '' } });
+      for (let t = 0; t < (c.thinkMs ?? 0); t += 500) { await sleep(Math.min(500, (c.thinkMs ?? 0) - t)); ev('ping', {}); }
+      ev('content_block_delta', { index: i, delta: { type: 'thinking_delta', thinking: '' } });
+      ev('content_block_delta', { index: i, delta: { type: 'signature_delta', signature: b.signature } });
+    } else if (b.type === 'text') {
+      ev('content_block_start', { index: i, content_block: { type: 'text', text: '' } });
+      for (const ch of b.text.match(/[\s\S]{1,24}/g) ?? []) { ev('content_block_delta', { index: i, delta: { type: 'text_delta', text: ch } }); await sleep(12); }
+    } else if (b.type === 'tool_use') {
+      ev('content_block_start', { index: i, content_block: { type: 'tool_use', id: b.id, name: b.name, input: {} } });
+      ev('content_block_delta', { index: i, delta: { type: 'input_json_delta', partial_json: '' } });
+      for (const ch of JSON.stringify(b.input).match(/[\s\S]{1,10}/g) ?? []) { ev('content_block_delta', { index: i, delta: { type: 'input_json_delta', partial_json: ch } }); await sleep(5); }
+    }
+    ev('content_block_stop', { index: i });
+  }
+  ev('message_delta', { delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: outTokens } });
+  ev('message_stop', {});
+  res.end();
+}
+
 export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}) {
   const config = {};                        // provider → { fault, delayMs, times }
   const calls = [];
@@ -82,7 +180,7 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
     const [, provider, ...rest] = u.pathname.split('/');
     const p = `/${rest.join('/')}`;
     if (provider === '__stub') {
-      if (p === '/config' && req.method === 'POST') { const b = await readBody(req); config[b.provider] = { fault: b.fault ?? null, delayMs: b.delayMs ?? 0, times: b.times ?? Infinity }; return send(res, 200, { ok: true, config }); }
+      if (p === '/config' && req.method === 'POST') { const b = await readBody(req); config[b.provider] = { fault: b.fault ?? null, delayMs: b.delayMs ?? 0, times: b.times ?? Infinity, mode: b.mode ?? 'native', thinkMs: b.thinkMs ?? 0 }; return send(res, 200, { ok: true, config }); }
       if (p === '/log') return send(res, 200, { calls });
       return send(res, 404, {});
     }
@@ -109,10 +207,16 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
       if (p === '/v1/messages') {
         if (!ANTHROPIC_MODELS.some((m) => m.id === body.model)) return send(res, 404, { type: 'error', error: { type: 'not_found_error', message: `model: ${body.model}` }, request_id: 'req_stub_404' });
         if ('temperature' in body && /opus-5|sonnet-5|fable/.test(body.model)) return send(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'temperature is not supported for this model' }, request_id: 'req_stub_400' });
-        return send(res, 200, { id: `msg_stub_${Date.now()}`, type: 'message', role: 'assistant', model: body.model,
-          content: [{ type: 'thinking', thinking: '', signature: 'EqQBCgIYAhIM' + 'x'.repeat(64) }, { type: 'text', text }],
-          stop_reason: 'end_turn', stop_sequence: null, stop_details: null,
-          usage: { input_tokens: usage.in, output_tokens: usage.out, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, service_tier: 'standard' } });
+        const problem = anthropicProblem(body);
+        const rec = calls[calls.length - 1];
+        Object.assign(rec, { tools: (body.tools ?? []).map((t) => t.name), toolChoice: body.tool_choice?.type ?? null, images: anthropicImages(body), toolResults: anthropicToolResults(body), maxTokens: body.max_tokens, problem });
+        if (problem) return send(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: problem }, request_id: 'req_stub_400' });
+        const content = anthropicAnswer(body, c ?? {});
+        const stop = content.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn';
+        const outTokens = Math.ceil(JSON.stringify(content).length / 4);
+        if (body.stream) return streamAnthropic(res, body.model, content, stop, outTokens, c ?? {});
+        return send(res, 200, { id: `msg_stub_${Date.now()}`, type: 'message', role: 'assistant', model: body.model, content, stop_reason: stop, stop_sequence: null, stop_details: null,
+          usage: { input_tokens: usage.in, output_tokens: outTokens, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, service_tier: 'standard' } });
       }
     }
     if (provider === 'openai') {
@@ -141,7 +245,7 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
   });
   await new Promise((r) => server.listen(port, host, r));
   return { origin: `http://${host}:${port}`, calls, close: () => new Promise((r) => server.close(() => r())),
-    configure: (provider, c) => { config[provider] = { fault: c.fault ?? null, delayMs: c.delayMs ?? 0, times: c.times ?? Infinity }; } };
+    configure: (provider, c) => { config[provider] = { fault: c.fault ?? null, delayMs: c.delayMs ?? 0, times: c.times ?? Infinity, mode: c.mode ?? 'native', thinkMs: c.thinkMs ?? 0 }; } };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

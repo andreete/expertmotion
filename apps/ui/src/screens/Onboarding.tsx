@@ -90,8 +90,9 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           )}
           {id === 'models' && (
             <>
-              {providerDone ? <AssignForm {...(newest ? { connectionId: newest.id } : {})} onSaved={() => go(STEPS.indexOf('hardware'))} /> : <p className="text-em-muted">{o('onb.models.skipped')}</p>}
-              <Button variant="ghost" onClick={() => go(STEPS.indexOf('hardware'))}>{o('onb.models.defaults')}</Button>
+              {/* FR-215: the model list loads by itself; "Use defaults" stores the default model of each agent, then moves on. */}
+              {providerDone ? <AssignForm {...(newest ? { connectionId: newest.id } : {})} useDefaultsLabel={o('onb.models.defaults')} onSaved={() => go(STEPS.indexOf('hardware'))} />
+                : <><p className="text-em-muted">{o('onb.models.skipped')}</p><Button variant="ghost" onClick={() => go(STEPS.indexOf('hardware'))}>{o('onb.next')}</Button></>}
             </>
           )}
           {id === 'hardware' && (

@@ -11,6 +11,9 @@ export interface BootstrapMessage {
   readonly dbKeyHex: string;
   /** Half B of the prompt-assets key (release builds only; SEC-133). */
   readonly promptKeyHalf?: string;
+  /** FR-205: the OS Videos folder (Electron `app.getPath('videos')`, follows Windows Known Folder / OneDrive redirection);
+   *  default export folder `<videosDir>/Expertmotion` and an allowed output root. Not secret. */
+  readonly videosDir?: string;
 }
 
 export interface ShutdownMessage {
@@ -29,13 +32,14 @@ export type ServiceToShell = { type: 'ready'; port: number } | { type: 'fatal'; 
 
 const HEX32 = /^[0-9a-f]{64}$/;
 
-export function buildBootstrap(args: { token: string; port: number; dataDir: string; dbKeyHex: string; promptKeyHalf?: string }): BootstrapMessage {
+export function buildBootstrap(args: { token: string; port: number; dataDir: string; dbKeyHex: string; promptKeyHalf?: string; videosDir?: string | undefined }): BootstrapMessage {
   if (args.token.length < 16) throw new Error('bootstrap: token too short');
   if (!Number.isInteger(args.port) || args.port <= 0 || args.port > 65535) throw new Error('bootstrap: bad port');
   if (args.dataDir.length === 0) throw new Error('bootstrap: empty dataDir');
   if (!HEX32.test(args.dbKeyHex)) throw new Error('bootstrap: dbKeyHex must be 64 lowercase hex chars (32 bytes)');
   if (args.promptKeyHalf !== undefined && args.promptKeyHalf !== '' && !HEX32.test(args.promptKeyHalf)) throw new Error('bootstrap: promptKeyHalf must be 64 lowercase hex chars');
-  return { type: 'bootstrap', token: args.token, port: args.port, dataDir: args.dataDir, dbKeyHex: args.dbKeyHex, ...(args.promptKeyHalf ? { promptKeyHalf: args.promptKeyHalf } : {}) };
+  const videosDir = args.videosDir && args.videosDir.length <= 1024 && !args.videosDir.includes('\0') && /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(args.videosDir) ? args.videosDir : undefined;
+  return { type: 'bootstrap', token: args.token, port: args.port, dataDir: args.dataDir, dbKeyHex: args.dbKeyHex, ...(args.promptKeyHalf ? { promptKeyHalf: args.promptKeyHalf } : {}), ...(videosDir ? { videosDir } : {}) };
 }
 
 export const shutdownMessage: ShutdownMessage = { type: 'shutdown' };

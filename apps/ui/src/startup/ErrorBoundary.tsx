@@ -2,10 +2,11 @@
 // leave a black window; now the Creator sees "Something went wrong — Reload" with the EM-8009 code and the error message,
 // and the error (with stack) goes to the Shell log through the preload's logError bridge (validated and capped in main).
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { AlertTriangle, RefreshCw, RotateCcw } from 'lucide-react';
+import { AlertTriangle, FilePlus2, FolderOpen, FolderSearch, RefreshCw, RotateCcw } from 'lucide-react';
 import { translate } from '../i18n/index.js';
 import { AppMark } from '../components/AppMark.js';
 import { startupLang } from './progress.js';
+import { getLogsDir, noteEditorCrash, requestBootAction } from './session-guard.js';
 
 export const EDITOR_ERROR_CODE = 'EM-8009';
 
@@ -33,17 +34,25 @@ interface State { error: Error | null }
 export class ErrorBoundary extends Component<{ children: ReactNode; onReload?: () => void }, State> {
   override state: State = { error: null };
   static getDerivedStateFromError(error: unknown): State { return { error: error instanceof Error ? error : new Error(String(error)) }; }
-  override componentDidCatch(error: unknown, info: ErrorInfo): void { logEditorError(error, 'error-boundary', info.componentStack ?? undefined); }
+  override componentDidCatch(error: unknown, info: ErrorInfo): void {
+    noteEditorCrash();                                     // FR-202: counts against the project opened just before (crash-loop guard)
+    logEditorError(error, 'error-boundary', info.componentStack ?? undefined);
+  }
   override render(): ReactNode {
     const { error } = this.state;
     if (!error) return this.props.children;
     const lang = startupLang();
     const t = (k: string) => translate(lang, k);
-    const reload = this.props.onReload ?? (() => window.location.reload());
+    const doReload = this.props.onReload ?? (() => window.location.reload());
+    // FR-202: never only "Reload" — another project, a new one, or the log folder are always one click away.
+    const go = (action: 'reload' | 'pick' | 'new') => () => { requestBootAction(action); doReload(); };
+    const logs = getLogsDir();
+    const bridge = typeof window !== 'undefined' ? window.expertmotion : undefined;
+    const second = 'inline-flex h-8 items-center gap-1.5 rounded-[6px] border border-em-line px-3 text-em-text hover:bg-em-panel-2';
     return (
       <div data-el="sys.crash" role="alertdialog" aria-labelledby="sys-crash-title" className="flex h-full w-full flex-col items-center justify-center gap-4 bg-em-bg p-8 text-em-text">
         <AppMark size={48} />
-        <div className="w-[440px] max-w-full rounded-[8px] border-l-2 border-em-danger bg-em-panel px-4 py-3">
+        <div className="w-[520px] max-w-full rounded-[8px] border-l-2 border-em-danger bg-em-panel px-4 py-3">
           <div className="flex items-center gap-2 text-em-danger">
             <AlertTriangle size={16} aria-hidden />
             <h1 id="sys-crash-title" className="flex-1 text-[15px] font-semibold">{t('ui.sys.crash.title')}</h1>
@@ -51,8 +60,15 @@ export class ErrorBoundary extends Component<{ children: ReactNode; onReload?: (
           </div>
           <p className="mt-1 text-em-text-2">{t('ui.sys.crash.body')}</p>
           <p data-el="sys.crash.message" className="t-mono mt-2 max-h-[72px] overflow-auto break-words text-[11px] text-em-muted select-all">{`${error.name}: ${error.message}`.slice(0, 300)}</p>
-          <div className="mt-3 flex justify-end">
-            <button type="button" data-el="sys.crash.reload" onClick={reload}
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            {logs && bridge?.openFolder && (
+              <button type="button" data-el="sys.crash.logs" onClick={() => void Promise.resolve(bridge.openFolder?.(logs)).catch(() => undefined)} className={`${second} mr-auto`}>
+                <FolderSearch size={14} aria-hidden />{t('ui.sys.crash.logs')}
+              </button>
+            )}
+            <button type="button" data-el="sys.crash.pick" onClick={go('pick')} className={second}><FolderOpen size={14} aria-hidden />{t('ui.sys.crash.pick')}</button>
+            <button type="button" data-el="sys.crash.new" onClick={go('new')} className={second}><FilePlus2 size={14} aria-hidden />{t('ui.sys.crash.new')}</button>
+            <button type="button" data-el="sys.crash.reload" onClick={go('reload')}
               className="inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-em-accent px-3 font-semibold text-em-accent-ink hover:bg-em-accent-hover">
               <RotateCcw size={14} aria-hidden />{t('ui.sys.crash.reload')}
             </button>

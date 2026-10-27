@@ -20,7 +20,7 @@ import { SectionBoundary } from '../startup/ErrorBoundary.js';
 
 /** FR-085: picks that compiled and applied without any model (Compile path), shown as a compact system line. */
 export function appliedDirectly(items: readonly EditIntent[]): EditIntent[] {
-  return items.filter((i) => !i.parentIntentId && (i.status === 'executed' || i.status === 'compiled') && !i.needsInterpretation && (i.source === 'ui' || i.source === 'brainstorm' || i.params['__output'] !== undefined));
+  return items.filter((i) => !i.parentIntentId && (i.status === 'executed' || i.status === 'compiled') && !i.needsInterpretation && (i.source === 'ui' || i.source === 'brainstorm' || i.params?.['__output'] !== undefined));
 }
 const planIdOf = (m: MessageDto): string | null => {
   for (const b of m.blocks) if (b.type === 'tool_result' && b.name === 'plan' && b.output && typeof (b.output as { planId?: unknown }).planId === 'string') return (b.output as { planId: string }).planId;
@@ -133,6 +133,8 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     const rows: Array<{ at: string; key: string; node: ReactNode }> = [];
     let current = false;
     state.messages.brainstorm.forEach((m, idx) => {
+      // An answer stored by an older build that held only tool-call markup has nothing to show once the markup is removed.
+      if (m.role === 'assistant' && !messageText(m).trim() && !m.blocks.some((b) => b.type === 'proposed_intents')) return;
       const pending = m.blocks.some((b) => b.type === 'proposed_intents' && b.handoffState === 'pending');
       const canApply = m.role === 'assistant' && !pending && Boolean(messageText(m).trim());
       rows.push({ at: m.createdAt, key: `b-${m.id}`, node: (

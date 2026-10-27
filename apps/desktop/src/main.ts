@@ -231,7 +231,7 @@ async function startService(): Promise<void> {
     });
   });
 
-  proc.postMessage(buildBootstrap({ token, port, dataDir: layout.root, dbKeyHex, promptKeyHalf: PROMPT_HALF_B }));
+  proc.postMessage(buildBootstrap({ token, port, dataDir: layout.root, dbKeyHex, promptKeyHalf: PROMPT_HALF_B, videosDir: videosFolder() }));
   proc.on('exit', (code) => onServiceExit(code));
 
   try {
@@ -240,7 +240,7 @@ async function startService(): Promise<void> {
     logLine('info', 'service ready', { port });
     phases.mark('service-ready', Date.now());
     maybeLogPhases();
-    pushServiceState({ status: 'ready', bootstrap: { port, token } });
+    pushServiceState({ status: 'ready', bootstrap: { port, token }, logsDir: layout.logs });   // FR-202: the crash card's "Buka folder log"
     startMetrics(proc);
   } catch (err) {
     logLine('error', 'service failed to become ready', { error: (err as Error).message });
@@ -725,6 +725,9 @@ function registerIpc(): void {
 let lastServiceState: ServiceStatePush = { status: 'starting' };
 /** Set when the Creator chose Restore backup for EM-6001: the next `ready` carries the code so the Editor opens Restore. */
 let restoreBackupPending = false;
+/** FR-205: the OS Videos folder (Known Folder on Windows, so a OneDrive / D:\\ redirection is followed); undefined when unknown. */
+function videosFolder(): string | undefined { try { return app.getPath('videos') || undefined; } catch { return undefined; } }
+
 function pushServiceState(state: ServiceStatePush): void {
   const out = state.status === 'ready' && restoreBackupPending ? { ...state, code: EM.storageUnavailable } : state;
   if (state.status === 'ready') restoreBackupPending = false;
