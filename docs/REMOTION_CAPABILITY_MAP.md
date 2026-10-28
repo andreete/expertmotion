@@ -252,6 +252,12 @@ All motion is a pure function of `useCurrentFrame()` inside the element's Sequen
 | `preset:motion.bounce` | `translate` Y with `easing: Easing.bounce` | same | loop + live | CPU | book §5.4 |
 | `preset:motion.typewriter` | characters shown = `Math.floor(interpolate(f, [d, d+n], [0, text.length], {clamp}))` on a `whiteSpace: 'pre'` span (text only) | durationMs | loop + live | CPU | derived from book §7.7 token pattern |
 | `preset:motion.word-stagger` | per word `s = spring({frame: f, fps, delay: i * 8, config: {damping: 14}})`; `opacity: s`, `translate: 0 ${(1 - s) * 60 * u}px` | same | loop + live | CPU | book §5.5 |
+| `preset:motion.blur-in` | `filter: blur((1 − p) × blurU × u px)` + `opacity: p` + `scale: 0.96 + 0.04 p` (ADR-034, `packages/engine/src/motion.ts` `motionFrame`) | blurU, durationMs, exitMs, exitStyle, bezier, loop | live | CPU (CSS filter) | https://www.remotion.dev/docs/interpolate |
+| `preset:motion.scale-in` | `scale: from + (1 − from) p`, `opacity: min(1, 2p)` | fromScale | live | CPU | https://www.remotion.dev/docs/spring |
+| `preset:motion.wipe-reveal` | `clip-path: inset(…)` shrinking from `direction` | direction | live | CPU | https://www.remotion.dev/docs/interpolate |
+| `preset:motion.draw-on` | shapes: `evolvePath(p, path)` from `@remotion/paths` → `strokeDasharray` / `strokeDashoffset` on the `make*` path, fill fades in for p > 0.65 | — | live | CPU | https://www.remotion.dev/docs/paths/evolve-path |
+| `preset:motion.grow` | `scale: 1 p` (or `p 1`) with `transform-origin` at the base, on an inner wrapper so the box keeps its centre transform; `bezier` via `Easing.bezier` | direction | live | CPU | https://www.remotion.dev/docs/easing |
+| idle `loop` param (any motion) | float: `noise2D(seed, t × 0.35, 0) × 6u` from `@remotion/noise` (deterministic, seeded by element id); pulse / sway: `Math.sin(t)`; spin: 45°/s | loop | live | CPU | https://www.remotion.dev/docs/noise/noise-2d |
 | `preset:motion.none` | static | — | — | — | — |
 
 ### B.6 Shapes (`preset:shape.*`) → `@remotion/shapes`
@@ -271,6 +277,11 @@ All components accept `fill`, `stroke`, `strokeWidth`, `style`, `pathStyle`, `de
 | `preset:shape.callout` | `<Callout />` **[props UNVERIFIED]** | — | — | sibling list |
 | `preset:shape.spark` | `<Spark />` **[props UNVERIFIED]** | — | — | sibling list |
 | `preset:shape.ellipse` | `<Ellipse rx ry />` | `rx`, `ry` | — | sibling list |
+| `preset:shape.line` | `makeRect({width, height, cornerRadius: h / 2})` → one `<path>` (ADR-034 renderer `PathShape`, `packages/engine/src/presets/shapes.tsx`) | w × h | — | sibling list |
+| `preset:shape.ring` | `makeCircle({radius})`, `fill none`, stroke = colour | w, strokeWidth | — | sibling list |
+| `preset:shape.pill` | `makeRect({width, height, cornerRadius: min(w, h) / 2})` | w × h | — | sibling list |
+| `preset:shape.check` | stroked path `M .1 .52 L .38 .8 L .9 .2` (× size) | strokeWidth | — | sibling list |
+| `preset:shape.chevron` | stroked path `M .3 .12 L .72 .5 L .3 .88` (× size) | strokeWidth | — | sibling list |
 
 ### B.7 Easing (`preset:easing.*`) → `Easing` and `spring` from `remotion`
 
@@ -285,6 +296,8 @@ All components accept `fill`, `stroke`, `strokeWidth`, `style`, `pathStyle`, `de
 | `preset:easing.linear` | `Easing.linear` | technical | https://www.remotion.dev/docs/easing |
 | `preset:easing.spring-soft` | `spring({frame, fps, config: {damping: 200}})` (motion) / `springTiming({config: {damping: 200}})` (transition) | — | book §5.5 |
 | `preset:easing.spring-bouncy` | `spring({…, config: {damping: 8}})` / `springTiming({config: {damping: 8}})` | — | book §5.5 |
+| `preset:easing.snappy` | `Easing.bezier(0.2, 0.8, 0.2, 1)` | — | https://www.remotion.dev/docs/easing |
+| `preset:easing.spring-light` | `spring({…, config: {damping: 14}})` | — | https://www.remotion.dev/docs/spring |
 
 Preview: loop (a dot travelling the curve) + live on the selected element. Render: CPU.
 
@@ -361,6 +374,7 @@ Fonts: `preset:font.inter`, `preset:font.plus-jakarta-sans`, `preset:font.archiv
 | `preset:texteffect.circle` | `<Circle progress … />` from `@remotion/rough-notation` (not the shapes `Circle`) | same | loop + live | same |
 | `preset:texteffect.kinetic` | ported `KineticText`: per-word `spring({frame, fps, delay: i × 8, config: {damping: 14}})` | durationMs | loop + live | book §5.5; ADR-013 port list |
 | `preset:texteffect.counter` | ported `AnimatedNumber`: `interpolate(f, [d, d + n], [from, to], {easing, clamp})` formatted per locale | from, to, durationMs | loop + live | ADR-013 |
+| `preset:texteffect.keyword` | per word: listed `words` coloured with the accent + `spring({damping: 10})` scale pop | words, colour | live | ADR-034 |
 
 ### B.12 Themes (`preset:palette.*`, `preset:fontpair.*`)
 
@@ -374,11 +388,17 @@ Not Remotion APIs: the Local Service resolves the picked palette and font pair i
 | `preset:palette.pastel-friendly` | `#FFF4EA` / `#3A3350` / `#E5546F` / `#2E9C86` (accents fail 4.5:1 for small text → used for shapes/large text only) | — | book §4.4 |
 | `preset:palette.high-contrast` | `#000000` / `#FFFFFF` / `#FFE600` / `#FF3B30` | — | book §4.4 |
 | `preset:palette.corporate-blue` | `#0D2A4A` / `#F2F7FC` / `#4DA3FF` / `#FFB020` | — | book §4.4 |
+| `preset:palette.editorial-teal` | `#0F1A1F` / `#FFFFFF` / `#5DCAA5` / `#EF9F27` (+ negative `#F0997B`, muted `#9FB3B8`, neutral `#888780`, pill `#1D9E75`) | — | QA 2026-10-28 reference (ADR-034) |
 | `preset:fontpair.jakarta-inter` | heading `Plus Jakarta Sans` (800), body `Inter` (400/600) via `loadFont` from `@remotion/fonts` | yes | DESIGN_CATALOGUE.md §10–11 |
 | `preset:fontpair.archivo-inter` | heading `Archivo`, body `Inter` | — | same |
 | `preset:fontpair.inter-mono` | heading `Inter`, body/numbers `JetBrains Mono` (also used by `preset:texteffect.counter`) | — | same |
+| `preset:fontpair.inter-inter` | heading and body `Inter` (bundled 400–800) | — | ADR-034 |
 
 ---
+
+### B.1 ADR-034 automatic motion and scene composition (installed packages only)
+
+Installed and used: `@remotion/transitions` (fade, slide, wipe, push-cut, iris, clock-wipe, zoom-in-out … chosen per mood by the scene composer, seeded by scene index; `fade` for the editorial crossfade-rise), `@remotion/shapes` (`make*` geometry for every shape), `@remotion/paths` (`evolvePath` draw-on; added to `packages/engine` dependencies — it was already installed as a dependency of `@remotion/shapes`, same pinned 4.0.535), `@remotion/noise` (`noise2D` idle float; `noise3D` clouds), `@remotion/rough-notation` (highlight / underline / circle), `@remotion/effects` (`lightLeak` etc. stay effect presets; not used by the composer because they need WebGL). Not installed here and therefore not used: `@remotion/motion-blur`, `@remotion/light-leaks`, `@remotion/animation-utils` (no new installs). Text measurement: the composer and the Engine share the deterministic glyph-width estimator `textGeometry` (`packages/composition-model/src/text-box.ts`); `@remotion/layout-utils` `measureText` / `fitText` need the DOM (canvas) and cannot run in the Local Service / agents runtime, so they are not the source of layout decisions (the Engine still renders with the real font; single words and counters never wrap).
 
 ## C. Media handling
 

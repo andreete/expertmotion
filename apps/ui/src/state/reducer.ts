@@ -39,7 +39,7 @@ export type Screen =
   /** FR-002: closing while a Render Job runs: "Cancel render and close" / "Keep rendering". */
   | { kind: 'close.render'; jobId: string; then: () => void };
 
-export interface Streaming { runId: string; text: string; modelId: string; /** FR-214: Send pressed with an image attachment */ attaching?: boolean; /** agent.run.progress (QA 2026-10-26 #5) */ phase?: AgentPhase; attempt?: number; of?: number; tool?: string; /** when the run started (elapsed seconds in the progress line) */ since?: number }
+export interface Streaming { runId: string; text: string; modelId: string; /** FR-214: Send pressed with an image attachment */ attaching?: boolean; /** agent.run.progress (QA 2026-10-26 #5) */ phase?: AgentPhase; attempt?: number; of?: number; tool?: string; /** FR-216 web search query / page */ query?: string; url?: string; /** when the run started (elapsed seconds in the progress line) */ since?: number }
 /** agent.run.failed `message` / `details` (QA 2026-10-26 #3/#5): the reason shown in the error bubble; `details.recentKey` = new key. */
 export interface AgentErrorDetail { message?: string; details?: Record<string, unknown> }
 
@@ -245,13 +245,24 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
       if (state.doneRuns.includes(ev.data.runId)) return state;
       const s = state.streaming[ev.data.agent];
       if (s && s.runId !== ev.data.runId && s.runId !== PENDING_RUN) return state;
-      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.runId, text: s?.text ?? '', modelId: s?.modelId ?? '', phase: ev.data.phase, since: s?.since ?? Date.now(), ...(ev.data.attempt !== undefined ? { attempt: ev.data.attempt } : {}), ...(ev.data.of !== undefined ? { of: ev.data.of } : {}), ...(ev.data.tool ? { tool: ev.data.tool } : {}) } } };
+      return { ...state, streaming: { ...state.streaming, [ev.data.agent]: { runId: ev.data.runId, text: s?.text ?? '', modelId: s?.modelId ?? '', phase: ev.data.phase, since: s?.since ?? Date.now(), ...(ev.data.attempt !== undefined ? { attempt: ev.data.attempt } : {}), ...(ev.data.of !== undefined ? { of: ev.data.of } : {}), ...(ev.data.tool ? { tool: ev.data.tool } : {}),
+        ...(ev.data.query ? { query: ev.data.query } : {}), ...(ev.data.url ? { url: ev.data.url } : {}) } } };
+    }
+    case 'plan.progress': {
+      if (state.plan?.id !== ev.data.planId) return state;
+      return { ...state, plan: { ...state.plan, execPhase: { phase: ev.data.phase, ...(ev.data.done !== undefined ? { done: ev.data.done } : {}), ...(ev.data.total !== undefined ? { total: ev.data.total } : {}), ...(ev.data.totalMs !== undefined ? { totalMs: ev.data.totalMs } : {}), since: state.plan.execPhase?.since ?? Date.now() } } };
+    }
+    case 'agent.message.updated': {
+      const agent = ev.data.agent; const m = safeMessage(ev.data.message);
+      if (!state.messages[agent].some((x) => x.id === m.id)) return state;
+      return { ...state, messages: { ...state.messages, [agent]: state.messages[agent].map((x) => (x.id === m.id ? m : x)) } };
     }
     case 'agent.run.failed': return { ...state, doneRuns: [ev.data.runId, ...state.doneRuns].slice(0, 20), streaming: { ...state.streaming, [ev.data.agent]: null }, agentError: { ...state.agentError, [ev.data.agent]: ev.data.code },
       agentErrorDetail: { ...state.agentErrorDetail, [ev.data.agent]: ev.data.message || ev.data.details ? { ...(ev.data.message ? { message: ev.data.message } : {}), ...(ev.data.details ? { details: ev.data.details } : {}) } : null } };
-    case 'model.progress': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, bytesDone: ev.data.bytesDone, bytesTotal: ev.data.bytesTotal, status: ev.data.status, pausedReason: ev.data.pausedReason ?? null } : m)) };
+    case 'model.progress': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, bytesDone: ev.data.bytesDone, bytesTotal: ev.data.bytesTotal, status: ev.data.status, pausedReason: ev.data.pausedReason ?? null,
+      retry: ev.data.retry ? { ...ev.data.retry, at: Date.now() } : null, failReason: null } : m)) };   // FR-245: "Mencoba lagi…" while a retry waits
     case 'model.installed': return { ...state, models: state.models.map((m) => (m.key === ev.data.model.key ? ev.data.model : m)) };
-    case 'model.failed': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, status: ev.data.code === 'EM-7006' ? 'not-installed' : 'failed', errorCode: ev.data.code } : m)) };   // EM-7006 = paused (FR-161)
+    case 'model.failed': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, status: ev.data.code === 'EM-7006' ? 'not-installed' : 'failed', errorCode: ev.data.code, retry: null, failReason: ev.data.reason ?? null } : m)) };   // EM-7006 = paused (FR-161)
     case 'hardware.tick': return { ...state, tick: ev.data };
     case 'license.changed': return { ...state, licence: ev.data.licence };
     case 'settings.changed': {
@@ -261,6 +272,10 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     }
     case 'service.notice': {
       const d = ev.data;
+      // FR-223 (QA 2026-10-28 #4): generator steps of an executed plan report started / done / failed; the Plan Card shows each.
+      if (d.kind === 'plan-step' && typeof d['planId'] === 'string' && typeof d['step'] === 'number' && state.plan?.id === d['planId']) {
+        return { ...state, plan: { ...state.plan, stepStatus: { ...(state.plan.stepStatus ?? {}), [d['step'] as number]: { status: String(d['status'] ?? ''), ...(typeof d.code === 'string' ? { code: d.code } : {}) } } } };
+      }
       // R-025: ready:true, or ready:false when a bundled file failed to ingest; either way the sample is settled and the tour continues on what is there.
       if (d.kind === 'sample' && typeof d['ready'] === 'boolean' && typeof d.projectId === 'string') return state.sampleReady.includes(d.projectId) ? state : { ...state, sampleReady: [...state.sampleReady, d.projectId] };
       if (d.kind === 'update') return { ...state, update: { version: typeof d['version'] === 'string' ? d['version'] : '', downloaded: Boolean(d['downloaded']) } };

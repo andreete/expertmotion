@@ -23,6 +23,9 @@ const OP_ALIASES: Record<string, string> = {
   'op:clip.volume': 'op:clip.setVolume', 'op:clip.reorder': 'op:clip.move', 'op:clip.split': 'op:element.split', 'op:text.split': 'op:element.split', 'op:audio.split': 'op:element.split',
   'op:element.transform': 'op:element.setTransform', 'op:clip.setTransform': 'op:element.setTransform', 'op:element.timing': 'op:element.setTiming', 'op:element.layer': 'op:element.setLayer',
   'op:image.add': 'op:overlay.addImage', 'op:overlay.add': 'op:overlay.addImage', 'op:overlay.image': 'op:overlay.addImage', 'op:image.remove': 'op:overlay.remove',
+  'op:caption.replace': 'op:caption.replaceText', 'op:captions.replaceText': 'op:caption.replaceText', 'op:caption.fix': 'op:caption.replaceText', 'op:caption.fixText': 'op:caption.replaceText',
+  'op:caption.replaceWord': 'op:caption.replaceText', 'op:caption.editText': 'op:caption.replaceText', 'op:caption.correct': 'op:caption.replaceText',
+  'op:caption.setText': 'op:caption.editPage', 'op:caption.setPageText': 'op:caption.editPage', 'op:caption.updatePage': 'op:caption.editPage', 'op:captions.editPage': 'op:caption.editPage',
   'op:caption.style': 'op:caption.setStyle', 'op:captions.setStyle': 'op:caption.setStyle', 'op:music.add': 'op:audio.addBed', 'op:audio.addMusic': 'op:audio.addBed', 'op:voice.add': 'op:audio.addLayer',
   'op:scene.create': 'op:scene.add', 'op:scene.insert': 'op:scene.add', 'op:scene.append': 'op:scene.add', 'op:scene.background': 'op:scene.setBackground',
   'op:effect.set': 'op:effect.add', 'op:motion.add': 'op:motion.set', 'op:motion.apply': 'op:motion.set', 'op:shape.create': 'op:shape.add', 'op:ratio.set': 'op:output.setRatio',
@@ -31,6 +34,7 @@ const OP_LOWER = new Map(Object.keys(OPERATIONS).map((n) => [n.toLowerCase(), n]
 const TOOL_ALIASES: Record<string, string> = {
   'composition.applyops': 'composition.applyOps', applyops: 'composition.applyOps', apply_ops: 'composition.applyOps', 'composition.apply': 'composition.applyOps', 'composition_applyops': 'composition.applyOps', composition: 'composition.applyOps',
   'tts.generate': 'tts.generate', tts: 'tts.generate', 'voice.generate': 'tts.generate', 'voiceover.generate': 'tts.generate', 'generate.voice': 'tts.generate', 'tts_generate': 'tts.generate',
+  'scene.compose': 'scene.compose', 'scenes.compose': 'scene.compose', compose: 'scene.compose', 'scene_compose': 'scene.compose', 'video.compose': 'scene.compose', 'scene.composer': 'scene.compose',
   'captions.generate': 'captions.generate', captions: 'captions.generate', 'caption.generate': 'captions.generate', 'generate.captions': 'captions.generate', 'captions_generate': 'captions.generate',
 };
 
@@ -140,6 +144,7 @@ const COMMON_ARG_ALIASES: Record<string, string[]> = {
   text: ['content', 'value', 'caption', 'label', 'title'], variant: ['variantId', 'textVariant', 'type'], colour: ['color', 'fontColor', 'textColor', 'fontColour'], fontSize: ['size', 'font_size'],
   volume: ['level', 'gain'], rate: ['speed', 'playbackRate'], scale: ['zoom'], toIndex: ['index', 'position', 'to'], trimBeforeMs: ['trimStartMs', 'trimMs', 'offsetMs', 'trimBefore'],
   styleOverrides: ['style', 'styles'], fixedMs: ['durationMs', 'lengthMs'], easingId: ['easing'], title: ['heading', 'headline'],
+  find: ['search', 'from', 'old', 'oldText', 'match', 'wrong', 'original'], replace: ['with', 'to', 'new', 'newText', 'replacement', 'correct', 'fixed'], pageIndex: ['page', 'index', 'pageNo'],
   background: ['backgroundPresetId', 'bg', 'backgroundId'], transition: ['transitionPresetId', 'transitionId'], motionId: ['motion', 'animation'],
 };
 const argKeysOf = (op: string): string[] => Object.keys((OPERATIONS[op as keyof typeof OPERATIONS].args as unknown as { def: { shape: Obj } }).def.shape);
@@ -155,7 +160,7 @@ function normalizeArgs(opName: string, raw: Obj, fixes: string[], n: string): Ob
   // Numbers sent as strings, and fractional milliseconds.
   for (const k of keys) {
     const v = a[k];
-    if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) && !['text', 'title', 'assetId', 'jobId', 'voiceId'].includes(k)) { a[k] = Number(v); fixes.push(`${n}: ${k} number`); }
+    if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) && !['text', 'title', 'assetId', 'jobId', 'voiceId', 'find', 'replace'].includes(k)) { a[k] = Number(v); fixes.push(`${n}: ${k} number`); }
     if (/Ms$/.test(k) && typeof a[k] === 'number' && !Number.isInteger(a[k])) a[k] = Math.round(a[k] as number);
   }
   if (opName === 'op:clip.setVolume' && typeof a['volume'] === 'number' && a['volume'] > 1 && a['volume'] <= 100) { a['volume'] = (a['volume'] as number) / 100; fixes.push(`${n}: volume percent`); }
@@ -280,7 +285,10 @@ export function normalizeModelReply(json: unknown, c: NormalizeContext): Normali
     if (tool && !(PLAN_STEP_TOOLS as readonly string[]).includes(tool)) { const t = TOOL_ALIASES[tool.toLowerCase()]; if (t) { fixes.push(`${n}: tool ${tool} → ${t}`); tool = t; } }
     tool ??= 'composition.applyOps';
     const ops = Array.isArray(st['ops']) ? st['ops'].map((op, k) => normalizeOp(op, c.model, fixes, `${n} op ${k + 1}`)) : [];
-    const args = tool === 'composition.applyOps' ? {} : normalizeStepArgs(tool, isObj(st['args']) ? st['args'] : isObj(st['input']) ? st['input'] : {}, fixes, n);
+    // ADR-034: a scene.compose step whose VideoSpec was written next to tool / n instead of inside args
+    const specInline = tool === 'scene.compose' && !isObj(st['args']) && Array.isArray(st['scenes']) ? Object.fromEntries(Object.entries(st).filter(([k]) => !['n', 'tool', 'ops', 'expectedDiff', 'dependsOn', 'description', 'summary'].includes(k))) : undefined;
+    if (specInline) fixes.push(`${n}: VideoSpec moved into args`);
+    const args = tool === 'composition.applyOps' ? {} : normalizeStepArgs(tool, isObj(st['args']) ? st['args'] : isObj(st['input']) ? st['input'] : specInline ?? {}, fixes, n);
     return [{ n: typeof st['n'] === 'number' && Number.isInteger(st['n']) && st['n'] >= 1 ? st['n'] : i + 1, tool, ops: tool === 'composition.applyOps' ? ops : [], args: tool === 'composition.applyOps' ? {} : args,
       expectedDiff: clip(st['expectedDiff'] ?? st['description'] ?? st['summary'], 200) ?? '', dependsOn: Array.isArray(st['dependsOn']) ? st['dependsOn'].filter((x) => Number.isInteger(x)) : [] }];
   });

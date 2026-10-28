@@ -9,6 +9,9 @@ export const SettingsSchema = z.object({
   defaultLanguage: z.enum(['id', 'en']).default('id'),
   performanceProfile: z.enum(['standard', 'accelerated', 'turbo']).default('standard'),
   autoPlan: z.boolean().default(true),
+  // FR-216 "Izinkan riset internet": the agents may search the web / read pages / find openly licensed pictures (default on;
+  // Private Mode blocks it regardless, SEC-140).
+  webResearch: z.boolean().default(true),
   outputFolder: z.string().max(1024).optional(),
   autosaveDebounceMs: z.number().int().min(500).max(10_000).default(2000),
   autosaveMaxMs: z.number().int().min(1000).max(10_000).default(5000),

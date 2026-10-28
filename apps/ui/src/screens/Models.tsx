@@ -50,7 +50,7 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
   const fits = m.tiers.includes(tier);
   const act = (p: Promise<unknown>) => { setConfirm(null); void p.then(() => onChanged()).catch(actions.error); };
   const pct = m.bytesTotal ? Math.round((m.bytesDone / m.bytesTotal) * 100) : 0;
-  const partial = m.status === 'not-installed' && m.bytesDone > 0;
+  const partial = (m.status === 'not-installed' || m.status === 'failed') && m.bytesDone > 0;   // FR-245: a failed download resumes from its .part too
   const usedBy = [...(m.usedBy?.generators ?? []).map((g) => t(`ui.scr.models.usedby.${g}`)), ...(m.usedBy?.presets ?? [])];
   const install = () => (fits ? act(runtime.api.installModel(m.key)) : setConfirm('install'));   // FR-123: EM-7005 above the tier
   const name = localModelName(m, lang);                                                             // product name (Operator 2026-10-25); licence stays in the card
@@ -71,7 +71,10 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
       <div className="flex flex-wrap items-center gap-2">
         <span data-el="scr.models.row.status" className="flex-1 text-[12px] text-em-muted">
           {m.status === 'paused' && m.pausedReason === 'render' ? t('ui.scr.models.status.pausedrender', { percent: pct })
+            : busyStatus(m.status) && m.retry ? t('ui.scr.models.status.retrying', { reason: t(`ui.scr.models.reason.${m.retry.reason}`), seconds: Math.max(1, Math.round(m.retry.delayMs / 1000)), percent: pct })
+            : m.status === 'failed' && partial ? t('ui.scr.models.status.failedat', { percent: pct })
             : partial ? t('ui.scr.models.status.partial', { percent: pct })
+            : busyStatus(m.status) ? `${t(`ui.scr.models.status.${m.status}`)} ${pct} %`
             : t(`ui.scr.models.status.${m.status}`)}{m.errorCode ? ` · ${t(`err.${m.errorCode}.title`)} · ${m.errorCode}` : ''}
         </span>
         {m.status === 'installed' && <Button el="scr.models.row.remove" size={28} variant="danger-ghost" onClick={() => setConfirm('remove')}>{t('ui.common.remove')}</Button>}
@@ -81,6 +84,7 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
         {(m.status === 'downloading' || m.status === 'verifying') && <Button el="scr.models.row.pause" size={28} variant="ghost" onClick={() => act(runtime.api.cancelModel(m.key))}>{t('ui.scr.models.pause')}</Button>}
         {(busyStatus(m.status) || partial) && <Button el="scr.models.row.cancel" size={28} variant="ghost" onClick={() => act(runtime.api.cancelModel(m.key, true))}>{t('ui.common.cancel')}</Button>}
       </div>
+      {m.status === 'failed' && m.failReason && <p data-el="scr.models.row.failhint" role="note" className="text-[12px] text-em-warn">{t(`ui.scr.models.fail.${m.failReason}`)}</p>}
       {busyStatus(m.status) && (
         <div data-el="scr.models.row.progress" className="flex items-center gap-2">
           <Progress value={m.bytesTotal ? m.bytesDone / m.bytesTotal : null} label={name} />

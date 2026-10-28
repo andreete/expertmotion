@@ -151,7 +151,9 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `stage.player.canvas.handle` | (added 2026-10-26, ADR-028) | Corner handles `data-handle="nw|ne|se|sw"` (scale; Shift keeps the centre) and the rotation handle `data-handle="rotate"` above the top edge (Shift snaps to 0 / 90 / 180 / 270). |
 | `stage.player.canvas.guide` | (added 2026-10-26, ADR-028) | Snap guide line while moving (`data-axis="x"` vertical / `"y"` horizontal, `data-at` in frame units): frame centre lines and frame edges; hidden while Alt is held. |
 | `stage.timeline` | rows under player | Timeline View container. |
-| `stage.timeline.ruler` / `.head` | (added) | Time ruler and playhead line. |
+| `stage.timeline.ruler` / `.head` | (added) | Time ruler and playhead line. FR-253 / FR-254 (2026-10-28): the ruler is sticky at the top of the Timeline scroll area (`data-sticky="top"`); the playhead line is a `role="slider"` over the whole Timeline height (12 px grab zone, `aria-valuenow` = ms, `data-scrubbing` while dragged); press + drag on the ruler, the line or empty track space scrubs. |
+| `stage.timeline.scroll` | (added 2026-10-28, FR-254) | The single scroll container of the Timeline (both axes): lane names stick to the left, the ruler to the top. |
+| `stage.timeline.head.handle` | (added 2026-10-28, FR-253) | Playhead marker inside the sticky ruler (stays visible while the lanes scroll). |
 | `stage.timeline.track.video` / `.caption` | rows in mockup | The video Track row and the caption row (captions render above every layer, so their row is the top row). |
 | `stage.timeline.lane.layer` | (added 2026-10-26, ADR-027) | One row per visual layer (texts, images, shapes), `data-layer="<n>"`, ordered front-most on top (CapCut order); between the caption row and the video Track. |
 | `stage.timeline.lane.audio` | (added 2026-10-26, ADR-027) | One row per audio lane, `data-lane="<n>"`, under the video Track (lane 0 nearest). |
@@ -186,6 +188,19 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `agent.chat.apply` | "Kerjakan di video" / "Apply to video" | On a Diskusi answer: sends the answer to Edit mode as the request; on a proposed-changes card (`agent.brainstorm.handoff`) it hands the ticked proposals to the Intent Queue (R-082). Either way the chat switches to Edit. |
 | `agent.chat.composer` / `agent.chat.send` / `agent.chat.attach` | input, send, attach icon | One composer for both modes (`data-mode`); Enter sends; Tab in an empty composer switches the mode; attach = reference an Asset or image. |
 | `agent.chat.mode` / `agent.chat.mode.brainstorm` / `agent.chat.mode.editor` | "💡 Diskusi \| ✂️ Edit" | Mode switch in the composer (`role=radiogroup`, `aria-checked`); Ctrl+1 / Ctrl+2 inside the chat; remembered per Project (prefs). |
+| `agent.chat.tabs` / `agent.chat.tab.brainstorm` / `agent.chat.tab.editor` | "Diskusi \| Editor" | ADR-033 / FR-219 (QA 2026-10-28 #2): the two chats as tabs (`role=tablist`, `aria-selected`; Diskusi amber 💡, Editor blue ✂), each with its own thread and composer; `data-busy` (spinner) while that agent works, `data-unread` (dot) for an answer in the other tab; Ctrl+1 / Ctrl+2, Tab in an empty composer. Replaces `agent.chat.mode` (kept for reference; no longer rendered). |
+| `agent.chat.research` | "🌐 Web aktif" | FR-216: switch for the setting "Izinkan riset internet" (`role=switch`, `aria-checked`); disabled with "Mode Privat memblokir riset internet" in Private Mode. |
+| `agent.chat.sendtoeditor` | "Kirim ke Editor" | FR-219: on every Diskusi answer and on its proposals card: the whole draft becomes one Editor request (R-083b); the Editor tab opens with its progress. |
+| `agent.brainstorm.handoff.card` / `agent.brainstorm.handoff.open` | "Editor sedang membuat …" + "Lihat di Editor" | FR-219 / FR-223: the hand-off card on a Diskusi draft; `data-state` = `planning` (with `agent.chat.phases`) / `ready` / `applied` / `failed`. |
+| `agent.editor.message.origin` | "💡 Dari Diskusi" | FR-219: tag on an Editor request that came from a Diskusi draft ("(dikirim otomatis)" when "buatkan videonya" started it). |
+| `agent.editor.askdiscussion` | "Tanya Diskusi" | FR-219: on an Editor question: sends it to the Diskusi tab ("Editor butuh info ini …"). |
+| `agent.chat.phases` / `agent.chat.phase` / `agent.chat.phases.meta` | "Membaca draf → Menyusun adegan → Memeriksa → Siap" | FR-223: phase stepper with a progress bar (`role=progressbar`, `data-phase-index`), seconds and "percobaan n/m"; in the Editor's working bubble and on the hand-off card. |
+| `agent.chat.message.sources` / `agent.chat.message.source` | "Sumber (2)" + numbered links | FR-216: the web sources of an answer (cited first; publisher, host, page age); a link opens in the system browser (Shell `openExternal`). |
+| `agent.chat.message.images` / `agent.chat.message.image` / `agent.chat.message.image.import` | "Gambar berlisensi terbuka (n)" + Impor | FR-217: picture candidates with licence chip, author, source page; `data-imported` after Import. |
+| `agent.chat.message.notice` | research notice | FR-216: why research did not run for this answer (`data-code` EM-4403 / EM-4404). |
+| `agent.chat.attach.audio` / `agent.chat.attach.document` / `agent.chat.attach.input` | "Musik atau suara…" / "Dokumen atau naskah…" | FR-221: attach menu entries; the hidden file input; chips `agent.chat.attach.chip` carry `data-kind` = `image` / `audio` / `document` (document chips show the character count, ✂ when truncated). |
+| `agent.chat.message.attachment.truncated` | "Dokumen panjang: hanya bagian awal yang dikirim" | FR-221. |
+| `agent.chat.target.caption.suggest` | "＋ Tunjuk Caption 0:17 “energi besi…”" | FR-220: offers the caption page under the playhead as a chip (kind `caption`). |
 | `agent.editor.picks` | "Your picks" strip | The Intent Queue as a compact strip above the composer, shown in Edit mode only; `data-open` while expanded. |
 | `agent.editor.intentqueue.toggle` / `agent.editor.intentqueue.count` | "Your picks (3) ▴" | Expands / collapses the strip (`aria-expanded`, persisted in prefs `picksOpen`); the count badge is highlighted while picks wait for Plan. |
 | `agent.editor.plancard.undo` | Undo on an executed plan | The one-line summary after Execute (and an older plan in the thread) offers Undo while its version is the head. |
@@ -407,7 +422,28 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `sys.update.later` | Update "Later" | Hides the banner; the update stays downloaded. |
 | `sys.update.retry` | Update "Try again" | EM-8104 (interrupted update, previous version kept), EM-8102, EM-8101: runs a new check (FR-152). |
 | `agent.chat.budget` | "Change budget" in the EM-4201 message | FR-117 / AI-016: opens `scr.providers` with focus on `.budget.project` (or `.budget.month`) of the connection whose cap is used up. |
-| `scr.generate.voice.voice` | Voice picker | Installed Piper/Kokoro voices (FR-101). |
+| `scr.generate.voice.voice` | Voice picker (legacy id) | Replaced by `scr.generate.voice.picker` (FR-246); kept for older builds. |
+| `scr.generate.voice.picker` | Voice picker | Every narrator voice for the language: local (offline) and cloud (OpenAI, Google Gemini, ElevenLabs with the Creator's own keys), with availability (FR-246, ADR-035). |
+| `scr.generate.voice.search` | Voice search | Free-text description ("perempuan hangat", "jelas, percaya diri") ranks the voices (FR-246). |
+| `scr.generate.voice.filter` | Voice filter | All / Female / Male / Offline / Cloud (FR-246). |
+| `scr.generate.voice.list` | Voice list | One `scr.generate.voice.row` per voice (`data-voice-id`), selectable (FR-246). |
+| `scr.generate.voice.row` | Voice row | Name, gender, character words, provider badge, price per 1,000 characters (cloud), why it cannot run yet (FR-246). |
+| `scr.generate.voice.private` | Private Mode note | Cloud voices are off while Private Mode is on (FR-246, SEC-135). |
+| `scr.generate.voice.selected` | Chosen narrator | Name, licence / quality note, cost estimate for the current text (`scr.generate.voice.cost`) (FR-246). |
+| `scr.generate.voice.cost` | Cost estimate | ≈ US$ for the current text with the chosen cloud voice (FR-246). |
+| `scr.generate.voice.el` | ElevenLabs key | Add / remove the Creator's ElevenLabs key (validated, stored sealed, hint only) (FR-246). |
+| `scr.generate.voice.voice.style` | Speaking style | Free text for voices that support a style instruction (OpenAI gpt-4o-mini-tts, Gemini, ElevenLabs) (FR-246). |
+| `scr.generate.voice.voice.captions` | Voice + captions | One action makes the voice and its captions from the exact script, timed to the voice (FR-248, default on). |
+| `scr.generate.music.library` | CC0 music library | Curated public-domain tracks by mood, download on demand, preview, "Use as music" (FR-247). |
+| `scr.generate.music.library.moods` | Mood filter | All + the library moods (FR-247). |
+| `scr.generate.music.library.list` | Track list | One `scr.generate.music.library.track` per track (`data-track-id`) (FR-247). |
+| `scr.generate.music.library.track` | Library track | Title, artist, mood, genre, length, credit line, licence link (FR-247). |
+| `scr.generate.music.library.play` | Track preview | Plays a downloaded track (FR-247). |
+| `scr.generate.music.library.download` | Download track | Verified download with progress (FR-245, FR-247). |
+| `scr.generate.music.library.insert` | Use as music | Copies the track into the project and adds it as the music bed in one version (R-222, FR-247). |
+| `scr.generate.music.library.licence` | Licence link | CC0 1.0 deed (FR-247). |
+| `scr.generate.music.ai` | AI music note | Explains that AI music needs a GPU and is not shipped in this version (FR-247). |
+| `scr.models.row.failhint` | Download failure hint | What happened and what to do, in words, by cause (busy server, blocked secure connection, dropped connection …) (FR-245). |
 | `scr.generate.voice.speed` | Speed slider | 0.8–1.2 (FR-101). |
 | `scr.generate.voice.preview` | Audio preview | Plays the generated audio before Insert (FR-101, FR-102). |
 | `scr.generate.voice.install` | Install model | Inline Model Download with size and progress (FR-107). |
@@ -415,9 +451,9 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.generate.voice.generated.insert` | Insert a listed result | R-134 (FR-108). |
 | `scr.generate.voice.generated.delete` | Delete a listed result | R-137 (FR-108). |
 | `scr.generate.music.duration` | Music length | 10–120 s (FR-102). |
-| `scr.generate.music.instrumental` | Instrumental toggle | Default on (FR-102). |
+| `scr.generate.music.instrumental` | Instrumental toggle (removed) | Library music is always instrumental (FR-247). |
 | `scr.generate.music.language` | Language toggle | Indonesia / English for sung lyrics, default from the Project language (FR-106). |
-| `scr.generate.music.cc0` | CC0 loop library note | T0 or the loop library chosen (FR-102). |
+| `scr.generate.music.cc0` | CC0 loop library note (removed) | Replaced by `scr.generate.music.library` (FR-247). |
 | `scr.generate.music.preview` | Audio preview | Plays the generated audio before Insert (FR-101, FR-102). |
 | `scr.generate.music.install` | Install model | Inline Model Download with size and progress (FR-107). |
 | `scr.generate.music.generated` | Generated list | Results from the last 7 days not inserted yet (FR-108). |
@@ -484,6 +520,14 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `lib.assets.card.action.ask` | "Tanya asisten" in the Asset card menu | Points the assistant at this Asset: adds it as a chip and focuses the composer. |
 | `stage.timeline.inspector.ask` | "Tanya asisten" in the Timeline inspector | Points the assistant at the selected element (chip + composer focus; in Edit mode also the FR-067 target). |
 | `agent.editor.plancard.toolstep` | a generator step on the Plan Card | `tts.generate` ("Suara narasi: …") / `captions.generate` ("Teks layar dari naskah"); `data-status` = `ready` / `needs-model` (skipped until the model is installed). |
+| `agent.editor.plancard.preview` / `agent.editor.plancard.preview.row` / `agent.editor.plancard.preview.summary` / `agent.editor.plancard.preview.total` | readable plan preview | FR-222: rows `data-kind` = `scene` / `text` / `shape` / `transition` / `background` / `voice` / `captions` / `audio` / `clip` / `remove` / `caption-fix` / `timing` / `other` with start–end times; summary counts and the total duration. |
+| `agent.editor.plancard.close` | ✕ in the card header | FR-222 / QA #16: discards a proposed plan (collapses an executed one); always visible. |
+| `agent.editor.plancard.confirmremoval` / `agent.editor.plancard.confirmremoval.yes` | "Rencana ini menghapus n item:" + "Hapus & terapkan" | FR-225: inline removal confirmation (EM-4310); Execute then sends `confirmDestructive: true`. |
+| `agent.editor.plancard.showtimeline` | "Lihat di timeline" | FR-222: selects the elements the executed plan added. |
+| `agent.editor.plancard.revise` | "Ubah" | FR-222: asks the Editor for a change to this plan (composer prefilled). |
+| `agent.editor.plancard.executing` | Execute phase + bar | FR-223 / FR-224: `data-phase` = `voice` / `measure` / `compose` / `apply` / `failed` (plan.progress). |
+| `agent.editor.plancard.estimate` | "Waktu masih perkiraan…" | FR-224: the plan's timing waits for the real voice clips. |
+| `agent.editor.plancard.steps.live` / `agent.editor.plancard.step.live` | generator step status | FR-223: after Execute each generator step shows `data-status` started / done / failed / skipped with its code. |
 | `agent.editor.plancard.models` | "Buka Model Manager" | Shown with a `model-missing` risk; opens `scr.models`. |
 | `agent.editor.plancard.toolnote` | "Suara sedang dibuat…" | After Execute, when a generator step started (`toolSteps`). |
 
@@ -493,6 +537,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 |---|---|---|
 | `stage.itemmenu` | context menu of a Timeline item or of the selected element on the Player | Opens on right-click, Shift+F10 or the ContextMenu key on a Timeline bar (an unselected bar becomes the selection first; a bar inside the selection acts on all of it) and on right-click of `stage.player.canvas.box`; `data-source="timeline|canvas"`; `role="menu"`, ↑ / ↓ / Home / End move, Enter / Space run, Esc / Tab / click outside close and return focus to the bar (FR-193, IX-30). |
 | `stage.itemmenu.delete` / `.split` / `.duplicate` / `.ask` | "Hapus" / "Belah di playhead" / "Duplikat" / "Tanya Editor Agent" | Delete = the Delete-key pick; Split = the S pick (`aria-disabled` with the reason when the playhead is not inside the item); Duplicate = one `itemsEdit {action: duplicate}` pick for clips, scene clips, texts, images and shapes (disabled for audio, captions, transitions, effects, the background); Ask = the items as chips, Edit mode, composer focused (FR-194). A disabled entry keeps its reason as `title`. |
+| `stage.itemmenu.copy` / `.cut` / `.paste` | "Salin" / "Potong" / "Tempel di playhead" (added 2026-10-28, FR-255 / FR-256) | Copy = snapshots of the selection onto the in-app clipboard (Ctrl+C; no version); Cut = Copy + the Delete pick (Ctrl+X; one Undo); Paste = the clipboard at the playhead as ONE `itemsEdit {action: paste}` pick (Ctrl+V; one Undo). Right-click on empty track space opens the menu with only Paste. `aria-disabled` with the reason when nothing copyable is selected / the clipboard is empty. |
 | `stage.timeline.inspector.delete` | "Hapus" next to "Tanya asisten" in the Timeline inspector | Deletes every selected item (same pick as the Delete key; Ctrl+Z restores; FR-192). |
 
 ## Additions for startup, recovery and busy feedback (FR-184 … FR-186, 2026-10-26)

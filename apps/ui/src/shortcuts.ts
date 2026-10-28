@@ -5,7 +5,8 @@ import { playerBus } from './stage/playerBus.js';
 import { requestImport } from './header/Header.js';
 import { guardUnsaved } from './screens/Lifecycle.js';
 import { runSplit } from './stage/split.js';
-import { runDelete } from './stage/items.js';
+import { runCopy, runCut, runDelete, runPaste } from './stage/items.js';
+import { timelineClipboard } from './stage/clipboard.js';
 import { formatTimecode } from './i18n/index.js';
 
 export function isTyping(target: EventTarget | null): boolean {
@@ -16,6 +17,11 @@ export function isTyping(target: EventTarget | null): boolean {
   if (el.closest?.('[contenteditable]:not([contenteditable="false"])')) return true;   // also where isContentEditable is missing (jsdom)
   if (tag === 'input') { const type = (el as HTMLInputElement).type; return !['checkbox', 'radio', 'range', 'button'].includes(type); }
   return tag === 'select';
+}
+
+/** True when the page has selected text (a Ctrl+C then belongs to the browser, not to the Timeline clipboard). */
+export function hasTextSelection(): boolean {
+  try { const sel = window.getSelection?.(); return Boolean(sel && !sel.isCollapsed && sel.toString().trim().length); } catch { return false; }
 }
 
 export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent: () => void }) {
@@ -39,6 +45,18 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
       if (typing || state.screen) return;
       if (ctrl) {
         const l = k.toLowerCase();
+        // FR-255 / FR-256: Ctrl+C / Ctrl+X / Ctrl+V on Timeline items (in-app clipboard). Never inside text fields (returned above)
+        // and never while the page has a text selection, so native copy / paste keeps working everywhere else.
+        if ((l === 'c' || l === 'x' || l === 'v') && !e.shiftKey && !e.altKey) {
+          if (hasTextSelection()) return;
+          if (l === 'v') { if (timelineClipboard.get()?.entries.length) { e.preventDefault(); runPaste({ playheadMs: player?.currentMs() ?? state.playheadMs, itemsEdit: actions.itemsEdit, toast: actions.toast, t }); } return; }
+          if (!state.selection.length) return;
+          e.preventDefault();
+          const model = state.head?.model; const projectId = state.project?.id ?? null;
+          if (l === 'c') runCopy({ model, projectId, selection: state.selection, toast: actions.toast });
+          else runCut({ model, projectId, selection: state.selection, itemsEdit: actions.itemsEdit, toast: actions.toast, t });
+          return;
+        }
         if (l === 'z' && !e.shiftKey) { e.preventDefault(); void actions.undo(); }
         else if (l === 'y' || (l === 'z' && e.shiftKey)) { e.preventDefault(); void actions.redo(); }
         else if (l === 's' && e.shiftKey) { e.preventDefault(); if (state.project) actions.setScreen({ kind: 'project.new', saveAs: true }); }

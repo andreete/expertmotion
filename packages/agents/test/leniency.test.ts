@@ -44,6 +44,12 @@ describe('lenient plan parsing (unambiguous repairs only)', () => {
     expect(n.value).toMatchObject({ baseVersion: f.base, steps: [{ n: 1, ops: [{ op: 'op:background.set', target: { kind: 'project' }, args: { presetId: 'preset:background.grid' } }] }],
       risks: [{ code: 'note', message: 'hati-hati', severity: 'info' }, { code: 'needs-input', message: 'Musik apa?', severity: 'warn' }] });
   });
+  it('ADR-033: caption fix aliases and arg names are repaired; numeric find / replace strings stay strings', () => {
+    const f = twoClips();
+    const n = normalizeModelReply({ goal: 'g', ops: [{ op: 'op:caption.fix', args: { old: 'energi besi', new: 'energi bersih', atMs: '12000' } }, { op: 'op:caption.replace', args: { find: '2023', replace: '2024', page: 0 } }] }, { model: f.model, baseVersion: f.base });
+    expect(n.value).toMatchObject({ steps: [{ ops: [{ op: 'op:caption.replaceText', target: { kind: 'project' }, args: { find: 'energi besi', replace: 'energi bersih', atMs: 12000 } },
+      { op: 'op:caption.replaceText', args: { find: '2023', replace: '2024', pageIndex: 0 } }] }] });
+  });
   it('intents instead of a plan: fully specified ones compile without another model call', async () => {
     const f = twoClips();
     const env = buildRewriteEnvelope({ model: f.model, baseVersion: f.base, assets: FIXTURES, intents: [], lockedKeys: [], creatorMessage: 'pakai transisi fade', tier: 'T1' });
@@ -78,7 +84,7 @@ describe('lenient plan parsing (unambiguous repairs only)', () => {
   });
   it('the envelope carries every op signature', () => {
     const t = opArgsTable();
-    expect(Object.keys(t)).toHaveLength(51);
+    expect(Object.keys(t)).toHaveLength(53);
     expect(t['op:clip.setVolume']).toBe("{volume: number 0..1, fadeInMs?: int 0.., fadeOutMs?: int 0..} target: clip");
   });
 });

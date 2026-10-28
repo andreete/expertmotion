@@ -12,7 +12,9 @@ import type { AgentKind, ChatTarget, EditIntent, MessageDto, PlanDto } from '../
 import type { ElementRefT } from '@expertmotion/composition-model';
 import { elementTarget, mergeTargets, selectionTargets, targetKey } from './targets.js';
 import { refExists } from '../stage/items.js';
-import { AgentErrorBubble, Bubble, ChatHeader, Composer, ModeTag, StreamingBubble, Thread, messageText, type ChatLayoutProps } from './Chat.js';
+import { AgentErrorBubble, Bubble, ChatHeader, ChatTabs, Composer, ModeTag, StreamingBubble, Thread, messageText, type ChatLayoutProps } from './Chat.js';
+import { HandoffCard } from './Handoff.js';
+import { HelpCircle, Lightbulb } from 'lucide-react';
 import { IntentQueue, targetText } from './IntentQueue.js';
 import { PlanCard, PlanSummary } from './PlanCard.js';
 import { ProposalCard, intentTitle } from './proposals.js';
@@ -68,7 +70,7 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
   // ADR-031 / FR-192: a chip whose Timeline element is gone (deleted by the Creator, an Undo, a plan) leaves the composer.
   useEffect(() => {
     const model = state.head?.model; if (!model) return;
-    const kept = state.chatTargets.filter((x) => x.kind === 'asset' || refExists(model, x));
+    const kept = state.chatTargets.filter((x) => x.kind === 'asset' || (x.kind === 'caption' ? (x.index ?? -1) < model.tracks.caption.pages.length : refExists(model, x)));
     if (kept.length !== state.chatTargets.length) actions.setChatTargets(kept);
   }, [state.head?.model]); // eslint-disable-line react-hooks/exhaustive-deps
   const draft = state.editorDraft;
@@ -92,14 +94,14 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     return () => window.removeEventListener('em:ask-editor', ask);
   }, [dispatch]);
   // FR-067 / FR-072: the inspector's typed target and the attachments travel with the next Edit message.
-  const send = async (attachments: string[]) => {
+  const send = async (attachments: string[], documents: string[] = []) => {
     const text = value.trim();
     const agent = mode;
     setValue('');
     const target = agent === 'editor' ? draftTarget : null;
     const sentTargets = targets;
     setLastSent({ agent, text, att: attachments, targets: sentTargets, target });
-    const ok = await actions.send(agent, text, attachments, target, sentTargets);
+    const ok = await actions.send(agent, text, attachments, target, sentTargets, documents);
     if (!ok) setValue(text);                                         // composer restored on failure (IX-12 point 9)
     else {
       actions.setChatTargets([]); setDismissed(new Set(sentTargets.map(targetKey)));   // chips are used up by the message
@@ -118,13 +120,25 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
   };
   /** "Apply to video" on a Diskusi answer without pending proposals: the answer becomes the Edit request. */
   const applyToVideo = async (m: MessageDto) => {
-    const request = applyRequest(messageText(m), t);
+    // FR-219: the whole draft (answer + proposed changes) goes to the Editor as one request; the Editor tab opens with its progress.
     setMode('editor');
-    setLastSent({ agent: 'editor', text: request, att: [], targets, target: null });
-    const ok = await actions.send('editor', request, [], null, targets);
-    if (!ok) setValue(request); else { actions.setChatTargets([]); setDismissed(new Set(targets.map(targetKey))); }
+    await actions.sendDraftToEditor(m);
+  };
+  /** FR-219: the Editor asks Diskusi for missing creative information (its question goes to the Brainstorming Agent). */
+  const askDiscussion = (question: string) => {
+    setMode('brainstorm');
+    void actions.send('brainstorm', t('ui.agent.handoff.askdiscussion.request', { question }));
   };
   const plan = state.plan;
+  // FR-220 (QA 2026-10-28 #12): the caption page under the playhead can be pointed at like any element ("@Caption 0:17 …").
+  const pages = state.head?.model?.tracks.caption.pages ?? [];
+  const capIdx = pages.findIndex((p) => state.playheadMs >= p.startMs && state.playheadMs < p.startMs + p.durationMs);
+  const capAt = capIdx >= 0 ? { i: capIdx, page: pages[capIdx]! } : null;
+  const capChip = (c: NonNullable<typeof capAt>): ChatTarget => {
+    const s0 = Math.floor(c.page.startMs / 1000);
+    const words = c.page.text.replace(/\s+/g, ' ').trim();
+    return { kind: 'caption', index: c.i, startMs: c.page.startMs, endMs: c.page.startMs + c.page.durationMs, label: `${t('ui.agent.chat.target.caption', { time: `${Math.floor(s0 / 60)}:${String(s0 % 60).padStart(2, '0')}` })} “${words.length > 32 ? `${words.slice(0, 31)}…` : words}”` };
+  };
   // FR-085/FR-086: one thread in creation order: both agents' messages, the plan each Edit reply produced (inline), and
   // "Applied directly" lines.
   const thread = useMemo(() => {
@@ -132,11 +146,12 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     for (const p of state.previousPlans) known[p.id] = { ...known[p.id], ...p };
     const rows: Array<{ at: string; key: string; node: ReactNode }> = [];
     let current = false;
-    state.messages.brainstorm.forEach((m, idx) => {
+    // ADR-033: each tab shows only its own chat.
+    (mode === 'brainstorm' ? state.messages.brainstorm : []).forEach((m, idx) => {
       // An answer stored by an older build that held only tool-call markup has nothing to show once the markup is removed.
       if (m.role === 'assistant' && !messageText(m).trim() && !m.blocks.some((b) => b.type === 'proposed_intents')) return;
-      const pending = m.blocks.some((b) => b.type === 'proposed_intents' && b.handoffState === 'pending');
-      const canApply = m.role === 'assistant' && !pending && Boolean(messageText(m).trim());
+      const handed = m.blocks.find((b): b is Extract<typeof b, { type: 'handoff' }> => b.type === 'handoff');
+      const canApply = m.role === 'assistant' && !handed && Boolean(messageText(m).trim());
       rows.push({ at: m.createdAt, key: `b-${m.id}`, node: (
         <Bubble key={`b-${m.id}`} m={m} agent="brainstorm" onApply={canApply ? () => void applyToVideo(m) : undefined} onRetry={m.role === 'system' ? () => {
           // FR-077: a restored failure re-sends the request it answered
@@ -144,23 +159,29 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
           const text = prev?.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n') ?? '';
           if (text) void actions.send('brainstorm', text, prev?.blocks.flatMap((b) => (b.type === 'attachment' && b.assetId ? [b.assetId] : [])) ?? []);
         } : undefined}>
-          {m.blocks.map((b, i) => (b.type === 'proposed_intents' ? <ProposalCard key={i} message={m} intents={b.intents} handoffState={b.handoffState} onApplied={() => setMode('editor')} /> : null))}
+          {m.blocks.map((b, i) => (b.type === 'proposed_intents' && !handed ? <ProposalCard key={i} message={m} intents={b.intents} handoffState={b.handoffState} onApplied={() => setMode('editor')} onSendDraft={() => void applyToVideo(m)} /> : null))}
+          {handed && <HandoffCard block={handed} onOpenEditor={() => setMode('editor')} />}
         </Bubble>
       ) });
     });
-    for (const m of state.messages.editor) {
+    for (const m of mode === 'editor' ? state.messages.editor : []) {
       const pid = planIdOf(m);
       const isCurrent = pid !== null && plan?.id === pid;
       current ||= isCurrent;
       const p = isCurrent ? plan : pid ? known[pid] : undefined;
       const questions = m.role === 'assistant' ? editorQuestions(p) : null;
+      const origin = m.role === 'user' ? m.blocks.find((b): b is Extract<typeof b, { type: 'origin' }> => b.type === 'origin') : undefined;
       rows.push({ at: m.createdAt, key: `e-${m.id}`, node: (
         <Bubble key={`e-${m.id}`} m={m} agent="editor" onRetry={() => void actions.plan()} text={questions ?? undefined} hideText={m.role === 'assistant' && Boolean(p) && !questions}>
+          {origin && (
+            <span data-el="agent.editor.message.origin" className="flex max-w-[92%] items-center gap-1 rounded-full border border-em-warn/50 px-1.5 text-[11px] text-em-warn"><Lightbulb size={11} aria-hidden />{t(origin.auto ? 'ui.agent.handoff.origin.auto' : 'ui.agent.handoff.origin')}</span>
+          )}
+          {questions && <button type="button" data-el="agent.editor.askdiscussion" className="inline-flex items-center gap-1 text-[11px] font-semibold text-em-warn underline" onClick={() => askDiscussion(questions)}><HelpCircle size={11} aria-hidden />{t('ui.agent.handoff.askdiscussion')}</button>}
           {questions ? null : isCurrent && plan ? <PlanCard plan={plan} /> : p ? <PlanSummary plan={p} /> : null}
         </Bubble>
       ) });
     }
-    for (const i of appliedDirectly(visibleQueue(state))) {
+    for (const i of mode === 'editor' ? appliedDirectly(visibleQueue(state)) : []) {
       const v = i.appliedHash ? ` · ${i.appliedHash.slice(0, 6)}` : i.appliedVersion !== undefined ? ` · v${i.appliedVersion}` : '';   // FR-085: short version hash
       rows.push({ at: i.createdAt, key: `applied-${i.id}`, node: (
         <div key={`applied-${i.id}`} data-el="agent.editor.message.applied" data-role="system" className="mx-auto flex max-w-[95%] items-center gap-1 text-center text-[11px] text-em-muted">
@@ -170,8 +191,13 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     }
     rows.sort((a, b) => a.at.localeCompare(b.at));
     return { rows, current };
-  }, [state.messages, state.queue, state.pending, state.previousPlans, state.head?.model, plan, plans, t, lang, setMode]); // eslint-disable-line react-hooks/exhaustive-deps
-  const empty = state.messages.brainstorm.length + state.messages.editor.length === 0 && !plan
+  }, [mode, state.messages, state.queue, state.pending, state.previousPlans, state.head?.model, state.streaming.editor, plan, plans, t, lang, setMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ADR-033: an answer that arrived in the other tab is marked (dot) until that tab is opened.
+  const counts = { brainstorm: state.messages.brainstorm.length, editor: state.messages.editor.length };
+  const [seen, setSeen] = useState<Record<AgentKind, number>>(counts);
+  useEffect(() => { setSeen((x) => ({ ...x, [mode]: counts[mode] })); }, [mode, counts[mode]]); // eslint-disable-line react-hooks/exhaustive-deps
+  const unread = { brainstorm: counts.brainstorm > seen.brainstorm, editor: counts.editor > seen.editor };
+  const empty = state.messages[mode].length === 0 && !(mode === 'editor' && plan)
     ? <div className="mx-auto max-w-[90%] text-center text-[12px] text-em-muted">{t(mode === 'brainstorm' ? 'ui.agent.brainstorm.first' : 'ui.agent.editor.first')}</div> : null;
   const onKeyDown = (e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === '1' || e.key === '2')) { e.preventDefault(); e.stopPropagation(); setMode(e.key === '1' ? 'brainstorm' : 'editor'); return; }
@@ -180,18 +206,21 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
   };
   return (
     <section data-el="agent.chat" data-mode={mode} data-maximized={layout.maximized ? 'true' : undefined} aria-label={t('ui.agent.chat.title')} className="flex min-h-0 flex-1 flex-col overflow-hidden" onKeyDown={onKeyDown}>
+      <ChatTabs mode={mode} setMode={setMode} unread={unread} />
       <ChatHeader mode={mode} setMode={setMode} layout={layout} />
-      <Thread label={t('a11y.agent.chat.thread')} empty={empty}>
+      <Thread label={t(mode === 'brainstorm' ? 'a11y.agent.chat.thread.brainstorm' : 'a11y.agent.chat.thread.editor')} empty={empty}>
         <SectionBoundary section="chat.thread" className="p-2">{thread.rows.map((r) => r.node)}</SectionBoundary>
-        <StreamingBubble agent="brainstorm" />
-        <StreamingBubble agent="editor" />
-        <AgentErrorBubble agent="brainstorm" onRetry={() => retry('brainstorm')} onRephrase={() => rephrase('brainstorm')} />
-        <AgentErrorBubble agent="editor" onRetry={() => retry('editor')} onRephrase={() => rephrase('editor')} />
-        {plan && !thread.current && <div className="flex flex-col items-start gap-1"><ModeTag agent="editor" /><PlanCard plan={plan} /></div>}
+        {mode === 'brainstorm' ? <><StreamingBubble agent="brainstorm" /><AgentErrorBubble agent="brainstorm" onRetry={() => retry('brainstorm')} onRephrase={() => rephrase('brainstorm')} /></>
+          : <><StreamingBubble agent="editor" /><AgentErrorBubble agent="editor" onRetry={() => retry('editor')} onRephrase={() => rephrase('editor')} /></>}
+        {mode === 'editor' && plan && !thread.current && <div className="flex flex-col items-start gap-1"><ModeTag agent="editor" /><PlanCard plan={plan} /></div>}
       </Thread>
       <IntentQueue hidden={mode !== 'editor'} />
+      {mode === 'editor' && capAt && !targets.some((x) => x.kind === 'caption' && x.index === capAt.i) && (
+        <button type="button" data-el="agent.chat.target.caption.suggest" className="mx-2 mb-0.5 truncate rounded-full border border-dashed border-em-accent/60 px-2 text-left text-[11px] text-em-accent hover:bg-em-accent/10"
+          onClick={() => actions.pointAt(capChip(capAt), 'editor')}>{t('ui.agent.chat.target.caption.suggest', { label: capChip(capAt).label })}</button>
+      )}
       <Composer mode={mode} setMode={setMode} placeholder={t(mode === 'brainstorm' ? 'ui.agent.brainstorm.placeholder' : 'ui.agent.editor.placeholder')} targets={targets}
-        onRemoveTarget={removeTarget} value={value} setValue={setValue} onSend={(att) => void send(att)} />
+        onRemoveTarget={removeTarget} value={value} setValue={setValue} onSend={(att, docs) => void send(att, docs)} />
     </section>
   );
 }

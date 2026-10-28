@@ -12,6 +12,7 @@ export function easingFn(id: string | undefined): (t: number) => number {
     case 'in': return Easing.in(base(d['base'], d['arg']));
     case 'inOut': return Easing.inOut(base(d['base'], d['arg']));
     case 'bounce': return Easing.bounce;
+    case 'bezier': { const a = (d['args'] as number[] | undefined) ?? [0.2, 0.8, 0.2, 1]; return Easing.bezier(a[0]!, a[1]!, a[2]!, a[3]!); }   // ADR-034 preset:easing.snappy
     case 'linear': return Easing.linear;
     default: return Easing.out(Easing.cubic);
   }

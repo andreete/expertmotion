@@ -8,7 +8,11 @@
 /** Provider host → path prefix on the stub server. */
 export const STUB_PREFIX: Readonly<Record<string, string>> = {
   'openrouter.ai': 'openrouter', 'api.openai.com': 'openai', 'api.anthropic.com': 'anthropic', 'generativelanguage.googleapis.com': 'gemini',
+  // FR-216 / FR-217 research (dev only): the picture catalogues and a fake public news site for web.fetch / picture downloads.
+  'api.openverse.org': 'openverse', 'commons.wikimedia.org': 'wikimedia', 'upload.wikimedia.org': 'wikimedia-upload', 'news.stub-research.test': 'web',
 };
+/** Research hosts the stub answers (their DNS check is skipped while the stub is on: they do not exist on the internet). */
+export const STUB_RESEARCH_HOSTS: readonly string[] = ['api.openverse.org', 'commons.wikimedia.org', 'upload.wikimedia.org', 'news.stub-research.test'];
 
 /** The stub origin when it is switched on (dev only, plain http on 127.0.0.1 with a port, nothing else), else null. */
 export function devProviderStubOrigin(dev: boolean, raw: string | undefined = process.env.EM_DEV_PROVIDER_STUB): string | null {

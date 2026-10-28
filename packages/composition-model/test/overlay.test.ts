@@ -39,13 +39,13 @@ describe('FR-028 op:overlay.setOpacity, FR-022 italic, FR-025 variant (ADR-020 a
     expect(!bad.ok && bad.issues[0]!.code).toBe('EM-2203');
     expect(applyOperations(m, [{ op: 'op:overlay.setOpacity', target: { kind: 'image', id: img.id }, args: { opacity: 1.5 } }], { assets: ASSETS, tier: 'T1', newId }).ok).toBe(false);
   });
-  it('italic is a text style field with its own key; fontSize range is 16–200', () => {
+  it('italic is a text style field with its own key; fontSize range is 16–600', () => {
     const m = start(); const id = m.tracks.text[0]!.id;
     const r = applyOperations(m, [{ op: 'op:text.setStyle', target: { kind: 'text', id }, args: { italic: true, fontSize: 16 } }, { op: 'op:theme.setTextDefaults', target: { kind: 'project' }, args: { italic: true } }], { assets: ASSETS, tier: 'T1', newId });
     expect(r.ok && r.value.model.tracks.text[0]!.style).toMatchObject({ italic: true, fontSize: 16 });
     expect(r.ok && r.value.model.theme.textDefaults.italic).toBe(true);
     expect(propertyKeysOf({ op: 'op:text.setStyle', target: { kind: 'text', id }, args: { italic: true } })).toEqual([`text:${id}.italic`]);
-    expect(applyOperations(m, [{ op: 'op:text.setStyle', target: { kind: 'text', id }, args: { fontSize: 201 } }], { assets: ASSETS, tier: 'T1', newId }).ok).toBe(false);
+    expect(applyOperations(m, [{ op: 'op:text.setStyle', target: { kind: 'text', id }, args: { fontSize: 601 } }], { assets: ASSETS, tier: 'T1', newId }).ok).toBe(false);   // ADR-034: 16–600 (hero numbers)
   });
   it('variant on a selected layer moves it to the variant position and drops size overrides', () => {
     const m = start(); const id = m.tracks.text[0]!.id;

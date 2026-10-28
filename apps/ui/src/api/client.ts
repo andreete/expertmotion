@@ -5,9 +5,9 @@ import { EmError, EM_CODE_RE, type EmCode } from '@expertmotion/shared';
 import type { ElementRefT, OperationT, ProjectSettingsT } from '@expertmotion/composition-model';
 import type {
   AgentKind, AgentRunDto, AssetDto, AssignmentDto, AssignmentsDto, CapabilityRow, CatalogueItemDto, ChatTarget, CheckpointDto, CompositionHeadResponse, ConnectionDto,
-  ConversationDto, DesignPickInput, DiskUsageDto, ElementDiff, ExecutionResult, GeneratorCardDto, GeneratorJobDto, GeneratorKind, HardwareProfileDto, HardwareTickDto, HealthDto, Id,
+  ChatDocumentDto, ConversationDto, DesignPickInput, DiskUsageDto, ElementDiff, ExecutionResult, GeneratorCardDto, GeneratorJobDto, GeneratorKind, HardwareProfileDto, HardwareTickDto, HealthDto, Id,
   IntentCreateResponse, IntentQueueDto, LicenseDto, MediaGrantDto, MediaVariant, MessageDto, ModelRegistrySource, ModelStateDto, OpenProjectResponse, OutputDto, Page, PlanDto,
-  ProbeResultDto, ProjectCreateInput, ProjectDto, ProjectSettingsExtras, ProjectUiState, ProviderKind, ProviderKindInfo, RecentCodeDto, RecoverySummaryDto, RenderCreateInput, RenderEstimate, RenderJobDto, SettingsDto, VersionDto,
+  ProbeResultDto, ProjectCreateInput, ProjectDto, ProjectSettingsExtras, ProjectUiState, ProviderKind, ProviderKindInfo, RecentCodeDto, RecoverySummaryDto, RenderCreateInput, RenderEstimate, RenderJobDto, SettingsDto, VersionDto, VoiceListDto, MusicTrackDto, TranscriptCueDto,
 } from './types.js';
 
 export interface Bootstrap { baseUrl: string; token: string }
@@ -263,11 +263,24 @@ export class ApiClient {
   setPlanNotes(planId: Id, notes: string): Promise<PlanDto> { return this.patch(`/plans/${planId}/notes`, { notes }); }    // R-075
   // ── 6.9 agents ──
   getConversation(id: Id, agent: AgentKind, query: { limit?: number; cursor?: string } = {}): Promise<ConversationDto> { return this.get(`/projects/${id}/conversations/${agent}`, query); } // R-080
-  sendMessage(id: Id, agent: AgentKind, body: { text: string; attachments?: Array<{ assetId: Id }>; intentIds?: Id[]; baseVersion: string; target?: ElementRefT; selection?: ElementRefT[]; playheadMs?: number; targets?: ChatTarget[] }): Promise<{ message: MessageDto; runId: Id; planId?: Id }> {
+  sendMessage(id: Id, agent: AgentKind, body: { text: string; attachments?: Array<{ assetId: Id }>; documents?: Array<{ documentId: Id }>; intentIds?: Id[]; baseVersion: string; target?: ElementRefT; selection?: ElementRefT[]; playheadMs?: number; targets?: ChatTarget[] }): Promise<{ message: MessageDto; runId: Id; planId?: Id }> {
     return this.post(`/projects/${id}/conversations/${agent}/messages`, body);                                          // R-081
   }
   handoff(id: Id, body: { messageId: Id; intentIds?: Id[]; baseVersion: string }): Promise<{ queue: IntentQueueDto; accepted: Id[]; rejected: Array<{ id: Id; code: string }>; planId: Id | null }> {
     return this.post(`/projects/${id}/conversations/brainstorm/handoff`, body);                                         // R-082
+  }
+  /** R-083b (FR-219): "Kirim ke Editor" — the Brainstorm draft becomes an Editor request (run + Plan Card). */
+  sendDraftToEditor(id: Id, messageId: Id, baseVersion: string): Promise<{ message: MessageDto; runId: Id; brainstormMessage: MessageDto }> {
+    return this.post(`/projects/${id}/conversations/brainstorm/messages/${messageId}/send-to-editor`, { baseVersion });
+  }
+  /** R-088 (FR-221): attach a document to the chat (Shell: by path; development browser: raw body). */
+  attachDocumentPath(id: Id, path: string): Promise<{ document: ChatDocumentDto }> { return this.post(`/projects/${id}/chat-documents`, { paths: [path] }, { 'X-Expertmotion-Caller': 'shell' }); }
+  async attachDocumentFile(id: Id, f: File): Promise<{ document: ChatDocumentDto }> {
+    return this.request<{ document: ChatDocumentDto }>('POST', `/projects/${id}/chat-documents`, { raw: f, headers: { 'Content-Type': 'application/octet-stream', 'X-Expertmotion-Filename': encodeURIComponent(f.name) } });
+  }
+  /** R-089 (FR-217): import an openly licensed picture the Creator confirmed (attribution stored with the asset). */
+  importResearchImage(id: Id, body: { messageId: Id; source: 'openverse' | 'wikimedia'; id: string }): Promise<{ assetId: Id; attribution: string | null; duplicate: boolean }> {
+    return this.post(`/projects/${id}/research/images/import`, body);
   }
   clearConversation(id: Id, agent: AgentKind): Promise<void> { return this.del(`/projects/${id}/conversations/${agent}`); } // R-083
   getAgentRun(runId: Id): Promise<AgentRunDto> { return this.get(`/agent-runs/${runId}`); }                                // R-084
@@ -320,6 +333,27 @@ export class ApiClient {
   // ── 6.14 models ──
   listModels(): Promise<{ items: ModelStateDto[]; tier: string; totalInstalledBytes: number; diskFreeBytes: number; registry?: ModelRegistrySource }> { return this.get('/models'); } // R-140
   getModel(key: string): Promise<ModelStateDto> { return this.get(`/models/${encodeURIComponent(key)}`); }                 // R-141
+  // ── FR-246 … FR-251 voices, transcripts, CC0 music library (R-138, R-139, R-215 … R-222) ──
+  listVoices(language: 'id' | 'en', refresh = false): Promise<VoiceListDto> { return this.get('/voices', { language, ...(refresh ? { refresh: '1' } : {}) }); }
+  /** The preview sample as a Blob (an <audio> element cannot send the Service Token; the Editor plays it from an object URL). */
+  async voicePreview(voiceId: string, language: 'id' | 'en'): Promise<Blob> {
+    const r = await this.fetchImpl(this.url(`/voices/${encodeURIComponent(voiceId)}/preview`, { language }), { method: 'GET', headers: { Authorization: `Bearer ${this.token}` } });
+    if (r.status !== 200) { let code = 'EM-9001'; try { code = (JSON.parse(await r.text()) as { error: { code: string } }).error.code; } catch { /* not json */ } throw new EmError(toEmCode(code), 'Preview failed', { status: r.status }); }
+    return r.blob();
+  }
+  setElevenLabsKey(key: string): Promise<{ provider: 'elevenlabs'; secretHint: string; status: 'valid' }> { return this.put('/voice-keys/elevenlabs', { key }); }
+  deleteElevenLabsKey(): Promise<void> { return this.del('/voice-keys/elevenlabs'); }
+  createVoiceBatch(id: Id, body: Record<string, unknown>): Promise<GeneratorJobDto> { return this.post(`/projects/${id}/generators/voice-batch`, body); }   // R-138
+  voiceTranscript(id: Id, assetId: Id): Promise<{ cues: TranscriptCueDto[]; method: string; spoken: string; written: string; durationMs: number }> { return this.get(`/projects/${id}/assets/${assetId}/transcript`); }   // R-139
+  voiceTranscriptSrtUrl(id: Id, assetId: Id): string { return this.url(`/projects/${id}/assets/${assetId}/transcript`, { format: 'srt' }); }
+  listMusicLibrary(query: { mood?: string; q?: string } = {}): Promise<{ items: MusicTrackDto[]; moods: string[] }> { return this.get('/music-library', query); }   // R-219
+  downloadMusicTrack(trackId: string): Promise<MusicTrackDto> { return this.post(`/music-library/${encodeURIComponent(trackId)}/download`); }   // R-220
+  async musicTrackAudio(trackId: string): Promise<Blob> {   // R-221
+    const r = await this.fetchImpl(this.url(`/music-library/${encodeURIComponent(trackId)}/audio`), { method: 'GET', headers: { Authorization: `Bearer ${this.token}` } });
+    if (r.status !== 200) throw new EmError('EM-7001', 'Track not downloaded', { status: r.status });
+    return r.blob();
+  }
+  insertMusicTrack(id: Id, trackId: string): Promise<{ assetId: Id; versionId: Id }> { return this.post(`/projects/${id}/music-library/${encodeURIComponent(trackId)}/insert`); }   // R-222
   installModel(key: string): Promise<ModelStateDto> { return this.post(`/models/${encodeURIComponent(key)}/install`); }    // R-142
   cancelModel(key: string, discard = false): Promise<ModelStateDto> { return this.post(`/models/${encodeURIComponent(key)}/cancel${discard ? '?discard=true' : ''}`); } // R-143 (Pause keeps the .part)
   revealModelsFolder(engine: string): Promise<{ path: string }> { return this.post(`/models/engines/${encodeURIComponent(engine)}/reveal`); } // R-146

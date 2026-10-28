@@ -6,7 +6,9 @@ import { Operation } from '@expertmotion/composition-model';
 import { parseToolMarkup, stripToolMarkup } from '@expertmotion/shared';
 import type { ChatMessage, ToolSpec } from './providers.js';
 
-export const BRAINSTORM_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate'] as const;
+/** FR-216 / FR-217: internet research tools (read-only; offered only when research is allowed and the Service supplies the handler). */
+export const WEB_TOOL_NAMES = ['web.search', 'web.fetch', 'web.images'] as const;
+export const BRAINSTORM_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate', ...WEB_TOOL_NAMES] as const;
 export type BrainstormToolName = (typeof BRAINSTORM_TOOL_NAMES)[number];
 /** FR-080 / AI_WORKFLOW §8: the Editor Agent's read-only set = the Brainstorm set + the dry run `composition.validateOps` + `assets.probe`. */
 export const EDITOR_TOOL_NAMES = [...BRAINSTORM_TOOL_NAMES, 'composition.validateOps', 'assets.probe'] as const;
@@ -21,6 +23,9 @@ export const BRAINSTORM_TOOL_INPUTS: Record<ToolName, z.ZodType> = {
   'hardware.profile': z.object({}).strict(),
   'project.settings.get': z.object({}).strict(),
   'render.estimate': z.object({ resolution: z.enum(['720p', '1080p', '2k', '2160p']).optional(), performanceProfile: z.enum(['standard', 'accelerated', 'turbo']).optional() }).strict(),
+  'web.search': z.object({ query: z.string().trim().min(2).max(300) }).strict(),
+  'web.fetch': z.object({ url: z.string().trim().min(8).max(2000) }).strict(),
+  'web.images': z.object({ query: z.string().trim().min(2).max(200) }).strict(),
 };
 
 export type ToolHandlers = Partial<Record<ToolName, (input: Record<string, unknown>) => unknown>>;
@@ -47,6 +52,12 @@ export const TOOL_DEFINITIONS: Record<ToolName, { description: string; inputSche
     inputSchema: { type: 'object', properties: { resolution: { type: 'string', enum: ['720p', '1080p', '2k', '2160p'] }, performanceProfile: { type: 'string', enum: ['standard', 'accelerated', 'turbo'] } }, additionalProperties: false } },
   'composition.validateOps': { description: 'Dry run: check operations against the current project without changing it. Returns ok, issues, predictedDiff, predictedDurationMs.',
     inputSchema: { type: 'object', properties: { ops: { type: 'array', description: 'Operation objects {op, target, args}', items: { type: 'object' } } }, required: ['ops'], additionalProperties: false } },
+  'web.search': { description: 'Search the internet for current facts, statistics, news, examples and sources. Returns a short summary and the source links (title, url). Use it for research; cite the sources.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'Search words, e.g. "ekspor nikel Indonesia 2026 ESDM"' } }, required: ['query'], additionalProperties: false } },
+  'web.fetch': { description: 'Read one web page or PDF by its URL (a URL the Creator gave or a search returned). Returns its title and text (truncated).',
+    inputSchema: { type: 'object', properties: { url: { type: 'string', description: 'https:// URL' } }, required: ['url'], additionalProperties: false } },
+  'web.images': { description: 'Find openly licensed pictures (CC0 / CC BY / CC BY-SA, Openverse and Wikimedia Commons) for a topic. Returns candidates with licence and author; the Creator confirms before any picture is downloaded into the Library.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'What the picture should show (English works best)' } }, required: ['query'], additionalProperties: false } },
 };
 /** Provider-safe tool name: providers accept [A-Za-z0-9_-] only, so `catalogue.search` is offered as `catalogue_search`. */
 export const wireToolName = (name: string): string => name.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -72,7 +83,7 @@ export function toolsPromptBlock(names: readonly ToolName[], finalReply = 'reply
       `Use them only when they help. At most ${MAX_TOOL_ROUNDS} rounds of tool calls per answer; then ${finalReply}. Tools never change the project.`,
       'Never write tool calls, XML tags or tool JSON into your answer text: the Creator reads it.'].join('\n');
   }
-  const sig = (n: ToolName) => (n === 'catalogue.search' ? '{"query": string, "category"?: string}' : n === 'render.estimate' ? '{"resolution"?: "720p"|"1080p"|"2k"|"2160p", "performanceProfile"?: "standard"|"accelerated"|"turbo"}'
+  const sig = (n: ToolName) => (n === 'catalogue.search' ? '{"query": string, "category"?: string}' : n === 'web.search' || n === 'web.images' ? '{"query": string}' : n === 'web.fetch' ? '{"url": string}' : n === 'render.estimate' ? '{"resolution"?: "720p"|"1080p"|"2k"|"2160p", "performanceProfile"?: "standard"|"accelerated"|"turbo"}'
     : n === 'assets.probe' ? '{"assetId": string} (fps, codecs, audio channels and sample rate, duration)' : n === 'composition.validateOps' ? '{"ops": Operation[]} (dry run against baseVersion: ok, issues, predictedDiff, predictedDurationMs)' : '{}');
   const lines = names.map((n) => `- ${n} ${sig(n)}`);
   return ['', '## Read-only tools', 'Before answering you may look things up. To call a tool, reply with only this JSON and nothing else:',

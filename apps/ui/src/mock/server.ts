@@ -3,7 +3,7 @@
 // (Design Picks really change the model); Compile uses packages/catalogue compileDefaults. Agent runs are scripted (no LLM).
 // This is a development and test harness, not a specification: the Local Service (apps/service) is the source of truth.
 import {
-  applyOperations, createEmptyModel, deriveTiming, duplicationSteps, hashModel, removalSteps, topmostAt, DEFAULT_SETTINGS,
+  applyOperations, createEmptyModel, deriveTiming, duplicationSteps, hashModel, pasteSteps, removalSteps, topmostAt, DEFAULT_SETTINGS,
   type AssetFacts, type CompositionModelT, type ElementRefT, type OperationT, type ProjectSettingsT,
 } from '@expertmotion/composition-model';
 import { compileDefaults, getPreset, listPresets, type Category } from '@expertmotion/catalogue';
@@ -11,7 +11,7 @@ import { newId } from '@expertmotion/shared';
 import { resolveDimensions } from '@expertmotion/engine/formats';
 import type {
   AgentKind, AssetDto, ChatTarget, AssignmentDto, CapabilityRow, CatalogueItemDto, CheckpointDto, ConnectionDto, DesignPickInput, EditIntent, ExecutionResult,
-  GeneratorJobDto, HardwareProfileDto, IntentCategory, IntentQueueDto, LicenseDto, MediaGrantDto, MessageBlock, MessageDto, ModelStateDto, OutputDto,
+  GeneratorJobDto, MusicTrackDto, HardwareProfileDto, IntentCategory, IntentQueueDto, LicenseDto, MediaGrantDto, MessageBlock, MessageDto, ModelStateDto, OutputDto,
   PlanDto, ProjectDto, RenderCreateInput, RenderJobDto, SettingsDto, VersionCause, VersionDto,
 } from '../api/types.js';
 import type { MediaResolver } from '../api/client.js';
@@ -248,8 +248,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
 
     if (body.itemsEdit) {                                                                 // ADR-031 Delete / Duplicate, as the Local Service
       const e = body.itemsEdit;
-      const steps = e.action === 'remove' ? removalSteps(model, e.items) : duplicationSteps(model, e.items);
-      if (!steps.length) return { leaves: [], parentKey: '?', needsInterpretation: false, notices, reject: e.action === 'remove' ? { code: 'EM-2203', message: 'That item no longer exists.' } : { code: 'EM-2201', message: 'This item cannot be duplicated.' } };
+      const steps = e.action === 'paste' ? pasteSteps(model, e.paste?.entries ?? [], e.paste?.atMs ?? 0) : e.action === 'remove' ? removalSteps(model, e.items) : duplicationSteps(model, e.items);
+      if (!steps.length) return { leaves: [], parentKey: '?', needsInterpretation: false, notices, reject: e.action === 'remove' ? { code: 'EM-2203', message: 'That item no longer exists.' } : e.action === 'paste' ? { code: 'EM-2201', message: 'The clipboard is empty.' } : { code: 'EM-2201', message: 'This item cannot be duplicated.' } };
       const leaves = steps.map((st) => ({ target: st.target, key: `list:${e.action}:${st.target.kind}:${st.target.id ?? st.target.index ?? ''}:${newId()}`, ops: [st.op] }));
       return { leaves, parentKey: leaves.length > 1 ? `group:${body.category}:` : leaves[0]!.key, needsInterpretation: false, notices };
     }
@@ -526,8 +526,13 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       if (plan.status !== 'draft') return;
       const hasClips = head(p).model.tracks.video.length > 0;
       const ops: OperationT[] = [{ op: 'op:text.add', args: { text: title, variant: 'preset:text.title', atMs: 0, durationMs: 3000 } }];
-      plan.steps = [{ n: 1, tool: 'composition.applyOps', ops, args: {}, expectedDiff: `Add Title '${title}' 0.0–3.0 s`, dependsOn: [] }];
-      if (hasClips) plan.steps.push({ n: 2, tool: 'composition.applyOps', ops: [], args: {}, expectedDiff: 'Rise motion on the title (variant default)', dependsOn: [1] });
+      const firstClip = head(p).model.tracks.video[0];
+      // QA 2026-10-28 #17: "hapus …" plans a removal (the Plan Card asks inline, Execute needs confirmDestructive).
+      if (/\b(hapus|delete|remove)\b/i.test(words) && firstClip) plan.steps = [{ n: 1, tool: 'composition.applyOps', ops: [{ op: 'op:clip.remove', target: { kind: 'clip', id: firstClip.id }, args: {} } as OperationT], args: {}, expectedDiff: 'Hapus klip 1', dependsOn: [] }];
+      else {
+        plan.steps = [{ n: 1, tool: 'composition.applyOps', ops, args: {}, expectedDiff: `Add Title '${title}' 0.0–3.0 s`, dependsOn: [] }];
+        if (hasClips) plan.steps.push({ n: 2, tool: 'composition.applyOps', ops: [], args: {}, expectedDiff: 'Rise motion on the title (variant default)', dependsOn: [1] });
+      }
       plan.risks = [{ code: 'EM-2305', message: 'Title may overlap the caption area for a moment.', severity: 'info' }];
       plan.usage = { model: modelId, inputTokens: 1240, outputTokens: 310, costUsd: 0.004, approximate: true };
       plan.status = 'valid';
@@ -1019,7 +1024,15 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   });
   r('GET', '/projects/:id/plans', (m) => ({ items: proj(m[1]!).plans.slice().reverse(), nextCursor: null }));
   r('GET', '/plans/:pid', (m) => { for (const p of projects.values()) { const pl = p.plans.find((x) => x.id === m[1]); if (pl) return { ...pl, stale: pl.baseVersion !== head(p).hash, headHash: head(p).hash }; } throw new HttpError(404, 'EM-9003', 'Not found.'); });
-  r('POST', '/plans/:pid/execute', (m) => executePlan(m[1]!));
+  r('POST', '/plans/:pid/execute', (m, b) => {
+    // R-073: a plan that removes content needs confirmDestructive (Service: EM-4310 with the items).
+    for (const p of projects.values()) {
+      const pl = p.plans.find((x) => x.id === m[1]);
+      const items = pl?.steps.flatMap((st) => st.ops.filter((o) => ['op:clip.remove', 'op:text.remove', 'op:audio.remove', 'op:shape.remove', 'op:overlay.remove', 'op:caption.clear', 'op:background.clear'].includes(o.op)).map((o) => ({ op: o.op, ...(o.target ? { target: o.target } : {}) }))) ?? [];
+      if (pl && items.length && obj(b)['confirmDestructive'] !== true) throw new HttpError(409, 'EM-4310', `This plan removes ${items.length} item(s) from the video; confirm the removal to continue.`, { destructive: [...new Set(items.map((x) => x.op))], items });
+    }
+    return executePlan(m[1]!);
+  });
   r('POST', '/plans/:pid/cancel', (m) => {
     for (const p of projects.values()) {
       const pl = p.plans.find((x) => x.id === m[1]);
@@ -1096,6 +1109,38 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     let planId: string | null = null;
     if (interpret.length && assignments.editor && !settings.privateMode) planId = startAgentPlan(p, interpret, undefined).id;
     return { queue: queueDto(p), accepted, rejected, planId };
+  });
+  // R-083b (FR-219): "Kirim ke Editor" — the Brainstorm draft becomes an Editor request (mock: same path as an Edit message).
+  r('POST', '/projects/:id/conversations/brainstorm/messages/:mid/send-to-editor', (m, b) => {
+    const p = proj(m[1]!), body = obj(b);
+    const msg = p.messages.brainstorm.find((x) => x.id === m[2] && x.role === 'assistant');
+    if (!msg) throw new HttpError(404, 'EM-9003', 'This draft is no longer available.');
+    agentChecks();
+    if (!assignments.editor) throw new HttpError(422, 'EM-4007', 'The Editor Agent has no model yet.');
+    if (body['baseVersion'] !== head(p).hash) throw new HttpError(409, 'EM-2301', 'Base version is not the head.');
+    const reply = msg.blocks.flatMap((x) => (x.type === 'text' ? [x.text] : [])).join('\n');
+    const text = `Kerjakan draf dari Diskusi ini di video sekarang.\n\nDRAF:\n${reply}`;
+    const user: MessageDto = { id: newId(), role: 'user', blocks: [{ type: 'text', text }, { type: 'origin', from: 'brainstorm', messageId: msg.id }], agentRunId: null, createdAt: nowIso() };
+    p.messages.editor.push(user);
+    const res = createIntent(p, { source: 'chat', category: 'text', target: { kind: 'selection' }, instruction: text, baseVersion: head(p).hash, plan: 'none' }, 'chat');
+    Object.assign(res.intent, { category: 'layout', propertyKey: `chat:${user.id}`, needsInterpretation: true });
+    startAgentPlan(p, [res.intent.id], text);
+    msg.blocks = [...msg.blocks.filter((x) => x.type !== 'handoff').map((x) => (x.type === 'proposed_intents' ? { ...x, handoffState: 'sent' as const } : x)),
+      { type: 'handoff', draftTitle: reply.split('\n')[0]!.slice(0, 80), editorMessageId: user.id, editorRunId: lastEditorRunId, state: 'planning' }];
+    emit('agent.message.updated', { projectId: p.dto.id, agent: 'brainstorm', message: msg });
+    return accepted({ message: user, runId: lastEditorRunId, brainstormMessage: msg });
+  });
+  // R-088 (FR-221) mock: the text is "extracted" from the raw body (plain text files only).
+  r('POST', '/projects/:id/chat-documents', (_m, b) => {
+    const text = typeof b === 'string' ? b : '';
+    return { document: { id: newId(), name: 'naskah.txt', kind: 'text', chars: text.length || 120, truncated: false, warnings: [] } };
+  });
+  // R-089 (FR-217) mock: the picture becomes an image asset with its credit line.
+  r('POST', '/projects/:id/research/images/import', (m) => {
+    const p = proj(m[1]!);
+    const a = { ...(p.assets[0] ?? {}), id: newId(), name: 'Nickel ore.png', kind: 'image', status: 'ready' } as (typeof p.assets)[number];
+    p.assets.push(a);
+    return { assetId: a.id, attribution: '"Nickel ore" by Stub Photographer, CC BY 4.0, via Openverse', duplicate: false };
   });
   r('DELETE', '/projects/:id/conversations/:agent', (m) => { proj(m[1]!).messages[m[2] as AgentKind] = []; return undefined; });
   r('GET', '/agent-runs/:rid', (m) => ({ id: m[1], status: 'done' }));
@@ -1217,9 +1262,12 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       ? [...ops, { op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: 'preset:caption.editorial' } }] : ops;
   r('POST', '/projects/:id/generators/:kind', (m, b) => {
     const p = proj(m[1]!), kind = m[2] as GeneratorJobDto['kind'], body = obj(b);
-    if (kind === 'music' || kind === 'thumbnail') throw new HttpError(422, 'EM-9004', 'Coming in a later version.', { feature: kind });
+    if (kind === 'thumbnail') throw new HttpError(422, 'EM-9004', 'Coming in a later version.', { feature: kind });
+    if (kind === 'music' && settings.privateMode && !mockTracks.some((x) => x.status === 'ready')) throw new HttpError(423, 'EM-8202', 'Private Mode is on.');   // FR-247: the CC0 library, no model
     if (kind === 'hashtags') { if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.'); if (!connections.length) throw new HttpError(503, 'EM-4001', 'No AI provider is connected.'); }
-    const needed = kind === 'captions' ? 'whisper-small' : kind === 'voice' ? 'piper-id-news' : null;
+    const cloudVoice = kind === 'voice' && typeof body['voiceId'] === 'string' && /^(openai|gemini|elevenlabs):/.test(body['voiceId']);
+    if (cloudVoice) { const v = mockVoices('id').items.find((x) => x.id === body['voiceId']); if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.'); if (v?.availability !== 'ready') throw new HttpError(422, 'EM-7113', 'Connect the provider first.', { provider: v?.provider ?? 'openai' }); }
+    const needed = kind === 'captions' ? 'whisper-small' : kind === 'voice' && !cloudVoice ? 'piper-id-news' : null;
     const model = needed ? models.find((x) => x.key === (typeof body['modelKey'] === 'string' ? body['modelKey'] : needed)) : null;
     if (needed && model?.status !== 'installed') throw new HttpError(422, 'EM-7001', 'Model not installed.', { modelKey: needed, bytes: model?.bytesTotal ?? 0 });
     const job: GeneratorJobDto = { id: newId(), projectId: p.dto.id, kind, status: 'running', progress: 0, modelKey: model?.key ?? null, resultAssetId: null, result: null, errorCode: null, createdAt: nowIso(), startedAt: nowIso(), finishedAt: null };
@@ -1229,7 +1277,12 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       job.status = 'done'; job.progress = 1; job.finishedAt = nowIso();
       const pages = [{ text: 'Selamat datang di Kafe Senja', startMs: 0, durationMs: 2000, tokens: [] }];
       let ops: OperationT[] = [];
-      if (kind === 'voice') {                                    // the voice becomes an Asset (generators-service register()), like the real service
+      if (kind === 'music') {                                    // FR-247: a library track fitted to the length becomes the music bed
+        const a = addAsset(p, { name: `music-${mockTracks[0]!.id}.wav`, kind: 'audio', status: 'ready', progress: 1, durationMs: Number(body['durationMs'] ?? 30_000), hasAudio: true, bytes: 96_000,
+          media: { original: true, playable: false, proxy: false, thumb: false, filmstrip: false, waveform: false } }, null);
+        job.resultAssetId = a.id; emit('ingest.done', { projectId: p.dto.id, asset: a });
+        ops = [{ op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId: a.id, volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000 } }];
+      } else if (kind === 'voice') {                                    // the voice becomes an Asset (generators-service register()), like the real service
         const a = addAsset(p, { name: `voice-${job.id.slice(-6).toLowerCase()}.wav`, kind: 'audio', status: 'ready', progress: 1, durationMs: 3000, hasAudio: true, bytes: 96_000,
           media: { original: true, playable: false, proxy: false, thumb: false, filmstrip: false, waveform: false } }, null);
         job.resultAssetId = a.id;
@@ -1265,6 +1318,48 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('GET', '/projects/:id/generator-jobs', (m, _b, q) => { const items = proj(m[1]!).genJobs.filter((j) => !q.get('kind') || j.kind === q.get('kind')); return { items, nextCursor: null, total: items.length }; });
   r('DELETE', '/generator-jobs/:jid', (m) => { for (const p of projects.values()) { const n = p.genJobs.length; p.genJobs = p.genJobs.filter((x) => x.id !== m[1]); if (p.genJobs.length !== n) return undefined; } throw new HttpError(404, 'EM-9003', 'Not found.'); });   // R-137
   r('POST', '/generator-jobs/:jid/save-output', () => { throw new HttpError(422, 'EM-9004', 'Coming in a later version.', { feature: 'thumbnail' }); });   // R-136 (thumbnail is off in the mock build)
+  // FR-246 / FR-247 (R-215 … R-222): voices and the CC0 music library, shaped like the Service's answers
+  const silentWav = (): Response => { const n = 800; const buf = new ArrayBuffer(44 + n * 2); const v = new DataView(buf); const w = (o: number, t: string) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+    return new Response(buf, { status: 200, headers: { 'Content-Type': 'audio/wav' } }); };
+  let elevenKey: string | null = null;
+  const mockVoices = (language: string) => {
+    const piper = models.find((x) => x.key === 'piper-id-news');
+    const cloud = (provider: 'openai' | 'gemini', voice: string, gender: 'female' | 'male', traits: string[]) => ({ id: `${provider}:${provider === 'openai' ? 'gpt-4o-mini-tts' : 'gemini-3.8-flash-tts'}:${voice}`, provider, name: voice, gender, traits: { id: traits, en: traits }, languages: ['id', 'en'],
+      cloud: true, supports: { speed: true, pitch: false, style: true }, usdPer1kChars: provider === 'openai' ? 0.018 : 0.016, installed: true,
+      availability: settings.privateMode ? 'private-mode' : connections.some((c) => c.provider === (provider === 'gemini' ? 'google' : provider)) ? 'ready' : 'no-connection' });
+    const local = (id: string, name: string, traits: string[], pitch?: number) => ({ id, provider: 'local', name, gender: 'neutral', traits: { id: traits, en: traits }, languages: ['id'], modelKey: 'piper-id-news', ...(pitch ? { pitch } : {}), cloud: false,
+      supports: { speed: true, pitch: true, style: false }, installed: piper?.status === 'installed', availability: piper?.status === 'installed' ? 'ready' : 'model-missing' });
+    const items = language === 'en' ? [] : [local('local:piper-id-news', 'Narator Berita', ['jelas', 'berita']), local('local:piper-id-news:deep', 'Narator Berita · berat', ['berat', 'berwibawa'], -2),
+      cloud('openai', 'coral', 'female', ['hangat', 'ramah']), cloud('openai', 'onyx', 'male', ['berat', 'berwibawa']), cloud('gemini', 'Sulafat', 'female', ['hangat', 'natural']), cloud('gemini', 'Charon', 'male', ['informatif', 'natural'])];
+    return { items, privateMode: settings.privateMode, elevenLabsKey: elevenKey };
+  };
+  r('GET', '/voices', (_m, _b, q) => mockVoices(q.get('language') ?? 'id'));
+  r('GET', '/voices/:vid/preview', () => silentWav());
+  r('PUT', '/voice-keys/elevenlabs', (_m, b) => { if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.'); const k = String(obj(b)['key'] ?? ''); elevenKey = `…${k.slice(-4)}`; return { provider: 'elevenlabs', secretHint: elevenKey, status: 'valid' }; });
+  r('DELETE', '/voice-keys/elevenlabs', () => { elevenKey = null; return undefined; });
+  const mockTracks = [
+    { id: 'infinite-peace', title: 'Infinite Peace', artist: 'Kevin MacLeod', mood: 'calm', genre: 'Ambient', bpm: 83, durationS: 76, bytes: 2_436_321 },
+    { id: 'windy-old-weather', title: 'Windy Old Weather', artist: 'Kevin MacLeod', mood: 'upbeat', genre: 'Jazz', bpm: 97, durationS: 120, bytes: 2_916_300 },
+    { id: 'honor-bound', title: 'Honor Bound', artist: 'Bryan Teoh', mood: 'cinematic', genre: 'Ambient', bpm: 126, durationS: 171, bytes: 3_413_629 },
+  ].map((x) => ({ ...x, credit: `Music: ${x.title} by ${x.artist} (FreePD.com, CC0 1.0)`, status: 'not-downloaded' as MusicTrackDto['status'], bytesDone: 0, errorCode: null as string | null,
+    licence: { spdx: 'CC0-1.0', name: 'CC0 1.0 (public domain dedication)', url: 'https://creativecommons.org/publicdomain/zero/1.0/', proofUrl: 'https://huggingface.co/datasets/Youmiel/FreePD-Data' } }));
+  const track = (id: string) => { const x = mockTracks.find((y) => y.id === id); if (!x) throw new HttpError(404, 'EM-9003', 'Not found.'); return x; };
+  r('GET', '/music-library', (_m, _b, q) => ({ items: mockTracks.filter((x) => !q.get('mood') || x.mood === q.get('mood')), moods: ['upbeat', 'energetic', 'calm', 'corporate', 'cinematic', 'dramatic', 'lofi', 'electronic', 'acoustic', 'sentimental'] }));
+  r('POST', '/music-library/:tid/download', (m) => {
+    const x = track(decodeURIComponent(m[1]!)); if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.');
+    if (x.status !== 'ready') { x.status = 'downloading'; later(300, () => { x.status = 'ready'; x.bytesDone = x.bytes; emit('service.notice', { kind: 'music-library', trackId: x.id, status: 'ready', percent: 100, done: true }); }); }
+    return accepted(x);
+  });
+  r('GET', '/music-library/:tid/audio', (m) => { const x = track(decodeURIComponent(m[1]!)); if (x.status !== 'ready') throw new HttpError(422, 'EM-7001', 'Download this track first.'); return silentWav(); });
+  r('POST', '/projects/:id/music-library/:tid/insert', (m) => {
+    const p = proj(m[1]!); const x = track(decodeURIComponent(m[2]!));
+    if (x.status !== 'ready') throw new HttpError(422, 'EM-7001', 'Download this track first.');
+    const a = addAsset(p, { name: `music-${x.id}.mp3`, kind: 'audio', status: 'ready', progress: 1, durationMs: x.durationS * 1000, hasAudio: true, bytes: x.bytes, media: { original: true, playable: false, proxy: false, thumb: false, filmstrip: false, waveform: false } }, null);
+    const res = applyOperations(head(p).model, [{ op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId: a.id, volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000 } }], { assets: facts(p), tier: hardware.tier, newId });
+    if (!res.ok) throw new HttpError(422, res.issues[0]?.code ?? 'EM-2102', res.issues[0]?.message ?? 'Invalid.');
+    return { assetId: a.id, versionId: commit(p, res.value.model, 'system', res.value.diff).id };
+  });
   r('GET', '/generators', () => {                                                                                 // R-135: the mock build enables P1 generators only
     const card = (kind: GeneratorJobDto['kind'], task: string | null, def: string | null) => {
       const list = task ? models.filter((x) => x.task === task).map((x) => ({ key: x.key, label: x.label, ...(x.displayName ? { displayName: x.displayName } : {}), bytes: x.bytesTotal, installed: x.status === 'installed', languages: [], minTier: x.tiers[0] ?? 'T0', belowTier: !x.tiers.includes(hardware.tier), cc0: false })) : [];
@@ -1272,9 +1367,10 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       if (kind === 'thumbnail') list.push({ key: 'frame-composite', label: 'Frame + title', displayName: { en: 'Thumbnail from a Frame', id: 'Thumbnail dari Frame' }, bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: false });
       const fallback = kind === 'thumbnail' ? list.find((x) => x.installed) ?? null : list[0] ?? null;
       const model = list.find((x) => x.key === def && (kind !== 'thumbnail' || x.installed)) ?? fallback;
-      return { kind, enabled: kind !== 'music' && kind !== 'thumbnail', priority: kind === 'music' || kind === 'thumbnail' ? 'P2' : 'P1', llm: kind === 'hashtags', tierHint: model?.belowTier ? 'slow' : 'ok', model, models: list, tier: hardware.tier };
+      if (kind === 'music') list.push({ key: 'loop-library-cc0', label: 'CC0 music library', displayName: { en: 'Music Library · CC0', id: 'Pustaka Musik · CC0' }, bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: true });
+      return { kind, enabled: kind !== 'thumbnail', priority: kind === 'music' || kind === 'thumbnail' ? 'P2' : 'P1', llm: kind === 'hashtags', tierHint: model?.belowTier ? 'slow' : 'ok', model, models: list, tier: hardware.tier };
     };
-    return { items: [card('voice', 'tts', 'piper-id-news'), card('music', 'music', null), card('thumbnail', 'image', null), card('captions', 'stt', 'whisper-small'), card('hashtags', null, null)] };
+    return { items: [card('voice', 'tts', 'piper-id-news'), card('music', 'music', 'loop-library-cc0'), card('thumbnail', 'image', null), card('captions', 'stt', 'whisper-small'), card('hashtags', null, null)] };
   });
   r('GET', '/generator-jobs/:jid', (m) => { for (const p of projects.values()) { const j = p.genJobs.find((x) => x.id === m[1]); if (j) return j; } throw new HttpError(404, 'EM-9003', 'Not found.'); });
   r('POST', '/generator-jobs/:jid/cancel', (m) => { for (const p of projects.values()) { const j = p.genJobs.find((x) => x.id === m[1]); if (j) { if (j.status === 'running') j.status = 'cancelled'; return j; } } throw new HttpError(404, 'EM-9003', 'Not found.'); });
@@ -1352,6 +1448,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       if (!match) continue;
       try {
         const out = h(match, body, url.searchParams, init);
+        if (typeof Response !== 'undefined' && out instanceof Response) return out;                 // binary answers (voice preview, library audio)
         if (out && typeof out === 'object' && '__status' in out) { const o = out as { __status: number; body: unknown }; return respond(o.__status, o.body); }
         return out === undefined ? new Response(null, { status: 204 }) : respond(200, out);
       } catch (e) {

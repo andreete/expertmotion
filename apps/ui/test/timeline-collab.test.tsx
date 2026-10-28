@@ -56,7 +56,7 @@ describe('pure helpers', () => {
   it('menu state: split needs the playhead inside the item; duplicate needs a duplicable kind; ask is off in Private Mode', () => {
     const m = faceless();
     const clip = [{ kind: 'clip' as const, id: m.tracks.video[0]!.id }];
-    expect(itemMenuState({ refs: clip, model: m, playheadMs: 1500, privateMode: false, t })).toEqual({ delete: null, split: null, duplicate: null, ask: null });
+    expect(itemMenuState({ refs: clip, model: m, playheadMs: 1500, privateMode: false, t })).toEqual({ copy: null, cut: null, paste: t('ui.stage.itemmenu.paste.empty'), delete: null, split: null, duplicate: null, ask: null });
     const off = itemMenuState({ refs: [{ kind: 'audio', id: m.tracks.audio[0]!.id }], model: m, playheadMs: 5900, privateMode: true, t });
     expect(off.split).toBe(t('ui.stage.itemmenu.split.outside'));
     expect(off.duplicate).toBe(t('ui.stage.itemmenu.duplicate.none'));
@@ -127,8 +127,11 @@ describe('item context menu (FR-193, FR-194)', () => {
     await until(() => el('stage.itemmenu'), 'menu');
     const menu = el('stage.itemmenu')!;
     expect(menu.getAttribute('role')).toBe('menu');
-    expect([...menu.querySelectorAll('[role="menuitem"]')].map((x) => x.getAttribute('data-el'))).toEqual(['stage.itemmenu.delete', 'stage.itemmenu.split', 'stage.itemmenu.duplicate', 'stage.itemmenu.ask']);
+    // FR-255 / FR-256: Copy / Cut / Paste come first (Paste disabled until something was copied)
+    expect([...menu.querySelectorAll('[role="menuitem"]')].map((x) => x.getAttribute('data-el'))).toEqual(['stage.itemmenu.copy', 'stage.itemmenu.cut', 'stage.itemmenu.paste', 'stage.itemmenu.delete', 'stage.itemmenu.split', 'stage.itemmenu.duplicate', 'stage.itemmenu.ask']);
     expect(el('stage.itemmenu.delete')?.textContent).toMatch(/Delete/);
+    expect(document.activeElement).toBe(el('stage.itemmenu.copy'));
+    for (let i = 0; i < 3; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
     expect(document.activeElement).toBe(el('stage.itemmenu.delete'));
     expect(bar.getAttribute('aria-selected')).toBe('true');                          // the right-clicked bar became the selection
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
@@ -149,7 +152,7 @@ describe('item context menu (FR-193, FR-194)', () => {
 
   it('Split is disabled when the playhead is outside the item; Delete from the menu works; Ask adds a chip and switches to Edit', async () => {
     await renderEditor('sample');
-    fireEvent.click(el('agent.chat.mode.brainstorm')!);
+    fireEvent.click(el('agent.chat.tab.brainstorm')!);
     fireEvent.contextMenu(bars('clip')[2]!, { clientX: 10, clientY: 10 });          // playhead at 0, clip 3 starts later
     await until(() => el('stage.itemmenu'), 'menu');
     expect(el('stage.itemmenu.split')?.getAttribute('aria-disabled')).toBe('true');

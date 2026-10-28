@@ -67,7 +67,8 @@ export function proposalTarget(i: EditIntent, model: CompositionModelT | undefin
 }
 
 /** The pending proposals of one Diskusi answer; `onApplied` runs after a successful hand-off (the chat switches to Edit). */
-export function ProposalCard({ message, intents, handoffState, onApplied }: { message: MessageDto; intents: EditIntent[]; handoffState: 'pending' | 'sent' | 'dismissed'; onApplied?: () => void }) {
+export function ProposalCard({ message, intents, handoffState, onApplied, onSendDraft }: { message: MessageDto; intents: EditIntent[]; handoffState: 'pending' | 'sent' | 'dismissed'; onApplied?: () => void;
+  /** FR-219: all valid items ticked → the whole draft goes to the Editor (run + progress + Plan Card); a subset is queued and planned. */ onSendDraft?: () => void }) {
   const { actions, t, lang, state } = useStore();
   const model = state.head?.model;
   const issues = Object.fromEntries(intents.map((i) => [i.id, proposalIssue(i, model, t)]));
@@ -99,7 +100,12 @@ export function ProposalCard({ message, intents, handoffState, onApplied }: { me
         })}
       </ul>
       <div className="flex gap-2">
-        <Button el="agent.chat.apply" variant="primary" size={28} icon={<Clapperboard size={14} />} title={t('ui.agent.chat.apply.tip')} disabledReason={ticked.length ? null : t('ui.agent.brainstorm.handoff.none')} onClick={() => { void actions.handoff(message, ticked.filter((id) => !issues[id])).then((ok) => { if (ok) onApplied?.(); }); }}>{t('ui.agent.chat.apply')}</Button>
+        <Button el="agent.chat.sendtoeditor" variant="primary" size={28} icon={<Clapperboard size={14} />} title={t('ui.agent.handoff.send.tip')} disabledReason={ticked.length ? null : t('ui.agent.brainstorm.handoff.none')} onClick={() => {
+          const valid = intents.filter((i) => !issues[i.id]).map((i) => i.id);
+          if (onSendDraft && valid.every((id) => ticked.includes(id))) { onSendDraft(); return; }
+          // QA 2026-10-28 #3/#4: a hand-off of picks now also starts the Editor run at once (it used to only queue them).
+          void actions.handoff(message, ticked.filter((id) => !issues[id])).then((ok) => { if (ok) { onApplied?.(); void actions.plan(); } });
+        }}>{t('ui.agent.handoff.send')}</Button>
         <Button variant="ghost" size={28} onClick={() => actions.dismissHandoff(message)}>{t('ui.agent.brainstorm.handoff.dismiss')}</Button>
       </div>
     </div>

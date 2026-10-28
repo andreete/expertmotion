@@ -11,7 +11,9 @@ import { route } from '../http/route.js';
 import { customBaseUrlProblem } from '../services/egress.js';
 import { createSecretBox, secretHint, type SecretBox } from '../s3/crypto.js';
 import { keyIsRecent, markKeyChanged, normalizeKey } from '../s3/keys.js';
-import { chatProviderFor, DEFAULT_CALL_TIMEOUT_MS, listModels, toolsRefused, VALIDATE_TIMEOUT_MS, validateKey } from '../s3/adapters.js';
+import { chatProviderFor, DEFAULT_CALL_TIMEOUT_MS, listModels, toolsRefused, VALIDATE_TIMEOUT_MS, validateKey, webOffNotice } from '../s3/adapters.js';
+import { providerSearch, researchConfigFor } from '../s3/research.js';
+import type { ResearchConfig, WebSource } from '@expertmotion/agents';
 import { dumpAgentCall } from '../s3/agent-dump.js';
 import { Agent, AssignmentDto, AssignmentSettings, audit, emit, Id, monthOf, ProviderKind, requireProject, type AgentT, type AssignmentDtoT, type CapabilityRowT, type ProviderKindT } from '../s3/dto.js';
 import { budgetCheck, budgetState, cachedModels, connectionMonthSpend, projectConnectionMonthSpend, projectMonthSpend, recordUsage } from '../s3/usage-store.js';
@@ -186,6 +188,12 @@ async function runProbe(ctx: ServiceContext, agent: AgentT, t: ProbeTarget): Pro
   } finally { st.providerCalls.delete(ac); }
 }
 
+function markRejected(ctx: ServiceContext, id: string) {
+  try {
+    const r = ctx.db.prepare("UPDATE provider_connections SET status = 'invalid', updated_at = ? WHERE id = ? AND status <> 'invalid'").run(ctx.now(), id);
+    if (r.changes) { ctx.log.warn({ connectionId: id }, 'provider rejected the key during an agent run; connection marked invalid'); changed(ctx, 'providers'); }
+  } catch (err) { ctx.log.warn({ connectionId: id, err: String(err) }, 'could not mark the connection invalid'); }
+}
 /** providerFor hook: a ChatProvider for the agent's Model Assignment. Keys are decrypted per call; Private Mode aborts in-flight calls. */
 function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
   if (ctx.egress.isPrivate()) throw new EmError('EM-4401', 'Private Mode blocks all internet use, so the agents are unavailable.');
@@ -220,11 +228,31 @@ function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
       return r;
     } catch (e) {
       dumpAgentCall(meta, full, { error: e, ms: Date.now() - t0 });
+      // QA 2026-10-28: the provider rejected the key itself during an agent run (Anthropic 401 "invalid x-api-key": a revoked /
+      // rotated key) → the connection is marked invalid so the header dot turns red and Providers asks for a new key.
+      if ((e as { code?: unknown })?.code === 'EM-4002' && (e as { details?: { status?: unknown } }).details?.status === 401) markRejected(ctx, conn.id);
       if (ac.signal.aborted && !req.signal?.aborted) throw new EmError('EM-8202', 'Private Mode is on, so the agent request was stopped.');
       throw e;
     } finally { st.providerCalls.delete(ac); }
   };
-  return { id: conn.provider, model: a.modelId, ...(nativeTools ? { nativeTools: true } : {}), complete: (req) => send(req), stream: (req, onDelta) => send(req, onDelta) };
+  return { id: conn.provider, model: a.modelId, ...(nativeTools ? { nativeTools: true } : {}), ...(conn.provider === 'anthropic' ? { nativeWebResearch: true } : {}), complete: (req) => send(req), stream: (req, onDelta) => send(req, onDelta) };
+}
+
+/**
+ * FR-216: internet research for an agent: the config (setting, Private Mode, provider, an account that disabled Anthropic web
+ * search this session) and, for tools mode, one search on the same connection's search feature.
+ */
+export function researchFor(ctx: ServiceContext, agent: AgentT): { cfg: ResearchConfig; search?: (query: string, signal?: AbortSignal) => Promise<{ summary: string; sources: WebSource[]; queries?: string[] }> } {
+  const a = assignmentOf(ctx, agent);
+  const conn = a ? ctx.db.prepare('SELECT id, provider FROM provider_connections WHERE id = ?').get(a.connectionId) as { id: string; provider: ProviderKindT } | undefined : undefined;
+  const cfg = researchConfigFor({ privateMode: ctx.egress.isPrivate(), setting: ctx.settings.get().webResearch !== false, provider: conn?.provider ?? null, nativeOff: conn && a ? webOffNotice(conn.provider, a.modelId) : null });
+  if (!cfg.available || cfg.mode !== 'tools' || !conn || !a) return { cfg };
+  return { cfg, search: async (query, signal) => {
+    if (ctx.egress.isPrivate()) throw new EmError('EM-8202', 'Private Mode is on, so the search was not sent to the internet.');
+    const ac = new AbortController(); s3(ctx).providerCalls.add(ac);
+    try { return await providerSearch(conn.provider, keyOf(ctx, getConn(ctx, conn.id)), a.modelId, egressFetch(ctx), query, signal ? AbortSignal.any([signal, ac.signal]) : ac.signal); }
+    finally { s3(ctx).providerCalls.delete(ac); }
+  } };
 }
 
 function budgetView(ctx: ServiceContext, month = monthOf(ctx.now())) {

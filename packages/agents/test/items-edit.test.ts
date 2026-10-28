@@ -1,7 +1,7 @@
 // ADR-031 / FR-192 / FR-193: Delete and Duplicate picks (`itemsEdit`) through createIntents + compileIntents: one child intent per
 // resolved item, unique list keys (never superseding, never Locked Keys), all ops in one compile (one Composition Version).
 import { describe, expect, it } from 'vitest';
-import { applyOperations, createEmptyModel, hashModel, type AssetFacts, type CompositionModelT } from '@expertmotion/composition-model';
+import { applyOperations, copySnapshot, createEmptyModel, hashModel, type AssetFacts, type CompositionModelT } from '@expertmotion/composition-model';
 import { compileIntents, createIntents, enqueue, lockedKeysFromQueue, pickFromIntent, type DesignPick } from '../src/index.js';
 
 const ASSETS: AssetFacts[] = [{ id: 'a1', kind: 'video', status: 'ready', durationMs: 5000 }];
@@ -55,5 +55,31 @@ describe('itemsEdit picks (ADR-031)', () => {
     expect(run(m, { action: 'remove', items: [] }).issues[0]).toMatchObject({ code: 'EM-2201' });
     expect(run(m, { action: 'remove', items: [{ kind: 'text', id: 'gone' }] }).issues[0]).toMatchObject({ code: 'EM-2203' });
     expect(run(m, { action: 'duplicate', items: [{ kind: 'background' }] }).issues[0]).toMatchObject({ code: 'EM-2201' });
+  });
+});
+
+describe('itemsEdit paste (FR-256)', () => {
+  it('Paste after Cut: one child per clipboard entry with synthetic project targets, unique list keys, one compile at the playhead', () => {
+    const m = scenes();
+    const s2 = m.tracks.video[1]!;
+    const { entries } = copySnapshot(m, [{ kind: 'clip', id: s2.id }]);
+    const cut = applyOperations(m, run(m, { action: 'remove', items: [{ kind: 'clip', id: s2.id }] }).ops, { assets: ASSETS, tier: 'T1', newId });
+    if (!cut.ok) throw new Error('cut');
+    const after = cut.value.model;
+    const r = run(after, { action: 'paste', items: [], paste: { atMs: 0, entries } });
+    expect(r.issues).toEqual([]);
+    expect(r.intents[0]).toMatchObject({ propertyKey: 'group:asset:', propertyClass: 'list' });
+    expect(r.intents.slice(1).map((k) => k.resolvedTargets)).toEqual([[{ kind: 'project', index: 0 }], [{ kind: 'project', index: 1 }]]);
+    expect(r.intents.slice(1).every((k) => k.propertyKey.startsWith('list:paste:'))).toBe(true);
+    expect(r.ops.map((o) => o.op)).toEqual(['op:scene.add', 'op:text.add']);
+    expect(pickFromIntent(r.intents[1]!).itemsEdit?.paste?.entries).toEqual(entries);
+    const applied = applyOperations(after, r.ops, { assets: ASSETS, tier: 'T1', newId });
+    expect(applied.ok).toBe(true);
+    if (applied.ok) expect(applied.value.model.tracks.text.map((x) => [x.text, x.timing.atMs]).sort((a, b) => Number(a[1]) - Number(b[1]))).toEqual([['Dua', 0], ['Satu', 3000], ['Tiga', 6000]]);
+  });
+  it('an empty clipboard → EM-2201; remove / duplicate unchanged', () => {
+    const m = scenes();
+    expect(run(m, { action: 'paste', items: [], paste: { atMs: 0, entries: [] } }).issues[0]).toMatchObject({ code: 'EM-2201' });
+    expect(run(m, { action: 'duplicate', items: [{ kind: 'text', id: m.tracks.text[0]!.id }] }).ops).toHaveLength(1);
   });
 });

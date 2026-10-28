@@ -94,7 +94,14 @@ Mapping: `interpolate`/`spring` on separate CSS props `translate`, `scale`, `rot
 | `preset:motion.bounce` | Bounce / Pantul | Easing.bounce translateY | P1 | |
 | `preset:motion.typewriter` | Typewriter / Ketik | text reveals per character (text only) | P1 | |
 | `preset:motion.word-stagger` | Word stagger / Kata bergantian | spring per word with delay i×8 frames (book §5.5) | P1 | |
+| `preset:motion.blur-in` | Blur in / Kabur masuk | blur `blurU` (16u)→0 + fade + scale 0.96→1 (ADR-034) | P1 | |
+| `preset:motion.scale-in` | Scale in / Membesar halus | scale `fromScale` (0.7)→1 + fade, no overshoot (ADR-034; image default) | P1 | |
+| `preset:motion.wipe-reveal` | Wipe reveal / Buka sapu | `clip-path: inset()` from `direction` (ADR-034; line accents) | P1 | |
+| `preset:motion.draw-on` | Draw on / Gambar garis | shapes: outline stroked on with `@remotion/paths` `evolvePath`, fill fades in at the end (ADR-034) | P1 | |
+| `preset:motion.grow` | Grow / Tumbuh | `scale` on one axis from the bar's base, `direction` up / down / left / right (ADR-034; bar charts) | P1 | |
 | `preset:motion.none` | Static / Diam | — | P0 | |
+
+ADR-034 optional params on every motion (absent = the behaviour above): `exitMs` (exit length; default = `durationMs`), `exitStyle` (`mirror` = entrance backwards, `fade` = opacity only), `bezier` ([x1, y1, x2, y2], wins over `easingId`), `loop` (`none|float|pulse|sway|spin`, a subtle idle loop after the entrance: float ±6 u via `@remotion/noise` `noise2D`, pulse ±3 %, sway ±2°, spin 45°/s). `rise.distanceU` allows 0–2000 (a bar value label rides up with its bar). Defaults when an add op names no motion: text variant `motionId` (title / subtitle rise, lower-third slide-in, callout pop, quote fade-in), shapes pop (line wipe-reveal; ring / check / chevron draw-on), images scale-in; `preset:motion.none` = static.
 
 ## 6. Shapes (`shape`) — list
 
@@ -113,6 +120,13 @@ Mapping: `@remotion/shapes` components; params: `size` (u), `fill` (theme accent
 | `preset:shape.callout` | Callout / Balon | `Callout` | P2 |
 | `preset:shape.spark` | Spark / Percik | `Spark` | P2 |
 | `preset:shape.ellipse` | Ellipse / Elips | `Ellipse` | P2 |
+| `preset:shape.line` | Line / Garis | `makeRect` w × h, round ends (underline, accent bar) | P1 |
+| `preset:shape.ring` | Ring / Cincin | `makeCircle`, stroke only (frame around a number) | P1 |
+| `preset:shape.pill` | Pill / Kapsul | `makeRect` w × h, radius h / 2 (button, badge) | P1 |
+| `preset:shape.check` | Check / Centang | stroked tick path (list) | P1 |
+| `preset:shape.chevron` | Chevron / Panah kecil | stroked chevron path (bullet) | P1 |
+
+ADR-034: every shape is drawn by one SVG path renderer from the `@remotion/shapes` `make*` geometry, inside a w × h box (`op:shape.add` `height` makes it non-square); `preset:shape.rect` takes `outline` (border only, stroke colour, `strokeWidth`, default 8 u) and `dashU` (dashed border, e.g. a target bar); `cornerRadius` is in u.
 
 ## 7. Easing (`easing`) — scalar (Theme default) or per motion
 
@@ -129,6 +143,8 @@ Mapping: `Easing` from `remotion` (book §5.4 guide).
 | `preset:easing.linear` | Linear / Linear | `Easing.linear` | technical | P1 |
 | `preset:easing.spring-soft` | Spring soft / Pegas lembut | `spring({damping: 200})` | — | P1 |
 | `preset:easing.spring-bouncy` | Spring bouncy / Pegas memantul | `spring({damping: 8})` | — | P1 |
+| `preset:easing.snappy` | Snappy / Sigap | `Easing.bezier(0.2, 0.8, 0.2, 1)` | bars, charts (ADR-034) | P1 |
+| `preset:easing.spring-light` | Spring light / Pegas ringan | `spring({damping: 14})` (slight overshoot) | pills, CTA (ADR-034) | P1 |
 
 ## 8. Visual effects (`effect`) — list (max 3 per element; T0 max 2)
 
@@ -191,17 +207,18 @@ Text effects (`op:text.setEffect`, exclusive):
 | `preset:texteffect.underline` | Underline / Garis bawah | rough-notation underline | P1 |
 | `preset:texteffect.circle` | Circle / Lingkari | rough-notation circle | P1 |
 | `preset:texteffect.kinetic` | Kinetic words / Kata bergerak | `KineticText` spring per word | P0 |
-| `preset:texteffect.counter` | Number counter / Angka berjalan | `AnimatedNumber` (ported) | P1 |
+| `preset:texteffect.counter` | Number counter / Angka berjalan | `AnimatedNumber` (ported, `packages/engine/src/format-number.ts`): the first number in the text counts from `from` (0) over `durationMs` (1200) after `delayMs` with `easingId` / `bezier`, written like the text (sign, Indonesian separators, decimals: "+17,2%", "US$ 25,96", "1.200"); never wraps | P1 |
+| `preset:texteffect.keyword` | Keyword colour / Warna kata kunci | the `words` (≤ 8) in the accent colour (or `colour`) with a small spring pop (ADR-034) | P1 |
 
 Fonts (bundled woff2, OFL): `preset:font.inter` (Inter), `preset:font.plus-jakarta-sans` (Plus Jakarta Sans), `preset:font.archivo` (Archivo), `preset:font.jetbrains-mono` (JetBrains Mono). Google Fonts are not used at runtime (offline rule).
 
 ## 11. Themes (`theme`) — scalar
 
-Palettes from the book §4.4 (contrast-checked): `preset:palette.editorial-dark` (#14120F / #F4EFE6 / #E8913A / #4FD1A5, default), `preset:palette.paper-light`, `preset:palette.neon-tech`, `preset:palette.pastel-friendly`, `preset:palette.high-contrast`, `preset:palette.corporate-blue`. Font pairs: `preset:fontpair.jakarta-inter` (default), `preset:fontpair.archivo-inter`, `preset:fontpair.inter-mono`.
+Palettes from the book §4.4 (contrast-checked): `preset:palette.editorial-dark` (#14120F / #F4EFE6 / #E8913A / #4FD1A5, default), `preset:palette.paper-light`, `preset:palette.neon-tech`, `preset:palette.pastel-friendly`, `preset:palette.high-contrast`, `preset:palette.corporate-blue`, `preset:palette.editorial-teal` (ADR-034, editorial data journalism: #0F1A1F / #FFFFFF / #5DCAA5 / #EF9F27, plus roles read by the scene composer: negative #F0997B, muted #9FB3B8, neutral #888780, pill #1D9E75). Font pairs: `preset:fontpair.jakarta-inter` (default), `preset:fontpair.archivo-inter`, `preset:fontpair.inter-mono`, `preset:fontpair.inter-inter` (ADR-034, Inter only).
 
 ## 12. P0 summary (must exist for v1.0; PRD-013)
 
-Transitions 6 (+none) · Captions 3 (+none) · Backgrounds 5 (+video-dim, none) · Motion 5 (+none) · Shapes 4 · Easing 5 · Effects 6 · Audio 3 · Text variants 4 · Text effects 2 · Palettes 6 · Font pairs 3.
+Transitions 6 (+none) · Captions 3 (+none) · Backgrounds 5 (+video-dim, none) · Motion 5 (+none) · Shapes 4 · Easing 5 · Effects 6 · Audio 3 · Text variants 4 · Text effects 2 · Palettes 7 · Font pairs 4.
 
 ## 13. Catalogue search tags
 

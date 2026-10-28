@@ -2,10 +2,11 @@
 // Brainstorming Agent, "Edit" = Editor Agent): CMP-13 bubbles tagged with their agent, the thread, the composer with the
 // mode switch, and the header with "Model: <label> ▾" (per mode), status and compact usage.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AtSign, CircleHelp, Clapperboard, Copy, ImagePlus, Info, Lightbulb, Loader, Maximize2, Minimize2, Paperclip, Scissors, SendHorizontal, ShieldCheck, Square, TriangleAlert, X } from 'lucide-react';
+import { AtSign, CircleHelp, Clapperboard, Copy, ExternalLink as ExternalIcon, FileText, Globe, ImagePlus, Info, Lightbulb, Loader, Maximize2, Minimize2, Music, Paperclip, Scissors, SendHorizontal, ShieldCheck, Square, TriangleAlert, X } from 'lucide-react';
 import { errCode, useStore } from '../state/store.js';
 import { PENDING_RUN } from '../state/reducer.js';
-import type { AgentKind, CapabilityRow, ChatTarget, MessageDto } from '../api/types.js';
+import type { AgentKind, CapabilityRow, ChatDocumentDto, ChatTarget, ImageCandidateDto, MessageDto, WebSourceDto } from '../api/types.js';
+import { openExternal } from '../components/ExternalLink.js';
 import type { AgentErrorDetail } from '../state/reducer.js';
 import { isRecentKey, keyRetryDelay } from '../state/key-retry.js';
 import { targetKey } from './targets.js';
@@ -17,6 +18,7 @@ import { copyText } from '../api/client.js';
 import { ModelText, modelReplyText } from './ModelText.js';
 import { ModelPopover } from './ModelPopover.js';
 import { SectionBoundary } from '../startup/ErrorBoundary.js';
+import { PhaseStepper } from './Handoff.js';
 
 /** FR-072: largest image the composer attaches from disk (EM-1002 above it). */
 export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
@@ -88,19 +90,21 @@ export function Bubble({ m, agent, children, onRetry, onApply, text: override, h
         ? <div className="max-w-[92%] whitespace-pre-wrap rounded-[8px] border-l-2 border-em-accent bg-em-panel-2 px-2.5 py-1.5">{shown}</div>
         : <div className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={shown} raw /></div>)}
       {attachments.map((a, i) => a.type === 'attachment' && (
-        <span key={i} data-el="agent.chat.message.attachment" data-sent={a.sent} className="flex max-w-[92%] flex-col items-end">
-          <span className="rounded-[4px] border border-em-line px-1 text-[11px] text-em-muted">📎 {a.name}</span>
+        <span key={i} data-el="agent.chat.message.attachment" data-sent={a.sent} data-kind={a.documentId ? 'document' : a.mime.split('/')[0]} className="flex max-w-[92%] flex-col items-end">
+          <span className="rounded-[4px] border border-em-line px-1 text-[11px] text-em-muted">{a.documentId ? '📄' : a.mime.startsWith('audio') ? '🎵' : '📎'} {a.name}{a.sent === 'text' && typeof a.chars === 'number' ? ` · ${t('ui.agent.message.attach.chars', { n: a.chars.toLocaleString(lang === 'id' ? 'id-ID' : 'en-GB') })}` : ''}</span>
           {a.sent === 'name' && <span className="text-[11px] text-em-muted">{t('ui.agent.message.attach.nameonly')}</span>}
+          {a.truncated && <span data-el="agent.chat.message.attachment.truncated" className="text-[11px] text-em-warn">{t('ui.agent.message.attach.truncated')}</span>}
         </span>))}
       {m.blocks.map((b, i) => (b.type === 'targets' && b.items.length ? (
         <span key={`t${i}`} data-el="agent.chat.message.targets" className="flex max-w-[92%] flex-wrap justify-end gap-1">
           {b.items.map((x) => <span key={targetKey(x)} data-kind={x.kind} className="inline-flex items-center gap-0.5 rounded-full border border-em-accent/50 px-1.5 text-[11px] text-em-accent"><AtSign size={10} aria-hidden />{x.label}</span>)}
         </span>) : null))}
+      {m.role === 'assistant' && <ResearchBlocks m={m} />}
       {children}
       {(shown || onApply) && (
         <span className="flex items-center gap-1.5 text-[10px] text-em-muted">{stamp}{shown && <CopyButton text={shown} />}
-          {onApply && <button type="button" data-el="agent.chat.apply" title={t('ui.agent.chat.apply.tip')} onClick={onApply}
-            className="ml-1 inline-flex items-center gap-1 rounded-[4px] border border-em-accent/60 px-1.5 py-0.5 text-[11px] font-medium text-em-accent hover:bg-em-accent/10"><Clapperboard size={11} aria-hidden />{t('ui.agent.chat.apply')}</button>}
+          {onApply && <button type="button" data-el="agent.chat.sendtoeditor" title={t('ui.agent.handoff.send.tip')} onClick={onApply}
+            className="ml-1 inline-flex items-center gap-1 rounded-[4px] border border-em-accent/60 px-1.5 py-0.5 text-[11px] font-medium text-em-accent hover:bg-em-accent/10"><Clapperboard size={11} aria-hidden />{t('ui.agent.handoff.send')}</button>}
         </span>
       )}
     </div>
@@ -158,6 +162,7 @@ export function StreamingBubble({ agent }: { agent: AgentKind }) {
         <span data-el="agent.chat.progress" data-phase={s.phase ?? 'sending'} className="inline-flex items-center gap-1">{progressText(s, t, agent)}<Elapsed since={s.since} /></span>
         <button type="button" data-el="agent.chat.progress.stop" className="ml-1 underline" onClick={stop}>{t('ui.agent.composer.stop')}</button>
       </div>
+      {agent === 'editor' && <div className="w-full max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><PhaseStepper /></div>}
       {shown && <div aria-hidden className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={shown} raw /><span className="em-skeleton ml-0.5 inline-block h-3 w-1.5 align-middle" /></div>}
     </div>
   );
@@ -177,9 +182,11 @@ export function useAgentErrorVars(agent: AgentKind): Record<string, string> {
 const TOOL_PROGRESS: Record<string, string> = {
   'catalogue.search': 'ui.agent.progress.tool.catalogue', 'composition.get': 'ui.agent.progress.reading', 'assets.list': 'ui.agent.progress.tool.assets', 'assets.probe': 'ui.agent.progress.tool.probe',
   'hardware.profile': 'ui.agent.progress.tool.hardware', 'project.settings.get': 'ui.agent.progress.tool.settings', 'render.estimate': 'ui.agent.progress.tool.estimate', 'composition.validateOps': 'ui.agent.progress.tool.validate',
+  'web.search': 'ui.agent.progress.tool.web.search', 'web.fetch': 'ui.agent.progress.tool.web.fetch', 'web.images': 'ui.agent.progress.tool.web.images',
 };
+const hostOf = (u: string | undefined): string => { try { return u ? new URL(u).hostname.replace(/^www\./, '') : ''; } catch { return ''; } };
 /** QA 2026-10-26 #5 / FR-214: what the running agent is doing (agent.run.progress), in the Creator's words, per agent. */
-export function progressText(p: { phase?: string | undefined; attempt?: number | undefined; of?: number | undefined; tool?: string | undefined; attaching?: boolean | undefined }, t: (k: string, v?: Record<string, string | number>) => string, agent: AgentKind = 'editor'): string {
+export function progressText(p: { phase?: string | undefined; attempt?: number | undefined; of?: number | undefined; tool?: string | undefined; attaching?: boolean | undefined; query?: string | undefined; url?: string | undefined }, t: (k: string, v?: Record<string, string | number>) => string, agent: AgentKind = 'editor'): string {
   const b = agent === 'brainstorm';
   switch (p.phase) {
     case undefined: case 'sending': return t(p.attaching ? 'ui.agent.progress.attaching' : 'ui.agent.progress.sending');
@@ -190,10 +197,69 @@ export function progressText(p: { phase?: string | undefined; attempt?: number |
     case 'checking': return t('ui.agent.progress.checking');
     case 'correcting': return p.of ? t('ui.agent.progress.correcting.of', { n: p.attempt ?? 2, of: p.of }) : t('ui.agent.progress.correcting', { n: p.attempt ?? 2 });
     case 'waiting': return t('ui.agent.progress.waiting', { n: p.attempt ?? 1, of: p.of ?? 2 });
-    case 'tool': return p.tool && TOOL_PROGRESS[p.tool] ? t(TOOL_PROGRESS[p.tool]!) : t('ui.agent.progress.tool', { tool: p.tool ?? '…' });
+    case 'tool':
+      // FR-216: "Mencari di internet: <query>…" / "Membaca halaman: <host>…"
+      if (p.tool === 'web.search' || p.tool === 'web.images') return p.query ? t(`${TOOL_PROGRESS[p.tool]!}.q`, { query: p.query.length > 70 ? `${p.query.slice(0, 69)}…` : p.query }) : t(TOOL_PROGRESS[p.tool]!);
+      if (p.tool === 'web.fetch') return p.url ? t('ui.agent.progress.tool.web.fetch.q', { host: hostOf(p.url) }) : t(TOOL_PROGRESS[p.tool]!);
+      return p.tool && TOOL_PROGRESS[p.tool] ? t(TOOL_PROGRESS[p.tool]!) : t('ui.agent.progress.tool', { tool: p.tool ?? '…' });
     default: return t(b ? 'ui.agent.progress.brainstorm.planning' : 'ui.agent.progress.planning');
   }
 }
+/** FR-216 / FR-217: sources (clickable, opened in the system browser), picture candidates (Import), research notices. */
+export function ResearchBlocks({ m }: { m: MessageDto }) {
+  const { t } = useStore();
+  const sources = m.blocks.flatMap((b) => (b.type === 'sources' ? [b] : []));
+  const images = m.blocks.flatMap((b) => (b.type === 'image_candidates' ? b.items : []));
+  const notices = m.blocks.flatMap((b) => (b.type === 'notice' ? [b] : []));
+  if (!sources.length && !images.length && !notices.length) return null;
+  return (
+    <>
+      {sources.map((b, i) => <SourcesList key={`s${i}`} items={b.items} queries={b.queries ?? []} />)}
+      {images.length > 0 && <ImageCandidates m={m} items={images} />}
+      {notices.map((n, i) => (
+        <div key={`n${i}`} data-el="agent.chat.message.notice" data-code={n.code} role="note" className="flex max-w-[92%] items-start gap-1.5 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px] text-em-text-2">
+          <Globe size={12} className="mt-0.5 shrink-0 text-em-warn" aria-hidden /><span className="flex-1">{t(`err.${n.code}.body`) !== `err.${n.code}.body` ? t(`err.${n.code}.body`) : n.text}</span><span className="t-mono text-[10px] text-em-muted">{n.code}</span>
+        </div>))}
+    </>
+  );
+}
+export function SourcesList({ items, queries }: { items: readonly WebSourceDto[]; queries: readonly string[] }) {
+  const { t } = useStore();
+  return (
+    <div data-el="agent.chat.message.sources" className="flex max-w-[92%] flex-col gap-0.5 rounded-[6px] border border-em-line px-2 py-1 text-[11px]">
+      <span className="flex items-center gap-1 font-semibold text-em-text-2"><Globe size={11} aria-hidden />{t('ui.agent.research.sources', { n: items.length })}{queries.length ? <span className="font-normal text-em-muted" title={queries.join('\n')}> · {t('ui.agent.research.searched', { n: queries.length })}</span> : null}</span>
+      <ol className="flex flex-col gap-0.5">
+        {items.map((x, i) => (
+          <li key={x.url} className="flex min-w-0 items-baseline gap-1">
+            <span className="t-mono text-em-muted">[{i + 1}]</span>
+            <a data-el="agent.chat.message.source" href={x.url} title={x.citedText ? `“${x.citedText}”\n${x.url}` : x.url} className="min-w-0 truncate text-em-accent underline" onClick={(e) => { e.preventDefault(); openExternal(x.url); }}>{x.title || hostOf(x.url)}</a>
+            <span className="shrink-0 text-em-muted">{hostOf(x.url)}{x.pageAge ? ` · ${x.pageAge}` : ''}</span>
+          </li>))}
+      </ol>
+    </div>
+  );
+}
+export function ImageCandidates({ m, items }: { m: MessageDto; items: readonly ImageCandidateDto[] }) {
+  const { t, actions } = useStore();
+  const [busy, setBusy] = useState<string | null>(null);
+  const licence = (x: ImageCandidateDto) => (x.license === 'cc0' ? 'CC0' : x.license === 'pdm' ? t('ui.agent.research.image.pd') : `CC ${x.license.toUpperCase()}${x.licenseVersion ? ` ${x.licenseVersion}` : ''}`);
+  return (
+    <div data-el="agent.chat.message.images" className="flex max-w-[92%] flex-col gap-1 rounded-[6px] border border-em-line px-2 py-1 text-[11px]">
+      <span className="font-semibold text-em-text-2">{t('ui.agent.research.images', { n: items.length })}</span>
+      {items.map((x) => (
+        <div key={`${x.source}:${x.id}`} data-el="agent.chat.message.image" data-imported={x.importedAssetId ? 'true' : undefined} className="flex min-w-0 items-center gap-1.5">
+          <ImagePlus size={12} className="shrink-0 text-em-muted" aria-hidden />
+          <span className="min-w-0 flex-1 truncate" title={`${x.title}${x.creator ? ` — ${x.creator}` : ''}`}>{x.title}{x.creator ? <span className="text-em-muted"> · {x.creator}</span> : null}</span>
+          <span className="shrink-0 rounded-[4px] border border-em-line px-1 text-em-muted">{licence(x)}</span>
+          {x.landingUrl && <button type="button" aria-label={t('ui.agent.research.image.source')} title={x.landingUrl} className="shrink-0 text-em-muted hover:text-em-text" onClick={() => openExternal(x.landingUrl!)}><ExternalIcon size={11} /></button>}
+          {x.importedAssetId ? <span className="shrink-0 text-em-success">{t('ui.agent.research.image.inlibrary')}</span>
+            : <Button el="agent.chat.message.image.import" size={28} variant="secondary" loading={busy === x.id} onClick={() => { setBusy(x.id); void actions.importResearchImage(m, x.source, x.id).finally(() => setBusy(null)); }}>{t('ui.agent.research.image.import')}</Button>}
+        </div>))}
+      <span className="text-[10px] text-em-muted">{t('ui.agent.research.images.note')}</span>
+    </div>
+  );
+}
+
 /** The recovery actions of an agent failure, by EM code (QA 2026-10-26 #5). `retry` is always offered unless a fix comes first. */
 export type ErrorAction = 'retry' | 'providers' | 'rephrase' | 'switchmodel' | 'budget';
 export function errorActions(code: string): ErrorAction[] {
@@ -284,11 +350,58 @@ export function ModeSwitch({ mode, setMode }: { mode: AgentKind; setMode: (m: Ag
   );
 }
 
+/**
+ * ADR-033 / FR-219 (QA 2026-10-28 #2, Operator request): Diskusi and Editor are two separate chats again, each with its own thread,
+ * shown as two clearly different tabs (colour, icon, name); a dot marks unread answers, a spinner a running agent. They stay
+ * connected: shared context, "Kirim ke Editor", hand-off progress in both, "Tanya Diskusi" from the Editor.
+ */
+export function ChatTabs({ mode, setMode, unread }: { mode: AgentKind; setMode: (m: AgentKind) => void; unread: Record<AgentKind, boolean> }) {
+  const { t, state } = useStore();
+  return (
+    <div data-el="agent.chat.tabs" role="tablist" aria-label={t('ui.agent.chat.mode')} className="flex h-10 shrink-0 items-stretch border-b border-em-line">
+      {(['brainstorm', 'editor'] as const).map((m, i) => {
+        const Icon = MODE_ICON[m]; const on = m === mode; const busy = Boolean(state.streaming[m]);
+        return (
+          <button key={m} type="button" role="tab" aria-selected={on} data-el={`agent.chat.tab.${m}`} data-busy={busy ? 'true' : undefined} data-unread={unread[m] && !on ? 'true' : undefined}
+            title={t(`ui.agent.chat.mode.${m}.tip`, { key: `Ctrl+${i + 1}` })} onClick={() => setMode(m)}
+            className={cx('relative flex flex-1 items-center justify-center gap-1.5 border-b-2 text-[13px]', on ? (m === 'brainstorm' ? 'border-em-warn bg-em-warn/10 font-semibold text-em-warn' : 'border-em-accent bg-em-accent/10 font-semibold text-em-accent') : 'border-transparent text-em-muted hover:text-em-text')}>
+            <Icon size={14} aria-hidden />{t(`ui.agent.tab.${m}`)}
+            {busy && <Loader size={12} className="em-spin" aria-label={t('ui.agent.tab.busy')} />}
+            {unread[m] && !on && <span aria-label={t('ui.agent.tab.unread')} className="h-2 w-2 rounded-full bg-em-danger" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** FR-216: "Riset internet" on / off in the chat header (setting `webResearch`; Private Mode always blocks it). */
+export function ResearchToggle() {
+  const { t, state, actions } = useStore();
+  const priv = Boolean(state.settings?.privateMode);
+  const on = !priv && state.settings?.webResearch !== false;
+  const tip = priv ? t('ui.agent.research.toggle.private') : on ? t('ui.agent.research.toggle.on.tip') : t('ui.agent.research.toggle.off.tip');
+  return (
+    <button type="button" data-el="agent.chat.research" role="switch" aria-checked={on} aria-label={t('ui.agent.research.toggle')} title={tip} disabled={priv}
+      onClick={() => { void actions.putSettings({ webResearch: !on }); }}
+      className={cx('flex shrink-0 items-center gap-0.5 rounded-[4px] border px-1 text-[10px]', on ? 'border-em-accent-2/60 text-em-accent-2' : 'border-em-line text-em-muted', priv && 'opacity-60')}>
+      <Globe size={11} aria-hidden />{on ? t('ui.agent.research.toggle.on') : t('ui.agent.research.toggle.off')}
+    </button>
+  );
+}
+
 /** FR-213: image types the composer attaches (the Service sends PNG / JPEG / WebP / GIF as image parts). */
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+/** FR-221 (QA 2026-10-28 #14): music / voice files become Library assets and chips; documents and scripts are read as text. */
+const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'];
+const DOC_EXTS = ['pdf', 'docx', 'txt', 'md', 'markdown', 'srt', 'vtt', 'csv', 'json', 'rtf', 'fountain', 'fdx'];
+const extOf = (name: string) => (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? '').toLowerCase();
+/** Largest audio file the composer attaches (the Library's own limit applies on import too). */
+export const MAX_AUDIO_BYTES = 500 * 1024 * 1024;
+export const MAX_DOC_BYTES = 20 * 1024 * 1024;
 
 export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTarget, value, setValue, onSend }: {
-  mode: AgentKind; setMode: (m: AgentKind) => void; placeholder: string; value: string; setValue: (v: string) => void; onSend: (attachments: string[]) => void;
+  mode: AgentKind; setMode: (m: AgentKind) => void; placeholder: string; value: string; setValue: (v: string) => void; onSend: (attachments: string[], documents: string[]) => void;
   /** QA 2026-10-26 #6: the pointed assets / Timeline elements, sent as `targets` with the next message (removable chips). */
   targets?: ChatTarget[]; onRemoveTarget?: (t: ChatTarget) => void;
 }) {
@@ -300,6 +413,7 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
   const [attachments, setAttachments] = useState<string[]>([]);
   const [attachError, setAttachError] = useState<{ code: string; vars?: Record<string, string | number> } | null>(null);
   const [importing, setImporting] = useState(false);
+  const [docs, setDocs] = useState<ChatDocumentDto[]>([]);
   const ref = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
   const cap = useAssignedCapability(agent);
@@ -327,23 +441,45 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
     } catch (e) { setAttachError({ code: errCode(e) }); } finally { setImporting(false); }
   };
   const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
-  const pickImage = async () => {
+  /** FR-221: a document is read as text by the Service (nothing uploaded anywhere); it shows as a chip with its size in characters. */
+  const attachDocument = async (run: () => Promise<{ document: ChatDocumentDto }>) => {
+    setImporting(true); setAttachError(null);
+    try { const r = await run(); setDocs((d) => [...d.filter((x) => x.id !== r.document.id), r.document].slice(0, 3)); }
+    catch (e) { setAttachError({ code: errCode(e) }); } finally { setImporting(false); }
+  };
+  const pickFile = async (what: 'image' | 'audio' | 'document') => {
     setAttachOpen(false);
     const projectId = state.project?.id; if (!projectId) return;
     if (runtime.mode === 'live' && shell?.pickFiles) {
-      const paths = await shell.pickFiles({ filters: [{ name: t('ui.agent.composer.attach.images'), extensions: IMAGE_EXTS }], multiple: false }).catch(() => [] as string[]);
-      if (paths[0]) await importImage(() => runtime.api.importAssetPaths(projectId, paths.slice(0, 1)));
+      const exts = what === 'image' ? IMAGE_EXTS : what === 'audio' ? AUDIO_EXTS : DOC_EXTS;
+      const label = t(what === 'image' ? 'ui.agent.composer.attach.images' : what === 'audio' ? 'ui.agent.composer.attach.audio' : 'ui.agent.composer.attach.docs');
+      const paths = await shell.pickFiles({ filters: [{ name: label, extensions: exts }], multiple: false }).catch(() => [] as string[]);
+      if (!paths[0]) return;
+      if (what === 'document') await attachDocument(() => runtime.api.attachDocumentPath(projectId, paths[0]!));
+      else await importImage(() => runtime.api.importAssetPaths(projectId, paths.slice(0, 1)));
       return;
     }
-    file.current?.click();
+    if (file.current) { file.current.accept = what === 'image' ? 'image/png,image/jpeg,image/webp,image/gif' : what === 'audio' ? AUDIO_EXTS.map((e) => `.${e}`).join(',') : DOC_EXTS.map((e) => `.${e}`).join(','); file.current.click(); }
   };
+  const pickImage = () => pickFile('image');
   const attachFile = async (f: File | undefined) => {
     if (!f) return;
     setAttachOpen(false);
-    if (!f.type.startsWith('image/')) { setAttachError({ code: 'EM-1002', vars: { size: f.name, limit: 'PNG/JPEG/WebP' } }); return; }
-    if (f.size > MAX_ATTACH_BYTES) { setAttachError({ code: 'EM-1002', vars: { size: `${(f.size / 1048576).toFixed(1)} MB`, limit: '10 MB' } }); return; }
+    const ext = extOf(f.name);
     const projectId = state.project?.id; if (!projectId) return;
     const paths = runtime.mode === 'live' ? shell?.getPathsForFiles?.([f]) ?? [] : [];
+    if (DOC_EXTS.includes(ext)) {
+      if (f.size > MAX_DOC_BYTES) { setAttachError({ code: 'EM-1002', vars: { size: `${(f.size / 1048576).toFixed(1)} MB`, limit: '20 MB' } }); return; }
+      await attachDocument(() => (paths[0] ? runtime.api.attachDocumentPath(projectId, paths[0]) : runtime.api.attachDocumentFile(projectId, f)));
+      return;
+    }
+    if (AUDIO_EXTS.includes(ext) || f.type.startsWith('audio/')) {
+      if (f.size > MAX_AUDIO_BYTES) { setAttachError({ code: 'EM-1002', vars: { size: `${(f.size / 1048576).toFixed(0)} MB`, limit: '500 MB' } }); return; }
+      await importImage(() => (paths[0] ? runtime.api.importAssetPaths(projectId, paths.slice(0, 1)) : runtime.api.uploadAssets(projectId, [f])));
+      return;
+    }
+    if (!f.type.startsWith('image/')) { setAttachError({ code: 'EM-1001', vars: { name: f.name } }); return; }
+    if (f.size > MAX_ATTACH_BYTES) { setAttachError({ code: 'EM-1002', vars: { size: `${(f.size / 1048576).toFixed(1)} MB`, limit: '10 MB' } }); return; }
     await importImage(() => (paths[0] ? runtime.api.importAssetPaths(projectId, paths.slice(0, 1)) : runtime.api.uploadAssets(projectId, [f])));
   };
   const reasonId = 'composer-chat-reason';
@@ -364,8 +500,8 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
     window.addEventListener('em:focus-composer', focus);
     return () => window.removeEventListener('em:focus-composer', focus);
   }, [setMode]);
-  const send = () => { const v = value.trim(); if (!v || reason || busy || preparing) return; onSend(attachments); setAttachments([]); setAttachError(null); };
-  const images = state.assets.filter((a) => a.kind === 'image' && a.status === 'ready');
+  const send = () => { const v = value.trim(); if (!v || reason || busy || preparing) return; onSend(attachments, docs.map((d) => d.id)); setAttachments([]); setDocs([]); setAttachError(null); };
+  const images = state.assets.filter((a) => (a.kind === 'image' || a.kind === 'audio') && a.status === 'ready');
   return (
     <div className="shrink-0 border-t border-em-line p-2">
       {targets.length > 0 && (
@@ -378,10 +514,14 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
           ))}
         </div>
       )}
-      {(attached.length > 0 || importing) && <div className="mb-1 flex flex-wrap gap-1">{attached.map((a) => (
-        <span key={a.id} data-el="agent.chat.attach.chip" data-status={a.status} className="inline-flex items-center gap-1 rounded-[4px] border border-em-line px-1 text-[11px]">
-          {a.status === 'ingesting' ? <Loader size={10} className="em-spin" aria-hidden /> : <ImagePlus size={10} aria-hidden />}{a.name}
+      {(attached.length > 0 || docs.length > 0 || importing) && <div className="mb-1 flex flex-wrap gap-1">{attached.map((a) => (
+        <span key={a.id} data-el="agent.chat.attach.chip" data-status={a.status} data-kind={a.kind} className="inline-flex items-center gap-1 rounded-[4px] border border-em-line px-1 text-[11px]">
+          {a.status === 'ingesting' ? <Loader size={10} className="em-spin" aria-hidden /> : a.kind === 'audio' ? <Music size={10} aria-hidden /> : <ImagePlus size={10} aria-hidden />}{a.name}
           <button type="button" aria-label={t('ui.agent.composer.attach.remove')} onClick={() => setAttachments((x) => x.filter((y) => y !== a.id))}><X size={10} /></button></span>))}
+        {docs.map((d) => (
+          <span key={d.id} data-el="agent.chat.attach.chip" data-kind="document" data-truncated={d.truncated ? 'true' : undefined} title={d.truncated ? t('ui.agent.message.attach.truncated') : undefined} className="inline-flex items-center gap-1 rounded-[4px] border border-em-line px-1 text-[11px]">
+            <FileText size={10} aria-hidden />{d.name} <span className="text-em-muted">· {t('ui.agent.message.attach.chars', { n: d.chars.toLocaleString() })}{d.truncated ? ' ✂' : ''}</span>
+            <button type="button" aria-label={t('ui.agent.composer.attach.remove')} onClick={() => setDocs((x) => x.filter((y) => y.id !== d.id))}><X size={10} /></button></span>))}
         {preparing && <span data-el="agent.chat.attach.preparing" role="status" className="inline-flex items-center gap-1 text-[11px] text-em-text-2"><Loader size={10} className="em-spin" aria-hidden />{t('ui.agent.composer.attach.preparing')}</span>}
       </div>}
       {nameOnly && (
@@ -409,18 +549,19 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
           }}
           className="min-h-7 w-full resize-none bg-transparent px-1.5 py-1 text-[14px] leading-5 outline-none placeholder:text-em-muted" />
         <div className="flex items-center gap-1">
-          <ModeSwitch mode={mode} setMode={setMode} />
           <span className="relative">
             <IconButton el="agent.chat.attach" data-popover-trigger="" label={t('ui.agent.composer.attach')} icon={<Paperclip size={16} />} size={28} disabledReason={reason} onClick={() => setAttachOpen((o) => !o)} />
             {attachOpen && (
               <Popover onClose={() => setAttachOpen(false)} width={220} label={t('ui.agent.composer.attach')}>
                 <button type="button" data-el="agent.chat.attach.file" className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickImage()}><ImagePlus size={14} />{t('ui.agent.composer.attach.file')}</button>
+                <button type="button" data-el="agent.chat.attach.audio" className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickFile('audio')}><Music size={14} />{t('ui.agent.composer.attach.audio.pick')}</button>
+                <button type="button" data-el="agent.chat.attach.document" className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickFile('document')}><FileText size={14} />{t('ui.agent.composer.attach.docs.pick')}</button>
                 <div className="my-1 border-t border-em-line" />
                 {images.length === 0 ? <div className="p-2 text-em-muted">{t('ui.agent.composer.attach.none')}</div>
                   : images.map((a) => <button key={a.id} type="button" data-el="agent.chat.attach.asset" className="block w-full truncate rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => { setAttachments((x) => [...new Set([...x, a.id])].slice(0, 4)); setAttachOpen(false); }}>{a.name}</button>)}
               </Popover>
             )}
-            <input ref={file} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden aria-hidden tabIndex={-1} onChange={(e) => { void attachFile(e.target.files?.[0]); e.target.value = ''; }} />
+            <input ref={file} data-el="agent.chat.attach.input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden aria-hidden tabIndex={-1} onChange={(e) => { void attachFile(e.target.files?.[0]); e.target.value = ''; }} />
           </span>
           <span className="flex-1" />
           {busy
@@ -499,6 +640,7 @@ export function ChatHeader({ mode, setMode, layout }: { mode: AgentKind; setMode
             </button>}
         {picker && <SectionBoundary section="chat.model-popover" onClose={closePicker} className="absolute left-0 top-full z-30 mt-1 w-[340px]"><ModelPopover agent={agent} onClose={closePicker} /></SectionBoundary>}
       </span>
+      <ResearchToggle />
       {agent === 'editor' && cap && !cap.toolCalling && <span className="shrink-0 rounded-[4px] border border-em-line px-1 text-[10px] text-em-muted" title={t('ui.agent.footer.jsonmode')}>JSON</span>}
       {a && <span data-el="agent.chat.usage" data-tone={tone} role="status" title={usageTip} aria-label={`${t('a11y.agent.footer.ctx', { used: formatTokens(used, lang), limit: limit ? formatTokens(limit, lang) : 'n/a' })}. ${t('ui.agent.footer.ctx.cost', { cost })}`}
         className={cx('t-mono shrink-0 text-[11px]', tone === 'danger' ? 'text-em-danger' : tone === 'warn' ? 'text-em-warn' : 'text-em-muted')}>

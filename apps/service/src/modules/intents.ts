@@ -7,6 +7,7 @@ import { modelsServiceOf } from '../s2/models-service.js';
 import { route } from '../http/route.js';
 import { DesignPickInput, ExecuteInput, IntentBatchInput, IntentClearQuery, IntentListQuery, IntentParams, NotesInput, PlanCreateInput, PlanListQuery, PlanParams, ProjectParams, decodeCursor, encodeCursor, planDto } from '../s1/dto.js';
 import { s1 } from '../s1/index.js';
+import { updateHandoff } from './agents.js';
 
 /** FR-037: where a preset's `model:<id>` flag comes from (the catalogue; tests substitute it, no P0 preset carries one yet). */
 export const modelGate = { flagOf: (presetId: string): string | undefined => getPreset(presetId)?.flags.find((f) => f.startsWith('model:')) };
@@ -26,7 +27,7 @@ export const intentsModule: ServiceModule = {
       const head = store.head(projectId);
       const mode = input.mode === 'compile' ? 'compile-only' : input.mode ?? 'auto';
       const started = workflow.createPlan(projectId, { intentIds: input.intentIds ?? [], message: input.instruction, baseVersion: head.hash, mode, signal: input.signal, runId: input.runId,
-        extras: { selection: input.selection, playheadMs: input.playheadMs, attachments: input.attachments, images: input.images, onDelta: input.onDelta, chat: input.chat, targets: input.targets, onProgress: input.onProgress } });
+        extras: { selection: input.selection, playheadMs: input.playheadMs, attachments: input.attachments, images: input.images, onDelta: input.onDelta, chat: input.chat, targets: input.targets, onProgress: input.onProgress, onSources: input.onSources } });
       const plan = await started.done;
       return { ...(plan as unknown as EditPlanT), planId: plan.id, ...(started.runId ? { runId: started.runId } : {}) };
     };
@@ -66,7 +67,11 @@ export const intentsModule: ServiceModule = {
     route(router, 'post', '/plans/:planId/execute', { params: PlanParams, body: ExecuteInput }, ({ params, body, req }) => {
       const key = req.headers['idempotency-key'];
       const k = typeof key === 'string' && key.length > 0 && key.length <= 128 ? key : undefined;
-      return workflow.execute(params.planId, { confirmDestructive: body.confirmDestructive, idempotencyKey: k });
+      return workflow.execute(params.planId, { confirmDestructive: body.confirmDestructive, idempotencyKey: k }).then((r) => {
+        // FR-219: the Brainstorm draft that produced this plan shows "applied" (its hand-off card follows the Editor run).
+        if (r.ok) { const row = ctx.db.prepare('SELECT project_id p, agent_run_id a FROM edit_plans WHERE id = ?').get(params.planId) as { p: string; a: string | null } | undefined; if (row?.a) updateHandoff(ctx, row.p, row.a, 'applied'); }
+        return r;
+      });
     });
     route(router, 'post', '/plans/:planId/cancel', { params: PlanParams }, ({ params }) => workflow.cancel(params.planId));
     route(router, 'patch', '/plans/:planId/notes', { params: PlanParams, body: NotesInput }, ({ params, body }) => workflow.setNotes(params.planId, body.notes));

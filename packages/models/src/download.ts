@@ -21,6 +21,9 @@ export interface FetchInit { method: 'GET'; headers: Record<string, string>; red
 export type FetchLike = (url: string, init: FetchInit) => Promise<FetchResponseLike>;
 
 export interface DownloadProgress { file: string; bytesDone: number; bytesTotal: number; bps: number }
+/** FR-245: why a transfer failed, in words the Creator can act on (ERROR_CATALOGUE EM-7002 reasons). */
+export type DownloadFailReason = 'rate-limited' | 'server' | 'http' | 'dns' | 'tls' | 'connection' | 'timeout' | 'stalled' | 'range' | 'network';
+export interface DownloadRetry { file: string; attempt: number; delayMs: number; reason: DownloadFailReason; httpStatus?: number; netCode?: string; bytesDone: number }
 
 export interface DownloadOptions {
   fetch: FetchLike;
@@ -31,9 +34,19 @@ export interface DownloadOptions {
   onProgress?: (p: DownloadProgress) => void;
   /** Checked before the first request and before every retry (SEC-076). */
   privateMode?: () => boolean;
-  /** Retries per network error (LOCAL_AI_MODELS §4.3: 2). */
+  /** Retries in a row WITHOUT new bytes (FR-245: 6; a retry that brought new bytes resets the count, so a long download over an
+   *  unstable connection keeps going from its `.part`). */
   retries?: number;
+  /** Hard cap on transfers per file, progress or not (FR-245: 40). */
+  maxAttempts?: number;
+  /** Delay before retry `attempt` (0-based). Default: 2 s · 2^attempt, max 60 s, ±20 % jitter. 429/503 use Retry-After / RateLimit `t=` instead (max 5 min). */
   backoffMs?: (attempt: number) => number;
+  /** No byte for this long while streaming → the transfer is dropped and resumed (FR-245: 60 s). */
+  stallMs?: number;
+  /** Until the response headers arrive (FR-245: 45 s). */
+  headersTimeoutMs?: number;
+  /** Called before every automatic retry (the Service shows "Mencoba lagi…" with the reason). */
+  onRetry?: (r: DownloadRetry) => void;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
   progressIntervalMs?: number;
@@ -98,8 +111,38 @@ export async function hashFile(p: string, into?: Hash): Promise<Hash> {
 export async function sha256File(p: string): Promise<string> { return (await hashFile(p)).digest('hex'); }
 
 class RetryableError extends Error {
-  constructor(message: string, readonly detail: Record<string, unknown> = {}) { super(message); this.name = 'RetryableError'; }
+  constructor(message: string, readonly detail: Record<string, unknown> & { reason: DownloadFailReason; retryAfterMs?: number } = { reason: 'network' }) { super(message); this.name = 'RetryableError'; }
 }
+const TLS_CODES = /^(UNABLE_TO_GET_ISSUER_CERT(_LOCALLY)?|SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT|CERT_HAS_EXPIRED|CERT_NOT_YET_VALID|ERR_TLS_CERT_ALTNAME_INVALID|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_UNTRUSTED|CERT_REVOKED|ERR_SSL_.*|EPROTO)$/;
+/**
+ * FR-245: what a failed fetch() really was. Node's fetch throws `TypeError: fetch failed` and hides the cause one or two levels
+ * down (`cause.code` ECONNRESET / ENOTFOUND / UND_ERR_* / a TLS code). The QA log of 2026-10-28 only had "Download of … failed".
+ */
+export function classifyNetError(err: unknown): { reason: DownloadFailReason; netCode: string | null; message: string } {
+  let c: unknown = err; let code: string | null = null; let name = '';
+  const msg = err instanceof Error ? err.message : String(err);
+  for (let i = 0; i < 5 && c; i++) {
+    const x = c as { code?: unknown; name?: unknown; cause?: unknown };
+    if (typeof x.code === 'string' && !code) code = x.code;
+    if (typeof x.name === 'string' && /Timeout/i.test(x.name)) name = x.name;
+    c = x.cause;
+  }
+  const reason: DownloadFailReason = code && TLS_CODES.test(code) ? 'tls'
+    : code && /^(ENOTFOUND|EAI_AGAIN|EAI_FAIL|EAI_NONAME)$/.test(code) ? 'dns'
+    : (code && /TIMEOUT|ETIMEDOUT/.test(code)) || name ? 'timeout'
+    : code && /^(ECONNRESET|ECONNREFUSED|EPIPE|ENETUNREACH|EHOSTUNREACH|ECONNABORTED|UND_ERR_SOCKET|UND_ERR_CLOSED)$/.test(code) ? 'connection'
+    : /terminated|other side closed|socket/i.test(msg) ? 'connection' : 'network';
+  return { reason, netCode: code, message: msg.slice(0, 200) };
+}
+/** Retry-After (seconds or HTTP date) or Hugging Face's `RateLimit: "resolvers";r=0;t=123` (seconds until the window resets). */
+export function retryAfterMs(headers: { get(name: string): string | null }, nowMs = Date.now()): number | undefined {
+  const ra = headers.get('retry-after');
+  if (ra) { const n = Number(ra); if (Number.isFinite(n)) return Math.max(0, n * 1000); const d = Date.parse(ra); if (Number.isFinite(d)) return Math.max(0, d - nowMs); }
+  const rl = /\bt=(\d+)/.exec(headers.get('ratelimit') ?? '');
+  return rl ? Number(rl[1]) * 1000 : undefined;
+}
+export const RETRY_AFTER_MAX_MS = 5 * 60_000;
+const defaultBackoff = (a: number): number => Math.round(Math.min(60_000, 2000 * 2 ** a) * (0.8 + Math.random() * 0.4));
 class HashMismatch extends Error {
   constructor(readonly actual: string, readonly reason: 'hash' | 'size') { super(`checksum mismatch (${reason})`); this.name = 'HashMismatch'; }
 }
@@ -122,10 +165,13 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
   const hosts = opts.allowedHosts ?? DOWNLOAD_HOSTS;
   assertAllowedUrl(spec.url, hosts);
   if (!/^[0-9a-f]{64}$/.test(spec.sha256)) throw emError('EM-7003', `${spec.name} has no pinned checksum; refusing to download`, { modelId: spec.modelKey ?? null, expectedHash: spec.sha256, reason: 'unpinned' });
-  const retries = opts.retries ?? 2;
-  const backoff = opts.backoffMs ?? ((a: number) => 1000 * 2 ** a);
+  const retries = opts.retries ?? 6;
+  const maxAttempts = opts.maxAttempts ?? 40;
+  const backoff = opts.backoffMs ?? defaultBackoff;
   const sleep = opts.sleep ?? defaultSleep;
   const now = opts.now ?? Date.now;
+  const stallMs = opts.stallMs ?? 60_000;
+  const headersTimeoutMs = opts.headersTimeoutMs ?? 45_000;
   const cap = sizeCap(spec.bytes);
   const minFree = opts.minFreeBytes ?? MIN_FREE_BYTES;
   const diskEvery = opts.diskCheckEveryBytes ?? DISK_CHECK_EVERY;
@@ -149,21 +195,40 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
   };
 
   /** One HTTP transfer (following redirects); appends to `.part`; returns the hash of the whole part file. */
+  let lastHost = '';
   const transfer = async (): Promise<{ hash: string; size: number }> => {
+    // FR-245: one AbortController per transfer — the caller's signal, the header timeout and the stall watchdog all end it.
+    const tc = new AbortController(); let timedOut: 'headers' | 'stalled' | null = null;
+    const onOuter = (): void => tc.abort();
+    opts.signal?.addEventListener('abort', onOuter, { once: true });
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const arm = (ms: number, why: 'headers' | 'stalled'): void => { if (watchdog) clearTimeout(watchdog); watchdog = setTimeout(() => { timedOut = why; tc.abort(); }, ms); (watchdog as { unref?: () => void }).unref?.(); };
+    try { return await transferOnce(tc.signal, arm, () => timedOut); } catch (err) {
+      if (timedOut && !opts.signal?.aborted && !(err instanceof EmError)) throw new RetryableError(timedOut === 'stalled' ? `no data for ${Math.round(stallMs / 1000)} s` : 'no answer from the download server', { reason: timedOut === 'stalled' ? 'stalled' : 'timeout' });
+      throw err;
+    } finally { if (watchdog) clearTimeout(watchdog); opts.signal?.removeEventListener('abort', onOuter); }
+  };
+  const transferOnce = async (signal: AbortSignal, arm: (ms: number, why: 'headers' | 'stalled') => void, timedOut: () => string | null): Promise<{ hash: string; size: number }> => {
     let have = await fileSize(paths.partPath);
     if (have > cap) { await rm(paths.partPath, { force: true }); have = 0; }
+    // hash the bytes we already have BEFORE asking for more: a multi-GB `.part` takes a while, and no watchdog runs meanwhile
+    const pre = have > 0 ? await hashFile(paths.partPath) : null;
     let url = spec.url;
     let res: FetchResponseLike | undefined;
     for (let hop = 0; ; hop++) {
       throwIfAborted(opts.signal);
       const headers: Record<string, string> = { 'Accept-Encoding': 'identity' };
       if (have > 0) headers.Range = `bytes=${have}-`;
-      const init: FetchInit = { method: 'GET', headers, redirect: 'manual', ...(opts.signal ? { signal: opts.signal } : {}) };
+      const init: FetchInit = { method: 'GET', headers, redirect: 'manual', signal };
+      lastHost = new URL(url).hostname;
+      arm(headersTimeoutMs, 'headers');
       try { res = await opts.fetch(url, init); } catch (err) {
         if (opts.signal?.aborted) throw new CancelledError();
+        if (timedOut()) throw err;
         const mapped = mapEgressError(err, spec, have);
         if (mapped instanceof EmError) throw mapped;
-        throw new RetryableError(mapped.message, { netError: mapped.message });
+        const net = classifyNetError(err);
+        throw new RetryableError(net.message, { reason: net.reason, netError: net.message, ...(net.netCode ? { netCode: net.netCode } : {}), host: lastHost });
       }
       if ([301, 302, 303, 307, 308].includes(res.status)) {
         const loc = res.headers.get('location');
@@ -176,28 +241,33 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
       break;
     }
     const r = res;
-    if (r.status === 416 && have > 0) return { hash: (await hashFile(paths.partPath)).digest('hex'), size: have };   // part already complete (verify decides)
-    if (r.status === 429 || r.status >= 500) throw new RetryableError(`HTTP ${r.status}`, { httpStatus: r.status });
-    if (r.status !== 200 && r.status !== 206) throw emError('EM-7002', `Download failed with HTTP ${r.status}`, { modelId: spec.modelKey ?? null, bytesDone: have, httpStatus: r.status });
+    if (r.status === 416 && have > 0 && pre) return { hash: pre.digest('hex'), size: have };   // part already complete (verify decides)
+    if (r.status === 429 || r.status >= 500) {
+      const after = retryAfterMs(r.headers, now());
+      throw new RetryableError(`HTTP ${r.status}`, { reason: r.status === 429 ? 'rate-limited' : 'server', httpStatus: r.status, host: lastHost, ...(after !== undefined && (r.status === 429 || r.status === 503) ? { retryAfterMs: Math.min(RETRY_AFTER_MAX_MS, after) } : {}) });
+    }
+    if (r.status !== 200 && r.status !== 206) throw emError('EM-7002', `Download failed with HTTP ${r.status}`, { modelId: spec.modelKey ?? null, bytesDone: have, httpStatus: r.status, reason: 'http', host: lastHost });
 
     let append = false;
     if (r.status === 206) {
       const m = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(r.headers.get('content-range') ?? '');
-      if (!m || Number(m[1]) !== have) { await rm(paths.partPath, { force: true }); throw new RetryableError('unexpected Content-Range', { contentRange: r.headers.get('content-range') }); }
+      if (!m || Number(m[1]) !== have) { await rm(paths.partPath, { force: true }); throw new RetryableError('unexpected Content-Range', { reason: 'range', contentRange: r.headers.get('content-range'), host: lastHost }); }
       if (m[3] !== '*' && Number(m[3]) > cap) await sizeExceeded(Number(m[3]));
       append = true;
     } else {
       const len = Number(r.headers.get('content-length') ?? NaN);
       if (Number.isFinite(len) && len > cap) await sizeExceeded(len);
     }
-    const hasher = createHash('sha256');
-    if (append) await hashFile(paths.partPath, hasher); else have = 0;
+    const hasher = append && pre ? pre : createHash('sha256');
+    if (!append) have = 0;
     const fh = await open(paths.partPath, append ? 'a' : 'w');
     let written = have; let sinceDiskCheck = 0;
+    arm(stallMs, 'stalled');
     try {
       try {
         for await (const chunk of iterateBody(r.body)) {
           throwIfAborted(opts.signal);
+          arm(stallMs, 'stalled');
           if (written + chunk.byteLength > cap) { await fh.close().catch(() => undefined); await sizeExceeded(written + chunk.byteLength); }
           await fh.write(chunk);
           hasher.update(chunk);
@@ -212,7 +282,9 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
       } catch (err) {
         if (err instanceof EmError || err instanceof CancelledError) throw err;
         if (opts.signal?.aborted) throw new CancelledError();
-        throw new RetryableError(err instanceof Error ? err.message : String(err), { netError: String(err) });
+        if (timedOut()) throw err;
+        const net = classifyNetError(err);
+        throw new RetryableError(net.message, { reason: net.reason, netError: net.message, ...(net.netCode ? { netCode: net.netCode } : {}), host: lastHost });
       }
     } finally { await fh.close().catch(() => undefined); }
     progress(written, true);
@@ -226,17 +298,28 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
 
   for (let hashAttempt = 0; ; hashAttempt++) {
     let out: { hash: string; size: number } | undefined;
-    for (let attempt = 0; ; attempt++) {
+    let failsInRow = 0; let attempts = 0;
+    for (;;) {
       throwIfAborted(opts.signal);
-      checkPrivate(await fileSize(paths.partPath));
+      const before = await fileSize(paths.partPath);
+      checkPrivate(before);
+      attempts++;
       try { out = await transfer(); break; } catch (err) {
         if (!(err instanceof RetryableError)) throw err;
-        if (attempt >= retries) {
-          const done = await fileSize(paths.partPath);
-          throw emError('EM-7002', `Download of ${spec.name} failed`, { modelId: spec.modelKey ?? null, bytesDone: done, percent: spec.bytes > 0 ? Math.floor((done / spec.bytes) * 100) : 0, ...err.detail });
+        const done = await fileSize(paths.partPath);
+        failsInRow = done > before ? 1 : failsInRow + 1;          // new bytes since the last failure → the count starts again
+        // A refused secure connection (antivirus HTTPS scanning, a proxy, an ISP block page) does not heal by retrying quickly.
+        const limit = err.detail.reason === 'tls' ? Math.min(1, retries) : retries;
+        if (failsInRow > limit || attempts >= maxAttempts) {
+          const { retryAfterMs: _ra, ...detail } = err.detail;
+          throw emError('EM-7002', `Download of ${spec.name} failed (${err.detail.reason}${err.detail.httpStatus ? ` HTTP ${String(err.detail.httpStatus)}` : ''}${err.detail.netCode ? ` ${String(err.detail.netCode)}` : ''})`,
+            { modelId: spec.modelKey ?? null, bytesDone: done, percent: spec.bytes > 0 ? Math.floor((done / spec.bytes) * 100) : 0, attempts, resumable: done > 0, ...detail });
         }
-        speedT0 = now(); speedB0 = await fileSize(paths.partPath);
-        await sleep(backoff(attempt), opts.signal);
+        const delayMs = err.detail.retryAfterMs ?? backoff(failsInRow - 1);
+        opts.onRetry?.({ file: spec.name, attempt: attempts, delayMs, reason: err.detail.reason, bytesDone: done,
+          ...(typeof err.detail.httpStatus === 'number' ? { httpStatus: err.detail.httpStatus } : {}), ...(typeof err.detail.netCode === 'string' ? { netCode: err.detail.netCode } : {}) });
+        speedT0 = now(); speedB0 = done;
+        await sleep(delayMs, opts.signal);
       }
     }
     try {

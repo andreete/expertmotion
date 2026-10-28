@@ -1,7 +1,7 @@
 // DTO types of docs/API_SPECIFICATION.md §3 (the owner). The Local Service defines them as Zod in apps/service/src/http/dto.ts
 // and BLUEPRINT.md says they are re-exported from @expertmotion/shared/dto; that subpath does not exist yet, so the Editor
 // mirrors them here as plain types (structure only, no logic). Replace with the shared import once it exists.
-import type { CompositionModelT, ElementRefT, OperationT, ProjectSettingsT, Ratio, Resolution, ThemeT } from '@expertmotion/composition-model';
+import type { ClipboardEntry, CompositionModelT, ElementRefT, OperationT, ProjectSettingsT, Ratio, Resolution, ThemeT } from '@expertmotion/composition-model';
 import type { Issue } from '@expertmotion/shared';
 
 export type { Ratio, Resolution };
@@ -88,8 +88,14 @@ export interface PlanDto {
   errorCode?: string;
   /** FR-086: summary of the ExecutionResult once executed (R-071 PlanDto `result`). */
   result?: PlanResultSummary | null;
+  /** QA 2026-10-28 #17 (Editor-side): the removals the Creator must confirm before Execute (EM-4310). */
+  confirmRemoval?: Array<{ op: string; label: string }> | undefined;
+  /** FR-223 (Editor-side): live state of the generator steps after Execute (service.notice kind plan-step). */
+  stepStatus?: Record<number, { status: string; code?: string }>;
+  /** FR-223 (Editor-side): the current Execute phase (plan.progress). */
+  execPhase?: { phase: 'voice' | 'measure' | 'compose' | 'apply' | 'failed'; done?: number; total?: number; totalMs?: number; since: number };
 }
-export interface PlanResultSummary { ok: boolean; toVersion: string | null; appliedOps: number; added: number; removed: number; modified: number; toolSteps?: ToolStepResult[] }
+export interface PlanResultSummary { ok: boolean; toVersion: string | null; appliedOps: number; added: number; removed: number; modified: number; toolSteps?: ToolStepResult[]; /** FR-222 "Lihat di timeline" */ addedIds?: string[] }
 /** R-073: generator steps of a plan (tts.generate, captions.generate) started after the Composition Version was committed. */
 export interface ToolStepResult { n: number; tool: string; status: 'started' | 'skipped' | 'done' | 'failed'; jobId?: Id; code?: string }
 export interface ExecutionResult {
@@ -139,11 +145,25 @@ export type MessageBlock =
   | { type: 'tool_call'; name: string; input: unknown }
   | { type: 'tool_result'; name: string; output: unknown }
   | { type: 'proposed_intents'; intents: EditIntent[]; handoffState: 'pending' | 'sent' | 'dismissed' }
-  | { type: 'attachment'; assetId?: Id; mime: string; name: string; /** FR-213: `name` = the model cannot read images; only the file name was sent */ sent?: 'image' | 'name' }
-  | { type: 'targets'; items: ChatTarget[] };
+  | { type: 'attachment'; assetId?: Id; /** FR-221 */ documentId?: Id; mime: string; name: string; /** FR-213: `name` = the model cannot read images; only the file name was sent; FR-221 `text` = a document's text was sent */ sent?: 'image' | 'name' | 'text'; chars?: number; truncated?: boolean }
+  | { type: 'targets'; items: ChatTarget[] }
+  /** FR-216: the web sources of an answer (links) and the searches it ran. */
+  | { type: 'sources'; items: WebSourceDto[]; queries?: string[] }
+  /** FR-217: openly licensed picture candidates; the Creator imports one (R-089). */
+  | { type: 'image_candidates'; items: ImageCandidateDto[] }
+  /** A notice with its EM code (research could not run, …). */
+  | { type: 'notice'; code: string; text: string }
+  /** FR-219: an Editor message that came from a Brainstorm draft. */
+  | { type: 'origin'; from: 'brainstorm'; messageId: Id; auto?: boolean }
+  /** FR-219: a Brainstorm draft handed to the Editor; the state follows the Editor run. */
+  | { type: 'handoff'; draftTitle: string; editorMessageId?: Id; editorRunId?: Id; state: 'sent' | 'planning' | 'ready' | 'applied' | 'failed'; scenes?: number };
+export interface WebSourceDto { url: string; title?: string; citedText?: string; pageAge?: string; cited?: boolean }
+export interface ImageCandidateDto { source: 'openverse' | 'wikimedia'; id: string; title: string; creator: string | null; license: string; licenseVersion: string | null; licenseUrl: string | null; landingUrl: string | null; width: number | null; height: number | null; provider: string | null; importedAssetId?: Id }
+export interface ChatDocumentDto { id: Id; name: string; kind: 'pdf' | 'docx' | 'text'; chars: number; truncated: boolean; pages?: number; warnings: string[] }
 /** QA 2026-10-26 #6 (pointing): an asset or Timeline element the Creator pointed the assistant at ("@Klip 2"). */
-export type ChatTargetKind = 'asset' | 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut';
-export interface ChatTarget { kind: ChatTargetKind; id?: string; index?: number; label: string }
+export type ChatTargetKind = 'asset' | 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut' | 'caption';
+/** FR-220: a `caption` chip is one caption page (`index`) with its time range. */
+export interface ChatTarget { kind: ChatTargetKind; id?: string; index?: number; label: string; startMs?: number; endMs?: number }
 /** FR-214: `sending` = Send pressed, the Service has not answered yet; `thinking` / `writing` come from the provider stream. */
 export type AgentPhase = 'sending' | 'reading' | 'planning' | 'checking' | 'correcting' | 'tool' | 'waiting' | 'thinking' | 'writing';
 export interface MessageDto { id: Id; role: 'user' | 'assistant' | 'system' | 'tool'; blocks: MessageBlock[]; agentRunId: Id | null; createdAt: Iso }
@@ -167,7 +187,7 @@ export interface LicenseDto {
   warnings?: string[]; code?: string | null; licenseeName?: string | null; clockAnomaly?: boolean;
 }
 export interface SettingsDto {
-  privateMode: boolean; outputFolder: string; autoPlan: boolean; uiLanguage: Lang; theme: 'dark' | 'light' | 'system'; defaultPerformanceProfile: PerformanceProfile;
+  privateMode: boolean; outputFolder: string; autoPlan: boolean; /** FR-216 "Izinkan riset internet" (default on) */ webResearch?: boolean; uiLanguage: Lang; theme: 'dark' | 'light' | 'system'; defaultPerformanceProfile: PerformanceProfile;
   defaultRatio: Ratio; defaultResolution: Resolution; defaultFps: Fps; checkUpdates: boolean; diagnosticsIncludeStructure: boolean;
   /** FR-004 onboarding record (server-side); absent on older services / the mock. */
   onboardingDone?: boolean; onboardingSkippedSteps?: OnboardingStep[];
@@ -186,6 +206,8 @@ export interface ModelStateDto {
   pausedReason?: 'render' | null; recommended?: boolean; priority?: 'P1' | 'P2'; languages?: string[]; notes?: string[]; commercialUse?: 'yes' | 'conditional' | 'no';
   licenceDetail?: { spdx: string | null; redistribution: 'yes' | 'no' | 'verify'; useRestrictions: string | null }; hashes?: Array<{ name: string; sha256: string | null }>;
   pathLabel?: string; usedBy?: { generators: string[]; presets: string[] }; engineNotices?: Array<{ label: string; licence: string; spdx: string | null; url: string }>;
+  /** FR-245 (Editor state only): the running retry and the reason of the last failure. */
+  retry?: { attempt: number; reason: string; delayMs: number; at: number } | null; failReason?: string | null;
 }
 /** R-140 `registry` (SEC-072): which model list is in use. */
 export interface ModelRegistrySource { source: 'built-in' | 'signed'; seq: number; code: string | null; reason: string | null }
@@ -195,6 +217,20 @@ export interface GeneratorJobDto {
   result: Record<string, unknown> | null; errorCode: string | null; createdAt: Iso; startedAt: Iso | null; finishedAt: Iso | null;
 }
 
+/** R-215 (FR-246): one narrator voice. `availability` says why it cannot run yet (model-missing → install; no-connection → Providers / ElevenLabs key; private-mode). */
+export interface VoiceDto {
+  id: string; provider: 'local' | 'openai' | 'gemini' | 'elevenlabs'; name: string; gender: 'female' | 'male' | 'neutral'; traits: { id: string[]; en: string[] }; languages: string[];
+  modelKey?: string; pitch?: number; model?: string; voice?: string; cloud: boolean; supports: { speed: boolean; pitch: boolean; style: boolean }; usdPer1kChars?: number;
+  note?: { id: string; en: string }; availability: 'ready' | 'model-missing' | 'private-mode' | 'no-connection'; installed: boolean;
+}
+export interface VoiceListDto { items: VoiceDto[]; privateMode: boolean; elevenLabsKey: string | null }
+/** R-219 (FR-247): one CC0 library track. */
+export interface MusicTrackDto {
+  id: string; title: string; artist: string; mood: string; genre: string; bpm: number; durationS: number; bytes: number; credit: string; status: 'not-downloaded' | 'downloading' | 'ready' | 'failed';
+  bytesDone: number; errorCode: string | null; licence: { spdx: string; name: string; url: string; proofUrl: string };
+}
+/** R-139 (FR-249): a voice clip's timed transcript (times relative to the clip start). */
+export interface TranscriptCueDto { index: number; text: string; written: string; fromMs: number; toMs: number; words: Array<{ text: string; fromMs: number; toMs: number }> }
 /** R-135 Generator Card (FR-100, FR-107). */
 export interface GeneratorModelDto { key: string; label: string; displayName?: DisplayNameDto; bytes: number; installed: boolean; languages: string[]; minTier: Tier; belowTier: boolean; cc0: boolean }
 export interface GeneratorCardDto {
@@ -216,7 +252,9 @@ export interface SplitEdit { atMs: number; items: Array<{ kind: 'clip' | 'text' 
 /** ADR-028 / FR-180: picture position / zoom / rotation (op:element.setTransform); x / y fractions of the frame, scale 1 = fit, degrees. */
 export interface TransformEdit { kind: 'clip' | 'image' | 'shape'; id: Id; x?: number; y?: number; scale?: number; rotation?: number }
 /** ADR-031 / FR-192 / FR-193: Delete or Duplicate Timeline items (R-060 `itemsEdit`; effect ids `<clipId>|<presetId>`). */
-export interface ItemsEdit { action: 'remove' | 'duplicate'; items: Array<{ kind: 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut' | 'effect' | 'background' | 'caption'; id?: string; index?: number }> }
+export interface ItemsEdit { action: 'remove' | 'duplicate' | 'paste'; items: Array<{ kind: 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut' | 'effect' | 'background' | 'caption'; id?: string; index?: number }>;
+  /** FR-256: Paste — in-app clipboard snapshots rebuilt at `atMs` (items empty). */
+  paste?: { atMs: number; entries: ClipboardEntry[] } }
 export interface ElementEdit { kind: 'text' | 'image' | 'shape' | 'audio'; id: Id; atMs?: number; durationMs?: number; trimBeforeMs?: number; layer?: number; move?: 'up' | 'down' | 'front' | 'back' }
 export interface DesignPickInput {
   source: 'ui' | 'chat'; category: IntentCategory; presetId?: string; params?: Record<string, unknown>; target: ElementRefT; selection?: ElementRefT[]; playheadMs?: number;
@@ -273,11 +311,15 @@ export interface EventMap {
   'agent.run.started': { run: AgentRunDto; agent: AgentKind; modelId: string; planId?: Id };
   'agent.run.delta': { runId: Id; agent: AgentKind; delta: string; toolCall?: { name: string; input: unknown } };
   'agent.run.done': { run: AgentRunDto; message: MessageDto; usage: UsageNumbers | null; contextUsage: { usedTokens: number; contextLength: number } | null };
-  'agent.run.progress': { runId: Id; agent: AgentKind; phase: AgentPhase; attempt?: number; of?: number; waitMs?: number; tool?: string };
+  'agent.run.progress': { runId: Id; agent: AgentKind; phase: AgentPhase; attempt?: number; of?: number; waitMs?: number; tool?: string; /** FR-216 */ query?: string; url?: string };
+  /** FR-223 / FR-224: Execute phases of a plan (voice clips first, measure, compose, apply). */
+  'plan.progress': { planId: Id; phase: 'voice' | 'measure' | 'compose' | 'apply' | 'failed'; done?: number; total?: number; totalMs?: number };
+  /** FR-219: a stored message changed (a Brainstorm draft's hand-off state). */
+  'agent.message.updated': { agent: AgentKind; message: MessageDto };
   'agent.run.failed': { runId: Id; agent: AgentKind; code: string; retryable: boolean; message?: string; details?: Record<string, unknown> };
-  'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render' };
+  'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render'; /** FR-245: an automatic retry is waiting */ retry?: { attempt: number; reason: string; delayMs: number } };
   'model.installed': { model: ModelStateDto };
-  'model.failed': { key: string; code: string };
+  'model.failed': { key: string; code: string; /** FR-245 */ reason?: string; httpStatus?: number; percent?: number; resumable?: boolean };
   'hardware.tick': HardwareTickDto;
   'license.changed': { licence: LicenseDto };
   'settings.changed': { scope: string; settings?: SettingsDto; privateMode?: boolean };
@@ -286,7 +328,7 @@ export interface EventMap {
 export type EventName = keyof EventMap;
 export const EVENT_NAMES: readonly EventName[] = [
   'intent.updated', 'plan.ready', 'plan.invalid', 'composition.updated', 'render.queued', 'render.progress', 'render.done', 'render.failed', 'render.cancelled',
-  'ingest.progress', 'ingest.done', 'ingest.failed', 'agent.run.started', 'agent.run.delta', 'agent.run.progress', 'agent.run.done', 'agent.run.failed', 'model.progress', 'model.installed',
+  'ingest.progress', 'ingest.done', 'ingest.failed', 'agent.run.started', 'agent.run.delta', 'agent.run.progress', 'agent.run.done', 'agent.run.failed', 'agent.message.updated', 'plan.progress', 'model.progress', 'model.installed',
   'model.failed', 'hardware.tick', 'license.changed', 'settings.changed', 'service.notice',
 ];
 export type ServiceEvent = { [K in EventName]: { name: K; data: EventMap[K] & EventEnvelope } }[EventName];

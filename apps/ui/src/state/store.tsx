@@ -9,7 +9,7 @@ import type {
   AgentKind, AssetDto, ChatTarget, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, ItemsEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
 } from '../api/types.js';
-import { initialState, PENDING_RUN, reducer, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
+import { initialState, PENDING_RUN, reducer, safeMessage, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
 import type { Runtime } from './runtime.js';
 import { loadPrefs, savePrefs, type Prefs } from '../prefs.js';
 /** Window event that opens the Hardware Monitor popover (Header listens; FR-128 low-disk banner action). */
@@ -18,6 +18,7 @@ import { translate, type Lang } from '../i18n/index.js';
 import { localModelByRef, localModelName } from './model-names.js';
 import { normalizeKey } from './key-retry.js';
 import { itemsCategory } from '../stage/items.js';
+import { DESTRUCTIVE_OPS, destructiveItems, removalLabel } from '../agent/plan-preview.js';
 import { bootDecision, noteProjectClosed, noteProjectOpening } from '../startup/session-guard.js';
 
 export interface Actions {
@@ -63,17 +64,24 @@ export interface Actions {
   removeIntent(id: string): Promise<void>;
   clearIntents(): Promise<void>;
   plan(message?: string): Promise<void>;
-  execute(): Promise<void>;
+  /** `confirmed`: the Creator confirmed the removals the plan makes (EM-4310 inline confirmation, QA 2026-10-28 #17). */
+  execute(confirmed?: boolean): Promise<void>;
   cancelPlan(): Promise<void>;
   setNotes(notes: string): Promise<void>;
   /** FR-067 / FR-080: the Editor message carries the inspector target (if any), the selection and the playhead. */
-  send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null, targets?: ChatTarget[]): Promise<boolean>;
+  send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null, targets?: ChatTarget[], documents?: string[]): Promise<boolean>;
+  /** FR-219: "Kirim ke Editor" — hand a Brainstorm draft to the Editor (its own run with progress; the Plan Card previews it). */
+  sendDraftToEditor(message: MessageDto): Promise<boolean>;
+  /** FR-217: import an openly licensed picture from a research answer into the Library. */
+  importResearchImage(message: MessageDto, source: 'openverse' | 'wikimedia', id: string): Promise<string | null>;
   /** QA 2026-10-26 #6: point the assistant at an asset or Timeline element (chip in the composer, composer focused). */
   pointAt(target: ChatTarget, mode?: AgentKind): void;
   setChatTargets(targets: ChatTarget[]): void;
   /** R-082: hands proposed intents to the Intent Queue; resolves true when the Service accepted the hand-off. */
   handoff(message: MessageDto, intentIds: string[]): Promise<boolean>;
   dismissHandoff(message: MessageDto): void;
+  /** Closes the removal confirmation of the current plan (nothing is executed). */
+  dismissRemoval(): void;
   stopStreaming(agent: AgentKind): void;
   setPrivateMode(on: boolean): Promise<void>;
   setLanguage(lang: Lang): Promise<void>;
@@ -341,6 +349,11 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       },
       async itemsEdit(edit, label) {
         const first = edit.items[0];
+        if (edit.action === 'paste') {                                    // FR-256: Paste at the playhead (no item is selected for it)
+          if (!edit.paste?.entries.length) return false;
+          const res = await createIntent({ source: 'ui', category: 'asset', itemsEdit: edit, target: { kind: 'playhead' }, plan: 'auto' }, label);
+          return Boolean(res?.appliedVersion);
+        }
         if (!first) return false;
         const res = await createIntent({ source: 'ui', category: itemsCategory(edit.items), itemsEdit: edit, target: { kind: first.kind, ...(first.id !== undefined ? { id: first.id } : {}), ...(first.index !== undefined ? { index: first.index } : {}) }, plan: 'auto' }, label);
         if (!res?.appliedVersion) return false;
@@ -461,7 +474,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           dispatch({ type: 'plan', plan });
         } catch (e) { error(e); }
       },
-      async execute() {
+      async execute(confirmed = false) {
         const plan = stateRef.current.plan;
         if (!plan) return;
         // FR-195 (collaboration safety): the Creator changed the Timeline after this plan was made. The Service would refuse it
@@ -469,14 +482,17 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const head = stateRef.current.head?.hash;
         if (plan.status === 'stale' || (plan.status === 'valid' && head !== undefined && plan.baseVersion !== head)) { await replanStale(plan); return; }
         if (plan.status !== 'valid') return;
-        const destructive = plan.steps.some((s) => s.ops.some((o) => ['op:clip.remove', 'op:caption.clear', 'op:background.clear', 'op:text.remove', 'op:shape.remove', 'op:audio.remove'].includes(o.op)));
+        // QA 2026-10-28 #17: the plan now arrives with its ops (plan.ready), so removals are known before Execute; the Plan Card shows
+        // them and asks inline. A plan whose ops were not loaded still gets EM-4310 from the Service, which opens the same question.
+        const destructive = plan.steps.some((s) => s.ops.some((o) => DESTRUCTIVE_OPS.includes(o.op)));
+        if (destructive && !confirmed) { dispatch({ type: 'plan', plan: { ...plan, confirmRemoval: destructiveItems(plan, stateRef.current) } }); return; }
         const run = async () => {
-          dispatch({ type: 'plan', plan: { ...plan, status: 'executing' } });
+          dispatch({ type: 'plan', plan: { ...plan, status: 'executing', confirmRemoval: undefined } });
           try {
-            const r = await api.executePlan(plan.id, { confirmDestructive: destructive });
+            const r = await api.executePlan(plan.id, { confirmDestructive: destructive || confirmed });
             if (r.ok) {
               const n = (c: string) => r.diff.filter((d) => d.change === c).length;   // FR-086 diff summary on the executed card
-              dispatch({ type: 'plan', plan: { ...plan, status: 'executed', result: { ok: true, toVersion: r.toVersion ?? null, appliedOps: r.appliedOps, added: n('added'), removed: n('removed'), modified: n('modified'), ...(r.toolSteps?.length ? { toolSteps: r.toolSteps } : {}) } } });
+              dispatch({ type: 'plan', plan: { ...plan, status: 'executed', result: { ok: true, toVersion: r.toVersion ?? null, appliedOps: r.appliedOps, added: n('added'), removed: n('removed'), modified: n('modified'), addedIds: r.diff.filter((d) => d.change === 'added').map((d) => d.elementId).slice(0, 200), ...(r.toolSteps?.length ? { toolSteps: r.toolSteps } : {}) } } });
               await refreshHead();
               const v = (r.toVersion ?? '').slice(0, 6);
               toast('success', 'ui.sys.toast.applied', { count: r.appliedOps, version: v }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } });
@@ -488,12 +504,46 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
             if (e instanceof EmError && e.code === 'EM-2301') { await replanStale(plan); return; }
             // FR-084: cancelled before the transaction started; the version is unchanged.
             if (e instanceof EmError && e.code === 'EM-4303') { dispatch({ type: 'plan', plan: { ...plan, status: 'cancelled' } }); toast('info', 'err.EM-4303.title', undefined, { code: 'EM-4303' }); return; }
+            if (e instanceof EmError && e.code === 'EM-4310') {
+              const items = ((e.details as { items?: Array<{ op: string; target?: { kind: string; id?: string; index?: number } }> } | undefined)?.items ?? []).map((x) => ({ op: x.op, label: removalLabel(x.op, x.target, stateRef.current) }));
+              dispatch({ type: 'plan', plan: { ...plan, status: 'valid', confirmRemoval: items.length ? items : destructiveItems(plan, stateRef.current) } }); return;
+            }
             dispatch({ type: 'plan', plan: { ...plan, status: 'valid' } });
             error(e);
           }
         };
-        if (destructive) setScreen({ kind: 'confirm', titleKey: 'ui.modal.destructive.title', bodyKey: 'ui.modal.destructive.body', confirmKey: 'ui.agent.editor.execute', danger: true, onConfirm: () => { void run(); } });
-        else await run();
+        await run();
+      },
+      async sendDraftToEditor(message) {
+        const id = pid(); if (!id) return false;
+        try {
+          dispatch({ type: 'agentError', agent: 'editor', code: null });
+          dispatch({ type: 'streamingStart', agent: 'editor', runId: PENDING_RUN, modelId: stateRef.current.assignments?.editor?.modelId ?? '' });
+          const res = await api.sendDraftToEditor(id, message.id, headHash());
+          dispatch({ type: 'messageAdded', agent: 'editor', message: res.message });
+          dispatch({ type: 'streamingStart', agent: 'editor', runId: res.runId, modelId: stateRef.current.assignments?.editor?.modelId ?? '' });
+          dispatch({ type: 'messages', agent: 'brainstorm', messages: stateRef.current.messages.brainstorm.map((m) => (m.id === res.brainstormMessage.id ? safeMessage(res.brainstormMessage) : m)) });
+          announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.agent.handoff.sent'));
+          return true;
+        } catch (e) {
+          const detail = e instanceof EmError ? { message: e.message, ...(e.details && typeof e.details === 'object' ? { details: e.details as Record<string, unknown> } : {}) } : null;
+          dispatch({ type: 'agentError', agent: 'editor', code: errCode(e), detail });
+          return false;
+        }
+      },
+      async importResearchImage(message, source, imageId) {
+        const id = pid(); if (!id) return null;
+        try {
+          const r = await api.importResearchImage(id, { messageId: message.id, source, id: imageId });
+          for (const agent of ['brainstorm', 'editor'] as const) {
+            if (!stateRef.current.messages[agent].some((m) => m.id === message.id)) continue;
+            dispatch({ type: 'messages', agent, messages: stateRef.current.messages[agent].map((m) => (m.id === message.id ? { ...m, blocks: m.blocks.map((b) => (b.type === 'image_candidates' ? { ...b, items: b.items.map((x) => (x.source === source && x.id === imageId ? { ...x, importedAssetId: r.assetId } : x)) } : b)) } : m)) });
+          }
+          const assets = await api.listAssets(id, { limit: 200 }).catch(() => null);
+          if (assets) dispatch({ type: 'assets', assets: assets.items });
+          toast('success', 'ui.agent.research.image.imported', r.attribution ? { attribution: r.attribution } : { attribution: '' });
+          return r.assetId;
+        } catch (e) { error(e); return null; }
       },
       async cancelPlan() {
         const s = stateRef.current, plan = s.plan;
@@ -517,7 +567,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: mode ? { agent: mode } : {} }));   // FR-194: "Ask Editor Agent" also switches to Edit
       },
       setChatTargets(targets) { dispatch({ type: 'chatTargets', targets }); },
-      async send(agent, text, attachments = [], target = null, targets = []) {
+      async send(agent, text, attachments = [], target = null, targets = [], documents = []) {
         const id = pid(); if (!id) return false;
         try {
           dispatch({ type: 'agentError', agent, code: null });
@@ -525,7 +575,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           dispatch({ type: 'streamingStart', agent, runId: PENDING_RUN, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '', ...(attachments.length ? { attaching: true } : {}) });
           const s0 = stateRef.current;
           const editorCtx = agent === 'editor' ? { ...(target ? { target } : {}), ...(s0.selection.length ? { selection: s0.selection.slice(0, 50) } : {}), playheadMs: Math.max(0, Math.round(s0.playheadMs)) } : {};
-          const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), baseVersion: headHash(), ...editorCtx, ...(targets.length ? { targets: targets.slice(0, 12) } : {}) });
+          const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), ...(documents.length ? { documents: documents.map((documentId) => ({ documentId })) } : {}), baseVersion: headHash(), ...editorCtx, ...(targets.length ? { targets: targets.slice(0, 12) } : {}) });
           dispatch({ type: 'messageAdded', agent, message: res.message });
           dispatch({ type: 'streamingStart', agent, runId: res.runId, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '' });
           return true;
@@ -539,7 +589,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const id = pid(); if (!id) return false;
         try {
           const res = await api.handoff(id, { messageId: message.id, intentIds, baseVersion: headHash() });
-          dispatch({ type: 'queue', queue: res.queue });
+          // QA 2026-10-28 #3/#4: the Service answered with the queue as a bare array, which emptied "Your picks"; read the queue DTO.
+          dispatch({ type: 'queue', queue: Array.isArray(res.queue) ? await api.listIntents(id) : res.queue });
           const msgs = stateRef.current.messages.brainstorm.map((m) => (m.id === message.id ? { ...m, blocks: m.blocks.map((b) => (b.type === 'proposed_intents' ? { ...b, handoffState: 'sent' as const } : b)) } : m));
           dispatch({ type: 'messages', agent: 'brainstorm', messages: msgs });
           await refreshHead();
@@ -548,6 +599,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           return true;
         } catch (e) { error(e); return false; }
       },
+      dismissRemoval() { const p = stateRef.current.plan; if (p?.confirmRemoval) dispatch({ type: 'plan', plan: { ...p, confirmRemoval: undefined } }); },
       dismissHandoff(message) {
         const msgs = stateRef.current.messages.brainstorm.map((m) => (m.id === message.id ? { ...m, blocks: m.blocks.map((b) => (b.type === 'proposed_intents' ? { ...b, handoffState: b.handoffState === 'dismissed' ? 'pending' as const : 'dismissed' as const } : b)) } : m));
         dispatch({ type: 'messages', agent: 'brainstorm', messages: msgs });
@@ -695,6 +747,21 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       case 'agent.run.failed': if (ev.data.code === 'EM-8202') actions.toast('info', 'err.EM-8202.title', undefined, { code: 'EM-8202' }); break;
       case 'service.notice':
         if (ev.data.kind === 'resync') void actions.reloadState();
+        // FR-252: a plan voice step waits for its model — one click installs it, the Service continues the plan by itself afterwards
+        if (ev.data.kind === 'plan-step' && ev.data['status'] === 'needs-model' && typeof ev.data['modelKey'] === 'string' && ev.data.projectId === stateRef.current.project?.id) {
+          const key = ev.data['modelKey'];
+          const m = stateRef.current.models.find((x) => x.key === key);
+          actions.toast('warn', 'ui.sys.toast.planstep.needsmodel', { model: m?.displayName?.[stateRef.current.settings?.uiLanguage ?? 'en'] ?? m?.label ?? key }, { code: 'EM-7001', sticky: true,
+            action: { labelKey: 'ui.sys.toast.planstep.install', run: () => { void runtime.api.installModel(key).then(() => actions.loadModels()).catch(actions.error); } } });
+        }
+        if (ev.data.kind === 'plan-step' && ev.data['status'] === 'resumed' && ev.data.projectId === stateRef.current.project?.id) actions.toast('info', 'ui.sys.toast.planstep.resumed');
+        if (ev.data.kind === 'plan-step' && ev.data['status'] === 'failed' && typeof ev.data.code === 'string' && ev.data.projectId === stateRef.current.project?.id) actions.toast('danger', `err.${ev.data.code}.title`, undefined, { code: ev.data.code });
+        // FR-223: a failed generator step is never silent (the QA's voice-over failed with EM-7001 and nothing said so).
+        if (ev.data.kind === 'plan-step' && ev.data['status'] === 'failed' && ev.data.projectId === stateRef.current.project?.id) {
+          const code = typeof ev.data.code === 'string' ? ev.data.code : 'EM-7101';
+          actions.toast('danger', 'ui.agent.plan.step.failed', { n: Number(ev.data['step'] ?? 0), tool: translate(L, ev.data['tool'] === 'tts.generate' ? 'ui.agent.plan.tool.tts.short' : 'ui.agent.plan.tool.captions.short'), code }, { code, sticky: true });
+        }
+        if (ev.data.kind === 'plan-step' && ev.data['status'] === 'done') void actions.refreshHead();
         // FR-128: the Service sends EM-6402 once per session; the banner stays until dismissed and opens the Hardware Monitor.
         if (ev.data.kind === 'low-disk' || ev.data.kind === 'low-memory') actions.toast('warn', `err.${ev.data.code ?? 'EM-6402'}.title`, typeof ev.data['have'] === 'number' ? { have: ev.data['have'] } : undefined,
           { code: ev.data.code ?? 'EM-6402', sticky: true, action: { labelKey: 'ui.scr.hardware.open', run: () => { window.dispatchEvent(new CustomEvent(OPEN_HARDWARE_EVENT)); } } });

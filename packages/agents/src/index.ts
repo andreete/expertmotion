@@ -11,3 +11,6 @@ export { installPromptSet, prompts, PROMPT_SET_KEYS, type PromptSet } from './pr
 export * from './plan-normalize.js';
 export * from './op-args.js';
 export * from './script-captions.js';
+export * from './research.js';
+export * from './auto-motion.js';
+export * from './auto-motion-plan.js';

@@ -1,9 +1,10 @@
 // Step 8 (AI_WORKFLOW §2): deterministic validation of any Edit Plan (compiled or model-authored) before Execute is enabled.
-import { applyOperations, conflictsWithLocked, deriveTiming, hashModel, propertyKeysOf, validate, type ApplyContext, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT, type Tier } from '@expertmotion/composition-model';
+import { applyOperations, conflictsWithLocked, diffModels, deriveTiming, hashModel, propertyKeysOf, validate, type ApplyContext, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT, type Tier } from '@expertmotion/composition-model';
 import { balancedObjects, issue, parseLooseJson, stripReasoning, type Issue } from '@expertmotion/shared';
 import { CaptionsStepArgs, EditPlan, ModelPlanReply, PLAN_STEP_TOOLS, TtsStepArgs, type EditPlanT } from './schemas.js';
 import { normalizeModelReply } from './plan-normalize.js';
 import { scriptPages } from './script-captions.js';
+import { expandSceneCompose, qualityGatePlan } from './auto-motion-plan.js';
 
 /** A local model a generator plan step needs (ADR-030): its Model Manager key, display label and whether it is installed. */
 export interface ToolModel { installed: boolean; modelKey: string; label: string }
@@ -86,16 +87,18 @@ function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT;
 
 /** Validates a plan; returns it with status valid | invalid | stale, the validation rows, touchesLockedKeys and the predicted diff. */
 export function validatePlan(input: EditPlanT, ctx: PlanContext): PlanValidation {
-  const prepared = prepareToolSteps(input, ctx);
-  const plan = prepared.plan;
-  const issues: Issue[] = [...prepared.issues];
+  // ADR-034: scene.compose steps become ordinary ops first (auto-motion-plan.ts), then generator steps are prepared.
+  const expanded = expandSceneCompose(input, { model: ctx.model, assets: ctx.assets, tier: ctx.tier, lockedKeys: ctx.lockedKeys, ...(ctx.language ? { language: ctx.language } : {}) });
+  const prepared = prepareToolSteps(expanded.plan, ctx);
+  let plan = prepared.plan;
+  const issues: Issue[] = [...expanded.issues, ...prepared.issues];
   const ops = planOps(plan);
   if (plan.baseVersion !== ctx.baseVersion) issues.push(issue('EM-2301', 'The composition changed after this plan was made; plan again.', 'block', 'baseVersion'));
   if (ops.length > MAX_OPS) issues.push(issue('EM-2304', `The plan has ${ops.length} operations; the limit is ${MAX_OPS}.`, 'block', 'steps'));
   if (plan.steps.length > MAX_STEPS) issues.push(issue('EM-2304', `The plan has ${plan.steps.length} steps; the limit is ${MAX_STEPS}.`, 'block', 'steps'));
   if (plan.steps.length === 0 && !plan.risks.some((r) => r.code === 'needs-input')) issues.push(issue('EM-4302', 'The plan is empty.', 'block', 'steps'));
   plan.steps.forEach((s, i) => {
-    if (!(PLAN_STEP_TOOLS as readonly string[]).includes(s.tool)) issues.push(issue('EM-2303', `Step ${s.n}: "${s.tool}" is not a plan tool; use composition.applyOps, tts.generate or captions.generate.`, 'block', `steps[${i}].tool`));
+    if (!(PLAN_STEP_TOOLS as readonly string[]).includes(s.tool)) issues.push(issue('EM-2303', `Step ${s.n}: "${s.tool}" is not a plan tool; use composition.applyOps, scene.compose, tts.generate or captions.generate.`, 'block', `steps[${i}].tool`));
     else if (s.tool !== 'composition.applyOps' && s.ops.length) issues.push(issue('EM-2303', `Step ${s.n}: operations must go through composition.applyOps.`, 'block', `steps[${i}].tool`));
   });
   const touched = conflictsWithLocked(ops.flatMap(propertyKeysOf), ctx.lockedKeys);
@@ -110,6 +113,10 @@ export function validatePlan(input: EditPlanT, ctx: PlanContext): PlanValidation
       const before = new Set(validate(ctx.model, { assets: ctx.assets, tier: ctx.tier }).map((i) => `${i.code}|${i.path}|${i.message}`));
       for (const i of after) if (!before.has(`${i.code}|${i.path}|${i.message}`)) issues.push(i);     // only problems the plan introduces
       predicted = { model: r.value.model, diff: r.value.diff };
+      // ADR-034 quality gate: repairs what the plan made worse on screen (overlap, safe area, contrast, font) and lists the rest
+      const g = qualityGatePlan(plan, ctx.model, r.value.model, { assets: ctx.assets, tier: ctx.tier, newId: ctx.newId, ...(ctx.jobs ? { jobs: ctx.jobs } : {}), ...(ctx.language ? { language: ctx.language } : {}) });
+      plan = g.plan;
+      if (g.predicted) predicted = { model: g.predicted, diff: diffModels(ctx.model, g.predicted) };
     }
   }
   const blocking = issues.filter((i) => i.severity === 'block');

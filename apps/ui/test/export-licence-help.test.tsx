@@ -211,8 +211,11 @@ describe('Editor screens (mock mode)', () => {
   it('FR-100: Generator Cards follow R-135 (model, installed state, no internal priority tag; Coming soon only for kinds the service disables)', async () => {
     await renderEditor('sample');
     await act(async () => { fireEvent.click(el('hdr.menu.tools')!); });
-    await waitFor(() => { if (el('lib.generator.card.music')?.getAttribute('data-enabled') !== 'false') throw new Error('cards not loaded'); });
-    expect(el('lib.generator.card.music')!.textContent).toContain(COMING_SOON);
+    // FR-247 (QA 2026-10-28 #9/#10): music is always available now (CC0 library); the mock build still disables thumbnails
+    await waitFor(() => { if (el('lib.generator.card.thumbnail')?.getAttribute('data-enabled') !== 'false') throw new Error('cards not loaded'); });
+    expect(el('lib.generator.card.thumbnail')!.textContent).toContain(COMING_SOON);
+    expect(el('lib.generator.card.music')!.getAttribute('data-enabled')).toBe('true');
+    expect(el('lib.generator.card.music')!.textContent).toContain('Free CC0 music library');
     expect(el('lib.generator.card.voice')!.getAttribute('data-enabled')).toBe('true');
     expect(el('lib.generator.card.voice')!.textContent).not.toMatch(/\bP[012]\b/);                 // Operator 2026-10-26: no internal priority tag
     expect(el('lib.generator.card.voice')!.textContent).toMatch(/Indonesian Voice · 63/);          // product name (displayName), not the upstream label

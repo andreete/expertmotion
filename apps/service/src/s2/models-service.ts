@@ -324,6 +324,11 @@ export class ModelsService {
           manifest = await installModel(def, {
             modelsDir: ctx.paths.models, fetch: fetchLike, freeBytes: this.opts.freeBytes ?? freeBytes, signal: sub.signal, allowedHosts: this.downloadHosts(),
             privateMode: () => ctx.settings.get().privateMode,
+            // FR-245: every automatic retry is visible (Model Manager "Mencoba lagi…") and logged with its real cause
+            onRetry: (r) => {
+              ctx.log.info({ model: def.key, file: r.file, attempt: r.attempt, reason: r.reason, httpStatus: r.httpStatus ?? null, netCode: r.netCode ?? null, delayMs: r.delayMs, bytesDone: r.bytesDone }, 'model download retrying');
+              emit(ctx, 'model.progress', { key: def.key, bytesDone: entry.bytesDone, bytesTotal: entry.bytesTotal, status: entry.status, retry: { attempt: r.attempt, reason: r.reason, delayMs: r.delayMs } });
+            },
             onProgress: (p) => {
               entry.bytesDone = p.bytesDone; entry.status = p.bytesDone >= p.bytesTotal ? 'verifying' : 'downloading';
               if (tick(entry.status === 'verifying')) emit(ctx, 'model.progress', { key: def.key, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, status: entry.status });
@@ -339,6 +344,7 @@ export class ModelsService {
       // FR-037: picks held for this model resume first, so the queue the Editor sees after `model.installed` is already current.
       if (def.flag) { try { ctx.hooks.onModelInstalled?.(def.flag); } catch (e) { ctx.log.warn({ model: def.key, err: String(e) }, 'held picks could not resume'); } }
       emit(ctx, 'model.installed', { model: await this.dto(def) });
+      s2(ctx).events.emit('model.installed', def.key);                               // FR-252: held plan steps continue
     } catch (e) {
       this.live.delete(def.key);
       if ((entry as { paused?: boolean }).paused) {
@@ -350,8 +356,11 @@ export class ModelsService {
       const code = e instanceof EmError ? e.code : 'EM-7002';
       if (code === 'EM-7006') { this.paused.add(def.key); this.upsert(def, 'not-installed', { bytesDone: entry.bytesDone }); }
       else this.upsert(def, 'failed', { bytesDone: entry.bytesDone, errorCode: code });
-      ctx.log.warn({ model: def.key, code, err: errorMessage(e).slice(0, 300) }, 'model download failed');
-      emit(ctx, 'model.failed', { key: def.key, code });
+      // FR-245: the log names the cause (QA 2026-10-28 had only "Download of … failed"): reason, HTTP status, network code, host, attempts
+      const d = (e instanceof EmError && e.details && typeof e.details === 'object' ? e.details : {}) as Record<string, unknown>;
+      const pick = (k: string) => (d[k] === undefined ? {} : { [k]: d[k] });
+      ctx.log.warn({ model: def.key, code, err: errorMessage(e).slice(0, 300), ...pick('reason'), ...pick('httpStatus'), ...pick('netCode'), ...pick('netError'), ...pick('host'), ...pick('attempts'), ...pick('bytesDone'), ...pick('percent') }, 'model download failed');
+      emit(ctx, 'model.failed', { key: def.key, code, ...pick('reason'), ...pick('httpStatus'), ...pick('percent'), ...pick('resumable') });
     }
   }
 

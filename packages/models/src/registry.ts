@@ -126,7 +126,9 @@ const MODEL_LIST: ModelDef[] = [
     licence: { spdx: 'GPL-3.0-or-later', name: 'GPL-3.0-or-later (espeak-ng)', url: 'https://github.com/espeak-ng/espeak-ng', redistribution: 'yes' }, commercialUse: 'yes',
     languages: [], minTier: 'T0', recommendedFor: [], ramBytes: 0, flag: null, priority: 'P1', notes: ['shipped inside the sherpa-onnx TTS Engine Binary; GPL written offer in Third-Party Notices'] },
   // §2.3 Music
-  { key: 'ace-step-v1-3.5b', label: 'ACE-Step v1 3.5B', engine: 'ace-step', task: 'music', version: REGISTRY_VERSION, availability: 'download', files: [], bytes: 7 * GB,
+  // FR-247 (QA 2026-10-28 #9): no embedded Python runtime ships yet and the file list is not pinned, so ACE-Step is listed for
+  // evaluation only (never installable, never offered); the Music card explains it and uses the CC0 library instead.
+  { key: 'ace-step-v1-3.5b', label: 'ACE-Step v1 3.5B', engine: 'ace-step', task: 'music', version: REGISTRY_VERSION, availability: 'evaluate', files: [], bytes: 7 * GB,
     licence: { spdx: 'Apache-2.0', name: 'Apache-2.0', url: 'https://huggingface.co/ACE-Step/ACE-Step-v1-3.5B', redistribution: 'yes' }, commercialUse: 'yes',
     languages: [], minTier: 'T1', recommendedFor: ['T1', 'T2'], ramBytes: 8 * GB, vramBytes: 4 * GB, flag: 'model:ace-step', priority: 'P2',
     notes: ['≈ 7 GB weights [estimate] + ≈ 3 GB Python runtime', 'file list TO_PIN (HF snapshot)', 'ramBytes derived (no doc figure)'] },
@@ -134,9 +136,10 @@ const MODEL_LIST: ModelDef[] = [
     licence: { name: 'Stability AI Community License', url: 'https://huggingface.co/stabilityai/stable-audio-open-1.0', redistribution: 'no', useRestrictions: 'free below US$1 M annual revenue; gated download, each Creator accepts the licence on HF' },
     commercialUse: 'conditional', languages: [], minTier: 'T2', recommendedFor: [], ramBytes: 6 * GB, vramBytes: 6 * GB, flag: 'model:stable-audio', priority: 'P2',
     notes: ['P2 evaluate only; revenue-conditional licence (BRD)', 'sizes are estimates'] },
-  { key: 'loop-library-cc0', label: 'CC0 loop library', engine: 'loops', task: 'library', version: REGISTRY_VERSION, availability: 'download', files: [], bytes: 150 * MB,
+  // FR-247: the CC0 library is a curated track list (music-library.ts); each track downloads on demand, so the row itself is virtual.
+  { key: 'loop-library-cc0', label: 'CC0 music library', engine: 'loops', task: 'library', version: REGISTRY_VERSION, availability: 'virtual', files: [], bytes: 85 * MB,
     licence: { spdx: 'CC0-1.0', name: 'CC0-1.0 (every track)', url: 'https://creativecommons.org/publicdomain/zero/1.0/', redistribution: 'yes' }, commercialUse: 'yes',
-    languages: [], minTier: 'T0', recommendedFor: ['T0'], ramBytes: 0, flag: null, priority: 'P2', notes: ['hosted on the Operator release host (TO_PIN)', 'T0 default and universal music fallback'] },
+    languages: [], minTier: 'T0', recommendedFor: ['T0'], ramBytes: 0, flag: null, priority: 'P2', notes: ['tracks pinned per file (Hugging Face mirror of FreePD.com, CC0), downloaded on demand', 'default on every tier and universal music fallback'] },
   // §2.4 Image / thumbnail — stable-diffusion.cpp
   { key: 'flux1-schnell-q4', label: 'FLUX.1-schnell Q4', engine: 'stable-diffusion.cpp', task: 'image', version: REGISTRY_VERSION, availability: 'download', files: FLUX_FILES, bytes: sum(FLUX_FILES),
     licence: { spdx: 'Apache-2.0', name: 'Apache-2.0', url: 'https://huggingface.co/black-forest-labs/FLUX.1-schnell', redistribution: 'yes' }, commercialUse: 'yes',
@@ -207,7 +210,7 @@ export const TIER_DEFAULTS: Readonly<{ stt: TierTable; 'tts.id': TierTable; 'tts
   stt: { T0: { default: 'whisper-small', offered: ['whisper-medium'] }, T1: { default: 'whisper-large-v3-turbo', offered: [] }, T2: { default: 'whisper-large-v3-turbo', offered: ['whisper-large-v3'] } },
   'tts.id': { T0: { default: 'piper-id-news-medium', offered: [] }, T1: { default: 'piper-id-news-medium', offered: [] }, T2: { default: 'piper-id-news-medium', offered: [] } },
   'tts.en': { T0: { default: 'piper-en-lessac-medium', offered: [] }, T1: { default: 'piper-en-lessac-medium', offered: ['kokoro-82m-v1.0'] }, T2: { default: 'kokoro-82m-v1.0', offered: [] } },
-  music: { T0: { default: 'loop-library-cc0', offered: [] }, T1: { default: 'ace-step-v1-3.5b', offered: [] }, T2: { default: 'ace-step-v1-3.5b', offered: [] } },
+  music: { T0: { default: 'loop-library-cc0', offered: [] }, T1: { default: 'loop-library-cc0', offered: [] }, T2: { default: 'loop-library-cc0', offered: [] } },
   image: { T0: { default: 'frame-composite', offered: ['sd15-emaonly'] }, T1: { default: 'sd15-emaonly', offered: [] }, T2: { default: 'flux1-schnell-q4', offered: [] } },
 });
 /** §5 "Universal fallback" column. `srt-import` / `voice-import` are non-model flows of the Local Service. */

@@ -133,7 +133,7 @@ describe('op:element.setTransform', () => {
     expect(blocked(applyOperations(b0, [tf('clip', id, {})], ctx()))).toMatchObject({ code: 'EM-2102', path: 'ops[0].args' });
     expect(blocked(applyOperations(b0, [tf('clip', id, { scale: 0.05 })], ctx()))).toMatchObject({ code: 'EM-2102', path: 'ops[0].args.scale' });
     expect(blocked(applyOperations(b0, [tf('clip', id, { x: 3 })], ctx()))).toMatchObject({ code: 'EM-2102' });
-    expect(blocked(applyOperations(b0, [tf('text', 't', { x: 0.1 })], ctx()))).toMatchObject({ code: 'EM-2102', path: 'ops[0].target.kind' });
+    expect(blocked(applyOperations(b0, [tf('audio', 'a', { x: 0.1 })], ctx()))).toMatchObject({ code: 'EM-2102', path: 'ops[0].target.kind' });   // ADR-034: texts may move (x / y), audio never
     expect(blocked(applyOperations(b0, [tf('clip', 'gone', { x: 0.1 })], ctx()))).toMatchObject({ code: 'EM-2203' });
     expect(blocked(applyOperations(b0, [tf('image', 'gone', { x: 0.1 })], ctx()))).toMatchObject({ code: 'EM-2203' });
   });

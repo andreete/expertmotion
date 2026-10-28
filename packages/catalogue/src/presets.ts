@@ -55,10 +55,16 @@ export const backgrounds = define('background', bgCommon, [
   { name: 'none', en: 'None', id: 'Tanpa latar', p: 'p0', tags: ['transparent', 'alpha'] },
 ]);
 
-const motionCommon = { durationMs: ms(600, 100, 10_000), delayMs: ms(0, 0, 10_000), easingId: easingRef(), exit: z.boolean().default(true) };
+// ADR-034 (auto motion): optional on every motion (absent = the behaviour before): exitMs (exit length, default = the entrance),
+// exitStyle (mirror = the entrance backwards, fade = opacity only), bezier (explicit cubic-bezier, wins over easingId), loop
+// (a subtle deterministic idle loop after the entrance), distanceU (rise / reveal distance).
+const motionCommon = { durationMs: ms(600, 100, 10_000), delayMs: ms(0, 0, 10_000), easingId: easingRef(), exit: z.boolean().default(true),
+  exitMs: z.number().int().min(0).max(10_000).optional(), exitStyle: z.enum(['mirror', 'fade']).optional(),
+  bezier: z.array(z.number().min(-2).max(3)).length(4).optional(), loop: z.enum(['none', 'float', 'pulse', 'sway', 'spin']).optional() };
+const grow = z.enum(['up', 'down', 'left', 'right']);
 export const motions = define('motion', motionCommon, [
   { name: 'fade-in', en: 'Fade in', id: 'Pudar masuk', p: 'p0', tags: ['soft'] },
-  { name: 'rise', en: 'Rise', id: 'Naik', p: 'p0', params: { distanceU: z.number().min(0).max(400).default(40) } },
+  { name: 'rise', en: 'Rise', id: 'Naik', p: 'p0', params: { distanceU: z.number().min(0).max(2000).default(40) } },
   { name: 'pop', en: 'Pop', id: 'Muncul membesar', p: 'p0', params: { damping: z.number().min(1).max(200).default(12) }, tags: ['energetic', 'bouncy'] },
   { name: 'slide-in', en: 'Slide in', id: 'Geser masuk', p: 'p0', params: { direction: direction('from-left') } },
   { name: 'zoom-drift', en: 'Zoom drift', id: 'Zoom pelan', p: 'p0', params: { toScale: z.number().min(1).max(1.5).default(1.08) }, tags: ['ken burns', 'calm', 'cinematic'] },
@@ -66,6 +72,11 @@ export const motions = define('motion', motionCommon, [
   { name: 'bounce', en: 'Bounce', id: 'Pantul', p: 'p1', tags: ['playful'] },
   { name: 'typewriter', en: 'Typewriter', id: 'Ketik', p: 'p1' },
   { name: 'word-stagger', en: 'Word stagger', id: 'Kata bergantian', p: 'p1', params: { staggerFrames: z.number().int().min(1).max(30).default(8) } },
+  { name: 'blur-in', en: 'Blur in', id: 'Kabur masuk', p: 'p1', params: { blurU: z.number().min(0).max(80).default(16) }, tags: ['soft', 'cinematic', 'smooth'] },
+  { name: 'scale-in', en: 'Scale in', id: 'Membesar halus', p: 'p1', params: { fromScale: z.number().min(0).max(2).default(0.7) }, tags: ['clean', 'smooth'] },
+  { name: 'wipe-reveal', en: 'Wipe reveal', id: 'Buka sapu', p: 'p1', params: { direction: direction('from-left') }, tags: ['reveal', 'clean'] },
+  { name: 'draw-on', en: 'Draw on', id: 'Gambar garis', p: 'p1', tags: ['draw', 'line', 'stroke', 'garis'] },
+  { name: 'grow', en: 'Grow', id: 'Tumbuh', p: 'p1', params: { direction: grow.default('up') }, tags: ['chart', 'bar', 'grafik'] },
   { name: 'none', en: 'Static', id: 'Diam', p: 'p0', preview: false },
 ]);
 
@@ -76,7 +87,7 @@ const shapeCommon = {
 };
 export const shapes = define('shape', shapeCommon, [
   { name: 'circle', en: 'Circle', id: 'Lingkaran', p: 'p0' },
-  { name: 'rect', en: 'Rectangle', id: 'Kotak', p: 'p0', params: { cornerRadius: z.number().min(0).max(500).default(24) } },
+  { name: 'rect', en: 'Rectangle', id: 'Kotak', p: 'p0', params: { cornerRadius: z.number().min(0).max(500).default(24), outline: z.boolean().optional(), dashU: z.number().min(0).max(200).optional() } },
   { name: 'star', en: 'Star', id: 'Bintang', p: 'p0', params: { points: z.number().int().min(3).max(20).default(5), innerRadius: unit(0.44) } },
   { name: 'arrow', en: 'Arrow', id: 'Panah', p: 'p0', params: { direction: z.enum(['left', 'right', 'up', 'down']).default('right') } },
   { name: 'triangle', en: 'Triangle', id: 'Segitiga', p: 'p1' },
@@ -86,6 +97,11 @@ export const shapes = define('shape', shapeCommon, [
   { name: 'callout', en: 'Callout', id: 'Balon', p: 'p2' },
   { name: 'spark', en: 'Spark', id: 'Percik', p: 'p2' },
   { name: 'ellipse', en: 'Ellipse', id: 'Elips', p: 'p2' },
+  { name: 'line', en: 'Line', id: 'Garis', p: 'p1', tags: ['underline', 'accent', 'bar', 'garis bawah'] },
+  { name: 'ring', en: 'Ring', id: 'Cincin', p: 'p1', tags: ['outline', 'circle', 'stat', 'lingkaran'] },
+  { name: 'pill', en: 'Pill', id: 'Kapsul', p: 'p1', tags: ['button', 'tombol', 'cta', 'badge'] },
+  { name: 'check', en: 'Check', id: 'Centang', p: 'p1', tags: ['tick', 'done', 'list', 'centang'] },
+  { name: 'chevron', en: 'Chevron', id: 'Panah kecil', p: 'p1', tags: ['bullet', 'list', 'next'] },
 ]);
 
 export const easings = define('easing', {}, [
@@ -98,6 +114,8 @@ export const easings = define('easing', {}, [
   { name: 'linear', en: 'Linear', id: 'Linear', p: 'p1', data: { fn: 'linear' }, preview: false },
   { name: 'spring-soft', en: 'Spring soft', id: 'Pegas lembut', p: 'p1', data: { fn: 'spring', damping: 200 }, preview: false },
   { name: 'spring-bouncy', en: 'Spring bouncy', id: 'Pegas memantul', p: 'p1', data: { fn: 'spring', damping: 8 }, preview: false },
+  { name: 'snappy', en: 'Snappy', id: 'Sigap', p: 'p1', data: { fn: 'bezier', args: [0.2, 0.8, 0.2, 1] }, preview: false },
+  { name: 'spring-light', en: 'Spring light', id: 'Pegas ringan', p: 'p1', data: { fn: 'spring', damping: 14 }, preview: false },
 ]);
 
 const fxCommon = { motion: z.enum(['static', 'in', 'out']).default('static') };
@@ -133,10 +151,11 @@ export const audio = define('audio', {}, [
 const textCommon = { fontSize: z.number().min(34).max(200).optional(), weight: z.number().int().min(100).max(900).optional(), align: z.enum(['left', 'center', 'right']).optional() };
 export const texts = define('text', textCommon, [
   { name: 'title', en: 'Title', id: 'Judul', p: 'p0', data: { fontSize: 110, weight: 800, align: 'center', motionId: 'preset:motion.rise' }, tags: ['heading', 'big', 'besar'] },
-  { name: 'subtitle', en: 'Subtitle', id: 'Subjudul', p: 'p0', data: { fontSize: 64, weight: 600, align: 'center' } },
-  { name: 'lower-third', en: 'Lower third', id: 'Nama bawah', p: 'p0', data: { fontSize: 48, weight: 600, align: 'left', bar: true, anchor: 'bottom-left' }, tags: ['name', 'nama'] },
-  { name: 'callout', en: 'Callout', id: 'Sorotan', p: 'p0', data: { fontSize: 56, weight: 700, align: 'center', box: true } },
-  { name: 'quote', en: 'Quote', id: 'Kutipan', p: 'p1', data: { fontSize: 72, weight: 500, align: 'center', italic: true } },
+  // ADR-034: every variant enters (and exits) with motion by default; preset:motion.none on the op makes a text static.
+  { name: 'subtitle', en: 'Subtitle', id: 'Subjudul', p: 'p0', data: { fontSize: 64, weight: 600, align: 'center', motionId: 'preset:motion.rise' } },
+  { name: 'lower-third', en: 'Lower third', id: 'Nama bawah', p: 'p0', data: { fontSize: 48, weight: 600, align: 'left', bar: true, anchor: 'bottom-left', motionId: 'preset:motion.slide-in' }, tags: ['name', 'nama'] },
+  { name: 'callout', en: 'Callout', id: 'Sorotan', p: 'p0', data: { fontSize: 56, weight: 700, align: 'center', box: true, motionId: 'preset:motion.pop' } },
+  { name: 'quote', en: 'Quote', id: 'Kutipan', p: 'p1', data: { fontSize: 72, weight: 500, align: 'center', italic: true, motionId: 'preset:motion.fade-in' } },
 ]);
 
 export const textEffects = define('texteffect', { colour: optionalHex() }, [
@@ -144,7 +163,9 @@ export const textEffects = define('texteffect', { colour: optionalHex() }, [
   { name: 'underline', en: 'Underline', id: 'Garis bawah', p: 'p1' },
   { name: 'circle', en: 'Circle', id: 'Lingkari', p: 'p1' },
   { name: 'kinetic', en: 'Kinetic words', id: 'Kata bergerak', p: 'p0', tags: ['energetic', 'words'] },
-  { name: 'counter', en: 'Number counter', id: 'Angka berjalan', p: 'p1', tags: ['number', 'angka'] },
+  { name: 'counter', en: 'Number counter', id: 'Angka berjalan', p: 'p1', tags: ['number', 'angka'],
+    params: { from: z.number().optional(), durationMs: z.number().int().min(100).max(20_000).optional(), delayMs: z.number().int().min(0).max(60_000).optional(), easingId: easingRef(), bezier: z.array(z.number().min(-2).max(3)).length(4).optional() } },
+  { name: 'keyword', en: 'Keyword colour', id: 'Warna kata kunci', p: 'p1', tags: ['emphasis', 'accent', 'kata kunci'], params: { words: z.array(z.string().min(1).max(40)).max(8).default([]) } },
 ]);
 
 export const fonts = define('font', {}, [
@@ -161,6 +182,8 @@ export const palettes = define('palette', {}, [
   { name: 'neon-tech', en: 'Neon tech', id: 'Neon teknologi', p: 'p0', data: { bg: '#0B1020', text: '#E8F1FF', accent: '#00E5FF', accent2: '#FF3DB8' }, preview: false },
   { name: 'pastel-friendly', en: 'Pastel friendly', id: 'Pastel ramah', p: 'p0', data: { bg: '#FFF4EA', text: '#3A3350', accent: '#E5546F', accent2: '#2E9C86' }, preview: false },
   { name: 'high-contrast', en: 'High contrast', id: 'Kontras tinggi', p: 'p0', data: { bg: '#000000', text: '#FFFFFF', accent: '#FFE600', accent2: '#FF3B30' }, preview: false },
+  // ADR-034: editorial data-journalism palette (reference video of QA 2026-10-28); extra roles read by the scene composer.
+  { name: 'editorial-teal', en: 'Editorial teal', id: 'Editorial toska', p: 'p0', data: { bg: '#0F1A1F', text: '#FFFFFF', accent: '#5DCAA5', accent2: '#EF9F27', negative: '#F0997B', muted: '#9FB3B8', neutral: '#888780', pill: '#1D9E75' }, preview: false },
   { name: 'corporate-blue', en: 'Corporate blue', id: 'Korporat biru', p: 'p0', data: { bg: '#0D2A4A', text: '#F2F7FC', accent: '#4DA3FF', accent2: '#FFB020' }, preview: false },
 ]);
 
@@ -168,6 +191,7 @@ export const fontPairs = define('fontpair', {}, [
   { name: 'jakarta-inter', en: 'Jakarta + Inter', id: 'Jakarta + Inter', p: 'p0', data: { heading: 'preset:font.plus-jakarta-sans', body: 'preset:font.inter' }, preview: false },
   { name: 'archivo-inter', en: 'Archivo + Inter', id: 'Archivo + Inter', p: 'p0', data: { heading: 'preset:font.archivo', body: 'preset:font.inter' }, preview: false },
   { name: 'inter-mono', en: 'Inter + Mono', id: 'Inter + Mono', p: 'p0', data: { heading: 'preset:font.inter', body: 'preset:font.jetbrains-mono' }, preview: false },
+  { name: 'inter-inter', en: 'Inter only', id: 'Inter saja', p: 'p0', data: { heading: 'preset:font.inter', body: 'preset:font.inter' }, preview: false },
 ]);
 
 export const ALL_PRESETS: readonly PresetDef[] = Object.freeze([

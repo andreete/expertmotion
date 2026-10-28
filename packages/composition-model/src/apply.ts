@@ -10,6 +10,9 @@ import { detectRatio } from './ratio.js';
 import { diffModels, type ElementDiff } from './diff.js';
 import { freeAudioLane, frontLayerFor, moveVisual, normalizeLanes, placeAudio, placeVisual, visualItems, visualSpan, type VisualItem } from './layers.js';
 import { CLIP_TIMING_OPS, followSceneAnchors, sceneAnchors } from './items.js';
+import { AUDIO_TIMING_OPS, followVoiceAnchors, voiceAnchors } from './voice-anchors.js';
+import { boxesOverlap, textGeometry } from './text-box.js';
+import { pageHas, pagesNear, replaceInPage, retextPage } from './caption-text.js';
 
 export interface GeneratedResult { kind: 'voice' | 'music' | 'thumbnail' | 'captions'; assetId?: string; pages?: CaptionPageT[] }
 export interface ApplyContext { assets: readonly AssetFacts[]; tier: Tier; newId: () => string; jobs?: Readonly<Record<string, GeneratedResult>> }
@@ -27,8 +30,10 @@ export function applyOperations(model: CompositionModelT, ops: readonly Operatio
     ops.forEach((op, i) => {
       const firstBefore = m.tracks.video[0]?.assetId;
       const anchors = CLIP_TIMING_OPS.has(op.op) ? sceneAnchors(m) : [];          // ADR-031: scene texts move with their scene clip
+      const voiceAnch = AUDIO_TIMING_OPS.has(op.op) && op.target?.kind === 'audio' ? voiceAnchors(m, ctx.assets) : [];   // FR-250: captions follow their voice clip
       applyOne(m, op, ctx, `ops[${i}]`, warnings);
       followSceneAnchors(m, anchors);
+      followVoiceAnchors(m, voiceAnch, ctx.assets);
       normalizeLanes(m);                                                             // ADR-027: lanes stay dense after every op
       if (m.tracks.video[0]?.assetId !== firstBefore) followFirstClip(m, ctx);      // FR-088: Auto re-checks when the first Clip changes
     });
@@ -117,6 +122,37 @@ function motionFrom(presetId: string, values: Record<string, unknown>): MotionT 
   const { durationMs, delayMs, easingId, exit, ...rest } = values;
   return { presetId, durationMs: Number(durationMs), delayMs: Number(delayMs ?? 0), ...(typeof easingId === 'string' ? { easingId } : {}), exit: exit !== false, params: rest };
 }
+/** ADR-034: automatic entrance + exit for shapes and images when the op names none (preset:motion.none = static). */
+export const DEFAULT_SHAPE_MOTION: Readonly<Record<string, string>> = Object.freeze({ 'preset:shape.line': 'preset:motion.wipe-reveal', 'preset:shape.ring': 'preset:motion.draw-on', 'preset:shape.check': 'preset:motion.draw-on', 'preset:shape.chevron': 'preset:motion.draw-on' });
+export const DEFAULT_SHAPE_MOTION_ID = 'preset:motion.pop', DEFAULT_IMAGE_MOTION_ID = 'preset:motion.scale-in';
+type MotionArgT = { presetId: string; durationMs?: number; delayMs?: number; easingId?: string; exit?: boolean; params?: Record<string, unknown> };
+/** A motion from an op's `motion` object (validated against the motion preset) or the fallback preset id with its defaults. */
+function motionOf(arg: MotionArgT | undefined, fallbackId: string | undefined, ctx: ApplyContext, path: string, warnings: Issue[]): MotionT | null {
+  if (arg) {
+    if (arg.presetId === 'preset:motion.none') return null;
+    const { presetId, params, ...top } = arg;
+    return motionFrom(presetId, preset(presetId, 'motion', { ...(params ?? {}), ...Object.fromEntries(Object.entries(top).filter(([, v]) => v !== undefined)) }, ctx, `${path}.args.motion`, warnings));
+  }
+  if (!fallbackId || fallbackId === 'preset:motion.none') return null;
+  return motionFrom(fallbackId, preset(fallbackId, 'motion', {}, ctx, path, warnings));
+}
+/**
+ * ADR-034 (QA 2026-10-28 #19 "words stacked in one place"): a text added without a position goes to its variant position unless
+ * another text playing at the same time is painted there; then it is stacked below the lowest such text (or above the highest
+ * when there is no room below), inside the safe area.
+ */
+function freeTextPosition(m: CompositionModelT, layer: TextLayerT): PositionT {
+  const geo = (t: TextLayerT) => textGeometry(t, m.settings.ratio, m.theme.textDefaults, m.settings.customRatio).box;
+  const span = { from: layer.timing.atMs, to: layer.timing.atMs + layer.timing.durationMs };
+  const others = m.tracks.text.filter((t) => t !== layer && t.timing.atMs < span.to && span.from < t.timing.atMs + t.timing.durationMs).map(geo);
+  const mine = geo(layer);
+  if (!others.some((b) => boxesOverlap(b, mine, 24))) return layer.position;
+  const f = frameInUnits(m.settings.ratio, m.settings.customRatio), h = mine.y1 - mine.y0, gap = 32;
+  const below = Math.max(...others.map((b) => b.y1)) + gap, above = Math.min(...others.map((b) => b.y0)) - gap - h;
+  const bottomLimit = f.h - 72, topLimit = 72;
+  const top = below + h <= bottomLimit ? below : above >= topLimit ? above : below;
+  return { x: layer.position.x, y: Math.round(top + h / 2 - f.h / 2) };
+}
 /** Cut bookkeeping when a Clip is inserted at index i: cuts ≥ i shift by +1 (the cut before i keeps its transition). */
 function shiftCutsForInsert(m: CompositionModelT, i: number) { for (const t of m.transitions) if (t.cutIndex >= i) t.cutIndex += 1; }
 /** When Clip i is removed, cuts i-1 and i merge into cut i-1 (keeping the first existing transition); later cuts shift -1. */
@@ -148,6 +184,39 @@ const round = (v: number, digits: number) => { const f = 10 ** digits; return Ma
 /** Rotation stored in [0, 360) degrees, 0.01° steps. */
 export const normaliseRotation = (r: number): number => { const x = round(((r % 360) + 360) % 360, 2); return x >= 360 ? 0 : x; };
 const isIdentity = (t: ClipTransformT) => t.x === 0 && t.y === 0 && t.scale === 1 && t.rotation === 0;
+
+const sec = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+const quote = (s: string) => JSON.stringify(s.length > 80 ? `${s.slice(0, 77)}…` : s);
+/** ADR-033: op:caption.replaceText / op:caption.editPage. Changes the text (and its tokens) of the addressed page(s) only. */
+function captionText(m: CompositionModelT, name: string, a: Record<string, any>, path: string, warnings: Issue[]): void {   // eslint-disable-line @typescript-eslint/no-explicit-any -- validated by the op schema
+  const pages = m.tracks.caption.pages;
+  if (pages.length === 0) stop('EM-2102', 'This video has no captions yet.', `${path}.args`);
+  if (a.atMs !== undefined && a.pageIndex !== undefined) stop('EM-2102', `${name}: give atMs or pageIndex, not both.`, `${path}.args.pageIndex`);
+  if (a.pageIndex !== undefined && a.pageIndex >= pages.length) stop('EM-2102', `Caption page ${a.pageIndex} does not exist; pages are 0…${pages.length - 1}.`, `${path}.args.pageIndex`);
+  const near = a.atMs !== undefined ? pagesNear(pages, a.atMs) : [];
+  if (a.atMs !== undefined && near.length === 0) stop('EM-2102', `No caption page at ${sec(a.atMs)} (or within 1.5 s).`, `${path}.args.atMs`);
+  if (name === 'op:caption.editPage') {
+    if (a.atMs === undefined && a.pageIndex === undefined) stop('EM-2102', 'op:caption.editPage needs atMs or pageIndex.', `${path}.args`);
+    if (a.text.trim() === '') stop('EM-2102', 'op:caption.editPage: text is empty (use op:caption.replaceText with replace "" to drop words).', `${path}.args.text`);
+    const i: number = a.pageIndex ?? near[0]!;
+    pages[i] = retextPage(pages[i]!, a.text);
+    return;
+  }
+  const opts = { all: a.all === true, caseSensitive: a.caseSensitive === true };
+  const where: number[] = a.pageIndex !== undefined ? [a.pageIndex]
+    : a.atMs !== undefined ? near.filter((i) => pageHas(pages[i]!, a.find, opts.caseSensitive)).slice(0, 1)
+    : pages.map((_, i) => i).filter((i) => pageHas(pages[i]!, a.find, opts.caseSensitive)).slice(0, opts.all ? undefined : 1);
+  let count = 0;
+  for (const i of where) { const r = replaceInPage(pages[i]!, a.find, a.replace, opts); if (r) { pages[i] = r.page; count += r.count; } }
+  if (count === 0) {
+    const shown = a.pageIndex !== undefined ? [a.pageIndex as number] : near.length ? near.slice(0, 2) : [];
+    const hint = shown.map((i) => `page ${i} (${sec(pages[i]!.startMs)}–${sec(pages[i]!.startMs + pages[i]!.durationMs)}): ${quote(pages[i]!.text)}`).join('; ');
+    stop('EM-2102', `${quote(a.find)} is not in the captions${hint ? ` there; ${hint}` : ''}.`, `${path}.args.find`);
+  }
+  const before = pages.length;
+  m.tracks.caption.pages = pages.filter((p) => p.text.trim() !== '');                       // a page left without words is dropped
+  if (m.tracks.caption.pages.length < before) warnings.push(issue('EM-2203', `${before - m.tracks.caption.pages.length} caption page(s) had no words left and were removed.`, 'info', path));
+}
 
 // ───────────────────────────── the operations ─────────────────────────────
 function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path: string, warnings: Issue[]): void {
@@ -219,8 +288,11 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       if (!vp || vp.category !== 'text') stop('EM-2101', `${a.variant} is not a text variant.`, `${path}.args.variant`);
       const position: PositionT = a.position === undefined ? variantPosition(m, a.variant) : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
       const motionId = vp!.data?.['motionId'];
-      const motion = typeof motionId === 'string' ? motionFrom(motionId, getPreset(motionId)!.defaults as Record<string, unknown>) : null;
-      const layer: TextLayerT = { id: ctx.newId(), variantId: a.variant, text: a.text, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position, style: { ...(a.styleOverrides ?? {}) }, effect: null, motion };
+      const motion = motionOf(a.motion, typeof motionId === 'string' ? motionId : undefined, ctx, path, warnings);
+      const effect = a.effect ? { presetId: a.effect.presetId, params: preset(a.effect.presetId, 'texteffect', a.effect.params, ctx, `${path}.args.effect`, warnings) } : null;
+      const layer: TextLayerT = { id: ctx.newId(), variantId: a.variant, text: a.text, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position,
+        ...(a.maxWidth !== undefined ? { maxWidth: a.maxWidth } : {}), ...(a.valign === 'top' ? { valign: 'top' as const } : {}), style: { ...(a.styleOverrides ?? {}) }, effect, motion };
+      if (a.position === undefined) layer.position = freeTextPosition(m, layer);
       addVisual(m, layer, a.layer);
       return;
     }
@@ -299,6 +371,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
     }
     case 'op:caption.setPages': m.tracks.caption.pages = [...a.pages].sort((x: CaptionPageT, y: CaptionPageT) => x.startMs - y.startMs); return;
     case 'op:caption.clear': { m.tracks.caption = { styleId: null, params: {}, pages: [] }; return; }
+    case 'op:caption.replaceText': case 'op:caption.editPage': { captionText(m, op.op, a, path, warnings); return; }
     case 'op:background.set': m.background = { presetId: a.presetId, params: preset(a.presetId, 'background', a.params, ctx, path, warnings) }; return;
     case 'op:background.clear': m.background = null; return;
     case 'op:motion.set': case 'op:motion.clear': {
@@ -327,8 +400,8 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const { size, fill, stroke, strokeWidth, position: _p, motionId, ...rest } = values;
       const accent = String(getPreset(m.theme.paletteId)?.data?.['accent'] ?? '#E8913A');
       const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
-      const motion = typeof motionId === 'string' ? motionFrom(motionId, preset(motionId, 'motion', {}, ctx, path, warnings)) : null;
-      addVisual(m, { kind: 'shape', id: ctx.newId(), presetId: a.presetId, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position: pos, size: { w: Number(size), h: Number(size) }, fill: typeof fill === 'string' ? fill : accent, ...(typeof stroke === 'string' ? { stroke } : {}), ...(Number(strokeWidth) > 0 ? { strokeWidth: Number(strokeWidth) } : {}), params: rest, motion }, a.layer);
+      const motion = motionOf(a.motion, typeof motionId === 'string' ? motionId : DEFAULT_SHAPE_MOTION[a.presetId] ?? DEFAULT_SHAPE_MOTION_ID, ctx, path, warnings);
+      addVisual(m, { kind: 'shape', id: ctx.newId(), presetId: a.presetId, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position: pos, size: { w: Number(size), h: a.height ?? Number(size) }, fill: typeof fill === 'string' ? fill : accent, ...(typeof stroke === 'string' ? { stroke } : {}), ...(Number(strokeWidth) > 0 ? { strokeWidth: Number(strokeWidth) } : {}), ...(a.opacity !== undefined ? { opacity: a.opacity } : {}), params: rest, motion }, a.layer);
       return;
     }
     case 'op:shape.remove': m.tracks.overlay.splice(findIndex(m.tracks.overlay, needTarget(op, path).id, 'shape', path), 1); return;
@@ -337,7 +410,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const w = Number(a.size ?? 480);
       const h = as.width && as.height ? Math.round((w * as.height) / as.width) : w;
       const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
-      addVisual(m, { kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, layer: 0, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, motion: null, effects: [] }, a.layer);
+      addVisual(m, { kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, layer: 0, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, motion: motionOf(a.motion, DEFAULT_IMAGE_MOTION_ID, ctx, path, warnings), effects: [] }, a.layer);
       return;
     }
     case 'op:overlay.remove': {
@@ -441,6 +514,12 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
         const cur = c.transform ?? IDENTITY_TRANSFORM;
         const next: ClipTransformT = { x: round(a.x ?? cur.x, 4), y: round(a.y ?? cur.y, 4), scale: round(a.scale ?? cur.scale, 4), rotation: normaliseRotation(a.rotation ?? cur.rotation) };
         if (isIdentity(next)) delete c.transform; else c.transform = next;
+        return;
+      }
+      if (t.kind === 'text') {
+        if (a.scale !== undefined || a.rotation !== undefined) stop('EM-2102', 'A text can only be moved (x / y); use op:text.setStyle for its size.', `${path}.args`);
+        const tx = visualTarget(m, op, path) as TextLayerT, fr = frameInUnits(m.settings.ratio, m.settings.customRatio);
+        tx.position = { x: a.x === undefined ? tx.position.x : round(a.x * fr.w, 1), y: a.y === undefined ? tx.position.y : round(a.y * fr.h, 1) };
         return;
       }
       const el = visualTarget(m, op, path) as OverlayElementT;

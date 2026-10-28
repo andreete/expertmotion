@@ -1,5 +1,5 @@
-// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (51 ops: ADR-020 additions, ADR-027 element timing/layer,
-// ADR-028 split and canvas transform, ADR-030 scenes for videos without media).
+// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (53 ops: ADR-020 additions, ADR-027 element timing/layer,
+// ADR-028 split and canvas transform, ADR-030 scenes for videos without media, ADR-033 caption text fixes).
 // test/operations.test.ts fails if this table and the document disagree.
 import { z } from 'zod';
 import { CaptionPage, Hex, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
@@ -23,9 +23,14 @@ const dur = z.number().int().min(100);
 const lane = z.number().int().min(0).max(999);                  // ADR-027 layer / audio lane
 const NamedPosition = z.enum(['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 const TextStyle = z.object({
-  fontFamily: z.string().min(1).max(100).optional(), fontSize: z.number().min(16).max(200).optional(), weight: z.number().int().min(100).max(900).optional(),
+  fontFamily: z.string().min(1).max(100).optional(), fontSize: z.number().min(16).max(600).optional(), weight: z.number().int().min(100).max(900).optional(),
   italic: z.boolean().optional(), colour: Hex.optional(), align: z.enum(['left', 'center', 'right']).optional(), opacity: z.number().min(0).max(1).optional(),
+  lineHeight: z.number().min(0.8).max(2.5).optional(), box: z.object({ colour: Hex, padX: z.number().min(0).max(400), padY: z.number().min(0).max(400), radius: z.number().min(0).max(2000) }).strict().optional(),
 }).strict();
+/** ADR-034: a motion given with the add op (absent = the automatic default for the element; presetId preset:motion.none = static). */
+const MotionArg = z.object({ presetId: PresetId, durationMs: z.number().int().min(100).max(10_000).optional(), delayMs: z.number().int().min(0).max(60_000).optional(),
+  easingId: PresetId.optional(), exit: z.boolean().optional(), params: Params.optional() }).strict();
+const EffectArg = z.object({ presetId: PresetId, params: Params.optional() }).strict();
 
 export type PropertyClass = 'scalar' | 'list' | 'exclusive-group';
 export interface OpDef { args: z.ZodType; targets: readonly TargetKind[] | null; propertyClass: PropertyClass | null; destructive: boolean }
@@ -42,7 +47,10 @@ export const OPERATIONS = {
   'op:clip.setFit': def({ objectFit: z.enum(['cover', 'contain']), crop: z.object({ left: z.number().min(0).max(1), right: z.number().min(0).max(1), top: z.number().min(0).max(1), bottom: z.number().min(0).max(1) }).strict().optional() }, ['clip'], 'scalar'),
   'op:transition.set': def({ presetId: PresetId, durationMs: z.number().int().min(100).max(2000), timing: z.enum(['linear', 'spring']).default('linear'), params: Params.optional() }, ['cut'], 'exclusive-group'),
   'op:transition.clear': def({}, ['cut'], null),
-  'op:text.add': def({ text: z.string().min(1).max(500), variant: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), styleOverrides: TextStyle.optional(), layer: lane.optional() }, null, 'list'),
+  // ADR-034: maxWidth (u), valign (position.y = centre | top), motion and effect at once; without position the text is placed
+  // where it overlaps no other text playing at the same time (auto stacking); without motion it gets the variant's default.
+  'op:text.add': def({ text: z.string().min(1).max(500), variant: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), styleOverrides: TextStyle.optional(), layer: lane.optional(),
+    maxWidth: z.number().min(50).max(4000).optional(), valign: z.enum(['center', 'top']).optional(), motion: MotionArg.optional(), effect: EffectArg.optional() }, null, 'list'),
   // ADR-030 (faceless videos): one scene of a video without media — a title and/or body text for `durationMs`, starting at
   // `atMs` or right after the latest text / image / shape (so consecutive scene ops line up). The project background shows behind.
   // ADR-030 (videos without media): a scene clip (background preset for durationMs) on the video Track with its title / text and
@@ -61,6 +69,13 @@ export const OPERATIONS = {
   'op:caption.setStyle': def({ presetId: PresetId, params: Params.optional() }, ['project'], 'exclusive-group'),
   'op:caption.setPages': def({ pages: z.array(CaptionPage).max(5000) }, ['project'], 'scalar'),
   'op:caption.clear': def({}, ['project'], null, true),
+  // ADR-033 (QA 2026-10-28): fix one caption word without rewriting the track. Address a page with `atMs` (the page whose
+  // [startMs, endMs) holds it, else the nearest page within 1500 ms that contains `find`) or `pageIndex` (0-based, the `i` of
+  // composition.captions.list in the envelope); neither = first page that contains it. One occurrence unless `all` (all = every occurrence in
+  // the addressed page, or in every page without an address). Only the tokens holding the text are re-split over their own span.
+  'op:caption.replaceText': def({ find: z.string().min(1).max(200), replace: z.string().max(200), atMs: ms.optional(), pageIndex: z.number().int().min(0).optional(), all: z.boolean().default(false), caseSensitive: z.boolean().default(false) }, ['project'], 'scalar'),
+  // ADR-033: the whole text of one page (atMs or pageIndex, exactly one); same start / duration, tokens re-timed over the page.
+  'op:caption.editPage': def({ text: z.string().min(1).max(500), atMs: ms.optional(), pageIndex: z.number().int().min(0).optional() }, ['project'], 'scalar'),
   'op:background.set': def({ presetId: PresetId, params: Params.optional() }, ['project'], 'exclusive-group'),
   'op:background.clear': def({}, ['project'], null),
   'op:motion.set': def({ presetId: PresetId, params: Params.optional() }, ['clip', 'text', 'shape'], 'exclusive-group'),
@@ -69,10 +84,11 @@ export const OPERATIONS = {
   'op:effect.add': def({ presetId: PresetId, params: Params.optional() }, ['clip'], 'list'),
   'op:effect.remove': def({ presetId: PresetId }, ['clip'], null),
   'op:effect.setParams': def({ presetId: PresetId, params: Params }, ['clip'], 'scalar'),
-  'op:shape.add': def({ presetId: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), fill: Hex.optional(), stroke: Hex.optional(), strokeWidth: z.number().min(0).max(100).optional(), motionId: PresetId.optional(), params: Params.optional(), layer: lane.optional() }, null, 'list'),
+  'op:shape.add': def({ presetId: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), fill: Hex.optional(), stroke: Hex.optional(), strokeWidth: z.number().min(0).max(100).optional(), motionId: PresetId.optional(), params: Params.optional(), layer: lane.optional(),
+    height: z.number().min(1).max(4000).optional(), opacity: z.number().min(0).max(1).optional(), motion: MotionArg.optional() }, null, 'list'),   // ADR-034: height (u) = a w × h box; motion object
   'op:shape.remove': def({}, ['shape'], null, true),
   // ADR-020 addition (Stage 3): image overlays (FR-029 "Insert Image", logo/product photo). size = width in u; height follows the image aspect.
-  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional(), layer: lane.optional() }, null, 'list'),
+  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional(), layer: lane.optional(), motion: MotionArg.optional() }, null, 'list'),
   'op:overlay.remove': def({}, ['image'], null, true),
   // FR-028 addition (Stage 3): opacity of an overlay image or a Shape on the overlay Track.
   'op:overlay.setOpacity': def({ opacity: z.number().min(0).max(1) }, ['image', 'shape'], 'scalar'),
@@ -86,7 +102,7 @@ export const OPERATIONS = {
   'op:element.split': def({ atMs: ms }, ['clip', 'text', 'image', 'shape', 'audio'], null),
   // ADR-028 (FR-180 canvas transform): picture position / zoom / rotation. x, y = centre offset as a fraction of the frame width /
   // height; scale 1 = the objectFit result (clip, 0.1…10) or the stored size (image / shape, 0.05…20); rotation in degrees.
-  'op:element.setTransform': def({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }, ['clip', 'image', 'shape'], 'scalar'),
+  'op:element.setTransform': def({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }, ['clip', 'image', 'shape', 'text'], 'scalar'),   // ADR-034: a text takes x / y only (quality-gate re-flow)
   'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),
   'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, null, 'list'),
   'op:audio.setDucking': def({ presetId: PresetId, params: Params.optional() }, ['audio'], 'exclusive-group'),
@@ -122,13 +138,16 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:clip.setFit': return [`${el}.fit`];
     case 'op:transition.set': case 'op:transition.clear': return [`cut:${t?.index ?? ''}.transition`];
     case 'op:text.setContent': return [`${el}.content`];
-    case 'op:text.setStyle': return fields(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity', 'variant']).map((f) => `${el}.${f}`);
+    case 'op:text.setStyle': return fields(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity', 'lineHeight', 'box', 'variant']).map((f) => `${el}.${f}`);
     case 'op:text.setEffect': return [`${el}.effect`];
     case 'op:text.setTiming': return [`${el}.timing`];
     case 'op:text.remove': case 'op:shape.remove': case 'op:audio.remove': case 'op:overlay.remove': return [el];
     case 'op:caption.importSrt': case 'op:caption.setPages': return ['project.captionPages'];
     case 'op:caption.setStyle': return ['project.captionStyle'];
     case 'op:caption.clear': return ['project.captionStyle', 'project.captionPages'];
+    // ADR-033: only the text of the addressed page (`@<ms>` when addressed by time; `project.captionPages.text` = any page's text).
+    case 'op:caption.replaceText': case 'op:caption.editPage':
+      return [a['pageIndex'] !== undefined ? `project.captionPages.${Number(a['pageIndex'])}.text` : a['atMs'] !== undefined ? `project.captionPages.@${Number(a['atMs'])}.text` : 'project.captionPages.text'];
     case 'op:background.set': case 'op:background.clear': return ['project.background'];
     case 'op:motion.set': case 'op:motion.clear': return [`${el}.motion`];
     case 'op:easing.setDefault': return ['theme.defaultEasingId'];

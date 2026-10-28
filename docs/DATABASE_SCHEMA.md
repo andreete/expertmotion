@@ -443,6 +443,8 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 
 | 31 | s3_project_connection_budgets | `project_connection_budgets(project_id, connection_id, limit_usd, updated_at, PK(project_id, connection_id))` (FR-117: the per-Project cap is per Provider Connection; calendar month; NULL or 0 = no limit; both FKs cascade); existing `project_budgets` caps are copied onto every connection and the project-wide value is cleared (the table stays for R-100 rows without `connectionId`); index `agent_runs(project_id, connection_id)` |
 | 32 | s3_license_states_no_trial | Trial Mode removed (Operator decision 2026-10-25, LICENSE_OPERATIONS §7): the one-row `license` table is rebuilt with `status IN ('licensed','unlicensed','invalid','revoked','machine-mismatch')`; existing rows map `active` → `licensed`, `trial` → `unlicensed`, `updates-expired` → `invalid` (`revoked`, `invalid` unchanged). The state is re-derived from the stored key at every start, so the mapping only has to satisfy the CHECK |
+| 33 | s3_asset_attributions | `asset_attributions(asset_id PK → assets ON DELETE CASCADE, project_id, source openverse/wikimedia, source_id, title, creator, license cc0/pdm/by/by-sa, license_version, license_url, landing_url, attribution, created_at)` (FR-217, SEC-142: the credit line of a picture imported from a research answer) |
+| 34 | s3_chat_documents | `chat_documents(id, project_id → projects ON DELETE CASCADE, name, kind pdf/docx/text, bytes, chars, truncated, pages, text, created_at)` (FR-221, SEC-143: the extracted text of a document attached in the chat; the file is not kept) |
 
 Later migrations append rows here (ADR-024).
 

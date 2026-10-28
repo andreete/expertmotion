@@ -194,7 +194,7 @@ describe('plans R-070…R-075', () => {
     const n = await s.json(`/plans/${r.body.plan.id}/notes`, { method: 'PATCH', json: { notes: 'jangan terlalu ramai' } });
     expect(n.body.notes).toBe('jangan terlalu ramai');
     const no = await s.json(`/plans/${r.body.plan.id}/execute`, { method: 'POST', json: {} });
-    expect([no.status, no.body.error.code, no.body.error.details.destructive]).toEqual([422, 'EM-9002', ['op:clip.remove']]);
+    expect([no.status, no.body.error.code, no.body.error.details.destructive]).toEqual([409, 'EM-4310', ['op:clip.remove']]);
     const yes = await s.json(`/plans/${r.body.plan.id}/execute`, { method: 'POST', json: { confirmDestructive: true } });
     expect(yes.body.ok).toBe(true);
     const r2 = await s.json(`/projects/${pid}/plans`, { method: 'POST', json: { baseVersion: await headHash(s, pid), message: 'judul' } });

@@ -51,7 +51,7 @@ export function Generators() {
             <span className="mt-0.5 text-em-accent">{ICONS[kind]}</span>
             <span className="flex flex-1 flex-col gap-1">
               <span className="font-semibold">{t(`ui.lib.generator.${kind}.title`)}</span>
-              <span className="text-em-muted">{t(`ui.lib.generator.${kind}.subtitle`)}</span>
+              <span className="text-em-muted">{t(kind === 'music' ? 'ui.lib.generator.music.library.subtitle' : `ui.lib.generator.${kind}.subtitle`)}</span>
               {card && !card.llm && model && (
                 <span className="text-[12px] text-em-text-2">{t('ui.lib.generator.model', { model: names.local(model), size: model.bytes ? formatBytes(model.bytes, lang) : t('ui.lib.generator.nodownload') })}</span>
               )}

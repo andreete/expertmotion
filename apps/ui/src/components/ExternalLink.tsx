@@ -8,6 +8,13 @@ import { copyText } from '../api/client.js';
 
 /** True when the link may be opened now; false means "show the copyable URL" (Private Mode). */
 export const canOpenExternal = (privateMode: boolean | undefined): boolean => !privateMode;
+/** FR-216: opens a web source in the system browser (Shell); development browsers get a new tab. http(s) only. */
+export function openExternal(url: string): void {
+  if (!/^https?:\/\//i.test(url)) return;
+  const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
+  if (shell?.openExternal) { void shell.openExternal(url); return; }
+  if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer');
+}
 
 export function ExternalLink({ url, label, el, action }: { url: string; label: string; el: string; action: string }) {
   const { state, t } = useStore();

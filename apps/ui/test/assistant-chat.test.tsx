@@ -35,13 +35,15 @@ async function say(m: 'brainstorm' | 'editor', text: string) {
 }
 
 describe('mode switch', () => {
-  it('starts in Diskusi; buttons, Ctrl+1 / Ctrl+2 and Tab in an empty composer switch; remembered per Project', async () => {
+  it('starts in Diskusi; two tabs, Ctrl+1 / Ctrl+2 and Tab in an empty composer switch; remembered per Project (ADR-033)', async () => {
     const { runtime } = await renderEditor('sample');
     expect(mode()).toBe('brainstorm');
-    expect(el('agent.chat.mode.brainstorm')!.getAttribute('aria-checked')).toBe('true');
-    expect(el('agent.chat.mode.brainstorm')!.textContent).toBe('Discuss');
+    expect(el('agent.chat.tab.brainstorm')!.getAttribute('aria-selected')).toBe('true');
+    expect(el('agent.chat.tab.brainstorm')!.textContent).toBe('Discussion');
+    expect(el('agent.chat.tab.editor')!.textContent).toBe('Editor');
+    expect(el('agent.chat.mode.brainstorm')).toBeNull();                              // no second switch in the composer
     expect(el('agent.chat.composer')!.getAttribute('placeholder')).toBe(t('ui.agent.composer.noprovider'));   // no provider yet
-    fireEvent.click(el('agent.chat.mode.editor')!);
+    fireEvent.click(el('agent.chat.tab.editor')!);
     expect(mode()).toBe('editor');
     expect(el('agent.chat.header')!.getAttribute('data-mode')).toBe('editor');
     fireEvent.keyDown(el('agent.chat.composer')!, { key: '1', ctrlKey: true });
@@ -53,8 +55,8 @@ describe('mode switch', () => {
     fireEvent.change(el('agent.chat.composer')!, { target: { value: 'draft' } });
     fireEvent.keyDown(el('agent.chat.composer')!, { key: 'Tab' });                  // with text: Tab is left alone
     expect(mode()).toBe('brainstorm');
-    fireEvent.click(el('agent.chat.mode.editor')!);
-    expect((el('agent.chat.composer') as HTMLTextAreaElement).value).toBe('draft'); // the draft survives a mode switch
+    fireEvent.click(el('agent.chat.tab.editor')!);
+    expect((el('agent.chat.composer') as HTMLTextAreaElement).value).toBe('draft'); // the draft survives a tab switch
     const stored = JSON.parse(localStorage.getItem('expertmotion.prefs.v1') ?? '{}') as { chatModeByProject?: Record<string, string> };
     expect(stored.chatModeByProject?.[runtime.seededProjectId!]).toBe('editor');      // remembered for this Project
     cleanup();                                                                       // a new window on the same Service
@@ -75,62 +77,66 @@ describe('mode switch', () => {
   });
 });
 
-describe('one thread, two agents', () => {
-  it('tags every message with its agent, and the Edit reply carries the Plan Card inline', async () => {
+describe('two chats, one project (ADR-033, QA 2026-10-28 #2)', () => {
+  it('each tab shows only its own thread; an answer in the other tab is marked unread; the Edit reply carries the Plan Card', async () => {
     const { runtime } = await renderEditor('sample');
     await connect(runtime);
     await say('brainstorm', 'ide intro energik');
     await waitFor(() => { if (!el('agent.brainstorm.handoff')) throw new Error('no reply'); });
+    expect(els('agent.chat.message').map((m) => `${m.getAttribute('data-agent')}:${m.getAttribute('data-role')}`)).toEqual(['brainstorm:user', 'brainstorm:assistant']);
     await say('editor', 'buat judul pembuka yang kuat');
     await waitFor(() => { if (el('agent.editor.plancard')?.getAttribute('data-status') !== 'valid') throw new Error('no plan'); });
     const msgs = els('agent.chat.message');
-    expect(msgs.map((m) => `${m.getAttribute('data-agent')}:${m.getAttribute('data-role')}`)).toEqual(['brainstorm:user', 'brainstorm:assistant', 'editor:user', 'editor:assistant']);
-    expect(msgs.map((m) => m.querySelector('[data-el="agent.chat.message.agent"]')?.textContent)).toEqual(['Discuss', 'Discuss', 'Edit', 'Edit']);
-    expect(msgs[3]!.querySelector('[data-el="agent.editor.plancard"]')).not.toBeNull();          // the plan is inline in the Edit reply
-    expect(msgs[3]!.querySelector('[data-el="agent.editor.execute"]')).not.toBeNull();
-    expect(el('agent.chat.usage')).not.toBeNull();                                              // compact usage in the header
+    expect(msgs.map((m) => `${m.getAttribute('data-agent')}:${m.getAttribute('data-role')}`)).toEqual(['editor:user', 'editor:assistant']);   // the Diskusi thread is not mixed in
+    expect(msgs[1]!.querySelector('[data-el="agent.editor.plancard"]')).not.toBeNull();
+    expect(msgs[1]!.querySelector('[data-el="agent.editor.plancard.preview"]')).not.toBeNull();             // FR-222: readable preview before Execute
+    expect(msgs[1]!.querySelector('[data-el="agent.editor.execute"]')).not.toBeNull();
+    expect(el('agent.chat.usage')).not.toBeNull();
+    fireEvent.click(el('agent.chat.tab.brainstorm')!);
+    expect(els('agent.chat.message')).toHaveLength(2);
   }, 20_000);
 });
 
-describe('Apply to video (Kerjakan di video)', () => {
-  it('the proposals card hands the ticked changes to Edit and switches the mode', async () => {
+describe('Kirim ke Editor (FR-219, QA 2026-10-28 #2 / #3)', () => {
+  it('the proposals card sends the whole draft to the Editor: its tab opens with the working phases, the Diskusi card follows the run', async () => {
     const { runtime } = await renderEditor('sample');
     await connect(runtime);
-    const handoff = vi.spyOn(runtime.api, 'handoff');
+    const send = vi.spyOn(runtime.api, 'sendDraftToEditor');
     await say('brainstorm', 'ide intro energik');
     await waitFor(() => { if (!el('agent.brainstorm.handoff')) throw new Error('no proposals'); });
-    const apply = el('agent.brainstorm.handoff')!.querySelector<HTMLElement>('[data-el="agent.chat.apply"]')!;
-    expect(apply.textContent).toBe('Apply to video');
-    await act(async () => { fireEvent.click(apply); });
-    await waitFor(() => { if (!handoff.mock.calls.length) throw new Error('not handed off'); });
-    expect(handoff.mock.calls[0]![1].intentIds?.length).toBeGreaterThan(0);
-    await waitFor(() => { if (mode() !== 'editor') throw new Error('mode not switched'); });
-    await waitFor(() => { if (!el('agent.brainstorm.handoff')?.textContent?.includes('Sent')) throw new Error('card not sent'); });
+    const button = el('agent.brainstorm.handoff')!.querySelector<HTMLElement>('[data-el="agent.chat.sendtoeditor"]')!;
+    expect(button.textContent).toBe('Send to Editor');
+    await act(async () => { fireEvent.click(button); });
+    await waitFor(() => { if (!send.mock.calls.length) throw new Error('not sent'); });
+    await waitFor(() => { if (mode() !== 'editor') throw new Error('tab not switched'); });
+    await waitFor(() => { if (!el('agent.editor.message.origin')) throw new Error('no origin tag'); });
+    await waitFor(() => { if (el('agent.editor.plancard')?.getAttribute('data-status') !== 'valid') throw new Error('no plan'); });
+    fireEvent.click(el('agent.chat.tab.brainstorm')!);
+    await waitFor(() => { if (!el('agent.brainstorm.handoff.card')) throw new Error('no hand-off card'); });
+    expect(el('agent.brainstorm.handoff.card')!.getAttribute('data-state')).toBe('ready');
+    await act(async () => { fireEvent.click(el('agent.brainstorm.handoff.open')!); });
+    expect(mode()).toBe('editor');
   }, 20_000);
 
-  it('a Diskusi answer without pending proposals is sent to the Editor Agent as the request', async () => {
+  it('a Diskusi answer without proposals has its own "Send to Editor"', async () => {
     const { runtime } = await renderEditor('sample');
     await connect(runtime);
-    const send = vi.spyOn(runtime.api, 'sendMessage');
+    const send = vi.spyOn(runtime.api, 'sendDraftToEditor');
     await say('brainstorm', 'ide intro energik');
     await waitFor(() => { if (!el('agent.brainstorm.handoff')) throw new Error('no proposals'); });
     fireEvent.click(document.querySelector<HTMLElement>('[data-el="agent.brainstorm.handoff"] button:not([data-el])')!);   // Dismiss
     const answer = els('agent.chat.message').find((m) => m.getAttribute('data-role') === 'assistant')!;
-    const apply = [...answer.querySelectorAll<HTMLElement>('[data-el="agent.chat.apply"]')].find((b) => !b.closest('[data-el="agent.brainstorm.handoff"]'))!;
+    const apply = [...answer.querySelectorAll<HTMLElement>('[data-el="agent.chat.sendtoeditor"]')].find((b) => !b.closest('[data-el="agent.brainstorm.handoff"]'))!;
     expect(apply).not.toBeNull();
     await act(async () => { fireEvent.click(apply); });
-    await waitFor(() => { if (send.mock.calls.length < 2) throw new Error('not sent'); });
-    const [, agent, body] = send.mock.calls[1]!;
-    expect(agent).toBe('editor');
-    expect(body.text.startsWith('Do this in the video:\n')).toBe(true);
-    expect(body.text).toContain('energetic title');
+    await waitFor(() => { if (!send.mock.calls.length) throw new Error('not sent'); });
     expect(mode()).toBe('editor');
   }, 20_000);
 
   it('applyRequest clips long answers; editorQuestions turns a needs-input plan into a message', () => {
     expect(applyRequest('  Pakai judul besar  ', t)).toBe('Do this in the video:\nPakai judul besar');
     expect(applyRequest('x'.repeat(9000), t).length).toBeLessThanOrEqual(APPLY_MAX_CHARS + 30);
-    expect(translate('id', 'ui.agent.chat.apply')).toBe('Kerjakan di video');
+    expect(translate('id', 'ui.agent.handoff.send')).toBe('Kirim ke Editor');
     const plan = (steps: number, risks: PlanDto['risks']) => ({ steps: Array.from({ length: steps }, (_, n) => ({ n })), risks }) as unknown as PlanDto;
     expect(editorQuestions(plan(0, [{ code: 'needs-input', message: 'Klip mana?', severity: 'block' }]))).toBe('Klip mana?');
     expect(editorQuestions(plan(1, [{ code: 'needs-input', message: 'Klip mana?', severity: 'warn' }]))).toBeNull();
@@ -187,7 +193,7 @@ describe('header model popover', () => {
     expect(a.editor?.modelId).toBe('anthropic/claude-sonnet-4.5');
     expect(el('agent.chat.model')!.textContent).toContain('Gemini 2.5 Flash');
     // "Switch model" on an error opens the same popover for that agent
-    fireEvent.click(el('agent.chat.mode.editor')!);
+    fireEvent.click(el('agent.chat.tab.editor')!);
     expect(el('agent.chat.model')!.textContent).toContain('Claude Sonnet 4.5');
   }, 20_000);
 });

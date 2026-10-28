@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EmError } from '@expertmotion/shared';
 import {
   PIPER_SHERPA_MODEL,
-  CancelledError, assertAllowedUrl, downloadFile, installModel, modelDir, modelFilePath, partPath, quickCheckInstalled, readInstallState, readManifest,
+  CancelledError, assertAllowedUrl, classifyNetError, retryAfterMs, downloadFile, installModel, modelDir, modelFilePath, partPath, quickCheckInstalled, readInstallState, readManifest,
   registry, removeModel, requiredInstallBytes, sizeCap, verifyInstalled, type DownloadOptions, type ModelDef, type ReadableStreamLike,
 } from '../src/index.js';
 import { expectEm, fakeServer, sha, tempDir } from './helpers.js';
@@ -54,14 +54,78 @@ describe('downloadFile', () => {
     expect(srv.calls.map((c) => c.init.headers.Range)).toEqual([undefined, 'bytes=12000-', 'bytes=24000-']);
   });
 
-  it('gives up with EM-7002 after the retries, keeping the .part', async () => {
+  it('keeps going while each retry brings new bytes; gives up after the retries in a row without progress (FR-245)', async () => {
     const data = body(50_000);
     const srv = fakeServer({ files: { [URL1]: { body: data } }, breakAfter: { url: URL1, bytes: 1_000, times: 10 } });
-    const d = await expectEm(downloadFile({ name: 'model.bin', url: URL1, bytes: data.length, bytesExact: true, sha256: sha(data), modelKey: 'm' }, paths(), opts(srv.fetch)), 'EM-7002');
+    const r = await downloadFile({ name: 'model.bin', url: URL1, bytes: data.length, bytesExact: true, sha256: sha(data), modelKey: 'm' }, paths(), opts(srv.fetch, { retries: 2 }));
+    expect(r.sha256).toBe(sha(data));
+    expect(srv.calls.length).toBe(11);
+    // no progress at all: 1 + retries calls, the .part kept, the cause in the details
+    const dead = fakeServer({ files: {}, throwOnFetch: () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) }) });
+    const d = await expectEm(downloadFile({ name: 'model.bin', url: URL1, bytes: data.length, bytesExact: true, sha256: sha(data), modelKey: 'm' }, { partPath: join(tmp.dir, 'p9'), destPath: join(tmp.dir, 'd9') }, opts(dead.fetch, { retries: 2 })), 'EM-7002');
+    expect(dead.calls.length).toBe(3);
+    expect(d).toMatchObject({ reason: 'connection', netCode: 'ECONNRESET', host: 'huggingface.co', attempts: 3, resumable: false });
+  });
+
+  it('a hard attempt cap ends an endless break loop and keeps the .part', async () => {
+    const data = body(50_000);
+    const srv = fakeServer({ files: { [URL1]: { body: data } }, breakAfter: { url: URL1, bytes: 1_000, times: 100 } });
+    const d = await expectEm(downloadFile({ name: 'model.bin', url: URL1, bytes: data.length, bytesExact: true, sha256: sha(data), modelKey: 'm' }, paths(), opts(srv.fetch, { maxAttempts: 3 })), 'EM-7002');
     expect(srv.calls.length).toBe(3);
     expect(d.bytesDone).toBe(3000);
     expect(d.percent).toBe(6);
+    expect(d.resumable).toBe(true);
     expect((await stat(paths().partPath)).size).toBe(3000);
+  });
+
+  it('429 waits for Retry-After / the Hugging Face RateLimit window and reports every retry (FR-245)', async () => {
+    const data = body(2_000);
+    let n = 0;
+    const base = fakeServer({ files: { [URL1]: { body: data } } });
+    const fetch: DownloadOptions['fetch'] = async (url, init) => {
+      if (n++ < 2) return { status: 429, headers: { get: (h: string) => (h === 'ratelimit' ? '"resolvers";r=0;t=42' : null) }, body: null };
+      return base.fetch(url, init);
+    };
+    const slept: number[] = []; const retries: unknown[] = [];
+    await downloadFile({ name: 'model.bin', url: URL1, bytes: data.length, bytesExact: true, sha256: sha(data) }, paths(),
+      opts(fetch, { sleep: async (ms) => { slept.push(ms); }, onRetry: (r) => retries.push(r) }));
+    expect(slept).toEqual([42_000, 42_000]);
+    expect(retries[0]).toMatchObject({ reason: 'rate-limited', httpStatus: 429, delayMs: 42_000, attempt: 1 });
+  });
+
+  it('a TLS refusal (antivirus / proxy / ISP page) stops after one retry with reason tls', async () => {
+    const tls = fakeServer({ files: {}, throwOnFetch: () => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('self-signed certificate in certificate chain'), { code: 'SELF_SIGNED_CERT_IN_CHAIN' }) }) });
+    const d = await expectEm(downloadFile({ name: 'm', url: URL1, bytes: 1, bytesExact: true, sha256: sha('x') }, paths(), opts(tls.fetch)), 'EM-7002');
+    expect(tls.calls.length).toBe(2);
+    expect(d.reason).toBe('tls');
+  });
+
+  it('a stalled body is dropped and resumed with Range (stall watchdog)', async () => {
+    const data = body(6_000);
+    let first = true;
+    const base = fakeServer({ files: { [URL1]: { body: data } } });
+    const fetch: DownloadOptions['fetch'] = async (url, init) => {
+      if (!first) return base.fetch(url, init);
+      first = false;
+      async function* stuck(): AsyncGenerator<Uint8Array> {
+        yield data.subarray(0, 1000);
+        await new Promise<void>((_r, rej) => init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')), { once: true }));
+      }
+      return { status: 200, headers: { get: () => null }, body: stuck() };
+    };
+    const retries: Array<{ reason: string }> = [];
+    const r = await downloadFile({ name: 'model.bin', url: URL1, bytes: data.length, bytesExact: true, sha256: sha(data) }, paths(), opts(fetch, { stallMs: 50, onRetry: (x) => retries.push(x) }));
+    expect(r.sha256).toBe(sha(data));
+    expect(retries[0]!.reason).toBe('stalled');
+    expect(base.calls[0]!.init.headers.Range).toBe('bytes=1000-');
+  });
+
+  it('classifyNetError and retryAfterMs read the real causes', () => {
+    expect(classifyNetError(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } })).reason).toBe('dns');
+    expect(classifyNetError(Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_CONNECT_TIMEOUT', name: 'ConnectTimeoutError' } })).reason).toBe('timeout');
+    expect(classifyNetError(new TypeError('terminated')).reason).toBe('connection');
+    expect(retryAfterMs({ get: (h) => (h === 'retry-after' ? '7' : null) })).toBe(7000);
+    expect(retryAfterMs({ get: () => null })).toBeUndefined();
   });
 
   it('restarts cleanly when the server ignores Range (200 instead of 206)', async () => {
@@ -176,8 +240,8 @@ describe('downloadFile', () => {
     expect((await expectEm(downloadFile({ name: 'm', url: URL1, bytes: 1, bytesExact: true, sha256: sha('x') }, paths(), opts(s404.fetch)), 'EM-7002')).httpStatus).toBe(404);
     expect(s404.calls.length).toBe(1);
     const s503 = fakeServer({ files: {}, status: { [URL1]: 503 } });
-    await expectEm(downloadFile({ name: 'm', url: URL1, bytes: 1, bytesExact: true, sha256: sha('x') }, paths(), opts(s503.fetch)), 'EM-7002');
-    expect(s503.calls.length).toBe(3);
+    expect((await expectEm(downloadFile({ name: 'm', url: URL1, bytes: 1, bytesExact: true, sha256: sha('x') }, paths(), opts(s503.fetch)), 'EM-7002')).reason).toBe('server');
+    expect(s503.calls.length).toBe(7);                                   // 1 + 6 retries without progress (FR-245)
   });
 
   it('416 on a complete .part verifies it in place', async () => {

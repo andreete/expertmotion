@@ -120,8 +120,12 @@ describe('generators (R-130…R-133) with fake engines', () => {
   it('validates per kind: EM-7105 language, EM-7106 text length, EM-7001 model missing with size', async () => {
     expect((await json<{ error: { code: string } }>(await gen('voice', { text: 'Halo', voiceId: 'piper-test', language: 'fr' }))).error.code).toBe('EM-7105');
     expect((await json<{ error: { code: string } }>(await gen('voice', { text: 'a'.repeat(2001), voiceId: 'piper-test', language: 'id' }))).error.code).toBe('EM-7106');
-    const missing = await json<{ error: { code: string; details: { modelKey: string } } }>(await gen('music', { prompt: 'santai', durationMs: 10_000 }));
-    expect(missing.error.code).toBe('EM-7001'); expect(missing.error.details.modelKey).toBeTruthy();
+    // FR-247 (QA 2026-10-28 #9/#10): music no longer needs a model — the CC0 library is always there (a job, not EM-7001);
+    // AI music (ACE-Step) is explained with EM-7107 instead of "model not available"
+    const lib = await gen('music', { prompt: 'santai', durationMs: 10_000 });
+    expect(lib.status).toBe(202);
+    await s.api(`/generator-jobs/${(await json<{ id: string }>(lib)).id}`, { method: 'DELETE' });
+    expect((await json<{ error: { code: string } }>(await gen('music', { prompt: 'santai', durationMs: 10_000, modelKey: 'ace-step-v1-3.5b' }))).error.code).toBe('EM-7107');
     expect((await gen('voice', {})).status).toBe(400);
     expect((await s.api(`/projects/${pid}/generators/nope`, { method: 'POST', json: {} })).status).toBe(400);
   });

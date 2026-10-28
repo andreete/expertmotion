@@ -57,9 +57,10 @@ export type EditPlanT = z.infer<typeof EditPlan>;
  * Local Service to run a local model after Execute (`tts.generate` voice-over from a script, `captions.generate` captions from a
  * script, the voice-over or the Sequence audio). Generator steps carry `args`, never ops.
  */
-export const PLAN_STEP_TOOLS = ['composition.applyOps', 'tts.generate', 'captions.generate'] as const;
+// ADR-034: `scene.compose` (args = VideoSpec, auto-motion-spec.ts) is expanded into composition.applyOps (+ tts steps) before validation.
+export const PLAN_STEP_TOOLS = ['composition.applyOps', 'tts.generate', 'captions.generate', 'scene.compose'] as const;
 export type PlanStepTool = (typeof PLAN_STEP_TOOLS)[number];
-export const TtsStepArgs = z.object({ text: z.string().min(1).max(2000), atMs: z.number().int().min(0).optional(), voiceId: z.string().min(1).max(64).optional(), language: z.enum(['id', 'en']).optional(), speed: z.number().min(0.8).max(1.2).optional() }).strict();
+export const TtsStepArgs = z.object({ text: z.string().min(1).max(2000), atMs: z.number().int().min(0).optional(), /** FR-224: VideoSpec voice clip id */ clipId: z.string().min(1).max(40).optional(), voiceId: z.string().min(1).max(64).optional(), language: z.enum(['id', 'en']).optional(), speed: z.number().min(0.8).max(1.2).optional() }).strict();
 export const CaptionsStepArgs = z.object({ source: z.enum(['script', 'voice', 'sequence']).default('script'), text: z.string().min(1).max(5000).optional(), atMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(500).optional(),
   presetId: z.string().regex(PresetIdRe).optional(), language: z.enum(['id', 'en']).optional() }).strict();
 

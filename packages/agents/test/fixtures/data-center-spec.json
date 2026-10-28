@@ -1,0 +1,19 @@
+{
+  "title": "Peluang Bisnis Data Center di Indonesia",
+  "language": "id",
+  "mood": "tech",
+  "scenes": [
+    { "role": "hook", "headline": "Data center: tambang emas digital Indonesia?", "keywords": ["emas", "digital"],
+      "narration": "Setiap kali kamu menonton video, belanja online, atau mengirim pesan, ada data center yang bekerja tanpa henti di belakangnya." },
+    { "role": "body", "headline": "Permintaan terus naik", "sub": "Cloud, AI, dan layanan digital butuh tempat menyimpan data di dalam negeri.",
+      "narration": "Permintaan terus naik karena cloud, kecerdasan buatan, dan layanan digital butuh penyimpanan di dalam negeri." },
+    { "role": "list", "headline": "Peluang untuk pebisnis", "bullets": ["Jasa colocation", "Energi hijau untuk server", "Pendingin hemat listrik", "Talenta operasional"],
+      "narration": "Peluangnya ada di jasa colocation, energi hijau, sistem pendingin hemat listrik, dan talenta operasional." },
+    { "role": "quote", "quote": "Data adalah infrastruktur baru.", "attribution": "Prinsip ekonomi digital",
+      "narration": "Banyak pelaku industri kini menyebut data sebagai infrastruktur baru, sama pentingnya dengan jalan dan listrik." },
+    { "role": "question", "headline": "Siapkah bisnismu ikut ambil bagian?",
+      "narration": "Pertanyaannya, siapkah bisnismu ikut ambil bagian?" },
+    { "role": "cta", "headline": "Mulai pelajari ekosistemnya", "button": "Follow untuk seri berikutnya", "action": "Bagikan ke temanmu",
+      "narration": "Follow untuk seri berikutnya dan bagikan ke temanmu." }
+  ]
+}

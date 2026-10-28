@@ -7,7 +7,8 @@ import { normalizeModelReply, presetParamShape } from './plan-normalize.js';
 import { listPresets } from '@expertmotion/catalogue';
 import { BrainstormTurn, normalizeProposedIntents, type EditPlanT } from './schemas.js';
 import type { RewriteEnvelope } from './envelope.js';
-import type { ChatActivity, ChatImage, ChatMessage, ChatProvider, ChatRequest, ChatUsage, ToolCall, ToolResultPart } from './providers.js';
+import type { ChatActivity, ChatImage, ChatMessage, ChatProvider, ChatRequest, ChatUsage, ToolCall, ToolResultPart, WebSource } from './providers.js';
+import { mergeSources, researchPromptBlock, sourcesOfToolCalls, type ResearchConfig } from './research.js';
 import { compileIntents, createIntents, pickFromIntent } from './intents.js';
 import { describeSchema, opSignature } from './op-args.js';
 import { isOpName, type OpName } from '@expertmotion/composition-model';
@@ -17,13 +18,16 @@ export interface RunOptions {
   maxCorrections?: number; maxTokens?: number; temperature?: number; signal?: AbortSignal; timeoutMs?: number; budgetCheck?: () => void;
   /** FR-075: receives streamed text deltas when the provider can stream (otherwise never called). */
   onDelta?: (delta: string) => void;
+  /** FR-216: internet research for this run (prompt block + native web tools or web.* handlers). Absent = not mentioned. */
+  research?: ResearchConfig;
   /** FR-190: what the run is doing now (chat shows "Membaca proyek…", "Menyusun rencana…", "Memeriksa rencana…"). */
   onProgress?: (p: RunProgress) => void;
 }
 /** `thinking` / `writing`: the provider stream shows the model reasoning / writing its answer (native streams only). */
 export type RunPhase = 'reading' | 'planning' | 'checking' | 'correcting' | 'tool' | 'waiting' | 'thinking' | 'writing';
 /** `attempt` of `of` (correcting: reply n of the allowed replies; waiting: rate-limit retry n of m, `waitMs` before it). */
-export interface RunProgress { phase: RunPhase; attempt?: number; of?: number; tool?: string; waitMs?: number }
+export interface RunProgress { phase: RunPhase; attempt?: number; of?: number; tool?: string; waitMs?: number;
+  /** FR-216: what web.search looks for / which page web.fetch reads ("Mencari di internet: <query>…"). */ query?: string; url?: string }
 /** Output budget of one Editor plan reply: reasoning models count their thinking here, and a 5-scene plan is ~2–3k tokens. */
 export const EDITOR_MAX_TOKENS = 8192;
 /**
@@ -31,7 +35,8 @@ export const EDITOR_MAX_TOKENS = 8192;
  * which repairs the lenient parser made, and the codes / paths of the last rejection.
  */
 export interface EditorRunDiagnostics { attempts: number; toolRounds: number; repairs: number; repairKinds: string[]; parseFailures: number; truncated?: number; lastIssues: Array<{ code: string; path: string }>; intentsReturned: boolean; fallbackQuestion?: boolean }
-export interface EditorRunResult { ok: true; plan: EditPlanT; issues: Issue[]; attempts: number; usage: ChatUsage[]; droppedOps: number; toolCalls: ToolCallRecord[]; predicted?: ReturnType<typeof validatePlan>['predicted']; diagnostics: EditorRunDiagnostics }
+export interface EditorRunResult { ok: true; plan: EditPlanT; issues: Issue[]; attempts: number; usage: ChatUsage[]; droppedOps: number; toolCalls: ToolCallRecord[]; predicted?: ReturnType<typeof validatePlan>['predicted']; diagnostics: EditorRunDiagnostics;
+  /** FR-216: web sources the Editor used while planning. */ sources?: WebSource[] }
 export interface EditorRunFailure { ok: false; error: EmError; attempts: number; usage: ChatUsage[]; toolCalls: ToolCallRecord[]; lastText?: string; diagnostics: EditorRunDiagnostics }
 export interface EditorRunOptions extends RunOptions {
   /** FR-080: read-only tool handlers from the Local Service (AI_WORKFLOW §8); `composition.validateOps` is added here (dry run). */
@@ -53,23 +58,25 @@ export function dryRunOps(input: Record<string, unknown>, ctx: PlanContext & { p
 const langName = (l: 'id' | 'en') => (l === 'id' ? 'Bahasa Indonesia' : 'English');
 export const editorSystemPrompt = (env: RewriteEnvelope) => prompts().EDITOR_SYSTEM.replaceAll('{{language_name}}', langName(env.project.language)).replaceAll('{{base_version}}', env.baseVersion);
 
-type CallResult = { text: string; finishReason?: string; toolCalls?: ToolCall[]; providerRaw?: unknown };
+type CallResult = { text: string; finishReason?: string; toolCalls?: ToolCall[]; providerRaw?: unknown; citations?: WebSource[]; webQueries?: string[]; webNotice?: { code: string; reason: string } };
 async function call(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[]): Promise<string> {
   return (await callFull(provider, system, messages, o, usage)).text;
 }
 /** `extra`: native tools / tool choice / wire activity for this call (AI_WORKFLOW §8.1). */
-async function callFull(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[], extra: Pick<ChatRequest, 'tools' | 'toolChoice' | 'onActivity'> = {}): Promise<CallResult> {
+async function callFull(provider: ChatProvider, system: string, messages: ChatMessage[], o: RunOptions, usage: ChatUsage[], extra: Pick<ChatRequest, 'tools' | 'toolChoice' | 'onActivity' | 'webResearch'> = {}): Promise<CallResult> {
   o.budgetCheck?.();
   for (let attempt = 0; ; attempt++) {
     try {
       const onRetry = o.onProgress ? (r: { n: number; of: number; waitMs: number }) => { try { o.onProgress!({ phase: 'waiting', attempt: r.n, of: r.of, waitMs: r.waitMs }); } catch { /* hint */ } } : undefined;
       const req: ChatRequest = { system, messages, maxTokens: o.maxTokens ?? 4000, temperature: o.temperature ?? 0.2, ...(o.signal ? { signal: o.signal } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}), ...(onRetry ? { onRetry } : {}),
-        ...(extra.tools?.length && provider.nativeTools ? { tools: extra.tools, toolChoice: extra.toolChoice ?? 'auto' } : {}), ...(extra.onActivity ? { onActivity: extra.onActivity } : {}) };
+        ...(extra.tools?.length && provider.nativeTools ? { tools: extra.tools, toolChoice: extra.toolChoice ?? 'auto' } : {}), ...(extra.onActivity ? { onActivity: extra.onActivity } : {}),
+        ...(extra.webResearch && provider.nativeWebResearch ? { webResearch: extra.webResearch } : {}) };
       let streamed = false;
       const r = o.onDelta && provider.stream ? await provider.stream(req, (d) => { streamed = true; o.onDelta!(d); }).catch((e: unknown) => { throw Object.assign(e as object, { streamed }); })
         : await provider.complete(req);
       usage.push(r.usage);
-      return { text: r.text, ...(r.finishReason ? { finishReason: r.finishReason } : {}), ...(r.toolCalls?.length ? { toolCalls: r.toolCalls } : {}), ...(r.providerRaw !== undefined ? { providerRaw: r.providerRaw } : {}) };
+      return { text: r.text, ...(r.finishReason ? { finishReason: r.finishReason } : {}), ...(r.toolCalls?.length ? { toolCalls: r.toolCalls } : {}), ...(r.providerRaw !== undefined ? { providerRaw: r.providerRaw } : {}),
+        ...(r.citations?.length ? { citations: r.citations } : {}), ...(r.webQueries?.length ? { webQueries: r.webQueries } : {}), ...(r.webNotice ? { webNotice: r.webNotice } : {}) };
     } catch (e) {
       const em = e instanceof EmError ? e : new EmError('EM-4003', String(e));
       const partial = (e as { streamed?: boolean })?.streamed === true;                                       // text already shown: never replay it
@@ -85,12 +92,17 @@ async function callFull(provider: ChatProvider, system: string, messages: ChatMe
 function activityProgress(progress: (p: RunProgress) => void, allowed: readonly string[]): (a: ChatActivity) => void {
   const seen = new Set<string>();
   return (a) => {
-    const key = a.type === 'tool' ? `tool:${a.name}` : a.type;
+    const key = a.type === 'tool' ? `tool:${a.name}` : a.type === 'web' ? `web:${a.kind}:${a.query ?? a.url ?? ''}` : a.type;
     if (seen.has(key)) return; seen.add(key);
     if (a.type === 'thinking') progress({ phase: 'thinking' });
     else if (a.type === 'text') progress({ phase: 'writing' });
+    else if (a.type === 'web') progress({ phase: 'tool', tool: a.kind === 'search' ? 'web.search' : 'web.fetch', ...(a.query ? { query: a.query.slice(0, 200) } : {}), ...(a.url ? { url: a.url.slice(0, 300) } : {}) });
     else progress({ phase: 'tool', tool: fromWireToolName(a.name, allowed) });
   };
+}
+/** FR-216: native web research for a call: search + fetch, bounded per answer (Anthropic `max_uses`). */
+function nativeWeb(cfg: ResearchConfig | undefined, editor = false): ChatRequest['webResearch'] | undefined {
+  return cfg?.available && cfg.mode === 'native' ? { search: true, fetch: true, maxSearches: editor ? 3 : 5, maxFetches: editor ? 2 : 3 } : undefined;
 }
 
 /**
@@ -101,7 +113,8 @@ async function runToolCalls(calls: ReadonlyArray<{ id?: string; name: string; in
   const out: ToolResultPart[] = [];
   for (const c of calls.slice(0, 8)) {
     const name = fromWireToolName(c.name, allowed);
-    progress({ phase: 'tool', tool: name });
+    const inp = (c.input && typeof c.input === 'object' ? c.input : {}) as { query?: unknown; url?: unknown };
+    progress({ phase: 'tool', tool: name, ...(typeof inp.query === 'string' && name.startsWith('web.') ? { query: inp.query.slice(0, 200) } : {}), ...(typeof inp.url === 'string' && name === 'web.fetch' ? { url: inp.url.slice(0, 300) } : {}) });
     const rec = await runTool(name, c.input, handlers, allowed);
     records.push(rec);
     out.push({ id: c.id ?? '', name: c.name, content: toolResultContent(rec), ...(rec.ok ? {} : { isError: true }) });
@@ -185,7 +198,8 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
   // AI_WORKFLOW §8.1: providers with a tools API get the tools natively; others keep the JSON-mode protocol (§12).
   const native = !!provider.nativeTools && names.length > 0;
   const specs = native ? toolSpecs(names) : undefined;
-  const system = editorSystemPrompt(env) + toolsPromptBlock(names, 'reply with the EditPlan JSON only', native ? 'native' : 'json');
+  const system = editorSystemPrompt(env) + toolsPromptBlock(names, 'reply with the EditPlan JSON only', native ? 'native' : 'json') + researchPromptBlock(o.research, 'editor');
+  const web = nativeWeb(o.research, true); const cited: WebSource[][] = [];
   const messages: ChatMessage[] = [{ role: 'user', content: JSON.stringify(env), ...(o.images?.length ? { images: o.images } : {}) }];
   const maxCorrections = o.maxCorrections ?? 2;
   const replies = maxCorrections + 1;
@@ -205,8 +219,9 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
     if (streamer) co.onDelta = (d: string) => { const v = streamer.push(d); if (v) o.onDelta!(v); };
     else if (o.onDelta) co.onDelta = () => { /* streamed for liveness only */ };
     let finishReason: string | undefined; let r: CallResult;
-    const extra = { ...(specs ? { tools: specs, toolChoice: toolRounds >= MAX_TOOL_ROUNDS ? 'none' as const : 'auto' as const } : {}), onActivity: activityProgress(progress, EDITOR_TOOL_NAMES) };
+    const extra = { ...(specs ? { tools: specs, toolChoice: toolRounds >= MAX_TOOL_ROUNDS ? 'none' as const : 'auto' as const } : {}), onActivity: activityProgress(progress, EDITOR_TOOL_NAMES), ...(web ? { webResearch: web } : {}) };
     try { r = await callFull(provider, system, [...messages], co, usage, extra); text = r.text; finishReason = r.finishReason; } catch (e) { return fail(e as EmError, attempt + 1); }
+    if (r.citations?.length) cited.push(r.citations);
     lastText = text; used = attempt + 1;
     if (r.toolCalls?.length) {                                          // native tool calls (AI_WORKFLOW §8.1)
       const turn: ChatMessage = { role: 'assistant', content: text, toolCalls: r.toolCalls, ...(r.providerRaw !== undefined ? { providerRaw: r.providerRaw } : {}) };
@@ -275,7 +290,7 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
       v = { ...v, plan: { ...v.plan, validation: [...v.plan.validation, ...lost.map((d) => ({ path: `droppedSteps[${d.n}]`, code: 'EM-2302', message: `${d.n}. ${d.expectedDiff} (${d.keys.join(', ')})` }))] } };
     }
     diag.lastIssues = v.issues.filter((i) => i.severity === 'block').slice(0, 8).map((i) => ({ code: i.code, path: i.path }));
-    if (v.plan.status === 'valid') return { ok: true, plan: v.plan, issues: v.issues, attempts: attempt + 1, usage, droppedOps: dropped, toolCalls, ...(v.predicted ? { predicted: v.predicted } : {}), diagnostics: { ...diag, attempts: attempt + 1, toolRounds } };
+    if (v.plan.status === 'valid') { const sources = mergeSources([...cited, sourcesOfToolCalls(toolCalls)]); return { ok: true, plan: v.plan, issues: v.issues, attempts: attempt + 1, usage, droppedOps: dropped, toolCalls, ...(v.predicted ? { predicted: v.predicted } : {}), diagnostics: { ...diag, attempts: attempt + 1, toolRounds }, ...(sources.length ? { sources } : {}) }; }
     if (v.plan.status === 'stale') return fail(new EmError('EM-2301', 'The composition changed while the agent was planning; plan again.'), attempt + 1, text);
     if (attempt >= maxCorrections) break;
     messages.push({ role: 'assistant', content: text }, { role: 'user', content: correctionMessage(v.plan, v.issues.filter((i) => i.severity === 'block'), parsed.fixes) });
@@ -285,7 +300,9 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
   return fail(new EmError('EM-4301', 'The model could not produce a valid plan.', { details: { lastIssues: diag.lastIssues.slice(0, 5), ...(diag.truncated ? { truncated: diag.truncated } : {}) } }), used, lastText);
 }
 
-export interface BrainstormResult { ok: true; turn: ReturnType<typeof BrainstormTurn.parse>; usage: ChatUsage[]; toolCalls: ToolCallRecord[]; summary: ThreadSummary | null }
+export interface BrainstormResult { ok: true; turn: ReturnType<typeof BrainstormTurn.parse>; usage: ChatUsage[]; toolCalls: ToolCallRecord[]; summary: ThreadSummary | null;
+  /** FR-216: the sources of this answer (citations first), the searches the provider ran, and why research could not run. */
+  sources: WebSource[]; webQueries: string[]; researchNotice?: { code: string; reason: string } }
 export interface BrainstormOptions extends RunOptions {
   /** Model context length in tokens (Capability Table); the thread window is 60 % of it (AI_WORKFLOW §10). Unknown → 32k. */
   contextLength?: number | null;
@@ -310,7 +327,9 @@ export async function runBrainstorm(history: ChatMessage[], contextBlock: unknow
   // markup, QA 2026-10-27); the JSON-mode protocol otherwise, where markup the model writes is read as tool calls too.
   const native = !!provider.nativeTools && names.length > 0;
   const specs = native ? toolSpecs(names) : undefined;
-  const system = prompts().BRAINSTORM_SYSTEM.replaceAll('{{language_name}}', langName(language)).replaceAll('{{language_code}}', language).replaceAll('{{context_block}}', JSON.stringify(contextBlock)) + toolsPromptBlock(names, 'reply normally', native ? 'native' : 'json');
+  const system = prompts().BRAINSTORM_SYSTEM.replaceAll('{{language_name}}', langName(language)).replaceAll('{{language_code}}', language).replaceAll('{{context_block}}', JSON.stringify(contextBlock)) + toolsPromptBlock(names, 'reply normally', native ? 'native' : 'json')
+    + researchPromptBlock(o.research, 'brainstorm');
+  const web = nativeWeb(o.research); const cited: WebSource[][] = []; const queries: string[] = []; let notice: { code: string; reason: string } | undefined;
   const w = windowThread(history, threadBudgetChars(o.contextLength, system.length, o.maxTokens ?? 4000));
   const messages = [...w.messages];
   const lastUser = messages.map((m) => m.role).lastIndexOf('user');
@@ -323,11 +342,14 @@ export async function runBrainstorm(history: ChatMessage[], contextBlock: unknow
       const streamer = o.onDelta ? new ReplyStreamer() : null;
       let first = true;
       progress({ phase: 'planning' });
-      const extra = { ...(specs ? { tools: specs, toolChoice: rounds >= MAX_TOOL_ROUNDS ? 'none' as const : 'auto' as const } : {}), onActivity: activityProgress(progress, BRAINSTORM_TOOL_NAMES) };
+      const extra = { ...(specs ? { tools: specs, toolChoice: rounds >= MAX_TOOL_ROUNDS ? 'none' as const : 'auto' as const } : {}), onActivity: activityProgress(progress, BRAINSTORM_TOOL_NAMES), ...(web ? { webResearch: web } : {}) };
       const r = await callFull(provider, system, [...messages], { temperature: 0.4, ...o, ...(streamer ? { onDelta: (d: string) => {
         const v = streamer.push(d); if (!v) return;
         o.onDelta!(first && shownAny ? `\n\n${v.replace(/^\s+/, '')}` : v); first = false; shownAny = true;
       } } : {}) }, usage, extra);
+      if (r.citations?.length) cited.push(r.citations);
+      if (r.webQueries?.length) queries.push(...r.webQueries);
+      if (r.webNotice) notice = r.webNotice;
       if (r.toolCalls?.length) {                                         // native tool calls
         const turn: ChatMessage = { role: 'assistant', content: r.text, toolCalls: r.toolCalls, ...(r.providerRaw !== undefined ? { providerRaw: r.providerRaw } : {}) };
         if (rounds < MAX_TOOL_ROUNDS) {
@@ -358,7 +380,8 @@ export async function runBrainstorm(history: ChatMessage[], contextBlock: unknow
         continue;
       }
       const turn = parseBrainstormReply(r.text);
-      return { ok: true, turn, usage, toolCalls, summary: w.summary };
+      return { ok: true, turn, usage, toolCalls, summary: w.summary, sources: mergeSources([...cited, sourcesOfToolCalls(toolCalls)]),
+        webQueries: [...new Set([...queries, ...toolCalls.filter((c) => c.name === 'web.search' && c.ok).map((c) => String((c.input as { query?: unknown })?.query ?? ''))].filter(Boolean))].slice(0, 10), ...(notice ? { researchNotice: notice } : {}) };
     }
   } catch (e) { return { ok: false, error: e as EmError, usage, toolCalls }; }
 }

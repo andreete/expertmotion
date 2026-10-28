@@ -6,11 +6,11 @@ import { SHAPES } from './shapes.js';
 
 const handledInline: Record<string, readonly string[]> = {
   background: ['solid', 'gradient', 'spotlight', 'grid', 'dots', 'moving-gradient', 'noise-clouds', 'video-dim', 'none'],
-  motion: ['fade-in', 'rise', 'pop', 'slide-in', 'zoom-drift', 'spin-in', 'bounce', 'typewriter', 'word-stagger', 'none'],
+  motion: ['fade-in', 'rise', 'pop', 'slide-in', 'zoom-drift', 'spin-in', 'bounce', 'typewriter', 'word-stagger', 'blur-in', 'scale-in', 'wipe-reveal', 'draw-on', 'grow', 'none'],
   caption: ['editorial', 'karaoke', 'box', 'pop', 'moving-pill', 'none'],
   text: ['title', 'subtitle', 'lower-third', 'callout', 'quote'],
-  texteffect: ['highlight', 'underline', 'circle', 'kinetic', 'counter'],
-  easing: ['out-quad', 'out-cubic', 'in-quad', 'in-out-cubic', 'back', 'bounce', 'linear', 'spring-soft', 'spring-bouncy'],
+  texteffect: ['highlight', 'underline', 'circle', 'kinetic', 'counter', 'keyword'],
+  easing: ['out-quad', 'out-cubic', 'in-quad', 'in-out-cubic', 'back', 'bounce', 'linear', 'spring-soft', 'spring-bouncy', 'snappy', 'spring-light'],
   audio: ['bed-soft', 'duck-voice', 'fade-in-out', 'sfx-hit'],
 };
 /** Presets with a known reason for having no implementation yet (documented in process.md / REMOTION_CAPABILITY_MAP). */

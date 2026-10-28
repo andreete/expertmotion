@@ -3,7 +3,7 @@
 // streaming (FR-210) and native tool calling for the read-only agent tools (AI_WORKFLOW §8.1, FR-211; JSON mode stays the fallback).
 // Every request goes through the injected `fetch`, which is the egress module (Private Mode → EM-8202, allow-list → EM-8203).
 import { EmError } from '@expertmotion/shared';
-import { mapProviderError, openRouterProvider, STREAM_TOTAL_FACTOR, withRateLimitRetry, type ChatMessage, type ChatProvider, type ChatRequest, type ChatResult, type RateLimitRetry, type ToolCall } from '@expertmotion/agents';
+import { mapProviderError, mergeSources, openRouterProvider, STREAM_TOTAL_FACTOR, withRateLimitRetry, type ChatMessage, type ChatProvider, type ChatRequest, type ChatResult, type RateLimitRetry, type ToolCall, type WebSource } from '@expertmotion/agents';
 import type { CapabilityRowT, ProviderKindT } from './dto.js';
 
 const OPENROUTER = 'https://openrouter.ai/api/v1';
@@ -259,13 +259,125 @@ export function anthropicMessages(messages: readonly ChatMessage[]): Array<{ rol
     return { role: 'user' as const, content: parts.length === 1 && m.content && !m.images?.length && !m.toolResults?.length ? m.content : parts };
   });
 }
-function anthropicResult(model: string, blocks: AnthropicBlock[], stop: unknown, usage: { input_tokens?: unknown; output_tokens?: unknown; cache_read_input_tokens?: unknown; cache_creation_input_tokens?: unknown } | undefined): ChatResult {
+type AnthropicUsage = { input_tokens?: unknown; output_tokens?: unknown; cache_read_input_tokens?: unknown; cache_creation_input_tokens?: unknown; server_tool_use?: { web_search_requests?: unknown; web_fetch_requests?: unknown } };
+/**
+ * FR-216: the web research of an answer (platform.claude.com/docs web search / web fetch tool, checked 2026-10-28): the queries
+ * (`server_tool_use` web_search input), every result (`web_search_tool_result` content list; an error is one object with
+ * `error_code`), the fetched pages (`web_fetch_tool_result`), and the citations on text blocks (`web_search_result_location`).
+ */
+export function anthropicWeb(blocks: readonly AnthropicBlock[]): { queries: string[]; fetches: string[]; sources: WebSource[]; errors: string[] } {
+  const queries: string[] = []; const fetches: string[] = []; const results: WebSource[] = []; const cited: WebSource[] = []; const errors: string[] = [];
+  for (const b of blocks) {
+    if (b.type === 'server_tool_use') {
+      const inp = (b.input ?? {}) as { query?: unknown; url?: unknown };
+      if (b.name === 'web_search' && typeof inp.query === 'string') queries.push(inp.query);
+      if (b.name === 'web_fetch' && typeof inp.url === 'string') fetches.push(inp.url);
+    } else if (b.type === 'web_search_tool_result') {
+      const c = b['content'];
+      if (Array.isArray(c)) for (const r of c as Array<{ type?: unknown; url?: unknown; title?: unknown; page_age?: unknown }>) { if (r?.type === 'web_search_result' && typeof r.url === 'string') results.push({ url: r.url, ...(typeof r.title === 'string' ? { title: r.title } : {}), ...(typeof r.page_age === 'string' ? { pageAge: r.page_age } : {}) }); }
+      else if (c && typeof c === 'object' && typeof (c as { error_code?: unknown }).error_code === 'string') errors.push((c as { error_code: string }).error_code);
+    } else if (b.type === 'web_fetch_tool_result') {
+      const c = b['content'] as { type?: unknown; url?: unknown; content?: { title?: unknown }; error_code?: unknown } | undefined;
+      if (c?.type === 'web_fetch_result' && typeof c.url === 'string') cited.push({ url: c.url, ...(typeof c.content?.title === 'string' ? { title: c.content.title } : {}), cited: true });
+      else if (typeof c?.error_code === 'string') errors.push(c.error_code);
+    } else if (b.type === 'text' && Array.isArray(b['citations'])) {
+      for (const x of b['citations'] as Array<{ type?: unknown; url?: unknown; title?: unknown; cited_text?: unknown }>) if (x?.type === 'web_search_result_location' && typeof x.url === 'string') cited.push({ url: x.url, ...(typeof x.title === 'string' ? { title: x.title } : {}), ...(typeof x.cited_text === 'string' ? { citedText: x.cited_text } : {}), cited: true });
+    }
+  }
+  return { queries, fetches, sources: mergeSources([cited, results.slice(0, 8)]), errors };
+}
+function anthropicResult(model: string, blocks: AnthropicBlock[], stop: unknown, usage: AnthropicUsage | undefined, webNotice?: { code: string; reason: string }): ChatResult {
   if (stop === 'refusal') throw new EmError('EM-4104', 'The provider declined to answer this request.');
   const text = blocks.filter((b) => b.type === 'text').map((b) => str(b.text)).join('');
   const calls: ToolCall[] = blocks.filter((b) => b.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string').map((b) => ({ id: b.id!, name: b.name!, input: b.input ?? {} }));
   const input = (num(usage?.input_tokens) ?? 0) + (num(usage?.cache_read_input_tokens) ?? 0) + (num(usage?.cache_creation_input_tokens) ?? 0);
+  const web = blocks.some((b) => b.type === 'server_tool_use' || b.type === 'web_search_tool_result' || b.type === 'web_fetch_tool_result') ? anthropicWeb(blocks) : null;
   return { text, usage: usageOf(model, input, usage?.output_tokens), finishReason: stop === 'max_tokens' ? 'length' : stop === 'tool_use' ? 'tool-calls' : String(stop ?? 'stop'),
-    ...(calls.length ? { toolCalls: calls, providerRaw: blocks } : {}) };
+    ...(calls.length ? { toolCalls: calls, providerRaw: blocks } : {}),
+    ...(web?.sources.length ? { citations: web.sources } : {}), ...(web?.queries.length ? { webQueries: web.queries } : {}), ...(web?.fetches.length ? { webFetches: web.fetches.length } : {}), ...(webNotice ? { webNotice } : {}) };
+}
+
+/** FR-216: server tool versions per model. `v2` = web_search_20260209 / web_fetch_20260209 (Claude 4.6 and later), `v1` = the basic
+ *  web_search_20250305 / web_fetch_20250910, `off` = refused (the account disabled web search, or the model has none). */
+export type WebLevel = 'v2' | 'v1' | 'off';
+const WEB_LEVEL = new Map<string, WebLevel>();
+const WEB_OFF_NOTICE = new Map<string, { code: string; reason: string }>();
+/** FR-216: why native web research is off for this connection's model this session (null = it works or was not tried). */
+export const webOffNotice = (p: ProviderKindT, model: string): { code: string; reason: string } | null => WEB_OFF_NOTICE.get(`${p}:${model}`) ?? null;
+/** The level a model starts at: the dynamic-filtering versions exist for Claude 4.6 and later (Opus / Sonnet / Fable 5.x included). */
+export function initialWebLevel(model: string): WebLevel {
+  const m = /claude-(?:[a-z]+-)?(\d+)(?:[-.](\d{1,2}))?(?![\d])/.exec(model);
+  if (!m) return 'v1';
+  const major = Number(m[1]); const minor = m[2] ? Number(m[2]) : 0;
+  if (/haiku/.test(model)) return 'v1';
+  return major > 4 || (major === 4 && minor >= 6) ? 'v2' : 'v1';
+}
+/** The server tool definitions for a level (allowed_callers direct: plain search results, no code-execution blocks to replay). */
+export function anthropicWebTools(level: WebLevel, w: NonNullable<ChatRequest['webResearch']>): unknown[] {
+  if (level === 'off') return [];
+  const out: unknown[] = [];
+  if (w.search) out.push(level === 'v2' ? { type: 'web_search_20260209', name: 'web_search', max_uses: w.maxSearches ?? 5, allowed_callers: ['direct'] } : { type: 'web_search_20250305', name: 'web_search', max_uses: w.maxSearches ?? 5 });
+  if (w.fetch) out.push(level === 'v2' ? { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: w.maxFetches ?? 3, allowed_callers: ['direct'], citations: { enabled: true }, max_content_tokens: 20_000 }
+    : { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: w.maxFetches ?? 3, citations: { enabled: true }, max_content_tokens: 20_000 });
+  return out;
+}
+/** A refusal naming the web tools (HTTP 400 invalid_request_error, or a 403 permission refusal, whose message mentions web search / fetch). */
+export function isWebToolRefusal(e: unknown): boolean {
+  const x = e as { code?: unknown; details?: { reason?: unknown } };
+  return x?.code === 'EM-4105' && /web[ _-]?(search|fetch)|allowed_callers|server[ _]tool|dynamic filtering/i.test(String(x.details?.reason ?? ''));
+}
+/** The account turned the tool off (Console > Settings > Capabilities): no lower version will help. */
+export const isWebDisabled = (e: unknown): boolean => isWebToolRefusal(e) && /not enabled|disabled|turned off|not allowed|organi[sz]ation/i.test(String((e as { details?: { reason?: unknown } }).details?.reason ?? ''));
+
+/** Reads one streamed Anthropic answer (content_block_* events; server tool blocks and citation deltas included, FR-216). */
+async function readAnthropicStream(res: Response, req: ChatRequest, onDelta: (d: string) => void): Promise<{ blocks: AnthropicBlock[]; stop: unknown; usage: AnthropicUsage }> {
+  const blocks: AnthropicBlock[] = []; const json: string[] = []; let stop: unknown; const usage: Record<string, unknown> = {};
+  await readStream(res, (ev) => {
+    const d = parseData(ev.data); if (!d) return;
+    switch (d['type']) {
+      case 'message_start': Object.assign(usage, ((d['message'] as { usage?: object } | undefined)?.usage) ?? {}); break;
+      case 'content_block_start': {
+        const i = Number(d['index']); const b = { ...(d['content_block'] as AnthropicBlock) };
+        blocks[i] = b; json[i] = '';
+        if (b.type === 'thinking' || b.type === 'redacted_thinking') req.onActivity?.({ type: 'thinking' });
+        else if (b.type === 'tool_use') req.onActivity?.({ type: 'tool', name: str(b.name) });
+        else if (b.type === 'server_tool_use') req.onActivity?.({ type: 'web', kind: b.name === 'web_fetch' ? 'fetch' : 'search' });
+        else if (b.type === 'text') { req.onActivity?.({ type: 'text' }); if (b.text) onDelta(b.text); }
+        break;
+      }
+      case 'content_block_delta': {
+        const i = Number(d['index']); const b = blocks[i]; const x = d['delta'] as { type?: string; text?: string; thinking?: string; signature?: string; partial_json?: string; citation?: unknown } | undefined;
+        if (!b || !x) break;
+        if (x.type === 'text_delta' && x.text) { b.text = (b.text ?? '') + x.text; onDelta(x.text); }
+        else if (x.type === 'thinking_delta') b.thinking = (b.thinking ?? '') + (x.thinking ?? '');
+        else if (x.type === 'signature_delta') b.signature = (b.signature ?? '') + (x.signature ?? '');
+        else if (x.type === 'input_json_delta') json[i] = (json[i] ?? '') + (x.partial_json ?? '');
+        else if (x.type === 'citations_delta' && x.citation) b['citations'] = [...(Array.isArray(b['citations']) ? b['citations'] as unknown[] : []), x.citation];
+        break;
+      }
+      case 'content_block_stop': {
+        const i = Number(d['index']); const b = blocks[i];
+        if (b?.type === 'tool_use' || b?.type === 'server_tool_use') b.input = json[i] ? toolInput(json[i]!) : (b.input ?? {});
+        if (b?.type === 'server_tool_use') { const inp = (b.input ?? {}) as { query?: unknown; url?: unknown }; req.onActivity?.({ type: 'web', kind: b.name === 'web_fetch' ? 'fetch' : 'search', ...(typeof inp.query === 'string' ? { query: inp.query } : {}), ...(typeof inp.url === 'string' ? { url: inp.url } : {}) }); }
+        break;
+      }
+      case 'message_delta': stop = (d['delta'] as { stop_reason?: unknown } | undefined)?.stop_reason ?? stop; Object.assign(usage, (d['usage'] as object | undefined) ?? {}); break;
+      case 'error': {
+        const er = (d['error'] ?? {}) as { type?: string };
+        throw mapProviderError(httpError(STREAM_ERROR_STATUS[str(er.type)] ?? 500, JSON.stringify(d)));
+      }
+      default: break;                                                                  // ping, message_stop
+    }
+  });
+  return { blocks: blocks.filter(Boolean), stop, usage: usage as AnthropicUsage };
+}
+/** Sums the usage of the calls of one paused / continued turn. */
+function addUsage(acc: AnthropicUsage, u: AnthropicUsage | undefined) {
+  if (!u) return;
+  const a = acc as Record<string, unknown>;
+  for (const k of ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const) a[k] = (num(a[k]) ?? 0) + (num(u[k]) ?? 0);
+  const s0 = acc.server_tool_use ?? {}; const s1 = u.server_tool_use ?? {};
+  acc.server_tool_use = { web_search_requests: (num(s0.web_search_requests) ?? 0) + (num(s1.web_search_requests) ?? 0), web_fetch_requests: (num(s0.web_fetch_requests) ?? 0) + (num(s1.web_fetch_requests) ?? 0) };
 }
 
 // ── OpenAI Chat Completions (platform.openai.com/docs/api-reference/chat; streaming, function calling, vision) ──
@@ -393,49 +505,68 @@ function rawChatProviderFor(p: ProviderKindT, key: string, model: string, fetchF
       // non-default sampling); thinking tokens count toward max_tokens and thinking behaviour when `thinking` is omitted depends on
       // the model, so max_tokens has a floor (higher for streamed agent calls). Native tools: `tools` + tool_choice auto / none;
       // tool_use blocks come back with the turn's thinking blocks, which are replayed unchanged with the tool_result blocks.
-      const body = (req: ChatRequest, streamed: boolean) => (_w: boolean, tools: boolean, floor: boolean) => ({ model, system: req.system, messages: anthropicMessages(req.messages),
-        max_tokens: Math.max(req.maxTokens, ANTHROPIC_MIN_MAX_TOKENS, streamed && floor ? STREAM_MIN_MAX_TOKENS : 0),
-        ...(tools ? { tools: req.tools!.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })), tool_choice: { type: req.toolChoice === 'none' ? 'none' : 'auto' } } : {}),
-        ...(streamed ? { stream: true } : {}) });
-      type Msg = { content?: AnthropicBlock[]; stop_reason?: unknown; usage?: Parameters<typeof anthropicResult>[3] };
-      return { id: 'anthropic', model, nativeTools: !NO_TOOLS.has(key2), async complete(req) {
-        const j = await send(req, (b) => call(req, `${ANTHROPIC}/messages`, b), body(req, false)) as Msg;
-        return anthropicResult(model, j.content ?? [], j.stop_reason, j.usage);
-      }, async stream(req, onDelta) {
-        const res = await send(req, (b) => postStream(fetchFn, `${ANTHROPIC}/messages`, authHeaders(p, key), b, req), body(req, true));
-        if (isJsonAnswer(res)) { const j = JSON.parse(await res.text()) as Msg; const r = anthropicResult(model, j.content ?? [], j.stop_reason, j.usage); if (r.text) onDelta(r.text); return r; }
-        const blocks: AnthropicBlock[] = []; const json: string[] = []; let stop: unknown; const usage: Record<string, unknown> = {};
-        await readStream(res, (ev) => {
-          const d = parseData(ev.data); if (!d) return;
-          switch (d['type']) {
-            case 'message_start': Object.assign(usage, ((d['message'] as { usage?: object } | undefined)?.usage) ?? {}); break;
-            case 'content_block_start': {
-              const i = Number(d['index']); const b = { ...(d['content_block'] as AnthropicBlock) };
-              blocks[i] = b; json[i] = '';
-              if (b.type === 'thinking' || b.type === 'redacted_thinking') req.onActivity?.({ type: 'thinking' });
-              else if (b.type === 'tool_use') req.onActivity?.({ type: 'tool', name: str(b.name) });
-              else if (b.type === 'text') { req.onActivity?.({ type: 'text' }); if (b.text) onDelta(b.text); }
-              break;
+      // FR-216: `req.webResearch` adds the web_search / web_fetch server tools (the API runs them; results and citations come back
+      // in the same answer). A long server-side loop ends with stop_reason pause_turn: the paused content is sent back unchanged
+      // (at most PAUSE_LIMIT times). A refusal naming the web tools steps down to the basic versions, then answers without them
+      // (EM-4403 account disabled / EM-4404 model) and the model is told so in the system prompt.
+      const PAUSE_LIMIT = 4;
+      const webLevel = (): WebLevel => WEB_LEVEL.get(key2) ?? initialWebLevel(model);
+      const body = (req: ChatRequest, streamed: boolean, cont: unknown[], level: WebLevel, note: string) => (_w: boolean, tools: boolean, floor: boolean) => {
+        const server = req.webResearch ? anthropicWebTools(level, req.webResearch) : [];
+        const client = tools ? req.tools!.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })) : [];
+        const all = [...client, ...server];
+        return { model, system: note ? `${req.system}\n\n${note}` : req.system, messages: [...anthropicMessages(req.messages), ...cont],
+          max_tokens: Math.max(req.maxTokens, ANTHROPIC_MIN_MAX_TOKENS, streamed && floor ? STREAM_MIN_MAX_TOKENS : 0),
+          ...(all.length ? { tools: all, tool_choice: { type: req.toolChoice === 'none' ? 'none' : 'auto' } } : {}),
+          ...(streamed ? { stream: true } : {}) };
+      };
+      type Msg = { content?: AnthropicBlock[]; stop_reason?: unknown; usage?: AnthropicUsage };
+      type Notice = { code: string; reason: string };
+      /** One Messages call with the web-tool fallback ladder; `notice` says why the answer has no web research. */
+      const withWeb = async <T>(req: ChatRequest, cont: unknown[], post: (build: ReturnType<typeof body>) => Promise<T>, streamed: boolean): Promise<{ v: T; notice?: Notice }> => {
+        let level: WebLevel = req.webResearch ? webLevel() : 'off';
+        let notice: Notice | undefined = req.webResearch && level === 'off' ? WEB_OFF_NOTICE.get(key2) : undefined;
+        for (let i = 0; ; i++) {
+          const note = notice ? `Internet research failed for this answer: ${notice.reason} Tell the Creator this in their language, and that this answer was not checked online.` : '';
+          try { const v = await post(body(req, streamed, cont, level, note)); return notice ? { v, notice } : { v }; } catch (e) {
+            if (i < 3 && level !== 'off' && isWebToolRefusal(e) && !cont.length) {
+              const disabled = isWebDisabled(e);
+              const reason = String((e as { details?: { reason?: unknown } }).details?.reason ?? '').slice(0, 300);
+              level = disabled || level === 'v1' ? 'off' : 'v1';
+              WEB_LEVEL.set(key2, level);
+              if (level === 'off') {
+                notice = disabled ? { code: 'EM-4403', reason: `Web search is turned off for this Anthropic account (${reason}). An admin can turn it on at console.anthropic.com > Settings > Capabilities.` }
+                  : { code: 'EM-4404', reason: `This model refused the web search tool (${reason}).` };
+                WEB_OFF_NOTICE.set(key2, notice);
+              }
+              continue;
             }
-            case 'content_block_delta': {
-              const i = Number(d['index']); const b = blocks[i]; const x = d['delta'] as { type?: string; text?: string; thinking?: string; signature?: string; partial_json?: string } | undefined;
-              if (!b || !x) break;
-              if (x.type === 'text_delta' && x.text) { b.text = (b.text ?? '') + x.text; onDelta(x.text); }
-              else if (x.type === 'thinking_delta') b.thinking = (b.thinking ?? '') + (x.thinking ?? '');
-              else if (x.type === 'signature_delta') b.signature = (b.signature ?? '') + (x.signature ?? '');
-              else if (x.type === 'input_json_delta') json[i] = (json[i] ?? '') + (x.partial_json ?? '');
-              break;
-            }
-            case 'content_block_stop': { const i = Number(d['index']); const b = blocks[i]; if (b?.type === 'tool_use') b.input = json[i] ? toolInput(json[i]!) : (b.input ?? {}); break; }
-            case 'message_delta': stop = (d['delta'] as { stop_reason?: unknown } | undefined)?.stop_reason ?? stop; Object.assign(usage, (d['usage'] as object | undefined) ?? {}); break;
-            case 'error': {
-              const er = (d['error'] ?? {}) as { type?: string };
-              throw mapProviderError(httpError(STREAM_ERROR_STATUS[str(er.type)] ?? 500, JSON.stringify(d)));
-            }
-            default: break;                                                                  // ping, message_stop
+            throw e;
           }
-        });
-        return anthropicResult(model, blocks.filter(Boolean), stop, usage);
+        }
+      };
+      return { id: 'anthropic', model, nativeTools: !NO_TOOLS.has(key2), nativeWebResearch: true, async complete(req) {
+        const all: AnthropicBlock[] = []; const cont: unknown[] = []; const usage: AnthropicUsage = {}; let notice: Notice | undefined;
+        for (let n = 0; ; n++) {
+          const { v: j, notice: nt } = await withWeb(req, cont, (b) => send(req, (x) => call(req, `${ANTHROPIC}/messages`, x), b) as Promise<Msg>, false);
+          notice ??= nt; addUsage(usage, j.usage);
+          all.push(...(j.content ?? []));
+          if (j.stop_reason !== 'pause_turn' || n >= PAUSE_LIMIT) return anthropicResult(model, all, j.stop_reason === 'pause_turn' ? 'end_turn' : j.stop_reason, usage, notice);
+          cont.push({ role: 'assistant', content: j.content ?? [] });
+        }
+      }, async stream(req, onDelta) {
+        const all: AnthropicBlock[] = []; const cont: unknown[] = []; const usageAll: AnthropicUsage = {}; let notice: Notice | undefined;
+        for (let n = 0; ; n++) {
+          const { v: res, notice: nt } = await withWeb(req, cont, (b) => send(req, (x) => postStream(fetchFn, `${ANTHROPIC}/messages`, authHeaders(p, key), x, req), b), true);
+          notice ??= nt;
+          let blocks: AnthropicBlock[]; let stop: unknown; let usage: AnthropicUsage;
+          if (isJsonAnswer(res)) { const j = JSON.parse(await res.text()) as Msg; blocks = j.content ?? []; stop = j.stop_reason; usage = j.usage ?? {}; const tx = blocks.filter((b) => b.type === 'text').map((b) => str(b.text)).join(''); if (tx) onDelta(tx); }
+          else ({ blocks, stop, usage } = await readAnthropicStream(res, req, onDelta));
+          addUsage(usageAll, usage);
+          all.push(...blocks);
+          if (stop !== 'pause_turn' || n >= PAUSE_LIMIT) return anthropicResult(model, all, stop === 'pause_turn' ? 'end_turn' : stop, usageAll, notice);
+          cont.push({ role: 'assistant', content: blocks });
+        }
       } };
     }
     case 'google': {

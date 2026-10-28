@@ -1,6 +1,6 @@
 // Request schemas and response mappers for the S1 routes (API_SPECIFICATION §3, §6.2–6.3, §6.6–6.8). Names follow the spec.
 import { z } from 'zod';
-import { ElementRef, Operation, ProjectSettings, Theme, type CompositionModelT } from '@expertmotion/composition-model';
+import { CLIPBOARD_MAX_ENTRIES, ElementRef, Operation, PASTE_OPS, ProjectSettings, Theme, type CompositionModelT } from '@expertmotion/composition-model';
 import { EditIntent, INTENT_CATEGORIES, type EditIntentT, type EditPlanT } from '@expertmotion/agents';
 import { ULID_RE } from '@expertmotion/shared';
 
@@ -46,6 +46,10 @@ export const DiffQuery = z.object({ from: z.string().min(1).max(128), to: z.stri
 export const ValidateInput = z.object({ baseVersion: z.string().min(1).max(128), ops: z.array(Operation).max(200) }).strict();
 
 /** API §6.7 DesignPickInput, plus the deterministic Text Panel / Output fields of the agents package DesignPick (field/value, output, assetId, text). */
+/** FR-256: one clipboard snapshot of R-060 `itemsEdit.paste` (the add op of its kind; args are checked again by applyOperations). */
+const ClipboardEntryInput = z.object({ kind: z.enum(['clip', 'scene', 'text', 'image', 'shape', 'audio']), offsetMs: z.number().int().min(0).max(86_400_000), durationMs: z.number().int().min(0).max(86_400_000),
+  op: z.object({ op: z.string().max(64), target: z.object({ kind: z.literal('sequence') }).strict().optional(), args: z.record(z.string(), z.unknown()) }).strict() }).strict()
+  .refine((e) => PASTE_OPS[e.kind] === e.op.op, { message: 'clipboard op does not match its kind' });
 export const DesignPickInput = z.object({
   source: z.enum(['ui', 'chat']),
   category: z.enum(INTENT_CATEGORIES),
@@ -73,8 +77,12 @@ export const DesignPickInput = z.object({
   transformEdit: z.object({ kind: z.enum(['clip', 'image', 'shape']), id: z.string().min(1).max(64), x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(),
     scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }).strict().optional(),
   /** ADR-031 / FR-192 / FR-193: Delete or Duplicate Timeline items (one op per item, one Composition Version). Effect ids are `<clipId>|<presetId>`. */
-  itemsEdit: z.object({ action: z.enum(['remove', 'duplicate']), items: z.array(z.object({ kind: z.enum(['clip', 'text', 'image', 'shape', 'audio', 'cut', 'effect', 'background', 'caption']),
-    id: z.string().min(1).max(160).optional(), index: z.number().int().min(0).optional() }).strict()).min(1).max(200) }).strict().optional(),
+  /** FR-256: `paste` carries in-app clipboard snapshots (untrusted: ≤ 50 entries, add ops of their kind only, ≤ 64 KB; applyOperations validates the args). */
+  itemsEdit: z.object({ action: z.enum(['remove', 'duplicate', 'paste']), items: z.array(z.object({ kind: z.enum(['clip', 'text', 'image', 'shape', 'audio', 'cut', 'effect', 'background', 'caption']),
+    id: z.string().min(1).max(160).optional(), index: z.number().int().min(0).optional() }).strict()).max(200),
+    paste: z.object({ atMs: z.number().int().min(0).max(86_400_000), entries: z.array(ClipboardEntryInput).min(1).max(CLIPBOARD_MAX_ENTRIES) }).strict().optional() }).strict()
+    .refine((e) => (e.action === 'paste' ? e.paste !== undefined && e.items.length === 0 : e.items.length >= 1 && e.paste === undefined), { message: 'paste needs `paste` and no items; remove / duplicate need items' })
+    .refine((e) => e.paste === undefined || JSON.stringify(e.paste).length <= 65_536, { message: 'clipboard too large' }).optional(),
 }).strict();
 export type DesignPickInputT = z.infer<typeof DesignPickInput>;
 /** R-065 (FR-095 / FR-097): fully specified picks applied as one unit (one Composition Version); each pick's own baseVersion is ignored. */
@@ -133,7 +141,7 @@ export function checkpointDto(r: CheckpointRow, durationMs: number, file?: { byt
 
 export function planDto(r: PlanRow, opts: { withOps?: boolean } = {}) {
   const p = JSON.parse(r.plan_json) as EditPlanT;
-  const steps = opts.withOps === false ? p.steps.map((s) => ({ ...s, ops: [], opCount: s.ops.length })) : p.steps;
+  const steps = opts.withOps === false ? p.steps.map((s) => ({ ...s, ops: [], opCount: s.ops.length })) : p.steps.map((s) => ({ ...s, opCount: s.ops.length }));
   return { ...p, steps, id: r.id, status: r.status, origin: r.origin, baseVersionId: r.base_version_id, agentRunId: r.agent_run_id,
     intentIds: r.intent_ids_json ? (JSON.parse(r.intent_ids_json) as string[]) : [], createdAt: r.created_at, updatedAt: r.updated_at,
     // FR-086: the execution result summary so a reopened Editor thread shows "3 added, 1 modified" and the version hash.

@@ -1,0 +1,76 @@
+{
+  "title": "Ekspor Nikel Indonesia 2026",
+  "ratio": "9:16",
+  "fps": 30,
+  "language": "id",
+  "mood": "editorial",
+  "maxDurationMs": 60000,
+  "style": {
+    "background": "#0f1a1f",
+    "fontFamily": "Inter",
+    "weights": [400, 500],
+    "align": "left",
+    "colors": { "positive": "#5DCAA5", "negative": "#F0997B", "warning": "#EF9F27", "neutral": "#888780", "muted": "#9fb3b8", "text": "#ffffff", "pill": "#1D9E75" },
+    "safeArea": { "left": 88, "right": 160, "top": 120, "bottom": 440 },
+    "sourceBottomPx": 440,
+    "transition": { "type": "crossfade-rise", "frames": 14, "risePx": 56, "easing": "out-cubic" }
+  },
+  "voice": {
+    "gapMs": 300, "tailMs": 500,
+    "clips": [
+      { "id": "v1", "text": "Ekspor nikel Indonesia naik tujuh belas persen.", "durationMs": 2600 },
+      { "id": "v2", "text": "Tapi volumenya justru turun tiga koma delapan persen.", "durationMs": 2900 },
+      { "id": "v3", "text": "Januari sampai Agustus dua ribu dua puluh enam, nilainya hampir dua puluh enam miliar dolar.", "durationMs": 5200 },
+      { "id": "v4", "text": "Dulu, sebelum hilirisasi, cuma tiga koma tiga miliar.", "durationMs": 3100 },
+      { "id": "v5", "text": "Target tahun ini: empat puluh lima miliar.", "durationMs": 2500 },
+      { "id": "v6", "text": "Artinya, empat bulan terakhir harus melesat.", "durationMs": 2700 },
+      { "id": "v7", "text": "Sementara kuota bijih dipangkas.", "durationMs": 2000 },
+      { "id": "v8", "text": "Pertanyaannya: ini benar-benar nilai tambah, atau sekadar harga naik?", "durationMs": 4300 },
+      { "id": "v9", "text": "Follow septianus angga W, untuk bedah isu global lainnya.", "durationMs": 3300 }
+    ]
+  },
+  "scenes": [
+    { "role": "stat-compare", "clips": ["v1", "v2"],
+      "kicker": { "text": "Ekspor nikel Indonesia, Jan–Agu 2026", "sizePx": 52, "color": "#9fb3b8" },
+      "stats": [
+        { "value": "+17,2%", "from": "+0,0%", "countFrames": 42, "easing": "out-cubic", "sizePx": 240, "weight": 500, "tone": "positive", "at": { "clip": "v1" },
+          "label": { "text": "nilai ekspor naik", "sizePx": 72, "color": "#ffffff" } },
+        { "value": "−3,8%", "count": false, "sizePx": 176, "weight": 500, "tone": "negative", "at": { "clip": "v2" }, "fadeFrames": 15, "risePx": 56,
+          "label": { "text": "tapi volumenya turun", "sizePx": 72, "color": "#ffffff", "at": { "clip": "v2" }, "fadeFrames": 15, "risePx": 56 } }
+      ],
+      "source": { "text": "Sumber: Ditjen Minerba ESDM, 2026", "sizePx": 44, "color": "#9fb3b8" } },
+    { "role": "stat", "clips": ["v3"],
+      "kicker": { "text": "Januari–Agustus 2026", "sizePx": 52, "color": "#9fb3b8" },
+      "stats": [
+        { "value": "25,96", "from": "0,00", "countFrames": 54, "easing": "out-cubic", "sizePx": 248, "weight": 500, "tone": "positive", "at": { "clip": "v3" },
+          "prefix": { "text": "US$", "sizePx": 80, "color": "#ffffff" }, "unit": { "text": "miliar", "sizePx": 88, "color": "#ffffff" },
+          "note": { "text": "setara Rp472 triliun", "sizePx": 60, "color": "#9fb3b8", "at": { "clip": "v3", "pct": 0.6 } } }
+      ],
+      "source": { "text": "Sumber: ESDM via ANTARA, 28 Okt 2026", "sizePx": 44, "color": "#9fb3b8" } },
+    { "role": "bar-chart", "clips": ["v4", "v5"],
+      "headline": { "text": "Nilai ekspor nikel (miliar US$)", "sizePx": 64, "weight": 500, "color": "#ffffff" },
+      "barGapPx": 56,
+      "bars": [
+        { "label": "2017–18", "value": 3.3, "display": "3,3", "heightPx": 60, "color": "#888780", "at": { "clip": "v4" }, "growFrames": 36, "easing": [0.2, 0.8, 0.2, 1] },
+        { "label": "Jan–Agu 2026", "value": 25.96, "display": "25,96", "heightPx": 460, "color": "#5DCAA5", "at": { "clip": "v4" }, "growFrames": 36, "easing": [0.2, 0.8, 0.2, 1] },
+        { "label": "Target 2026", "value": 45, "display": "45", "heightPx": 800, "color": "#EF9F27", "style": "dashed", "borderPx": 8, "valueColor": "#EF9F27", "at": { "clip": "v5" }, "growFrames": 36, "easing": [0.2, 0.8, 0.2, 1] }
+      ],
+      "source": { "text": "Sumber: ESDM, 14 Okt 2026; ESDM via ANTARA", "sizePx": 44, "color": "#9fb3b8" } },
+    { "role": "hbar-compare", "clips": ["v6", "v7"],
+      "headline": { "text": "Empat bulan terakhir harus melesat", "sizePx": 80, "weight": 500, "color": "#ffffff" },
+      "bars": [
+        { "label": "Rata-rata Jan–Agu", "widthPct": 0.67, "color": "#5DCAA5", "at": { "clip": "v6" }, "growFrames": 36, "easing": [0.2, 0.8, 0.2, 1], "caption": { "text": "±3,2 miliar per bulan", "sizePx": 52, "color": "#9fb3b8" } },
+        { "label": "Dibutuhkan Sep–Des", "widthPct": 1, "color": "#EF9F27", "at": { "clip": "v6" }, "growFrames": 36, "easing": [0.2, 0.8, 0.2, 1], "caption": { "text": "±4,8 miliar per bulan", "sizePx": 52, "color": "#9fb3b8" } }
+      ],
+      "barHeightPx": 56,
+      "note": { "text": "Sementara kuota bijih dipangkas.", "sizePx": 64, "color": "#F0997B", "at": { "clip": "v7" } },
+      "source": { "text": "Hitungan sendiri dari target US$45 miliar", "sizePx": 44, "color": "#9fb3b8" } },
+    { "role": "question", "clips": ["v8"], "topPx": 280,
+      "headline": { "text": "Ini benar-benar nilai tambah, atau sekadar harga naik?", "sizePx": 104, "weight": 500, "color": "#ffffff", "lineHeight": 1.3 } },
+    { "role": "cta-handle", "clips": ["v9"],
+      "kicker": { "text": "Bedah isu global lainnya", "sizePx": 64, "color": "#9fb3b8" },
+      "handle": { "text": "@septianusanggaw", "sizePx": 76, "weight": 500, "color": "#ffffff", "at": { "clip": "v9" } },
+      "pill": { "color": "#1D9E75", "padXPx": 72, "padYPx": 40, "radiusPx": 999 },
+      "action": { "text": "Follow sekarang", "sizePx": 80, "weight": 500, "color": "#ffffff" } }
+  ]
+}

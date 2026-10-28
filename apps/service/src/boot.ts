@@ -8,7 +8,7 @@ import { EventBus } from './http/events.js';
 import { createApp } from './http/app.js';
 import { GrantStore } from './services/grants.js';
 import { createEgress, customBaseUrlHost } from './services/egress.js';
-import { devProviderStubOrigin, withDevProviderStub } from './s3/dev-provider-stub.js';
+import { devProviderStubOrigin, withDevProviderStub, STUB_RESEARCH_HOSTS } from './s3/dev-provider-stub.js';
 import { SettingsStore } from './services/settings.js';
 import { createLogger, pruneLogs } from './services/logger.js';
 import type { ServiceModule } from './modules/types.js';
@@ -66,7 +66,7 @@ export async function boot(cfg: ServiceConfig, opts: { resources?: Resources; mo
   if (stub) log.warn({ stub }, 'DEV provider stub active: provider calls go to the local stub server');
   const ctx: ServiceContext = {
     cfg, paths: p, db, bus: new EventBus(), grants: new GrantStore(cfg.mediaGrantTtlMs), settings, log,
-    egress: createEgress({ isPrivate: () => settings.get().privateMode, customProviderHosts: () => customProviderHosts(db), ...(stub ? { impl: withDevProviderStub(globalThis.fetch, stub) } : {}) }),
+    egress: createEgress({ isPrivate: () => settings.get().privateMode, customProviderHosts: () => customProviderHosts(db), ...(stub ? { impl: withDevProviderStub(globalThis.fetch, stub), lookup: async (h: string) => (STUB_RESEARCH_HOSTS.includes(h) ? ['93.184.216.34'] : (await import('node:dns')).promises.lookup(h, { all: true }).then((x) => x.map((y) => y.address))) } : {}) }),
     resources: opts.resources ?? defaultResources(), hooks: defaultHooks(), newId, now: nowIso, mediaOrigins: new Set<string>(),
   };
   const modules = opts.modules ?? MODULES;

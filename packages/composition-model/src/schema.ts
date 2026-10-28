@@ -75,13 +75,19 @@ export const Transition = z.object({
   timing: z.enum(['linear', 'spring']), params: Params.default({}),
 });
 
+/** ADR-034: a filled box drawn behind a text (CTA pill, label chip): colour, padding in u, corner radius in u (≥ half the height = pill). */
+export const TextBox = z.object({ colour: Hex, padX: z.number().min(0).max(400), padY: z.number().min(0).max(400), radius: z.number().min(0).max(2000) });
 export const TextLayer = z.object({
   id: z.string(), variantId: PresetId,
   text: z.string().min(1).max(500),
   timing: Timing, layer: Lane, position: Position, maxWidth: z.number().optional(),
+  /** ADR-034: what `position.y` names — the centre of the text box (absent, the picture before) or its top edge. */
+  valign: z.enum(['center', 'top']).optional(),
   style: z.object({
     fontFamily: z.string().optional(), fontSize: z.number().optional(), weight: z.number().optional(), colour: Hex.optional(),
     align: z.enum(['left', 'center', 'right']).optional(), opacity: z.number().optional(), italic: z.boolean().optional(),
+    /** ADR-034 (optional, absent = before): line height (×font size, default 1.15) and a background box around the text (pill / label). */
+    lineHeight: z.number().min(0.8).max(2.5).optional(), box: TextBox.optional(),
   }),
   effect: z.object({ presetId: PresetId, params: Params.default({}) }).nullable(),
   motion: Motion.nullable(),

@@ -38,8 +38,11 @@ export function present(id: string): boolean {
 
 /** The assistant chat composer in the given mode (clicks the composer's mode switch first; 2026-10-26 one chat, two modes). */
 export function chatComposer(mode: 'brainstorm' | 'editor'): HTMLElement {
+  // ADR-033: Diskusi and Editor are tabs (separate threads); the composer belongs to the selected tab.
+  const tab = el(`agent.chat.tab.${mode}`);
+  if (tab && tab.getAttribute('aria-selected') !== 'true') fireEvent.click(tab);
   const b = el(`agent.chat.mode.${mode}`);
-  if (b && b.getAttribute('aria-checked') !== 'true') fireEvent.click(b);
+  if (!tab && b && b.getAttribute('aria-checked') !== 'true') fireEvent.click(b);
   return el('agent.chat.composer')!;
 }
 /** Opens the Providers screen from the chat header: "Connect" without a connection, else Model ▾ → Manage providers. */

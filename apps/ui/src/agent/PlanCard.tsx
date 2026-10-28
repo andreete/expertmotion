@@ -1,7 +1,9 @@
 // Plan Card (agent.editor.plancard, CMP-14, UI_UX_SPECIFICATION.md §11.2): read-only Edit Plan with notes, stale state +
 // Re-plan, Execute (Ctrl+Enter), Cancel while running, Discard. States: draft/valid/invalid/stale/executing/executed/failed/cancelled.
 import { useEffect, useState, type ReactNode } from 'react';
-import { Captions, CheckCircle2, History, Lightbulb, Loader, Mic, OctagonAlert, TriangleAlert, Info, XCircle } from 'lucide-react';
+import { Captions, CheckCircle2, Clapperboard, History, Lightbulb, Loader, Mic, OctagonAlert, Pencil, Shapes, Trash2, TriangleAlert, Type, Info, X, XCircle, Music, ArrowRightLeft, Image as ImageIcon, Clock, LocateFixed } from 'lucide-react';
+import type { ElementRefT, CompositionModelT } from '@expertmotion/composition-model';
+import { fmtTime, previewDurationMs, previewRows, type PreviewKind, type PreviewRow } from './plan-preview.js';
 import { useStore } from '../state/store.js';
 import { ModelText } from './ModelText.js';
 import { useModelNames } from '../state/use-model-names.js';
@@ -55,6 +57,62 @@ export function lockedSteps(plan: PlanDto): { dropped: Array<{ n: number; text: 
   return { dropped, touching };
 }
 
+const KIND_ICON: Record<PreviewKind, ReactNode> = { scene: <Clapperboard size={12} />, text: <Type size={12} />, shape: <Shapes size={12} />, transition: <ArrowRightLeft size={12} />, background: <ImageIcon size={12} />,
+  voice: <Mic size={12} />, captions: <Captions size={12} />, audio: <Music size={12} />, clip: <Clapperboard size={12} />, remove: <Trash2 size={12} />, 'caption-fix': <Captions size={12} />, timing: <Clock size={12} />, other: <Info size={12} /> };
+/** FR-222 (QA 2026-10-28 #4): what the plan will do, readable — scenes with start / length, texts, shapes, transitions, voice-over, removals. */
+export function PlanPreview({ plan }: { plan: PlanDto }) {
+  const { state, t, lang } = useStore();
+  const rows = previewRows(plan, state.head?.model, lang, { assets: state.assets });
+  if (!rows.length) return null;
+  const total = previewDurationMs(rows);
+  const scenes = rows.filter((r) => r.kind === 'scene').length;
+  const counts = (['text', 'shape', 'voice', 'transition', 'remove'] as const).map((k) => [k, rows.filter((r) => r.kind === k).length] as const).filter(([, n]) => n > 0);
+  return (
+    <div data-el="agent.editor.plancard.preview" className="flex flex-col gap-1 border-t border-em-line pt-2">
+      <div data-el="agent.editor.plancard.preview.summary" className="flex flex-wrap items-center gap-x-2 text-[12px] font-semibold">
+        {scenes > 0 && <span>{t('ui.agent.plan.preview.scenes', { n: scenes })}</span>}
+        {counts.map(([k, n]) => <span key={k} className="font-normal text-em-text-2">{t(`ui.agent.plan.preview.count.${k}`, { n })}</span>)}
+        {total !== null && <span data-el="agent.editor.plancard.preview.total" className="t-mono font-normal text-em-muted">· {t('ui.agent.plan.preview.total', { time: fmtTime(total) })}</span>}
+      </div>
+      <ol className="flex max-h-[320px] flex-col gap-0.5 overflow-y-auto pr-1">
+        {rows.map((r: PreviewRow, i) => (
+          <li key={i} data-el="agent.editor.plancard.preview.row" data-kind={r.kind} className={cx('flex items-start gap-1.5 text-[12px]', r.kind === 'remove' && 'text-em-danger', r.kind !== 'scene' && r.kind !== 'voice' && r.kind !== 'captions' && 'pl-3')}>
+            <span className="mt-0.5 shrink-0 text-em-muted" aria-hidden>{KIND_ICON[r.kind]}</span>
+            <span className="min-w-0 flex-1"><span className={r.kind === 'scene' ? 'font-semibold' : undefined}><ModelText inline text={r.title} /></span>{r.count && r.count > 1 ? ` ×${r.count}` : ''}{r.detail ? <span className="text-em-text-2"> · <ModelText inline text={r.detail} /></span> : null}</span>
+            {r.startMs !== undefined && <span className="t-mono shrink-0 text-[10px] text-em-muted">{fmtTime(r.startMs)}{r.durationMs !== undefined ? `–${fmtTime(r.startMs + r.durationMs)}` : ''}</span>}
+          </li>))}
+      </ol>
+    </div>
+  );
+}
+/** FR-224: voice clips a scene.compose plan still generates on Execute (its scene timing is an estimate until then). */
+export function voicePending(plan: PlanDto): number {
+  for (const st of plan.steps) {
+    const spec = st.args?.['sceneCompose'] as { voice?: { clips?: Array<{ assetId?: string }>; generate?: boolean } } | undefined;
+    if (spec && st.args?.['measured'] !== true && spec.voice?.generate !== false) return (spec.voice?.clips ?? []).filter((c) => !c.assetId).length;
+  }
+  return 0;
+}
+/** FR-222: the refs of the elements a plan added (from the execution diff ids), so "Lihat di timeline" selects them. */
+export function addedRefs(model: CompositionModelT | null | undefined, ids: readonly string[]): ElementRefT[] {
+  if (!model || !ids.length) return [];
+  const set = new Set(ids); const out: ElementRefT[] = [];
+  for (const c of model.tracks.video) if (set.has(c.id)) out.push({ kind: 'clip', id: c.id });
+  for (const x of model.tracks.text) if (set.has(x.id)) out.push({ kind: 'text', id: x.id });
+  for (const o of model.tracks.overlay) if (set.has(o.id)) out.push({ kind: o.kind === 'image' ? 'image' : 'shape', id: o.id });
+  for (const a of model.tracks.audio) if (set.has(a.id)) out.push({ kind: 'audio', id: a.id });
+  return out;
+}
+function ShowInTimeline({ plan }: { plan: PlanDto }) {
+  const { state, actions, t } = useStore();
+  const refs = addedRefs(state.head?.model, plan.result?.addedIds ?? []);
+  if (!refs.length) return null;
+  return <button type="button" data-el="agent.editor.plancard.showtimeline" className="inline-flex shrink-0 items-center gap-1 font-semibold text-em-accent underline" onClick={() => {
+    actions.select(refs.slice(0, 50));
+    window.dispatchEvent(new CustomEvent('em:focus-timeline', { detail: { refs } }));
+  }}><LocateFixed size={12} aria-hidden />{t('ui.agent.plan.showtimeline')}</button>;
+}
+
 /** Undo for an executed plan whose version is still the head (the one-line summary after Execute, 2026-10-26). */
 function UndoPlan({ plan }: { plan: PlanDto }) {
   const { state, actions, t } = useStore();
@@ -68,7 +126,7 @@ export function PlanSummary({ plan }: { plan: PlanDto }) {
   const { t } = useStore();
   const v = plan.result?.toVersion?.slice(0, 6);
   return (
-    <div data-el="agent.editor.plancard" data-status={plan.status} data-collapsed="true" className={cx('flex items-center gap-2 rounded-[8px] border px-2 py-1 text-[12px]', plan.status === 'executed' ? 'border-em-success/70 text-em-success' : 'border-em-line text-em-muted')}>
+    <div data-el="agent.editor.plancard" data-plan-id={plan.id} data-status={plan.status} data-collapsed="true" className={cx('flex items-center gap-2 rounded-[8px] border px-2 py-1 text-[12px]', plan.status === 'executed' ? 'border-em-success/70 text-em-success' : 'border-em-line text-em-muted')}>
       {plan.status === 'executed' ? <CheckCircle2 size={14} /> : <History size={14} />}
       <span className="min-w-0 flex-1 truncate text-em-text"><ModelText inline text={plan.goal} /></span>
       <span>{t(`ui.agent.plan.status.${plan.status}`)}{v ? ` · v${v}` : ''}</span>
@@ -112,13 +170,13 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
   const lockedNotice = locked.dropped.length > 0 || locked.touching.size > 0;
   const otherValidation = plan.validation.filter((v) => !(v.code === 'EM-2302' && v.path.startsWith('droppedSteps[')));
   if (collapsed) {
-    return <div data-el="agent.editor.plancard" data-status="executed" data-collapsed="true" className="flex items-center gap-2 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} /><span className="min-w-0 flex-1 truncate"><ModelText inline text={plan.goal} /></span>
+    return <div data-el="agent.editor.plancard" data-plan-id={plan.id} data-status="executed" data-collapsed="true" className="flex items-center gap-2 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} /><span className="min-w-0 flex-1 truncate"><ModelText inline text={plan.goal} /></span>
       <span className="shrink-0">{t('ui.agent.plan.status.executed')} · v{(plan.result?.toVersion ?? headHash ?? '').slice(0, 6)}</span>{plan.result && <span data-el="agent.editor.plancard.result" className="shrink-0 text-em-text-2">· {diffSummary(plan.result, t)}</span>}
-      <UndoPlan plan={plan} /><button type="button" className="shrink-0 underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button>
+      <ShowInTimeline plan={plan} /><UndoPlan plan={plan} /><button type="button" className="shrink-0 underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button>
       {toolNote && <span data-el="agent.editor.plancard.toolnote" className="shrink-0 text-em-text-2">· {toolNote}</span>}</div>;
   }
   return (
-    <section data-el="agent.editor.plancard" data-status={status} role="region" aria-label={t('a11y.agent.editor.plancard', { goal: plan.goal, status: h.text, version: base })}
+    <section data-el="agent.editor.plancard" data-plan-id={plan.id} data-status={status} role="region" aria-label={t('a11y.agent.editor.plancard', { goal: plan.goal, status: h.text, version: base })}
       className={cx('flex flex-col gap-2 rounded-[8px] border bg-em-panel p-2.5', h.border)}>
       <div className="flex items-center gap-1.5 text-[12px]">
         <span data-el={status === 'executing' ? 'agent.chat.progress' : undefined} data-phase={status === 'executing' ? 'executing' : undefined} role={status === 'executing' ? 'status' : undefined} className={cx('flex items-center gap-1 font-semibold', h.tone)}>{h.icon}{h.text}</span>
@@ -126,8 +184,22 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
         <span data-el={stale ? 'agent.editor.plancard.baseversion.stale' : 'agent.editor.plancard.baseversion'} className={cx('t-mono', stale ? 'text-em-warn' : 'text-em-muted')} title={t('ui.agent.plan.basedon', { version: base })}>{t('ui.agent.plan.basedon', { version: base })}</span>
         <span className="flex-1" />
         <button type="button" aria-label={t('ui.agent.plan.history')} title={t('ui.agent.plan.history')} onClick={() => actions.setScreen({ kind: 'history' })} className="text-em-muted hover:text-em-text"><History size={14} /></button>
+        {/* QA 2026-10-28 #16: the card can always be closed from its header (the footer may be scrolled away in a narrow panel). */}
+        <button type="button" data-el="agent.editor.plancard.close" aria-label={status === 'executed' ? t('ui.common.close') : t('ui.agent.plan.discard')} title={status === 'executed' ? t('ui.common.close') : t('ui.agent.plan.discard')}
+          onClick={() => { if (status === 'executed') setCollapsed(true); else if (status !== 'executing') void actions.cancelPlan(); }} className="text-em-muted hover:text-em-text" disabled={status === 'executing'}><X size={14} /></button>
       </div>
       <div data-el="agent.editor.plancard.goal" className="text-[16px] font-semibold leading-[22px]">{plan.goal ? <ModelText inline text={plan.goal} /> : t('ui.agent.plan.goal.pending')}</div>
+      {status !== 'draft' && <PlanPreview plan={plan} />}
+      {plan.confirmRemoval && plan.confirmRemoval.length > 0 && (
+        <div data-el="agent.editor.plancard.confirmremoval" role="alertdialog" aria-label={t('ui.agent.plan.confirmremoval.title')} className="rounded-[6px] border border-em-danger bg-em-panel-2 p-2 text-[12px]">
+          <div className="mb-1 flex items-center gap-1.5 font-semibold text-em-danger"><Trash2 size={13} />{t('ui.agent.plan.confirmremoval.title', { n: plan.confirmRemoval.length })}<span className="t-mono ml-auto text-[10px] text-em-muted">EM-4310</span></div>
+          <ul className="mb-2 list-disc pl-4 text-em-text-2">{plan.confirmRemoval.slice(0, 10).map((x, i) => <li key={i}>{x.label}</li>)}</ul>
+          <div className="flex gap-2">
+            <Button el="agent.editor.plancard.confirmremoval.yes" variant="danger" size={28} onClick={() => void actions.execute(true)}>{t('ui.agent.plan.confirmremoval.yes')}</Button>
+            <Button size={28} variant="ghost" onClick={() => actions.dismissRemoval()}>{t('ui.common.cancel')}</Button>
+          </div>
+        </div>
+      )}
       {(plan.steps.length > 0 || locked.dropped.length > 0) && (
         <ol className="flex flex-col gap-1 border-t border-em-line pt-2">
           {plan.steps.map((s) => {
@@ -184,13 +256,29 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
         className="resize-none rounded-[6px] border border-em-line bg-em-panel-2 px-2 py-1 text-[12px] outline-none placeholder:text-em-muted" />
       {status === 'executed' && plan.result && <div data-el="agent.editor.plancard.result" className="text-[12px] text-em-success">{diffSummary(plan.result, t)}</div>}
       {status === 'executed' && toolNote && <div data-el="agent.editor.plancard.toolnote" className="text-[12px] text-em-text-2">{toolNote}</div>}
+      {status === 'executed' && plan.steps.some(isToolStep) && (
+        <ul data-el="agent.editor.plancard.steps.live" className="flex flex-col gap-0.5 text-[12px]">
+          {plan.steps.filter(isToolStep).map((s) => { const st = plan.stepStatus?.[s.n]?.status ?? plan.result?.toolSteps?.find((x) => x.n === s.n)?.status ?? 'started'; const code = plan.stepStatus?.[s.n]?.code;
+            return <li key={s.n} data-el="agent.editor.plancard.step.live" data-status={st} className={cx('flex items-center gap-1.5', st === 'failed' ? 'text-em-danger' : st === 'done' ? 'text-em-success' : 'text-em-text-2')}>
+              {st === 'done' ? <CheckCircle2 size={12} /> : st === 'failed' ? <XCircle size={12} /> : st === 'skipped' ? <Info size={12} /> : <Loader size={12} className="em-spin" />}
+              {toolStepText(s, t)} · {t(`ui.agent.plan.step.status.${st}`)}{code ? <span className="t-mono text-[10px]"> {code}</span> : null}</li>; })}
+        </ul>
+      )}
+      {status === 'executed' && <div className="flex gap-3 text-[12px]"><ShowInTimeline plan={plan} /></div>}
       {plan.usage && (
         <div className="t-mono text-[11px] text-em-muted" title={plan.usage.approximate ? t('ui.agent.common.cost.approx') : plan.usage.costUsd === null ? t('ui.agent.common.cost.na') : undefined}>
           <span data-el="agent.editor.plancard.model" title={plan.usage.model}>{names.llm(plan.usage.model, 'editor')}</span> · {t('ui.agent.plan.usage', { input: formatTokens(plan.usage.inputTokens, lang), output: formatTokens(plan.usage.outputTokens, lang), cost: formatMoney(plan.usage.costUsd, plan.usage.approximate, lang) })}
         </div>
       )}
-      <div className="flex items-center gap-2 border-t border-em-line pt-2">
+      {status === 'executing' && (
+        <div data-el="agent.editor.plancard.executing" data-phase={plan.execPhase?.phase ?? 'apply'} className="flex flex-col gap-1">
+          <span role="status" className="text-[12px] text-em-text-2">{plan.execPhase ? t(`ui.agent.plan.exec.${plan.execPhase.phase}`, { done: plan.execPhase.done ?? 0, total: plan.execPhase.total ?? 0, n: Math.max(1, planChanges(plan)), time: plan.execPhase.totalMs ? fmtTime(plan.execPhase.totalMs) : '' }) : t('ui.agent.plan.state.executing.changes', { n: Math.max(1, planChanges(plan)) })}</span>
+          <div role="progressbar" aria-label={t('ui.agent.plan.state.executing.changes', { n: Math.max(1, planChanges(plan)) })} className="h-1 w-full overflow-hidden rounded-full bg-em-line"><div className="em-indeterminate h-full w-1/3 bg-em-accent" /></div>
+        </div>)}
+      {status !== 'executing' && voicePending(plan) > 0 && <div data-el="agent.editor.plancard.estimate" role="note" className="text-[11px] text-em-warn">{t('ui.agent.plan.preview.estimate', { n: voicePending(plan) })}</div>}
+      <div className="sticky bottom-0 flex items-center gap-2 border-t border-em-line bg-em-panel pt-2">
         {status !== 'executed' && status !== 'executing' && <Button size={28} variant="ghost" onClick={() => void actions.cancelPlan()}>{t('ui.agent.plan.discard')}</Button>}
+        {(status === 'valid' || status === 'stale') && <Button el="agent.editor.plancard.revise" size={28} variant="ghost" icon={<Pencil size={12} />} title={t('ui.agent.plan.revise.tip')} onClick={() => { window.dispatchEvent(new CustomEvent('em:ask-editor', { detail: { text: t('ui.agent.plan.revise.prefix') } })); }}>{t('ui.agent.plan.revise')}</Button>}
         {status === 'executing' && <Button size={28} variant="ghost" aria-label={t('ui.agent.plan.cancelexecute')} onClick={() => void actions.cancelPlan()}>{t('ui.common.cancel')}</Button>}
         <span className="flex-1" />
         {(status === 'stale' || status === 'invalid' || status === 'failed' || status === 'cancelled') && (

@@ -8,7 +8,7 @@ import type { EngineInputProps, AssetUrls } from '../inputs.js';
 import { ThemeProvider, useTheme } from '../theme.js';
 import { useLayout, type Layout } from '../layout.js';
 import { ensureFontsLoaded } from '../fonts.js';
-import { motionStyle } from '../motion.js';
+import { motionCss, motionFrame, motionStyle } from '../motion.js';
 import { easingFn } from '../easing.js';
 import { TRANSITIONS } from '../presets/transitions.js';
 import { effectsFor } from '../presets/effects.js';
@@ -113,14 +113,16 @@ const OverlayView: React.FC<{ element: CompositionModelT['tracks']['overlay'][nu
   const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const t = useTheme();
   const { left, top } = layout.toPx(element.position.x, element.position.y);
   const w = element.size.w * layout.u, h = element.size.h * layout.u;
-  const m = motionStyle(element.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId);
-  const box: React.CSSProperties = { position: 'absolute', left, top, width: w, height: h, transform: overlayTransform(element), display: 'flex', alignItems: 'center', justifyContent: 'center', ...m };
+  // ADR-034: the positioned box keeps its centre transform; the motion (scale / grow / reveal / loops) acts on an inner wrapper.
+  const mf = motionFrame(element.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId, element.id);
+  const box: React.CSSProperties = { position: 'absolute', left, top, width: w, height: h, transform: overlayTransform(element) };
+  const inner: React.CSSProperties = { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', ...motionCss(mf) };
   if (element.kind === 'shape') {
     const Shape = SHAPES[element.presetId];
-    return Shape ? <div style={{ ...box, ...(element.opacity === undefined ? {} : { opacity: element.opacity * (typeof m.opacity === 'number' ? m.opacity : 1) }) }}><Shape size={Math.min(w, h)} fill={element.fill} stroke={element.stroke} strokeWidth={element.strokeWidth === undefined ? undefined : element.strokeWidth * layout.u} params={element.params} /></div> : null;
+    return Shape ? <div data-em-shape={element.id} style={{ ...box, ...(element.opacity === undefined ? {} : { opacity: element.opacity }) }}><div style={inner}><Shape w={w} h={h} u={layout.u} fill={element.fill} stroke={element.stroke} strokeWidth={element.strokeWidth === undefined ? undefined : element.strokeWidth * layout.u} params={element.params} draw={mf.draw} /></div></div> : null;
   }
   if (!urls) return null;
-  return <div style={{ ...box, opacity: element.opacity * (typeof m.opacity === 'number' ? m.opacity : 1) }}><Img src={quality === 'draft' && urls.proxy ? urls.proxy : urls.playable} style={{ width: '100%', height: '100%', objectFit: element.objectFit }} effects={effectsFor(element.effects, frame, durationInFrames, fps)} /></div>;
+  return <div style={{ ...box, opacity: element.opacity }}><div style={inner}><Img src={quality === 'draft' && urls.proxy ? urls.proxy : urls.playable} style={{ width: '100%', height: '100%', objectFit: element.objectFit }} effects={effectsFor(element.effects, frame, durationInFrames, fps)} /></div></div>;
 };
 
 /** Frames (absolute) where speech plays: voice layers and Clips with audio that are not muted. Used by preset:audio.duck-voice. */

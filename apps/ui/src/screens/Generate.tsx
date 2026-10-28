@@ -14,6 +14,9 @@ import { Badge, Button, ErrorBox, Field, Modal, Progress, cx, inputCls } from '.
 import { GENERATOR_MODEL, useGeneratorCards } from '../library/Generators.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
 import { copyText } from '../api/client.js';
+import { VoicePicker } from './VoicePicker.js';
+import { MusicLibraryPanel } from './MusicLibrary.js';
+import type { VoiceDto } from '../api/types.js';
 
 type Page = { text: string; startMs: number; durationMs: number; tokens: Array<{ text: string; fromMs: number; toMs: number }> };
 const WEEK_MS = 7 * 24 * 3_600_000;
@@ -53,13 +56,16 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const chosenKey = model || (options.find((m) => m.key === defaultKey && m.installed)?.key ?? options.find((m) => m.installed)?.key ?? defaultKey);
   const chosen = options.find((m) => m.key === chosenKey) ?? (card?.model?.key === chosenKey ? card.model : null);
   const live = state.models.find((m) => m.key === chosenKey);
-  const installed = kind === 'hashtags' || chosenKey === 'frame-composite' || Boolean(live ? live.status === 'installed' : chosen?.installed);
+  // FR-246: the voice comes from the voice picker; FR-247: music always has the CC0 library (no model to install)
+  const [voice, setVoice] = useState<VoiceDto | null>(null);
+  const [voiceStyle, setVoiceStyle] = useState('');
+  const [withCaptions, setWithCaptions] = useState(true);
+  const installed = kind === 'hashtags' || kind === 'music' || chosenKey === 'frame-composite' || (kind === 'voice' ? voice?.availability === 'ready' : Boolean(live ? live.status === 'installed' : chosen?.installed));
   const downloading = live && (live.status === 'downloading' || live.status === 'verifying');
   const notEnabled = card ? !card.enabled : false;
   // per-kind inputs
   const [speed, setSpeed] = useState(1);
   const [durationS, setDurationS] = useState(30);
-  const [instrumental, setInstrumental] = useState(true);
   const [count, setCount] = useState(kind === 'hashtags' ? 15 : 1);
   const [prompt, setPrompt] = useState('');
   const [platform, setPlatform] = useState<'tiktok' | 'instagram' | 'youtube'>('tiktok');
@@ -112,8 +118,8 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
     const modelKey = chosenKey && chosenKey !== 'frame-composite' ? { modelKey: chosenKey } : {};
     const frameOnly = chosenKey === 'frame-composite';
     const body: Record<string, unknown> = kind === 'captions' ? { ...(captionSource === 'sequence' ? { source: 'sequence' } : { source: 'asset', assetId: captionSource }), language, ...modelKey }
-      : kind === 'voice' ? { text: input, voiceId: chosenKey, language, speed, atMs: state.playheadMs }
-        : kind === 'music' ? { prompt: input, durationMs: durationS * 1000, instrumental, language, ...modelKey }
+      : kind === 'voice' ? { text: input, voiceId: voice?.id ?? chosenKey, language, speed, atMs: Math.round(state.playheadMs), captions: withCaptions, ...(voiceStyle.trim() && voice?.supports.style ? { style: voiceStyle.trim() } : {}) }
+        : kind === 'music' ? { prompt: input, durationMs: durationS * 1000, instrumental: true, language }
           : kind === 'thumbnail' ? { frameMs: Math.round(state.playheadMs), ...(input.trim() ? { titleText: input } : {}), ...(!frameOnly && prompt.trim() ? { prompt } : {}), count, style, language, ...(chosenKey ? { modelKey: chosenKey } : {}) }
             : { language, platform, tone, count };
     try { const j = await runtime.api.createGeneratorJob(state.project.id, kind, body); setJob(j); return j; } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); return null; } finally { setStarting(false); }
@@ -156,7 +162,8 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const textMissing = (kind === 'voice' || kind === 'music') && !input.trim();
   const tracks = state.head?.model?.tracks;
   const noAudio = kind === 'captions' && captionSource === 'sequence' && !(tracks?.video.length ?? 0) && !(tracks?.audio.some((a) => a.role !== 'bed') ?? false);
-  const runReason = notEnabled ? t('err.EM-9004.title') : !installed ? t('ui.scr.generate.installfirst') : kind === 'hashtags' && priv ? t('err.EM-8202.title')
+  const voiceReason = kind === 'voice' && voice && voice.availability !== 'ready' && voice.availability !== 'model-missing' ? t(`ui.scr.generate.voice.avail.${voice.availability}`, { provider: t(`ui.scr.generate.voice.provider.${voice.provider}`) }) : null;
+  const runReason = notEnabled ? t('err.EM-9004.title') : voiceReason ? voiceReason : !installed ? t('ui.scr.generate.installfirst') : kind === 'hashtags' && priv ? t('err.EM-8202.title')
     : textMissing ? t('ui.scr.generate.input.required') : noAudio ? t('err.EM-7103.title') : kind === 'voice' && [...input].length > 2000 ? t('err.EM-7106.title') : null;
   const generated = generatedList(history).filter((j) => j.id !== job?.id);
 
@@ -169,19 +176,25 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
       <p className="mb-3 text-em-muted">{t(`ui.lib.generator.${kind}.subtitle`)}</p>
       {notEnabled && <div className="mb-3"><ErrorBox code="EM-9004" vars={{ feature: t(`ui.lib.generator.${kind}.title`) }} /></div>}
 
-      {kind !== 'hashtags' && (
+      {kind === 'voice' && (
+        <div data-el={`${p}.model`} className="mb-3 flex flex-col gap-1 rounded-[8px] border border-em-line p-2">
+          <span className="t-label">{t('ui.scr.generate.voice')}</span>
+          <VoicePicker language={language} value={voice?.id ?? ''} onChange={setVoice} chars={[...input].length} />
+        </div>
+      )}
+      {kind === 'music' && <MusicLibraryPanel onInserted={onClose} />}
+      {kind !== 'hashtags' && kind !== 'voice' && kind !== 'music' && (
         <div data-el={`${p}.model`} className="mb-3 flex flex-col gap-1 rounded-[8px] border border-em-line p-2">
           <div className="flex items-center gap-2">
-            <label htmlFor="em-gen-model" className="t-label flex-1">{kind === 'voice' ? t('ui.scr.generate.voice') : t('ui.scr.generate.model')}</label>
+            <label htmlFor="em-gen-model" className="t-label flex-1">{t('ui.scr.generate.model')}</label>
             {chosen && <span className="t-mono text-[12px] text-em-muted">{chosen.bytes ? formatBytes(chosen.bytes, lang) : t('ui.lib.generator.nodownload')}</span>}
             <Badge tone={installed ? 'success' : 'info'}>{installed ? t('ui.lib.generator.installed') : t('ui.lib.generator.needsmodel')}</Badge>
           </div>
-          <select id="em-gen-model" data-el={kind === 'voice' ? `${p}.voice` : undefined} className={inputCls} value={chosenKey} onChange={(e) => setModel(e.target.value)}>
+          <select id="em-gen-model" className={inputCls} value={chosenKey} onChange={(e) => setModel(e.target.value)}>
             {options.length === 0 && <option value={defaultKey}>{chosenKey === 'frame-composite' ? t('ui.scr.generate.thumbnail.frame') : t('ui.scr.generate.nomodel')}</option>}
             {options.map((m) => <option key={m.key} value={m.key}>{names.local(m)}{m.cc0 ? ' · CC0' : ''}{m.installed ? '' : ` · ${t('ui.lib.generator.needsmodel')}`}</option>)}
           </select>
           {chosen?.belowTier && <p className="text-[12px] text-em-warn">{t('err.EM-7005.body', { model: names.local(chosen) })}</p>}
-          {kind === 'music' && (card?.tier === 'T0' || chosen?.cc0) && <p data-el={`${p}.cc0`} className="text-[12px] text-em-text-2">{t('ui.scr.generate.music.cc0')}</p>}
           {!installed && !downloading && chosenKey && chosenKey !== 'frame-composite' && (
             <Button el={`${p}.install`} size={28} icon={<Download size={14} />} disabledReason={priv ? t('err.EM-8202.title') : null} onClick={() => void install()}>
               {t('ui.scr.generate.installsize', { size: formatBytes(chosen?.bytes ?? live?.bytesTotal ?? 0, lang) })}
@@ -225,14 +238,21 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
         </div>
         {kind === 'voice' && (
           <Field label={t('ui.scr.generate.speed', { speed: speed.toFixed(2) })} htmlFor="em-gen-speed">
-            <input id="em-gen-speed" data-el={`${p}.speed`} type="range" min={0.8} max={1.2} step={0.05} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="w-full" />
+            <input id="em-gen-speed" data-el={`${p}.speed`} type="range" min={voice?.cloud ? 0.7 : 0.8} max={1.2} step={0.05} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="w-full" />
           </Field>
+        )}
+        {kind === 'voice' && voice?.supports.style && (
+          <Field label={t('ui.scr.generate.voice.style')} htmlFor="em-gen-vstyle" hint={t('ui.scr.generate.voice.style.hint')}>
+            <input id="em-gen-vstyle" data-el={`${p}.voice.style`} className={inputCls} maxLength={200} value={voiceStyle} onChange={(e) => setVoiceStyle(e.target.value)} />
+          </Field>
+        )}
+        {kind === 'voice' && (
+          <label className="col-span-2 flex items-center gap-2 text-[12px]"><input data-el={`${p}.voice.captions`} type="checkbox" checked={withCaptions} onChange={(e) => setWithCaptions(e.target.checked)} />{t('ui.scr.generate.voice.withcaptions')}</label>
         )}
         {kind === 'music' && <>
           <Field label={t('ui.scr.generate.duration', { s: durationS })} htmlFor="em-gen-dur">
             <input id="em-gen-dur" data-el={`${p}.duration`} type="range" min={10} max={120} step={5} value={durationS} onChange={(e) => setDurationS(Number(e.target.value))} className="w-full" />
           </Field>
-          <label className="flex items-center gap-2 self-end pb-2"><input data-el={`${p}.instrumental`} type="checkbox" checked={instrumental} onChange={(e) => setInstrumental(e.target.checked)} />{t('ui.scr.generate.instrumental')}</label>
         </>}
         {kind === 'thumbnail' && <>
           {chosenKey !== 'frame-composite' && <Field label={t('ui.scr.generate.thumbnail.prompt')} htmlFor="em-gen-prompt" hint={t('ui.scr.generate.thumbnail.prompt.hint', { time: formatDuration(state.playheadMs) })}>

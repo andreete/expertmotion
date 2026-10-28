@@ -59,4 +59,39 @@ INSERT INTO license_new(id, token_enc, status, tier, licensee_hash, updates_unti
 DROP TABLE license;
 ALTER TABLE license_new RENAME TO license;
 ` },
+  // FR-217 / SEC-142: attribution of pictures imported from openly licensed catalogues (Openverse, Wikimedia Commons).
+  { version: 33, name: 's3_asset_attributions', sql: `
+CREATE TABLE IF NOT EXISTS asset_attributions (
+  asset_id     TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source       TEXT NOT NULL CHECK(source IN ('openverse','wikimedia')),
+  source_id    TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  creator      TEXT,
+  license      TEXT NOT NULL CHECK(license IN ('cc0','pdm','by','by-sa')),
+  license_version TEXT,
+  license_url  TEXT,
+  landing_url  TEXT,
+  attribution  TEXT NOT NULL,              -- the line to credit (shown in the Library and exported with the project)
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attr_project ON asset_attributions(project_id);
+` },
+  // FR-221: documents attached in the chat (PDF / DOCX / TXT / MD / scripts): the extracted text only (the file is not kept), sent to
+  // the agent as context. Lives in the encrypted database like the messages.
+  { version: 34, name: 's3_chat_documents', sql: `
+CREATE TABLE IF NOT EXISTS chat_documents (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK(kind IN ('pdf','docx','text')),
+  bytes       INTEGER NOT NULL,
+  chars       INTEGER NOT NULL,
+  truncated   INTEGER NOT NULL DEFAULT 0,
+  pages       INTEGER,
+  text        TEXT NOT NULL,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_docs_project ON chat_documents(project_id, created_at);
+` },
 ];

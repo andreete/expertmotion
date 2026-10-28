@@ -17,3 +17,7 @@ export * from './engines/whisper.js';
 export * from './engines/sherpa.js';
 export * from './engines/sdcpp.js';
 export * from './engines/acestep.js';
+export * from './transcript.js';
+export * from './voices.js';
+export * from './music-library.js';
+export * from './audio-energy.js';

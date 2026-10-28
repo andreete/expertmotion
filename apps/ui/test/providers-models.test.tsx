@@ -112,6 +112,7 @@ describe('Budget used up (FR-117, AI-016)', () => {
     await until(() => el('stage.timeline') && el('agent.output.ratio.9x16'), 'boot');
     const c = await runtime.api.addConnection({ provider: 'openrouter', label: 'Utama', secret: KEY, validateNow: true });
     await runtime.api.putAssignments({ editor: { agent: 'editor', connectionId: c.id, modelId: 'anthropic/claude-sonnet-4.5', settings: {} }, defaultConnectionId: c.id });
+    fireEvent.click(el('agent.chat.tab.editor')!);                                // ADR-033: the Editor failure shows in the Editor tab
     await act(async () => { bus.emit('agent.run.failed', { runId: 'r1', agent: 'editor', code: 'EM-4201', retryable: false }); });
     await until(() => el('agent.chat.budget'), 'Change budget');
     expect(el('agent.chat.budget')!.textContent).toBe('Change budget');

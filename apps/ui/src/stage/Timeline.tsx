@@ -188,6 +188,8 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
   const [width, setWidth] = useState(600);
   const [liveMs, setLiveMs] = useState(state.playheadMs);
   const lanes = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);                      // FR-254: the one scroll container (both axes); ruler sticks to its top
+  const content = useRef<HTMLDivElement>(null);
   useEffect(() => playerBus.subscribe(setLiveMs), []);
   useEffect(() => { setLiveMs(state.playheadMs); }, [state.playheadMs]);
   useEffect(() => {
@@ -220,10 +222,10 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
       e.preventDefault();
       const cur = pxRef.current * 1000;
       const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, e.deltaY < 0 ? cur * 1.2 : cur / 1.2));
-      const r = el.getBoundingClientRect();
-      const atMs = (e.clientX - r.left + el.scrollLeft) / pxRef.current;
+      const r = el.getBoundingClientRect();                           // the lanes box moves with the scroll, so this is already content time
+      const atMs = (e.clientX - r.left) / pxRef.current;
       setZoom(next);
-      requestAnimationFrame(() => { el.scrollLeft = Math.max(0, atMs * (next / 1000) - (e.clientX - r.left)); });
+      requestAnimationFrame(() => { const sc = scroller.current; if (sc) sc.scrollLeft = Math.max(0, sc.scrollLeft + r.left + atMs * (next / 1000) - e.clientX); });
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -320,15 +322,38 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
     if (isMenuKey(e)) { e.preventDefault(); e.stopPropagation(); openMenu(b, e.currentTarget); return; }
     if (isEditable(b)) onElementKey(b, e);
   };
-  // FR-066: click or drag on the ruler scrubs the playhead (the Player scrubber follows through playerBus).
-  const seekFromRuler = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    const ruler = e.currentTarget;
-    const at = (x: number) => { const r = ruler.getBoundingClientRect(); return Math.max(0, Math.min(durationMs, (x - r.left) / pxRef.current)); };
-    playerBus.get()?.seekMs(at(e.clientX));
-    const move = (ev: PointerEvent) => { ev.preventDefault(); playerBus.get()?.seekMs(at(ev.clientX)); };
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  // FR-066 / FR-253: press and drag on the ruler, on the playhead line (its whole height) or on empty track space scrubs the
+  // playhead (the Player follows through playerBus; no Composition change). The press seeks at once; moves are coalesced to one
+  // seek per animation frame and the release applies the last position exactly.
+  const pending = useRef<number | null>(null); const frame = useRef<number | null>(null);
+  const flushSeek = () => { if (frame.current !== null) { cancelAnimationFrame(frame.current); frame.current = null; } const p = pending.current; pending.current = null; if (p !== null) playerBus.get()?.seekMs(p); };
+  const seekLive = (ms: number) => {
+    if (frame.current === null) { playerBus.get()?.seekMs(ms); frame.current = requestAnimationFrame(() => { frame.current = null; flushSeek(); }); }
+    else pending.current = ms;
+  };
+  const msAt = (clientX: number) => { const r = (content.current ?? lanes.current)?.getBoundingClientRect(); const ms = (clientX - (r?.left ?? 0)) / pxRef.current; return Number.isFinite(ms) ? Math.max(0, Math.min(durationMs, ms)) : 0; };
+  const startScrub = (e: ReactPointerEvent<HTMLElement>) => {
+    if ((e.button ?? 0) !== 0) return;
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* jsdom / released pointer */ }
+    playerBus.get()?.seekMs(msAt(e.clientX));
+    setScrubbing(true);
+    const move = (ev: PointerEvent) => { ev.preventDefault(); seekLive(msAt(ev.clientX)); };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); flushSeek(); setScrubbing(false); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+  };
+  const [scrubbing, setScrubbing] = useState(false);
+  // FR-253: a press on empty track space seeks there (and scrubs while held); a plain press also clears the selection, Shift or
+  // Ctrl / ⌘ keep it. Right-click there opens the item menu with only Paste available.
+  const onTrackDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget || (e.button ?? 0) !== 0) return;
+    if (!e.shiftKey && !e.ctrlKey && !e.metaKey) actions.select([]);
+    startScrub(e);
+  };
+  const onTrackMenu = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, refs: [], source: 'timeline', returnFocus: e.currentTarget });
   };
   const tickEvery = pxPerMs * 1000 > 80 ? 1000 : pxPerMs * 1000 > 30 ? 2000 : pxPerMs * 1000 > 12 ? 5000 : 10000;
   const ticks = Array.from({ length: Math.floor(durationMs / tickEvery) + 1 }, (_, i) => i * tickEvery);
@@ -356,9 +381,9 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
         <span className="t-mono text-em-muted">{formatTimecode(durationMs, fps)}</span>
       </div>
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-h-0 min-w-0 flex-1 overflow-y-auto">
-        {showLanes && <div className="flex w-24 shrink-0 flex-col self-start border-r border-em-line">
-          <div className="h-6 border-b border-em-line" />
+        <div ref={scroller} data-el="stage.timeline.scroll" className="flex min-h-0 min-w-0 flex-1 overflow-auto">
+        {showLanes && <div className="sticky left-0 z-40 flex w-24 shrink-0 flex-col self-start border-r border-em-line bg-em-panel">
+          <div className="sticky top-0 z-40 h-6 border-b border-em-line bg-em-panel" />
           {rows.map((r) => (
             <div key={r.key} className={cx('flex h-9 items-center gap-1 border-b border-em-line px-2 text-[12px]', r.isNew ? 'text-em-muted' : 'text-em-text-2')}>
               <span className="flex-1 truncate">{laneName(r)}</span>
@@ -366,12 +391,13 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
             </div>
           ))}
         </div>}
-        <div ref={lanes} role="grid" aria-label={t('a11y.stage.timeline')} className="relative min-w-0 flex-1 self-start overflow-x-auto overflow-y-hidden"
+        <div ref={lanes} role="grid" aria-label={t('a11y.stage.timeline')} className="relative min-w-0 flex-1 self-start"
           onClick={(e) => { if (e.target === e.currentTarget) actions.select([]); }}>
-          <div className="relative" style={{ width: Math.max(width, durationMs * pxPerMs + 8) }}>
+          <div ref={content} className="relative" style={{ width: Math.max(width, durationMs * pxPerMs + 8) }}>
             {showLanes && <>
-            <div data-el="stage.timeline.ruler" className="relative h-6 cursor-pointer touch-none select-none border-b border-em-line" onPointerDown={seekFromRuler}>
-              {ticks.map((ms) => <span key={ms} className="t-mono absolute top-1 border-l border-em-line pl-1 text-[10px] text-em-muted" style={{ left: ms * pxPerMs }}>{Math.round(ms / 1000)}s</span>)}
+            <div data-el="stage.timeline.ruler" data-sticky="top" className="sticky top-0 z-30 h-6 cursor-pointer touch-none select-none border-b border-em-line bg-em-panel" onPointerDown={startScrub}>
+              {ticks.map((ms) => <span key={ms} className="t-mono pointer-events-none absolute top-1 border-l border-em-line pl-1 text-[10px] text-em-muted" style={{ left: ms * pxPerMs }}>{Math.round(ms / 1000)}s</span>)}
+              <span data-el="stage.timeline.head.handle" aria-hidden className="pointer-events-none absolute top-0 -ml-[5px] h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-[var(--em-accent)]" style={{ left: liveMs * pxPerMs }} />
             </div>
             {rows.map((r) => {
               const own = bars.filter((b) => b.row === r.key);
@@ -380,7 +406,7 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
               return (
                 <div key={r.key} data-el={rowEl(r)} data-row={r.key} {...(r.kind === 'layer' ? { 'data-layer': r.lane } : r.kind === 'audio' ? { 'data-lane': r.lane } : {})} role="row" aria-label={rowA11y(r, count)}
                   className={cx('relative h-9 border-b border-em-line', r.isNew && 'border-dashed', dropTarget && 'shadow-[inset_0_0_0_2px_var(--em-accent)]')}
-                  onClick={(e) => { if (e.target === e.currentTarget) actions.select([]); }}>
+                  onPointerDown={onTrackDown} onContextMenu={onTrackMenu}>
                   {r.isNew && drag?.mode === 'move' && <span aria-hidden className="pointer-events-none absolute inset-0 flex items-center px-2 text-[10px] text-em-muted">{r.kind === 'audio' ? t('ui.stage.timeline.lane.newaudio.hint') : t('ui.stage.timeline.lane.new.hint')}</span>}
                   {own.map((b) => {
                     const sel = isSelected(b);
@@ -397,7 +423,7 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
                         aria-keyshortcuts={isEditable(b) ? 'ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Alt+ArrowUp Alt+ArrowDown' : undefined}
                         aria-label={t('a11y.stage.timeline.element', { kind: t(`ui.stage.timeline.kind.${b.kind}`), label: b.label, start: formatTimecode(b.fromMs, fps), end: formatTimecode(b.toMs, fps) })}
                         title={`${b.label} · ${formatTimecode(b.fromMs, fps)}–${formatTimecode(b.toMs, fps)}${isEditable(b) ? ` · ${t('ui.stage.timeline.element.keys')}` : ''}`}
-                        onClick={(e) => { e.stopPropagation(); select(b, e); }} onPointerDown={draggable ? (e) => startDrag(b, e) : undefined} onKeyDown={(e) => onBarKey(b, e)} data-dragging={dragging ? drag?.mode : undefined}
+                        onClick={(e) => { e.stopPropagation(); if (e.altKey && !suppressClick.current) { playerBus.get()?.seekMs(msAt(e.clientX)); return; } select(b, e); }} onPointerDown={draggable ? (e) => startDrag(b, e) : undefined} onKeyDown={(e) => onBarKey(b, e)} data-dragging={dragging ? drag?.mode : undefined}
                         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); openMenu(b, e.currentTarget, { x: e.clientX, y: e.clientY }); }} aria-haspopup="menu"
                         className={cx('absolute truncate rounded-[4px] border px-1 text-left text-[11px] em-trans', STRIP[b.kind] ? `${STRIP[b.kind]} rounded-[2px] px-0 text-[0px]` : b.kind === 'transition' ? 'top-1 h-7 z-10 bg-em-panel-2' : 'top-1 h-7 bg-em-panel-2',
                           draggable && 'touch-none', dragging && !clipDrag && 'opacity-40',
@@ -424,8 +450,14 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
             {ghost?.snapMs !== null && ghost?.snapMs !== undefined && (
               <div data-el="stage.timeline.snap" data-ms={ghost.snapMs} aria-hidden className="pointer-events-none absolute bottom-0 top-6 z-20 w-px bg-em-warn" style={{ left: ghost.snapMs * pxPerMs }} />
             )}
-            <div data-el="stage.timeline.head" aria-hidden className="pointer-events-none absolute bottom-0 top-0 z-20 w-0.5 bg-em-accent" style={{ left: liveMs * pxPerMs }}>
-              <span className="absolute -left-1 top-0 h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-[var(--em-accent)]" />
+            {/* FR-253: the playhead line is a slider over the whole Timeline height: drag it anywhere, or focus it and use ←/→ (frame),
+                Shift+←/→ (1 s), Home / End (global shortcuts). It sits above the bars (12 px grab zone) and below the sticky ruler. */}
+            <div data-el="stage.timeline.head" role="slider" tabIndex={0} aria-label={t('a11y.stage.timeline.head')} aria-orientation="horizontal"
+              aria-valuemin={0} aria-valuemax={Math.round(durationMs)} aria-valuenow={Math.round(liveMs)} aria-valuetext={formatTimecode(liveMs, fps)}
+              aria-keyshortcuts="ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Home End" data-scrubbing={scrubbing || undefined}
+              title={t('ui.stage.timeline.head.hint')} onPointerDown={startScrub}
+              className="absolute bottom-0 top-0 z-[25] -ml-1.5 w-3 cursor-ew-resize touch-none outline-none focus-visible:bg-em-accent/20" style={{ left: liveMs * pxPerMs }}>
+              <span aria-hidden className="pointer-events-none absolute bottom-0 left-[5px] top-0 w-0.5 bg-em-accent" />
             </div>
             </>}
             {!hasClip && !bars.length && (

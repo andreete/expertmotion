@@ -10,8 +10,11 @@ import { scriptPages, type ToolModel } from '@expertmotion/agents';
 import { applyOperations, deriveTiming, type CompositionModelT, type GeneratedResult, type OperationT } from '@expertmotion/composition-model';
 import { compileDefaults } from '@expertmotion/catalogue';
 import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
-import { CancelledError, JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, preparePiperVoice, removeJobDir, synthesize, transcribeToPages,
-  displayNameOf, type JobContext, type JobEvent, type ModelDef } from '@expertmotion/models';
+import { CancelledError, JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, preparePiperVoice, removeJobDir, synthesize, transcribe, transcribeToPages,
+  displayNameOf, buildTranscript, cuesToCaptionPages, energyFrames, parseWav, refineWordTimes, speechWindow, transcriptToSrt, wavDurationMs,
+  MUSIC_LIBRARY, MUSIC_LIBRARY_LICENCE, type JobContext, type JobEvent, type ModelDef, type RecognisedToken, type Transcript } from '@expertmotion/models';
+import { voicesServiceOf, type VoiceDto } from './voices-service.js';
+import { musicLibraryOf } from './music-library-service.js';
 import type { ServiceContext } from '../context.js';
 import { em, emit } from './common.js';
 import { getAsset, listAssets, toFacts } from './assets-repo.js';
@@ -25,6 +28,14 @@ import { s2, useModel } from './state.js';
 import { assertEngineSpawnAllowed } from './spawn-gate.js';
 
 export const GENERATOR_KINDS = ['voice', 'music', 'thumbnail', 'captions', 'hashtags'] as const;
+/** FR-251 batch input / output (documented in API_SPECIFICATION R-138 and for the agent runtime). */
+export interface VoiceBatchInput { clips: Array<{ id: string; text: string; written?: string }>; voiceId: string; language?: 'id' | 'en'; speed?: number; style?: string; maxTotalMs?: number;
+  startMs?: number; gapMs?: number; sceneGapMs?: number; scenes?: string[][]; insert?: boolean; captions?: boolean }
+export interface VoiceCueDto { index: number; text: string; written: string; fromMs: number; toMs: number; words: Array<{ text: string; fromMs: number; toMs: number }> }
+export interface VoiceBatchResult { jobId: string; batch: true; voiceId: string; speed: number; regenerated: boolean; totalMs: number; overLimit: boolean; costUsd: number;
+  clips: Array<{ id: string; assetId: string; name: string; durationMs: number; atMs: number; endMs: number; scene: number | null; timing: string; cues: VoiceCueDto[] }> }
+/** Cue times are relative to the clip start (0 = first sample of the clip). */
+export const cueDto = (c: Transcript['cues'][number]): VoiceCueDto => ({ index: c.index, text: c.text, written: c.written, fromMs: c.fromMs, toMs: c.toMs, words: c.words.map((w) => ({ text: w.text, fromMs: w.fromMs, toMs: w.toMs })) });
 /** FR-103: thumbnail styles: the title Text Layer variant in still mode, prompt wording in prompt mode. */
 export const THUMBNAIL_STYLES = ['bold', 'clean', 'cinematic', 'playful'] as const;
 export type ThumbnailStyle = (typeof THUMBNAIL_STYLES)[number];
@@ -94,6 +105,8 @@ export interface EngineStepCtx { engineDir: string; jobDir: string; signal: Abor
 export interface GeneratorEngines {
   captions(i: { modelPath: string; wavPath: string; language: string; audioDurationMs: number }, c: EngineStepCtx): Promise<{ pages: unknown[]; language: string | null }>;
   voice(i: { modelDir: string; text: string; speed?: number }, c: EngineStepCtx): Promise<{ wavPath: string }>;
+  /** FR-249: word timings for alignment (whisper.cpp word tokens of a 16 kHz mono wav). Default: transcribeToPages captions. */
+  wordTokens?(i: { modelPath: string; wavPath: string; language: string; audioDurationMs: number }, c: EngineStepCtx): Promise<RecognisedToken[]>;
   music(i: { modelDir: string; prompt: string; durationMs: number; seed: number; tier: 'T0' | 'T1' | 'T2' }, c: EngineStepCtx): Promise<{ wavPath: string }>;
   image(i: { model: ModelDef; modelDir: string; prompt: string; width: number; height: number; seed: number; tier: 'T0' | 'T1' | 'T2' }, c: EngineStepCtx): Promise<{ pngPath: string }>;
   frame(i: { model: CompositionModelT; projectId: string; frameMs: number; outPath: string; assetIds: string[] }, c: EngineStepCtx & { ctx: ServiceContext; jobId: string }): Promise<void>;
@@ -129,6 +142,8 @@ const firstWith = (dir: string, re: RegExp): string => { const f = fs.readdirSyn
 function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
   const ectx = (c: EngineStepCtx) => ({ engineDir: c.engineDir, jobDir: c.jobDir, signal: c.signal, onProgress: c.onProgress });
   return {
+    wordTokens: async (i, c) => (await transcribe({ modelPath: i.modelPath, wavPath: i.wavPath, language: i.language, threads: threads(), audioDurationMs: i.audioDurationMs }, ectx(c))).captions
+      .map((x) => ({ text: x.text, fromMs: x.startMs, toMs: x.endMs })),
     captions: async (i, c) => { const r = await transcribeToPages({ modelPath: i.modelPath, wavPath: i.wavPath, language: i.language, threads: threads(), audioDurationMs: i.audioDurationMs }, ectx(c)); return { pages: r.pages, language: r.language }; },
     voice: async (i, c) => {
       // Kokoro (sherpa-onnx export) ships a voice table; Piper/VITS voices are one .onnx + tokens.txt.
@@ -203,8 +218,11 @@ export class GeneratorsService {
   private readonly runner: JobRunner;
   private readonly engines: GeneratorEngines;
   private readonly inserts = new Map<string, boolean>();
+  /** FR-252: plan generator steps waiting for a model install (model key → held runs). */
+  private readonly held = new Map<string, Array<{ projectId: string; planId: string; steps: Array<{ n: number; tool: string; args: Record<string, unknown>; dependsOn: number[] }> }>>();
   constructor(private readonly ctx: ServiceContext, private readonly opts: GeneratorsOptions = {}) {
     this.engines = { ...defaultEngines(opts), ...(opts.engines ?? {}) };
+    s2(ctx).events.on('model.installed', (key: string) => this.resumeHeld(key));
     this.runner = new JobRunner({ emit: (e) => this.onEvent(e), concurrency: 1, progressIntervalMs: 500, newId: ctx.newId, keepFinished: 20 });
   }
   get(id: string): GenRow | undefined { return this.ctx.db.prepare('SELECT * FROM generator_jobs WHERE id = ?').get(id) as GenRow | undefined; }
@@ -242,6 +260,8 @@ export class GeneratorsService {
         cc0: d.engine === 'loops' })));
       // frame-composite (thumbnails) needs no model: a still of the current frame plus the title (LOCAL_AI_MODELS §5). It is always
       // one of the options, so the sheet's model picker can show and select it (QA 14: it showed an uninstalled image model instead)
+      // FR-247: the CC0 music library is always an option (tracks download on demand); AI music is explained, never offered
+      if (kind === 'music' && !list.some((m) => m.key === 'loop-library-cc0')) list.push({ key: 'loop-library-cc0', label: 'CC0 music library', displayName: { en: 'Music Library · CC0', id: 'Pustaka Musik · CC0' }, bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: true });
       if (kind === 'thumbnail') list.push({ key: 'frame-composite', label: 'Frame + title', displayName: displayNameOf({ key: 'frame-composite', label: 'Frame + title' }), bytes: 0, installed: true, languages: [], minTier: 'T0', belowTier: false, cc0: false });
       let model = list.find((m) => m.key === defKey) ?? null;
       // a thumbnail never waits for a download: when the tier's image model is not installed, the frame still is the default
@@ -325,8 +345,10 @@ export class GeneratorsService {
         try {
           if (st.tool === 'tts.generate') {
             const language = lang(st.args);
-            const voiceId = String(st.args['voiceId'] ?? st.args['modelKey'] ?? (await this.planToolModel('tts', language))?.modelKey ?? '');
-            const job = await this.create(projectId, 'voice', { text: String(st.args['text'] ?? ''), voiceId, language, atMs: typeof st.args['atMs'] === 'number' ? st.args['atMs'] : 0, ...(typeof st.args['speed'] === 'number' ? { speed: st.args['speed'] } : {}), insert: true });
+            // FR-246: a voice id, a legacy model key or a description ("suara perempuan hangat"); empty → the best available voice
+            const voiceId = String(st.args['voiceId'] ?? st.args['voice'] ?? st.args['modelKey'] ?? '');
+            const job = await this.create(projectId, 'voice', { text: String(st.args['text'] ?? ''), voiceId, language, atMs: typeof st.args['atMs'] === 'number' ? st.args['atMs'] : 0,
+              ...(typeof st.args['speed'] === 'number' ? { speed: st.args['speed'] } : {}), ...(typeof st.args['style'] === 'string' ? { style: st.args['style'] } : {}), insert: true });
             const wait = this.waitJob(String(job['id'])); voices.set(st.n, wait); voiceAt.set(wait, typeof st.args['atMs'] === 'number' ? st.args['atMs'] : 0);
             notice(st.n, st.tool, 'started', { jobId: job['id'] });
           } else if (st.tool === 'captions.generate' && st.args['source'] === 'sequence') {
@@ -339,15 +361,31 @@ export class GeneratorsService {
             const same = row?.status === 'done' && row.result_asset_id ? model.tracks.audio.filter((a) => a.assetId === row.result_asset_id && a.role === 'voice') : [];
             const layer = same.find((a) => a.atMs === (dep ? voiceAt.get(dep) : undefined)) ?? same.at(-1);
             const from = layer?.atMs ?? 0, to = layer?.durationMs !== undefined ? from + layer.durationMs : deriveTiming(model).durationMs;
-            const pages = scriptPages(String(st.args['text'] ?? ''), from, Math.min(to, deriveTiming(model).durationMs));
+            // FR-248: the voice's own timed transcript (script words, engine / whisper times) — the caption text is the script, never recognition
+            const stored = row?.result_asset_id ? this.transcriptOf(row.result_asset_id) : null;
+            const captionText = String(st.args['text'] ?? '').trim();
+            const tx = stored && captionText && captionText !== stored.spoken && captionText !== stored.written
+              ? buildTranscript({ spoken: stored.spoken, written: captionText, language: stored.language, durationMs: stored.durationMs, tokens: stored.words, method: 'engine' })
+              : stored;
+            const pages = tx && layer ? cuesToCaptionPages(tx.cues, from, { trimBeforeMs: layer.trimBeforeMs, untilMs: Math.min(to, deriveTiming(model).durationMs) })
+              : scriptPages(captionText, from, Math.min(to, deriveTiming(model).durationMs));
             if (!pages.length) { notice(st.n, st.tool, 'skipped', { code: 'EM-7103' }); continue; }
             const ops = this.withCaptionStyle(projectId, [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT, ...(typeof st.args['presetId'] === 'string' ? [{ op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: st.args['presetId'] } } as OperationT] : [])]);
             ctx.hooks.applyOps(projectId, ops, { kind: 'generator', ref: planId, summary: 'Captions from the script' });
-            notice(st.n, st.tool, 'done', { pages: pages.length, timedTo: layer ? 'voice' : 'video' });
+            notice(st.n, st.tool, 'done', { pages: pages.length, timedTo: layer ? 'voice' : 'video', timing: tx?.method ?? 'proportional' });
           }
         } catch (e) {
           const code = e instanceof EmError ? e.code : 'EM-7101';
-          ctx.log.warn({ projectId, planId, step: st.n, tool: st.tool, code }, 'plan generator step failed');
+          const d = (e instanceof EmError && e.details && typeof e.details === 'object' ? e.details : {}) as Record<string, unknown>;
+          ctx.log.warn({ projectId, planId, step: st.n, tool: st.tool, code, ...(d['modelKey'] ? { modelKey: d['modelKey'] } : {}), ...(d['voiceId'] ? { voiceId: d['voiceId'] } : {}) }, 'plan generator step failed');
+          // FR-252: a missing local model holds this step and the ones after it; installing the model (one click on the notice)
+          // continues them automatically. The notice carries what the Editor needs for the "Pasang" button.
+          if (code === 'EM-7001' && typeof d['modelKey'] === 'string') {
+            const rest = steps.slice(steps.indexOf(st));
+            this.held.set(d['modelKey'], [...(this.held.get(d['modelKey']) ?? []).filter((h) => h.planId !== planId), { projectId, planId, steps: rest }]);
+            notice(st.n, st.tool, 'needs-model', { code, modelKey: d['modelKey'], bytes: d['bytes'] ?? null, held: rest.map((x) => x.n) });
+            return;
+          }
           notice(st.n, st.tool, 'failed', { code });
         }
       }
@@ -355,6 +393,16 @@ export class GeneratorsService {
     void work.catch(() => undefined);
     return steps.map((st) => ({ n: st.n, tool: st.tool, status: 'started' as const }));
   }
+  /** FR-252: continues the plan steps that waited for `modelKey` (called when the model is installed). */
+  resumeHeld(modelKey: string): number {
+    const runs = this.held.get(modelKey) ?? []; this.held.delete(modelKey);
+    for (const r of runs) {
+      emit(this.ctx, 'service.notice', { kind: 'plan-step', projectId: r.projectId, planId: r.planId, step: r.steps[0]?.n ?? 0, tool: r.steps[0]?.tool ?? '', status: 'resumed', modelKey });
+      this.runPlanSteps(r.projectId, r.planId, r.steps);
+    }
+    return runs.length;
+  }
+  heldSteps(): Array<{ modelKey: string; projectId: string; planId: string; steps: number[] }> { return [...this.held.entries()].flatMap(([modelKey, rs]) => rs.map((r) => ({ modelKey, projectId: r.projectId, planId: r.planId, steps: r.steps.map((x) => x.n) }))); }
   /** R-134: insert a finished job's result later (no re-run). Idempotent: a second call returns the same version with notice EM-2308. */
   /** FR-104: caption Insert also sets the default caption style when the project has none yet. */
   private withCaptionStyle(projectId: string, ops: OperationT[]): OperationT[] {
@@ -457,6 +505,184 @@ export class GeneratorsService {
     return (async () => { await createJobDir(this.ctx.paths.tmp, j.jobId); try { return await fn(); } finally { await removeJobDir(this.ctx.paths.tmp, j.jobId).catch(() => undefined); } })();
   }
 
+  // ───────────────────────────── voices (FR-246 … FR-251, ADR-035) ─────────────────────────────
+  /** A voice id, a legacy model key or a description → a voice that can run now; EM-7001 (local model missing, installable), EM-8202 / EM-7113 (cloud). */
+  async resolveVoice(idOrDescription: string, language: 'id' | 'en'): Promise<VoiceDto> {
+    const models = modelsServiceOf(this.ctx);
+    const asModel = models.def(idOrDescription);
+    if (asModel && asModel.task !== 'tts') throw em('EM-9002', 'Invalid request: voiceId is not a voice.', { status: 400, path: 'body.voiceId' });
+    const v = await voicesServiceOf(this.ctx).resolve(idOrDescription || (language === 'id' ? 'natural jelas' : 'natural clear'), language);
+    if (!v) throw em('EM-9002', 'Invalid request: voiceId is not a voice.', { status: 400, path: 'body.voiceId' });
+    if (!v.cloud && v.availability !== 'ready') { const def = models.def(v.modelKey!); throw em('EM-7001', `"Generate Voice" needs the ${def ? displayNameOf(def).en : v.modelKey} model.`, { details: { modelKey: v.modelKey, modelId: v.modelKey, bytes: def?.bytes ?? null, voiceId: v.id } }); }
+    if (v.availability === 'private-mode') throw em('EM-8202', 'Private Mode is on, so cloud voices are not used.', { details: { action: 'cloud voice', voiceId: v.id } });
+    if (v.availability === 'no-connection') throw em('EM-7113', 'This cloud voice needs its provider connected.', { details: { provider: v.provider, voiceId: v.id, reason: 'no-connection' } });
+    return v;
+  }
+  /** FR-249: the installed recogniser used only for word TIMES (smallest first); null → proportional timing over the speech window. */
+  private async alignModel(): Promise<ModelDef | null> {
+    const models = modelsServiceOf(this.ctx);
+    const keys = ['whisper-small', 'whisper-large-v3-turbo', 'whisper-medium', 'whisper-large-v3', ...models.defs().filter((d) => d.task === 'stt').map((d) => d.key)];
+    for (const k of keys) { const d = models.def(k); if (d && await models.isInstalled(k)) return d; }
+    return null;
+  }
+  private ffmpeg(j: JobContext, args: string[], cwd: string, timeoutMs = 120_000): Promise<unknown> {
+    return s2(this.ctx).heavy.run(() => runTool({ exe: this.ctx.resources.ffmpeg, args: ['-v', 'error', '-nostdin', '-y', ...args], cwd, timeoutMs, signal: j.signal }));
+  }
+  /**
+   * One voice clip (FR-246, FR-249): synthesis (local engine or the Creator's cloud voice), pitch / tempo post-processing, a timed
+   * transcript built from the SCRIPT (engine word times, else whisper word times aligned to the script and snapped to the audio,
+   * else proportional), the WAV registered as an Asset named `<name>.wav`, the transcript stored for that Asset (JSON + SRT).
+   */
+  async voiceClip(j: JobContext, projectId: string, voice: VoiceDto, clip: { name: string; text: string; written?: string },
+    o: { language: 'id' | 'en'; speed?: number; style?: string; align?: boolean; part?: (f: number) => void }): Promise<{ assetId: string; durationMs: number; transcript: Transcript; usd: number }> {
+    const ctx = this.ctx; const models = modelsServiceOf(ctx);
+    const dir = path.join(ctx.paths.tmp, 'jobs', j.jobId, clip.name.replace(/[^\w-]/g, '_')); fs.mkdirSync(dir, { recursive: true });
+    const wav = path.join(dir, 'clip.wav');
+    let tokens: RecognisedToken[] | null = null; let method: 'engine' | 'aligned' = 'aligned'; let usd = 0;
+    if (!voice.cloud) {
+      const def = await this.requireInstalled(voice.modelKey!, 'Generate Voice');
+      const speed = o.speed === undefined ? undefined : Math.max(0.8, Math.min(1.2, o.speed));
+      const r = await this.engineStep(j, 'sherpa-onnx', 'synthesize', (c) => this.engines.voice({ modelDir: models.dirOf(def), text: clip.text, ...(speed !== undefined ? { speed } : {}) }, { ...c, onProgress: (f) => o.part?.(f * 0.6) }));
+      if (voice.pitch) {
+        const f = 2 ** (voice.pitch / 12); const sr = parseWav(fs.readFileSync(r.wavPath)).sampleRate;
+        await this.ffmpeg(j, ['-i', r.wavPath, '-af', `asetrate=${Math.round(sr * f)},aresample=${sr},atempo=${(1 / f).toFixed(5)}`, '-ac', '1', '-c:a', 'pcm_s16le', wav], dir);
+      } else fs.copyFileSync(r.wavPath, wav);
+    } else {
+      j.progress(0.05, 'cloud');
+      const res = await voicesServiceOf(ctx).synthesizeCloud(voice, clip.text, { language: o.language, ...(o.speed !== undefined ? { speed: o.speed } : {}), ...(o.style ? { style: o.style } : {}), signal: j.signal });
+      usd = res.usd; tokens = res.tokens; if (tokens?.length) method = 'engine';
+      const raw = path.join(dir, `cloud.${res.ext}`); fs.writeFileSync(raw, res.audio);
+      const tempo = voice.provider === 'gemini' && o.speed && Math.abs(o.speed - 1) > 0.01 ? ['-af', `atempo=${Math.max(0.5, Math.min(2, o.speed)).toFixed(3)}`] : [];
+      await this.ffmpeg(j, ['-i', raw, ...tempo, '-ac', '1', '-ar', '24000', '-c:a', 'pcm_s16le', wav], dir);
+      if (tempo.length && tokens) tokens = tokens.map((t) => ({ ...t, fromMs: Math.round(t.fromMs / o.speed!), toMs: Math.round(t.toMs / o.speed!) }));
+      o.part?.(0.6);
+    }
+    const buf = fs.readFileSync(wav);
+    const durationMs = wavDurationMs(parseWav(buf));
+    if (!tokens && o.align !== false) {
+      const am = await this.alignModel();
+      if (am) {
+        try {
+          const w16 = path.join(dir, 'align16k.wav');
+          await this.ffmpeg(j, ['-i', wav, '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', w16], dir);
+          const modelPath = firstWith(models.dirOf(am), /\.bin$/);
+          tokens = await this.engineStep(j, 'whisper.cpp', 'align', (c) => this.engines.wordTokens!({ modelPath, wavPath: w16, language: o.language, audioDurationMs: durationMs }, { ...c, onProgress: (f) => o.part?.(0.6 + f * 0.35) }));
+        } catch (e) {
+          if (j.signal.aborted || e instanceof CancelledError) throw e;
+          ctx.log.warn({ jobId: j.jobId, code: e instanceof EmError ? e.code : 'EM-7101' }, 'voice alignment skipped; proportional timing');   // never fails the voice
+          tokens = null;
+        }
+      }
+    }
+    const frames = energyFrames(buf);
+    const transcript = buildTranscript({ spoken: clip.text, ...(clip.written ? { written: clip.written } : {}), language: o.language, durationMs, tokens, method, speech: speechWindow(buf) ?? { fromMs: 0, toMs: durationMs },
+      refine: (w) => refineWordTimes(w, frames) });
+    o.part?.(1);
+    const assetId = await this.register(projectId, wav, `${clip.name}.wav`);
+    ctx.db.prepare('INSERT OR REPLACE INTO voice_transcripts (asset_id, project_id, voice_id, method, json, srt, created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(assetId, projectId, voice.id, transcript.method, JSON.stringify(transcript), transcriptToSrt(transcript.cues), ctx.now());
+    return { assetId, durationMs, transcript, usd };
+  }
+  /** FR-246 (R-216): a short preview sample of a voice, cached in `<models>/voice-previews/` (local: needs the model; cloud: one small paid call). */
+  async previewVoice(voice: VoiceDto, language: 'id' | 'en', outFile: string, text: string): Promise<void> {
+    const jobId = this.ctx.newId(); const ac = new AbortController();
+    const j = { jobId, signal: ac.signal, progress: () => undefined } as unknown as JobContext;
+    await createJobDir(this.ctx.paths.tmp, jobId);
+    try {
+      const dir = path.join(this.ctx.paths.tmp, 'jobs', jobId);
+      let src: string;
+      if (!voice.cloud) {
+        const def = await this.requireInstalled(voice.modelKey!, 'Generate Voice');
+        src = (await this.engineStep(j, 'sherpa-onnx', 'preview', (c) => this.engines.voice({ modelDir: modelsServiceOf(this.ctx).dirOf(def), text }, c))).wavPath;
+      } else {
+        const res = await voicesServiceOf(this.ctx).synthesizeCloud(voice, text, { language, signal: ac.signal });
+        src = path.join(dir, `cloud.${res.ext}`); fs.writeFileSync(src, res.audio);
+      }
+      const f = voice.pitch ? 2 ** (voice.pitch / 12) : 1;
+      const sr = 24000;
+      const af = voice.pitch ? ['-af', `aresample=${sr},asetrate=${Math.round(sr * f)},aresample=${sr},atempo=${(1 / f).toFixed(5)}`] : [];
+      const tmp = path.join(dir, 'preview.wav');
+      await this.ffmpeg(j, ['-i', src, ...af, '-ac', '1', '-ar', String(sr), '-c:a', 'pcm_s16le', tmp], dir);
+      fs.copyFileSync(tmp, outFile);
+    } finally { await removeJobDir(this.ctx.paths.tmp, jobId).catch(() => undefined); }
+  }
+  /** FR-247 (R-222): a downloaded library track copied into the project as an Asset (`music-<id>.mp3`). */
+  async importLibraryTrack(projectId: string, trackId: string): Promise<{ assetId: string }> {
+    const lib = musicLibraryOf(this.ctx); const t = lib.require(trackId);
+    await lib.download(trackId);
+    const src = await lib.readyFile(trackId);
+    const dir = path.join(this.ctx.paths.tmp, 'library', this.ctx.newId()); fs.mkdirSync(dir, { recursive: true });
+    const copy = path.join(dir, t.file); fs.copyFileSync(src, copy);
+    try { return { assetId: await this.register(projectId, copy, `music-${t.id}.mp3`) }; } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+  /** FR-249: the stored transcript of a voice Asset (built from its script), or null. */
+  transcriptOf(assetId: string): Transcript | null {
+    const r = this.ctx.db.prepare('SELECT json FROM voice_transcripts WHERE asset_id = ?').get(assetId) as { json: string } | undefined;
+    if (!r) return null; try { return JSON.parse(r.json) as Transcript; } catch { return null; }
+  }
+  /** FR-250: ONE op:caption.setPages with the cues of every given clip at its timeline position; other pages outside those windows stay. */
+  captionPagesOp(projectId: string, placed: ReadonlyArray<{ transcript: Transcript; atMs: number; durationMs: number }>): OperationT {
+    let existing: CompositionModelT['tracks']['caption']['pages'] = [];
+    try { existing = this.ctx.hooks.composition(projectId).model.tracks.caption.pages; } catch { /* no head yet */ }
+    const windows = placed.map((p) => [p.atMs, p.atMs + p.durationMs] as const);
+    const kept = existing.filter((p) => !windows.some(([a, b]) => p.startMs < b && p.startMs + p.durationMs > a));
+    const fresh = placed.flatMap((p) => cuesToCaptionPages(p.transcript.cues, p.atMs, { untilMs: p.atMs + p.durationMs }));
+    return { op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages: [...kept, ...fresh].sort((a, b) => a.startMs - b.startMs) } } as OperationT;
+  }
+  /**
+   * FR-251: several voice clips in ONE request (one per sentence; `v1` … `vN`), each a Library Asset named after its id with a
+   * measured duration and timed cues. Placement: clips in order from `startMs`, `gapMs` (0.3 s) between clips of the same scene,
+   * `sceneGapMs` (0.5 s) after a scene's last clip. `maxTotalMs`: when the total is longer, the whole set is generated again a
+   * little faster (never cut). A failed clip fails the whole batch: nothing is placed, no timing is invented.
+   */
+  private async prepareVoiceBatch(projectId: string, b: Record<string, unknown>, language: 'id' | 'en'): Promise<Prepared> {
+    const clips = (b['clips'] as Array<{ id: string; text: string; written?: string }>);
+    const voice = await this.resolveVoice(String(b['voiceId'] ?? b['voice'] ?? ''), language);
+    const scenes = Array.isArray(b['scenes']) ? (b['scenes'] as string[][]) : null;
+    const sceneOf = new Map<string, number>(); scenes?.forEach((sc, i) => sc.forEach((id) => sceneOf.set(id, i)));
+    const gap = typeof b['gapMs'] === 'number' ? b['gapMs'] : 300; const sceneGap = typeof b['sceneGapMs'] === 'number' ? b['sceneGapMs'] : 500;
+    const startMs = typeof b['startMs'] === 'number' ? b['startMs'] : 0;
+    const maxTotal = typeof b['maxTotalMs'] === 'number' ? b['maxTotalMs'] : null;
+    const style = typeof b['style'] === 'string' ? b['style'] : undefined;
+    const maxSpeed = voice.cloud ? (voice.provider === 'elevenlabs' ? 1.2 : 1.25) : 1.2;
+    const gapAfter = (i: number): number => (i === clips.length - 1 ? 0 : scenes ? (sceneOf.get(clips[i]!.id) === sceneOf.get(clips[i + 1]!.id) ? gap : sceneGap) : gap);
+    return { modelKey: voice.cloud ? null : voice.modelKey ?? null, run: (j) => this.withJobDir(j, async () => {
+      let speed = typeof b['speed'] === 'number' ? b['speed'] : 1;
+      const runAll = async (pass: number) => {
+        const out: Array<{ id: string; assetId: string; durationMs: number; transcript: Transcript; usd: number }> = [];
+        for (const [i, c] of clips.entries()) {
+          const r = await this.voiceClip(j, projectId, voice, { name: pass ? `${c.id}-${pass + 1}` : c.id, text: c.text, ...(c.written ? { written: c.written } : {}) },
+            { language, speed, ...(style ? { style } : {}), part: (f) => j.progress(Math.min(0.94, (pass ? 0.5 : 0) + ((i + f) / clips.length) * (pass ? 0.45 : (maxTotal ? 0.5 : 0.9))), `clip ${c.id}`) });
+          out.push({ id: c.id, ...r });
+        }
+        return out;
+      };
+      const total = (rs: ReadonlyArray<{ durationMs: number }>) => rs.reduce((s, r, i) => s + r.durationMs + gapAfter(i), 0);
+      let done = await runAll(0); let regenerated = false;
+      if (maxTotal !== null && total(done) > maxTotal && speed < maxSpeed) {
+        // shorten by speaking a little faster: the speech part must shrink by (total − max), gaps stay
+        const speech = done.reduce((s, r) => s + r.durationMs, 0); const gaps = total(done) - speech;
+        speed = Math.min(maxSpeed, Math.round(speed * (speech / Math.max(1, maxTotal - gaps)) * 1.02 * 100) / 100);
+        done = await runAll(1); regenerated = true;
+      }
+      let at = startMs;
+      const placed = done.map((r, i) => { const atMs = at; at += r.durationMs + gapAfter(i); return { ...r, atMs, endMs: atMs + r.durationMs, scene: sceneOf.get(r.id) ?? null }; });
+      const ops: OperationT[] = placed.map((p) => ({ op: 'op:audio.addLayer', args: { assetId: p.assetId, atMs: p.atMs, volume: 1, role: 'voice' } } as OperationT));
+      if (b['captions'] === true) ops.push(this.captionPagesOp(projectId, placed));
+      j.progress(0.96, 'place');
+      const totalMs = placed.length ? placed.at(-1)!.endMs - startMs : 0;
+      return { ...(placed[0] ? { assetId: placed[0].assetId } : {}), result: { batch: true, voiceId: voice.id, speed, regenerated, totalMs, overLimit: maxTotal !== null && totalMs > maxTotal, costUsd: Math.round(placed.reduce((s, p) => s + p.usd, 0) * 10000) / 10000,
+        clips: placed.map((p) => ({ id: p.id, assetId: p.assetId, name: getAsset(this.ctx, p.assetId, projectId)?.name ?? `${p.id}.wav`, durationMs: p.durationMs, atMs: p.atMs, endMs: p.endMs, scene: p.scene, timing: p.transcript.method, cues: p.transcript.cues.map(cueDto) })) }, ops };
+    }) };
+  }
+  /** FR-251 for the agent runtime: runs a batch and resolves with the clips once done; rejects with the job's EM code (nothing placed). */
+  async voiceBatch(projectId: string, body: VoiceBatchInput): Promise<VoiceBatchResult> {
+    const job = await this.create(projectId, 'voice', { ...body, clips: body.clips, language: body.language ?? 'id', insert: body.insert ?? false });
+    const row = await this.waitJob(String(job['id']));
+    if (!row || row.status !== 'done') throw em((row?.error_code ?? 'EM-7101') as 'EM-7101', 'The voice clips could not be generated.', { details: { jobId: job['id'], status: row?.status ?? 'missing' } });
+    return { jobId: row.id, ...(JSON.parse(row.result_json ?? '{}') as Omit<VoiceBatchResult, 'jobId'>) };
+  }
+
   /** FR-104: captions for the Sequence audio: each video Clip's audio segment is transcribed and its pages placed on the timeline. */
   private async prepareSequenceCaptions(projectId: string, b: Record<string, unknown>, tier: 'T0' | 'T1' | 'T2'): Promise<Prepared> {
     const ctx = this.ctx; const models = modelsServiceOf(ctx);
@@ -521,42 +747,49 @@ export class GeneratorsService {
       }) };
     }
     if (kind === 'voice') {
+      const language = lang === 'en' ? 'en' : 'id';
+      if (Array.isArray(b['clips'])) return this.prepareVoiceBatch(projectId, b, language);
       const text = String(b['text'] ?? '');
       if ([...text].length > 2000) throw em('EM-7106', 'Voice generation accepts up to 2,000 characters at a time.', { details: { chars: [...text].length, limit: 2000 } });
-      const def = await this.requireInstalled(String(b['voiceId']), 'Generate Voice');
-      if (def.task !== 'tts') throw em('EM-9002', 'Invalid request: voiceId is not a voice.', { status: 400, path: 'body.voiceId' });
+      const voice = await this.resolveVoice(String(b['voiceId'] ?? ''), language);
       const atMs = typeof b['atMs'] === 'number' ? b['atMs'] : 0;
-      return { modelKey: def.key, run: (j) => this.withJobDir(j, async () => {
-        const r = await this.engineStep(j, 'sherpa-onnx', 'synthesize', (c) => this.engines.voice({ modelDir: models.dirOf(def), text, ...(typeof b['speed'] === 'number' ? { speed: b['speed'] } : {}) }, c));
-        j.progress(0.9, 'ingest');
-        const assetId = await this.register(projectId, r.wavPath, `voice-${short(j.jobId)}.wav`);
-        return { assetId, result: { assetId, waveform: true }, ops: [{ op: 'op:audio.addLayer', args: { assetId, atMs, volume: 1, role: 'voice' } }] };
+      const written = typeof b['captionText'] === 'string' && b['captionText'].trim() ? b['captionText'] : undefined;
+      return { modelKey: voice.cloud ? null : voice.modelKey ?? null, run: (j) => this.withJobDir(j, async () => {
+        const c = await this.voiceClip(j, projectId, voice, { name: `voice-${short(j.jobId)}`, text, ...(written ? { written } : {}) },
+          { language, ...(typeof b['speed'] === 'number' ? { speed: b['speed'] } : {}), ...(typeof b['style'] === 'string' ? { style: b['style'] } : {}), part: (f) => j.progress(0.05 + f * 0.85, 'synthesize') });
+        j.progress(0.95, 'ingest');
+        const ops: OperationT[] = [{ op: 'op:audio.addLayer', args: { assetId: c.assetId, atMs, volume: 1, role: 'voice' } } as OperationT];
+        if (b['captions'] === true) ops.push(this.captionPagesOp(projectId, [{ transcript: c.transcript, atMs, durationMs: c.durationMs }]));
+        return { assetId: c.assetId, result: { assetId: c.assetId, waveform: true, durationMs: c.durationMs, voiceId: voice.id, timing: c.transcript.method, costUsd: c.usd, captions: b['captions'] === true,
+          cues: c.transcript.cues.map(cueDto) }, ops };
       }) };
     }
     if (kind === 'music') {
       const key = typeof b['modelKey'] === 'string' ? b['modelKey'] : defaultModelFor('music', tier);
-      const def = await this.requireInstalled(key, 'Generate Music');
       const durationMs = Number(b['durationMs']);
       const vocals = lang === 'en' ? ', English vocals' : ', Indonesian vocals';   // FR-106: the language of sung lyrics
       const prompt = `${String(b['prompt'] ?? '')}${typeof b['style'] === 'string' && b['style'] ? `, ${b['style']}` : ''}${b['instrumental'] === false ? vocals : ', instrumental'}`;
-      return { modelKey: def.key, run: (j) => this.withJobDir(j, async () => {
-        const seed = crypto.createHash('sha256').update(prompt).digest().readUInt32BE(0);
-        let wav: string; let source: 'ace-step' | 'loop-library';
-        if (def.engine === 'loops') {
-          source = 'loop-library';
-          const dir = models.dirOf(def);
-          const loops = fs.readdirSync(dir).filter((n) => /\.(wav|mp3|m4a|ogg|flac)$/i.test(n)).sort();
-          if (!loops.length) throw em('EM-7108', 'The installed loop library is damaged.');
-          wav = path.join(ctx.paths.tmp, 'jobs', j.jobId, 'out.wav');
-          await this.engineStep(j, 'loops', 'generate', () => runTool({ exe: ctx.resources.ffmpeg, args: ['-v', 'error', '-nostdin', '-y', '-stream_loop', '-1', '-i', path.join(dir, loops[seed % loops.length]!),
-            '-t', (durationMs / 1000).toFixed(3), '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', wav], cwd: path.dirname(wav), timeoutMs: 120_000, signal: j.signal }));
-        } else {
-          source = 'ace-step';
-          wav = (await this.engineStep(j, 'ace-step', 'generate', (c) => this.engines.music({ modelDir: models.dirOf(def), prompt, durationMs, seed, tier }, c))).wavPath;
-        }
+      if (key !== 'loop-library-cc0') {
+        // FR-247: AI music needs the ACE-Step engine (embedded Python, GPU ≥ 4 GB), which this version does not ship
+        const def = models.def(key);
+        if (!def || def.engine === 'ace-step') throw em('EM-7107', 'AI music generation is not available in this version; use the CC0 music library.', { details: { modelKey: key, fallback: 'loop-library-cc0' } });
+        await this.requireInstalled(key, 'Generate Music');
+      }
+      const lib = musicLibraryOf(ctx);
+      const asked = typeof b['trackId'] === 'string' ? lib.require(b['trackId']) : null;
+      if (ctx.settings.get().privateMode && !(asked ? lib.isReady(asked) : MUSIC_LIBRARY.some((t) => lib.isReady(t)))) throw em('EM-8202', 'Private Mode is on, so no music track can be downloaded.', { details: { action: 'music download' } });
+      return { modelKey: null, run: (j) => this.withJobDir(j, async () => {
+        j.progress(0.05, 'download');
+        const track = asked ?? await lib.pickFor(prompt);
+        if (asked) await lib.download(asked.id);
+        const src = await lib.readyFile(track.id);
+        const wav = path.join(ctx.paths.tmp, 'jobs', j.jobId, 'out.wav');
+        const fadeOut = Math.max(0, durationMs / 1000 - 1.5).toFixed(3);
+        await this.engineStep(j, 'loops', 'generate', () => runTool({ exe: ctx.resources.ffmpeg, args: ['-v', 'error', '-nostdin', '-y', '-stream_loop', '-1', '-i', src,
+          '-t', (durationMs / 1000).toFixed(3), '-af', `afade=t=out:st=${fadeOut}:d=1.5`, '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', wav], cwd: path.dirname(wav), timeoutMs: 120_000, signal: j.signal }));
         j.progress(0.9, 'ingest');
-        const assetId = await this.register(projectId, wav, `music-${short(j.jobId)}.wav`);
-        return { assetId, result: { assetId, durationMs, source, instrumental: b['instrumental'] !== false, cc0: source === 'loop-library' }, ops: [musicBedOp(assetId)] };
+        const assetId = await this.register(projectId, wav, `music-${track.id}.wav`);
+        return { assetId, result: { assetId, durationMs, source: 'loop-library', instrumental: true, cc0: true, trackId: track.id, title: track.title, artist: track.artist, credit: track.credit, licence: MUSIC_LIBRARY_LICENCE.url }, ops: [musicBedOp(assetId)] };
       }) };
     }
     if (kind === 'thumbnail') {

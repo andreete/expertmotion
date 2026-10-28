@@ -1,7 +1,7 @@
 // Edit-intent pipeline steps 2–7 (docs/AI_WORKFLOW.md §2, §4, §6, §7): typed intents from Design Picks, Target Resolution,
 // multi-target expansion, the Intent Queue reducer (supersede / restore / remove) and the deterministic Compile path.
 import { compileDefaults, getPreset, type Category } from '@expertmotion/catalogue';
-import { deriveTiming, duplicationSteps, propertyKeysOf, removalSteps, stepFor, topmostAt, type CompositionModelT, type ElementRefT, type ItemRef, type LayerMove, type OperationT } from '@expertmotion/composition-model';
+import { deriveTiming, duplicationSteps, pasteSteps, propertyKeysOf, removalSteps, stepFor, topmostAt, type CompositionModelT, type ElementRefT, type ClipboardEntry, type ItemRef, type LayerMove, type OperationT } from '@expertmotion/composition-model';
 import { fail, issue, ok, type Result } from '@expertmotion/shared';
 import type { EditIntentT, IntentCategory } from './schemas.js';
 
@@ -42,7 +42,8 @@ export interface DesignPick {
    */
   itemsEdit?: ItemsEdit;
 }
-export interface ItemsEdit { action: 'remove' | 'duplicate'; items: ItemRef[] }
+/** FR-255 / FR-256: `paste` rebuilds clipboard snapshots at `paste.atMs` (pasteSteps); `items` is empty then. */
+export interface ItemsEdit { action: 'remove' | 'duplicate' | 'paste'; items: ItemRef[]; paste?: { atMs: number; entries: ClipboardEntry[] } }
 export type SplitKind = 'clip' | 'text' | 'image' | 'shape' | 'audio';
 export interface SplitEdit { atMs: number; items: Array<{ kind: SplitKind; id: string }> }
 export interface TransformEdit { kind: 'clip' | 'image' | 'shape'; id: string; x?: number; y?: number; scale?: number; rotation?: number }
@@ -166,7 +167,7 @@ function splitWindow(model: CompositionModelT, kind: SplitKind, id: string): { f
 }
 const categoryOfKind = (kind: string): IntentCategory => (kind === 'audio' ? 'audio' : kind === 'text' ? 'text' : kind === 'shape' ? 'shape' : 'asset');
 /** ADR-031: the ops of a Delete / Duplicate pick on `model` (one per resolved target). */
-const itemSteps = (model: CompositionModelT, e: ItemsEdit) => (e.action === 'remove' ? removalSteps(model, e.items) : duplicationSteps(model, e.items));
+const itemSteps = (model: CompositionModelT, e: ItemsEdit) => (e.action === 'paste' ? pasteSteps(model, e.paste?.entries ?? [], e.paste?.atMs ?? 0) : e.action === 'remove' ? removalSteps(model, e.items) : duplicationSteps(model, e.items));
 const ITEM_CATEGORY: Record<string, IntentCategory> = { cut: 'transition', effect: 'effect', background: 'background', caption: 'caption' };
 const categoryOfItems = (items: readonly ItemRef[]): IntentCategory => {
   const cats = [...new Set(items.map((x) => ITEM_CATEGORY[x.kind] ?? categoryOfKind(x.kind)))];
@@ -190,6 +191,11 @@ export function resolveTargets(pick: DesignPick, model: CompositionModelT): Resu
     case 'items': {
       // ADR-031: Delete / Duplicate — the listed items that still exist (a deleted scene clip takes its own texts with it).
       const e = pick.itemsEdit!;
+      if (e.action === 'paste') {                                     // FR-256: one step per clipboard entry (synthetic project targets)
+        const steps = itemSteps(model, e);
+        if (!steps.length) return fail([issue('EM-2201', 'The clipboard is empty.', 'block', 'itemsEdit.paste')]);
+        return ok({ targets: steps.map((s) => s.target), label: `paste ${steps.length === 1 ? (e.paste!.entries[0]?.kind ?? 'item') : `${steps.length} items`}` });
+      }
       if (!e.items.length) return fail([issue('EM-2201', 'Select something on the Timeline first.', 'block', 'itemsEdit.items')]);
       const steps = itemSteps(model, e);
       if (!steps.length) return fail([issue(e.action === 'duplicate' ? 'EM-2201' : 'EM-2203', e.action === 'duplicate' ? 'This item cannot be duplicated.' : 'That item no longer exists.', 'block', 'itemsEdit.items')]);

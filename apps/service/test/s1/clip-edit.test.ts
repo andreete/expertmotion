@@ -3,6 +3,7 @@
 // ADR-027: elementEdit picks (texts, images, shapes, audio) compile to op:element.setTiming / op:element.setLayer, undoable.
 // ADR-028: splitEdit (scissors / S) → op:element.split per item in ONE version; transformEdit (Player handles) → op:element.setTransform.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { copySnapshot } from '@expertmotion/composition-model';
 import { headHash, insertClips, newProject, startS1, type S1Service } from './helpers.js';
 
 describe('FR-068 clip edits', () => {
@@ -110,5 +111,37 @@ describe('FR-068 clip edits', () => {
     const add = await s.json(`/projects/${empty.id}/intents`, { method: 'POST', json: { source: 'ui', category: 'text', presetId: 'preset:text.title', text: 'Halo', target: { kind: 'playhead' }, playheadMs: 0, baseVersion: empty.headHash } });
     expect([add.status, add.body.intent.status]).toEqual([201, 'executed']);
     expect((await s.json(`/projects/${empty.id}/composition`)).body.head.model.tracks.text[0].timing).toEqual({ atMs: 0, durationMs: 3000 });
+  });
+  it('FR-255 / FR-256: Cut (copy + Delete) then Paste at the playhead is one executed pick and one undo; untrusted clipboards are refused', async () => {
+    const p = await newProject(s, 'Tempel');
+    insertClips(s, p.id, ['a1', 'a2']);
+    const model = async () => (await s.json(`/projects/${p.id}/composition`)).body.head.model;
+    const post = async (body: Record<string, unknown>) => s.json(`/projects/${p.id}/intents`, { method: 'POST', json: { source: 'ui', target: { kind: 'playhead' }, ...body, baseVersion: await headHash(s, p.id) } });
+    expect((await post({ category: 'text', presetId: 'preset:text.title', text: 'Judul', playheadMs: 0 })).body.intent.status).toBe('executed');
+    const m0 = await model();
+    const clip = m0.tracks.video[0] as { id: string }, text = m0.tracks.text[0] as { id: string };
+    const { entries } = copySnapshot(m0, [{ kind: 'clip', id: clip.id }, { kind: 'text', id: text.id }]);
+    expect((await post({ category: 'asset', target: { kind: 'clip', id: clip.id }, itemsEdit: { action: 'remove', items: [{ kind: 'clip', id: clip.id }, { kind: 'text', id: text.id }] } })).body.intent.status).toBe('executed');
+    const before = await headHash(s, p.id);
+    const paste = await post({ category: 'asset', playheadMs: 0, itemsEdit: { action: 'paste', items: [], paste: { atMs: 0, entries } } });
+    expect([paste.status, paste.body.intent.status]).toEqual([201, 'executed']);
+    const m1 = await model();
+    expect(m1.tracks.video.map((c: { assetId: string }) => c.assetId)).toEqual(m0.tracks.video.map((c: { assetId: string }) => c.assetId));
+    expect(m1.tracks.text.map((x: { text: string; timing: { atMs: number } }) => [x.text, x.timing.atMs])).toEqual([['Judul', 0]]);
+    await s.json(`/projects/${p.id}/composition/undo`, { method: 'POST' });
+    expect(await headHash(s, p.id)).toBe(before);                                      // one undo removes the whole paste
+    // untrusted input: an op that is not the add op of its kind, too many entries, items with paste, paste without entries
+    const bad = [{ ...entries[0]!, op: { op: 'op:clip.remove', args: {} } }];
+    expect((await post({ category: 'asset', itemsEdit: { action: 'paste', items: [], paste: { atMs: 0, entries: bad } } })).status).toBe(400);
+    expect((await post({ category: 'asset', itemsEdit: { action: 'paste', items: [], paste: { atMs: 0, entries: Array.from({ length: 51 }, () => entries[1]!) } } })).status).toBe(400);
+    expect((await post({ category: 'asset', itemsEdit: { action: 'paste', items: [{ kind: 'text', id: text.id }], paste: { atMs: 0, entries } } })).status).toBe(400);
+    expect((await post({ category: 'asset', itemsEdit: { action: 'paste', items: [] } })).status).toBe(400);
+    expect((await post({ category: 'asset', itemsEdit: { action: 'remove', items: [] } })).status).toBe(400);
+    // a pasted clip whose asset is not in this project is blocked by applyOperations (nothing applied)
+    const foreign = [{ kind: 'clip', offsetMs: 0, durationMs: 1000, op: { op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: '01JAZK0000000000000000000Z', durationMs: 1000 } } }];
+    const h = await headHash(s, p.id);
+    const r = await post({ category: 'asset', itemsEdit: { action: 'paste', items: [], paste: { atMs: 0, entries: foreign } } });
+    expect(r.status === 201 ? r.body.intent.status : r.status).not.toBe('executed');
+    expect(await headHash(s, p.id)).toBe(h);
   });
 });

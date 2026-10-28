@@ -14,7 +14,7 @@ describe('registry matches docs/DESIGN_CATALOGUE.md exactly', () => {
   it('documented P0 counts (§12)', () => {
     const p0 = (c: Category) => listPresets({ category: c, priority: ['p0'] }).filter((p) => !p.id.endsWith('.none')).length;
     expect({ transition: p0('transition'), caption: p0('caption'), motion: p0('motion'), shape: p0('shape'), easing: p0('easing'), effect: p0('effect'), audio: p0('audio'), text: p0('text'), texteffect: p0('texteffect'), palette: p0('palette'), fontpair: p0('fontpair') })
-      .toEqual({ transition: 6, caption: 3, motion: 5, shape: 4, easing: 5, effect: 6, audio: 3, text: 4, texteffect: 2, palette: 6, fontpair: 3 });
+      .toEqual({ transition: 6, caption: 3, motion: 5, shape: 4, easing: 5, effect: 6, audio: 3, text: 4, texteffect: 2, palette: 7, fontpair: 4 });
     // backgrounds: 5 + video-dim + none
     expect(listPresets({ category: 'background', priority: ['p0'] }).length).toBe(7);
   });

@@ -276,6 +276,36 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | 9 | `EM-2201` (nothing duplicable), `EM-2203` (item gone), `EM-2102` (a copied value outside the add op's range, e.g. a hand-made model). |
 | 10 | Ctrl+Z removes every copy of the action at once. |
 
+### IX-31 Move the playhead from anywhere on the Timeline (FR-253, FR-254; QA 2026-10-28 #6)
+
+| # | Spec |
+|---|---|
+| 1 | Press + drag the playhead line `stage.timeline.head` anywhere along its height (12 px grab zone, pointer capture), press / drag on the sticky ruler `stage.timeline.ruler`, or press / drag on empty track space (a lane or track row, not a bar). **Alt+click** on a bar seeks to the click point and leaves the selection unchanged. Keyboard: focus the playhead (Tab, `role="slider"`) or anywhere outside text fields: ←/→ one frame, Shift+←/→ one second, Home / End. |
+| 2 | The Player follows live (one seek per animation frame while dragging; the release applies the exact last position). A plain press on empty track space also clears the selection; Shift or Ctrl / ⌘ keep it. The ruler with the playhead marker stays at the top of `stage.timeline.scroll` while the lanes scroll; lane names stay at the left. |
+| 3 | No Edit Intent (UI state only). |
+| 4 | — |
+| 5 | — |
+| 6 | The Player shows the frame at the new time. |
+| 7 | The playhead line and the ruler marker move; `data-scrubbing` on the line while dragging. |
+| 8 | Esc does not apply (no change to cancel); a pointer cancel ends the scrub at the last position. |
+| 9 | — |
+| 10 | n/a (the playhead position is saved per project as before). |
+
+### IX-32 Copy / Cut / Paste Timeline items (FR-255, FR-256; QA 2026-10-28 #5)
+
+| # | Spec |
+|---|---|
+| 1 | Item menu (`stage.itemmenu.copy` / `.cut` / `.paste`) or Ctrl+C / Ctrl+X / Ctrl+V (⌘ on macOS) with focus outside text fields and no text selected on the page. Right-click on empty track space opens the menu with only Paste. |
+| 2 | Copy: toast "Copied 2 items" / "2 item disalin" (with a note when captions, transitions, effects or music beds were left out); nothing is sent to the Local Service. Cut: Copy + IX-29 Delete. Paste: at the playhead (live Player time). Empty clipboard → info toast "Nothing copied yet…" / "Belum ada yang disalin…". The clipboard is in-app (never the OS clipboard), lives for the Editor window session and works across projects (an Asset that is not in the target project blocks the pick). |
+| 3 | Paste: category asset / `list:paste:project:<n>:<unique>` per entry (never supersedes, never a Locked Key) / list, `source: ui`, pick field `itemsEdit {action: 'paste', items: [], paste: {atMs, entries}}` (≤ 50 entries, ≤ 64 KB, each entry carries only the add op of its kind). |
+| 4 | Compile (no LLM, `pasteSteps`): clips (`op:clip.insert` / `op:scene.add` with `atIndex`) first, inserted one after the other at the cut at / after the playhead (inside a clip → after it), then `op:text.add` / `op:overlay.addImage` / `op:shape.add` / `op:audio.addLayer` at the first clip's start + offset (no clips: playhead + offset); ONE plan, ONE Composition Version. |
+| 5 | One Intent Queue item "Paste (2)" / "Tempel (2)", executed; toast "Pasted 2 items" / "2 item ditempel" with Undo. |
+| 6 | Player shows the new version. |
+| 7 | The pasted bars appear (overlapping texts / images / shapes on free lanes); later scene clips and their items move right. |
+| 8 | As IX-02. |
+| 9 | `EM-2201` (empty clipboard), `EM-2102` / `EM-2203` (a value or Asset the project does not accept), 400 for a malformed clipboard. |
+| 10 | Ctrl+Z removes the whole paste at once (Cut: Ctrl+Z restores the deleted items). |
+
 ## 3. Agent Panel actions
 
 ### IX-12 Brainstorm send
@@ -490,7 +520,7 @@ Creator gesture ─► (2) optimistic UI ─► POST intent ─► (3) typed int
 | Multi selection | Shift+click range within one Track or lane; Ctrl+click toggles across Tracks; inspector shows "3 elements" with common fields; picks apply to "each selected" per Target Resolution. Cuts are selectable as thin handles between Clips (single only). |
 | Playhead as implicit target | With nothing selected, motion/effect picks target the Clip under the playhead; text picks target a Text Layer under the playhead if one exists ("apply to this text" / "terapkan ke teks ini" offered). |
 | Selection vs. playhead independence | Selecting does not move the playhead unless "Seek on select" is on in `stage.player.menu` (default on). |
-| Clearing | Esc, click on empty lane, a Delete (IX-29), or a Composition Version that removes the element. |
+| Clearing | Esc, a press on empty track space (which also seeks there, IX-31; Shift / Ctrl keep the selection), a Delete (IX-29), or a Composition Version that removes the element. |
 | Chips | Every selected element is a chip in the chat composer at once ("Klip 2", "Adegan 1", the text's first words, an asset name); Ctrl+click / Shift+click add more chips, a chip appears once per element, and a chip whose element is gone leaves the composer (FR-194). |
 | Persistence | Selection is not saved; playhead position is saved per project (restore on open). |
 | Asset selection | Independent of timeline selection; `lib.assets.card.select` checkboxes; Space toggles the focused card. |
@@ -503,7 +533,7 @@ Windows keys; `Ctrl` = `Ctrl` (macOS build P2 maps to `Cmd`). Shortcuts are list
 | Shortcut | Action | Scope | Element |
 |---|---|---|---|
 | Space | Play / pause | Editor (not in text fields) | `stage.player.controls.play` |
-| ← / → | Previous / next frame; with an editable Timeline bar focused: move it one frame earlier / later (IX-26) | Editor | `stage.player.controls.scrubber`, `stage.timeline.element` |
+| ← / → | Previous / next frame (also with the Timeline playhead `stage.timeline.head` focused, IX-31); with an editable Timeline bar focused: move it one frame earlier / later (IX-26) | Editor | `stage.player.controls.scrubber`, `stage.timeline.head`, `stage.timeline.element` |
 | Shift+← / → | −1 s / +1 s (Player, or the focused Timeline bar) | Editor | same |
 | Alt+↑ / Alt+↓ | Focused Timeline bar one lane up / down (layer forward / back; IX-26) | Stage | `stage.timeline.element` |
 | Alt (held while dragging) | Disable snapping to the playhead and edges (IX-26) and to the frame centre / edges on the Player (IX-27) | Stage | `stage.timeline.snap`, `stage.player.canvas.guide` |
@@ -524,6 +554,8 @@ Windows keys; `Ctrl` = `Ctrl` (macOS build P2 maps to `Cmd`). Shortcuts are list
 | Enter | Insert when Asset Panel focused and ≥ 1 selected | Library Panel | `lib.assets.insert` |
 | Delete / Backspace | Delete every selected Timeline item as one undoable pick, no dialog (IX-29) | Stage (not in text fields) | `stage.timeline.inspector.delete` |
 | Shift+F10 / ContextMenu | Item menu of the focused Timeline bar (IX-30) | Timeline bar | `stage.itemmenu` |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copy / Cut / Paste Timeline items on the in-app clipboard; Paste at the playhead (IX-32). Not in text fields and not while page text is selected (native copy / paste then) | Stage | `stage.itemmenu.copy` / `.cut` / `.paste` |
+| Alt+click on a bar | Seek to the click point without changing the selection (IX-31) | Timeline | `stage.timeline.element` |
 | A | Ask Editor Agent about the selection | Stage | inspector shortcut |
 | F | Fullscreen Player toggle | Editor | `stage.player.controls.fullscreen` |
 | Shift+? | Shortcut sheet | Global | — |

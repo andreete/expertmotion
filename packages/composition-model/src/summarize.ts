@@ -14,12 +14,17 @@ export interface CompactComposition {
   text: Array<{ id: string; variant: string; text: string; atMs: number; durationMs: number; layer: number }>;
   /** `x` / `y`: centre as a fraction of the frame (0 = centre, ADR-028 units); `scale` / `rotation` only when set. */
   overlay: Array<{ id: string; kind: string; preset: string | null; asset: string | null; atMs: number; durationMs: number; layer: number; x: number; y: number; scale?: number; rotation?: number }>;
-  captions: { style: string | null; pages: number };
+  /** ADR-033: `list` = the caption pages (i = 0-based pageIndex, start / end ms, text ≤ 80 chars) so one page can be fixed
+   *  with op:caption.replaceText / op:caption.editPage; at most CAPTION_LIST_MAX pages, halved first when over budget. */
+  captions: { style: string | null; pages: number; list: Array<{ i: number; startMs: number; endMs: number; text: string }> };
   audio: Array<{ id: string; role: string; asset: string; atMs: number; durationMs: number | null; lane: number }>;
   background: string | null;
   theme: { palette: string; fontPair: string; easing: string };
   truncated: boolean;
 }
+
+/** ADR-033: caption pages listed in the envelope (a 3-minute talking video has ~150). */
+export const CAPTION_LIST_MAX = 200;
 
 export function summarizeForAgent(model: CompositionModelT, assets: readonly AssetFacts[], maxTokens = 4000): CompactComposition {
   const names = new Map(assets.map((a) => [a.id, a.name ?? a.id]));
@@ -34,7 +39,8 @@ export function summarizeForAgent(model: CompositionModelT, assets: readonly Ass
     text: model.tracks.text.map((x) => ({ id: x.id, variant: x.variantId, text: x.text.length > 120 ? `${x.text.slice(0, 117)}…` : x.text, atMs: x.timing.atMs, durationMs: x.timing.durationMs, layer: x.layer })),
     overlay: model.tracks.overlay.map((o) => ({ id: o.id, kind: o.kind, preset: o.kind === 'shape' ? o.presetId : null, asset: o.kind === 'image' ? names.get(o.assetId) ?? o.assetId : null, atMs: o.timing.atMs, durationMs: o.timing.durationMs, layer: o.layer,
       x: frac(o.position.x, f.w), y: frac(o.position.y, f.h), ...(o.scale !== undefined ? { scale: o.scale } : {}), ...(o.rotation !== undefined ? { rotation: o.rotation } : {}) })),
-    captions: { style: model.tracks.caption.styleId, pages: model.tracks.caption.pages.length },
+    captions: { style: model.tracks.caption.styleId, pages: model.tracks.caption.pages.length,
+      list: model.tracks.caption.pages.slice(0, CAPTION_LIST_MAX).map((p, i) => { const x = p.text.trim(); return { i, startMs: p.startMs, endMs: p.startMs + p.durationMs, text: x.length > 80 ? `${x.slice(0, 79)}…` : x }; }) },
     audio: model.tracks.audio.map((a) => ({ id: a.id, role: a.role, asset: names.get(a.assetId) ?? a.assetId, atMs: a.atMs, durationMs: a.durationMs ?? null, lane: a.lane })),
     background: model.background?.presetId ?? null,
     theme: { palette: model.theme.paletteId, fontPair: model.theme.fontPairId, easing: model.theme.defaultEasingId },
@@ -42,6 +48,9 @@ export function summarizeForAgent(model: CompositionModelT, assets: readonly Ass
   };
   const budget = maxTokens * 4;
   const lists = ['text', 'overlay', 'audio', 'video'] as const;
+  if (out.captions.list.length < out.captions.pages) out.truncated = true;
+  // Caption pages go first (they are the longest list and only needed for caption fixes), down to 20.
+  while (JSON.stringify(out).length > budget && out.captions.list.length > 20) { out.captions.list.splice(Math.ceil(out.captions.list.length / 2)); out.truncated = true; }
   while (JSON.stringify(out).length > budget && lists.some((k) => out[k].length > 3)) {
     const k = lists.find((l) => out[l].length > 3)!;
     (out[k] as unknown[]).splice(Math.ceil(out[k].length / 2));

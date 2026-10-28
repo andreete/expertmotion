@@ -6,6 +6,13 @@
 // markup is ever visible; proposals render and survive a reload (the crash); an image attachment reaches Claude as an image part;
 // a text-only model gets the file name only; the markup fallback runs the tool; the Editor's native tool call works; no page
 // exception, console error or error-boundary hit.
+// QA 2026-10-28 (Entry 33) adds: internet research (web_search server tool, progress "Searching the internet: …", citations as
+// links, pause_turn continuation, an account with web search off → EM-4403 notice), openly licensed pictures (web_images →
+// Import → Library asset), Diskusi and Editor as separate tabs with "Send to Editor" (both tabs show progress, the draft card
+// follows the run), the plan preview before Execute and the timeline change after it, deleting through the chat with the inline
+// confirmation (no EM-9002), fixing ONE caption word through a caption chip, audio + document attachments, and the acceptance
+// prompt "Ekspor Nikel Indonesia 2026" (scene.compose preview with 6 scenes "perkiraan"; Execute makes the voices first — no local
+// voice model here, so it must stop with the reason and change nothing).
 //
 // Prepare once exactly like poc/e2e/providers-flow.mjs (scratch folder <dir> outside the repo with token, pass, a1.key, a UI build in
 // <dir>/ui and a dev Service build with that A1 public key). Ports 4110 service / 4120 UI / 4140 stub / 9335 CDP.
@@ -101,7 +108,7 @@ const assistantCount = () => count('[data-el="agent.chat.message"][data-role="as
  * from the first sample to the answer (FR-214), with phase text and Stop; streamed text must grow before the end; no markup ever.
  */
 const discuss = async (label, message, { mode = 'brainstorm' } = {}) => {
-  await click(`[data-el="agent.chat.mode.${mode}"]`);
+  await click(`[data-el="agent.chat.tab.${mode}"]`);                       // ADR-033: two tabs (separate threads)
   const before = mode === 'brainstorm' ? await assistantCount() : await count('[data-el="agent.editor.plancard"]');
   await page.evaluate('window.__em.progress = []');
   await typeInto('[data-el="agent.chat.composer"]', message);
@@ -223,7 +230,7 @@ try {
 
   // ── FR-213: image attachment reaches Claude as an image part ──
   await step('image-attach', async () => {
-    await click('[data-el="agent.chat.mode.brainstorm"]');
+    await click('[data-el="agent.chat.tab.brainstorm"]');
     const { root: docRoot } = await page.send('DOM.getDocument', { depth: -1, pierce: true });
     const { nodeId } = await page.send('DOM.querySelector', { nodeId: docRoot.nodeId, selector: '[data-el="agent.chat"] input[type="file"]' });
     await page.send('DOM.setFileInputFiles', { nodeId, files: [pngPath] });
@@ -268,6 +275,149 @@ try {
     check('plan card shown', (await count('[data-el="agent.editor.plancard"]')) > 0);
     const ed = stub.calls.filter((c) => c.provider === 'anthropic' && c.path === '/v1/messages' && c.tools?.includes('composition_validateOps'));
     check('Editor used native tools with valid requests', ed.length >= 2 && ed.every((c) => !c.problem) && ed.some((c) => c.toolResults?.length), { calls: ed.map((c) => ({ results: c.toolResults?.length, problem: c.problem })) });
+  });
+
+  // ── FR-216: internet research (Anthropic web_search server tool), citations, pause_turn, account with web search off ──
+  await step('research-web-search', async () => {
+    const n0 = stub.calls.length;
+    const r = await discuss('Diskusi (riset internet)', 'Tolong riset data terbaru ekspor nikel Indonesia 2026 dan sebutkan sumbernya');
+    const calls = stub.calls.slice(n0).filter((c) => c.provider === 'anthropic' && c.path === '/v1/messages');
+    check('research: web_search_20260209 + web_fetch_20260209 offered, request valid', calls.some((c) => c.webTools?.includes('web_search_20260209') && c.webTools?.includes('web_fetch_20260209')) && calls.every((c) => !c.problem), { calls: calls.map((c) => ({ web: c.webTools, problem: c.problem, stop: c.stop })) });
+    check('research: progress said what it searched ("Searching the internet: …")', r.progressTexts.some((x) => /Searching the internet: ekspor nikel|Mencari di internet: ekspor nikel/.test(x)), { texts: r.progressTexts });
+    check('research: sources shown as links (cited first)', await waitFor(`document.querySelectorAll('[data-el="agent.chat.message.source"]').length >= 2`, 5000), { sources: await page.evaluate(`[...document.querySelectorAll('[data-el="agent.chat.message.source"]')].map((a) => a.getAttribute('href'))`) });
+    check('research: first link is the cited ANTARA article', /antaranews\.com/.test(await page.evaluate(`document.querySelector('[data-el="agent.chat.message.source"]')?.getAttribute('href') ?? ''`)));
+    check('research: answer has the researched figure and no "cannot access the internet"', /25,96/.test(await text('[data-el="agent.chat.thread"]')) && !/tidak bisa mengakses internet|cannot access the internet/i.test(await text('[data-el="agent.chat.thread"]')));
+  });
+  await step('research-pause-turn', async () => {
+    stub.configure('anthropic', { thinkMs: 300, pauseOnce: true });
+    const n0 = stub.calls.length;
+    await discuss('Diskusi (riset, pause_turn)', 'Riset sumber terbaru soal volume ekspor nikel');
+    const calls = stub.calls.slice(n0).filter((c) => c.provider === 'anthropic' && c.path === '/v1/messages');
+    check('pause_turn: the paused turn was continued (pause_turn → end_turn, every request valid)', calls.map((c) => c.stop).join(',').includes('pause_turn,end_turn') && calls.every((c) => !c.problem), { stops: calls.map((c) => c.stop), problems: calls.map((c) => c.problem) });
+    stub.configure('anthropic', { thinkMs: 300 });
+  });
+  await step('research-pictures', async () => {
+    await discuss('Diskusi (gambar)', 'Carikan gambar bijih nikel untuk adegan 3');
+    check('pictures: candidates listed with licence (by-nc dropped)', await waitFor(`document.querySelectorAll('[data-el="agent.chat.message.image"]').length === 1 && /CC BY 4\.0/.test(document.querySelector('[data-el="agent.chat.message.image"]').innerText)`, 8000), { text: await text('[data-el="agent.chat.message.images"]') });
+    const before = (await api(`/projects/${(await api('/projects')).body.items[0].id}/assets`)).body.items?.length ?? 0;
+    await click('[data-el="agent.chat.message.image.import"]');
+    check('pictures: Import puts it in the Library with its credit', await waitFor(`document.querySelector('[data-el="agent.chat.message.image"]')?.getAttribute('data-imported') === 'true'`, 15000));
+    const after = (await api(`/projects/${(await api('/projects')).body.items[0].id}/assets`)).body.items?.length ?? 0;
+    check('pictures: one more asset in the project', after === before + 1, { before, after });
+  });
+  await step('research-org-disabled', async () => {
+    stub.configure('anthropic', { thinkMs: 300, web: 'disabled' });
+    await discuss('Diskusi (web search off di akun)', 'Riset internet: harga nikel terbaru');
+    check('account with web search off: EM-4403 notice instead of a failure', await waitFor(`!!document.querySelector('[data-el="agent.chat.message.notice"][data-code="EM-4403"]')`, 8000), { notice: await text('[data-el="agent.chat.message.notice"]') });
+    stub.configure('anthropic', { thinkMs: 300, web: 'on' });
+  });
+
+  // ── ADR-033 / FR-219: separate chats; "Send to Editor" with progress in both tabs; plan preview; Execute changes the timeline ──
+  await step('handoff-send-to-editor', async () => {
+    await click('[data-el="agent.chat.tab.brainstorm"]');
+    check('Diskusi tab shows only Diskusi messages', await page.evaluate(`[...document.querySelectorAll('[data-el="agent.chat.message"]')].every((m) => m.getAttribute('data-agent') === 'brainstorm')`));
+    const btn = await page.evaluate(`(() => { const all = [...document.querySelectorAll('[data-el="agent.chat.sendtoeditor"]')]; const b = all.at(-1); if (!b) return false; b.scrollIntoView({ block: 'center' }); b.click(); return true; })()`);
+    check('"Send to Editor" on the latest draft', btn);
+    const samples = [];
+    for (let i = 0; i < 150; i++) {
+      const v = await page.evaluate(`({ tab: document.querySelector('[data-el="agent.chat.tab.editor"]')?.getAttribute('aria-selected'), phases: !!document.querySelector('[data-el="agent.chat.phases"]'), streaming: !!document.querySelector('[data-el="agent.chat.streaming"][data-agent="editor"]'), plan: document.querySelector('[data-el="agent.editor.plancard"]:last-of-type')?.getAttribute('data-status') ?? null, cards: document.querySelectorAll('[data-el="agent.editor.plancard"]').length })`);
+      samples.push(v); if (v.plan === 'valid' && !v.streaming) break; await sleep(100);
+    }
+    check('Editor tab opened at once with the phase stepper while it plans', samples.some((x) => x.tab === 'true' && x.phases), { first: samples[0], n: samples.length });
+    check('Editor message carries "From Discussion"', await waitFor(`!!document.querySelector('[data-el="agent.editor.message.origin"]')`, 8000));
+    check('plan ready with a readable preview (rows)', await waitFor(`([...document.querySelectorAll('[data-el="agent.editor.execute"]')].at(-1)?.closest('[data-el="agent.editor.plancard"]')?.querySelectorAll('[data-el="agent.editor.plancard.preview.row"]').length ?? 0) > 0`, 20000), { rows: await count('[data-el="agent.editor.plancard.preview.row"]') });
+    await click('[data-el="agent.chat.tab.brainstorm"]');
+    check('Diskusi tab: the draft card says the plan is ready', await waitFor(`document.querySelector('[data-el="agent.brainstorm.handoff.card"]')?.getAttribute('data-state') === 'ready'`, 8000));
+    await click('[data-el="agent.brainstorm.handoff.open"]');
+    const before = await count('[data-el="stage.timeline.element"]');
+    await page.evaluate(`(() => { const b = [...document.querySelectorAll('[data-el="agent.editor.execute"]')].at(-1); b?.scrollIntoView({ block: 'center' }); b?.click(); })()`);
+    check('Execute applied the plan', await waitFor(`[...document.querySelectorAll('[data-el="agent.editor.plancard"]')].some((c) => c.getAttribute('data-status') === 'executed')`, 20000));
+    check('the timeline visibly changed', await waitFor(`document.querySelectorAll('[data-el="stage.timeline.element"]').length > ${before}`, 10000), { before, after: await count('[data-el="stage.timeline.element"]') });
+    check('"Show in timeline" offered on the applied card', (await count('[data-el="agent.editor.plancard.showtimeline"]')) > 0);
+    await click('[data-el="agent.chat.tab.brainstorm"]');
+    check('Diskusi draft card follows to "applied"', await waitFor(`document.querySelector('[data-el="agent.brainstorm.handoff.card"]')?.getAttribute('data-state') === 'applied'`, 8000));
+  });
+
+  // ── QA #17: delete through the chat → inline confirmation → confirmDestructive → removed (never EM-9002) ──
+  await step('delete-via-chat', async () => {
+    const pid = (await api('/projects')).body.items[0].id;
+    const clipsBefore = (await api(`/projects/${pid}/composition?model=true`)).body.head.model.tracks.video.length;
+    await discuss('Edit (hapus adegan)', 'hapus adegan pertama dari timeline', { mode: 'editor' });
+    check('delete plan previews the removal', await waitFor(`!!document.querySelector('[data-el="agent.editor.plancard.preview.row"][data-kind="remove"]')`, 8000));
+    await page.evaluate(`(() => { const b = [...document.querySelectorAll('[data-el="agent.editor.execute"]')].at(-1); b?.scrollIntoView({ block: 'center' }); b?.click(); })()`);
+    check('inline removal confirmation (no "Request not valid")', await waitFor(`!!document.querySelector('[data-el="agent.editor.plancard.confirmremoval"]')`, 8000) && !(await page.evaluate(`/EM-9002/.test(document.body.innerText)`)));
+    await click('[data-el="agent.editor.plancard.confirmremoval.yes"]');
+    check('removed after confirming', await waitFor(`[...document.querySelectorAll('[data-el="agent.editor.plancard"]')].filter((c) => c.getAttribute('data-status') === 'executed').length >= 2`, 15000));
+    const clipsAfter = (await api(`/projects/${pid}/composition?model=true`)).body.head.model.tracks.video.length;
+    check('the composition lost exactly that scene', clipsAfter === clipsBefore - 1, { clipsBefore, clipsAfter });
+  });
+
+  // ── QA #12 / #13: caption chip + fix ONE word ──
+  await step('caption-fix-one-word', async () => {
+    const pid = (await api('/projects')).body.items[0].id;
+    await discuss('Edit (buat caption)', 'buat caption dari naskah', { mode: 'editor' });
+    await page.evaluate(`(() => { const b = [...document.querySelectorAll('[data-el="agent.editor.execute"]')].at(-1); b?.scrollIntoView({ block: 'center' }); b?.click(); })()`);
+    await sleep(1500);
+    const pages0 = (await api(`/projects/${pid}/composition?model=true`)).body.head.model.tracks.caption.pages;
+    check('captions in place (2 pages)', pages0.length === 2, { pages: pages0.map((p) => p.text) });
+    // the caption under the playhead is offered as a chip when the playhead is inside a page (the playhead is at 0 here: page 1)
+    const suggested = await waitFor(`!!document.querySelector('[data-el="agent.chat.target.caption.suggest"]')`, 3000);
+    check('caption under the playhead offered as a chip', suggested);
+    await discuss('Edit (perbaiki 1 kata caption)', "ganti 'energi besi' jadi 'energi bersih' di detik 2", { mode: 'editor' });
+    await page.evaluate(`(() => { const b = [...document.querySelectorAll('[data-el="agent.editor.execute"]')].at(-1); b?.scrollIntoView({ block: 'center' }); b?.click(); })()`);
+    await sleep(1500);
+    const pages1 = (await api(`/projects/${pid}/composition?model=true`)).body.head.model.tracks.caption.pages;
+    check('only that caption page changed ("energi bersih"), the other page untouched, timing kept', pages1.length === 2 && pages1[1].text.includes('energi bersih') && pages1[0].text === pages0[0].text && pages1[1].startMs === pages0[1].startMs && pages1[1].durationMs === pages0[1].durationMs, { before: pages0.map((p) => p.text), after: pages1.map((p) => p.text) });
+  });
+
+  // ── QA #14: audio and document attachments ──
+  await step('attach-audio-and-document', async () => {
+    const wav = path.join(dataDir, 'musik-latar.wav');
+    const pcm = Buffer.alloc(16000); const hdr = Buffer.alloc(44);
+    hdr.write('RIFF', 0); hdr.writeUInt32LE(36 + pcm.length, 4); hdr.write('WAVE', 8); hdr.write('fmt ', 12); hdr.writeUInt32LE(16, 16); hdr.writeUInt16LE(1, 20); hdr.writeUInt16LE(1, 22); hdr.writeUInt32LE(16000, 24); hdr.writeUInt32LE(32000, 28); hdr.writeUInt16LE(2, 32); hdr.writeUInt16LE(16, 34); hdr.write('data', 36); hdr.writeUInt32LE(pcm.length, 40);
+    fs.writeFileSync(wav, Buffer.concat([hdr, pcm]));
+    const md = path.join(dataDir, 'naskah-nikel.md'); fs.writeFileSync(md, '# Naskah\n\nv1: Ekspor nikel Indonesia naik tujuh belas persen.\nv2: Tapi volumenya justru turun tiga koma delapan persen.\n');
+    await click('[data-el="agent.chat.tab.brainstorm"]');
+    const { root: docRoot } = await page.send('DOM.getDocument', { depth: -1, pierce: true });
+    const { nodeId } = await page.send('DOM.querySelector', { nodeId: docRoot.nodeId, selector: '[data-el="agent.chat.attach.input"]' });
+    await page.send('DOM.setFileInputFiles', { nodeId, files: [wav] });
+    check('audio attachment becomes a Library asset chip', await waitFor(`!!document.querySelector('[data-el="agent.chat.attach.chip"][data-kind="audio"][data-status="ready"]')`, 30000), { chips: await page.evaluate(`[...document.querySelectorAll('[data-el="agent.chat.attach.chip"]')].map((x) => x.outerHTML.slice(0, 160))`) });
+    const { root: r2 } = await page.send('DOM.getDocument', { depth: -1, pierce: true });
+    const { nodeId: n2 } = await page.send('DOM.querySelector', { nodeId: r2.nodeId, selector: '[data-el="agent.chat.attach.input"]' });
+    await page.send('DOM.setFileInputFiles', { nodeId: n2, files: [md] });
+    check('document attachment chip (text extracted locally)', await waitFor(`!!document.querySelector('[data-el="agent.chat.attach.chip"][data-kind="document"]')`, 15000));
+    const n0 = stub.calls.length;
+    await discuss('Diskusi (lampiran audio + naskah)', 'Pakai musik dan naskah ini');
+    const sent = stub.calls.slice(n0).filter((c) => c.provider === 'anthropic' && c.path === '/v1/messages').map((c) => c.lastUserText ?? '').find((x) => /Attached document/.test(x)) ?? '';
+    check('the document text reached Claude, the audio is named', /Attached document "naskah-nikel\.md"/.test(sent) && /tujuh belas persen/.test(sent) && /musik-latar\.wav/.test(sent), { sample: sent.slice(0, 400) });
+  });
+
+  // ── Acceptance prompt: "Ekspor Nikel Indonesia 2026" (FR-224) ──
+  await step('acceptance-nikel', async () => {
+    const prompt = fs.readFileSync(process.env.E2E_NIKEL_PROMPT ?? path.join(root, 'poc/e2e/fixtures/nikel-prompt.md'), 'utf8');
+    await discuss('Edit (nikel, jangan tanya balik)', prompt, { mode: 'editor' });
+    check('nikel: a plan, not a question', await waitFor(`[...document.querySelectorAll('[data-el="agent.editor.plancard"]')].some((c) => c.getAttribute('data-status') === 'valid')`, 15000) && !(await count('[data-el="agent.editor.askdiscussion"]')));
+    const prev = await page.evaluate(`(() => { const c = [...document.querySelectorAll('[data-el="agent.editor.execute"]')].at(-1)?.closest('[data-el="agent.editor.plancard"]'); return { scenes: c?.querySelectorAll('[data-el="agent.editor.plancard.preview.row"][data-kind="scene"]').length ?? 0, voice: c?.querySelectorAll('[data-el="agent.editor.plancard.preview.row"][data-kind="voice"]').length ?? 0, estimate: !!c?.querySelector('[data-el="agent.editor.plancard.estimate"]'), total: c?.querySelector('[data-el="agent.editor.plancard.preview.total"]')?.innerText ?? '' }; })()`);
+    check('nikel: preview shows 6 scenes, 9 voice clips, total, labelled as an estimate', prev.scenes === 6 && prev.voice === 9 && prev.estimate && /total/.test(prev.total), prev);
+    const pid = (await api('/projects')).body.items[0].id;
+    const v0 = (await api(`/projects/${pid}/composition`)).body.head.id;
+    const planId = await page.evaluate(`[...document.querySelectorAll('[data-el="agent.editor.execute"]')].at(-1)?.closest('[data-el="agent.editor.plancard"]')?.getAttribute('data-plan-id') ?? ''`);
+    const card = `document.querySelector('[data-el="agent.editor.plancard"][data-plan-id="${planId}"]')`;
+    await page.evaluate(`(() => { const b = ${card}?.querySelector('[data-el="agent.editor.execute"]'); b?.scrollIntoView({ block: 'center' }); b?.click(); })()`);
+    const phases = [];
+    for (let i = 0; i < 300; i++) {
+      const v = await page.evaluate(`({ s: ${card}?.getAttribute('data-status'), p: ${card}?.querySelector('[data-el="agent.editor.plancard.executing"]')?.getAttribute('data-phase') ?? null })`);
+      if (v.p && phases.at(-1) !== v.p) phases.push(v.p);
+      if (v.s === 'failed' || v.s === 'executed') break; await sleep(100);
+    }
+    await sleep(800);                                                        // nothing may flip the card back afterwards
+    const status = await page.evaluate(`${card}?.getAttribute('data-status')`);
+    const cardText = await page.evaluate(`${card}?.innerText ?? ''`);
+    const apiPlan = (await api(`/plans/${planId}`)).body;
+    const v1 = (await api(`/projects/${pid}/composition`)).body.head.id;
+    log({ nikelExecute: { planId, phases, status, apiStatus: apiPlan.status, changed: v0 !== v1 } });
+    if (status === 'failed') check('nikel: without a voice model Execute stops with the reason and changes nothing (no invented timing)', v0 === v1 && apiPlan.status === 'failed' && /EM-7\d{3}/.test(cardText), { status, phases, card: cardText.slice(0, 200) });
+    else check('nikel: executed with the measured voices as one version', status === 'executed' && v0 !== v1, { status, phases });
   });
 
   const ex = page.consoleLines.filter((l) => l.startsWith('EXCEPTION'));

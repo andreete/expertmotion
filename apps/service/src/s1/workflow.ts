@@ -12,7 +12,8 @@ import type { ServiceContext } from '../context.js';
 import { parseIntent, planDto, versionDto, type DesignPickInputT, type PlanRow, type VersionDto } from './dto.js';
 import type { Checkpoints } from './checkpoints.js';
 import { issueError, type CompositionStore } from './store.js';
-import { brainstormTools, deltaEmitter } from '../modules/agents.js';
+import { brainstormTools, deltaEmitter, researchToolsFor } from '../modules/agents.js';
+import { composeScenes, type VideoSpecT } from '@expertmotion/agents';
 import { getAssignment } from '../modules/providers.js';
 import { cachedModels } from '../s3/usage-store.js';
 import { discussionFor } from '../s3/shared-context.js';
@@ -21,7 +22,8 @@ import { discussionFor } from '../s3/shared-context.js';
 export interface AgentPlanExtras { selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images?: ChatImage[] | undefined; attachments?: string[] | undefined; onDelta?: ((d: string) => void) | undefined;
   chat?: { messageId: string; target?: ElementRefT | undefined } | undefined;
   /** FR-189 pointed targets (chat chips); FR-190 run phases. */
-  targets?: PointedTarget[] | undefined; onProgress?: ((p: RunProgress) => void) | undefined }
+  targets?: PointedTarget[] | undefined; onProgress?: ((p: RunProgress) => void) | undefined;
+  /** FR-216: web sources the Editor used (the S3 chat stores them under its reply). */ onSources?: ((s: { sources: Array<{ url: string; title?: string }>; images: unknown[] }) => void) | undefined }
 
 type Reason = 'created' | 'superseded' | 'restored' | 'removed' | 'cleared' | 'compiled' | 'executed' | 'rejected';
 export interface ExecutionResultT {
@@ -35,6 +37,16 @@ export interface PickResult { intent: EditIntentT; queue: ReturnType<Workflow['q
 interface Run { ac: AbortController; runId: string; projectId: string; planId: string; external: boolean }
 
 /** Ops that need `confirmDestructive` (API R-073 list ∪ OPERATIONS[*].destructive). */
+/** FR-224: the scene.compose step of a plan whose voice clips still need generating (and the tts steps standing for them). */
+export function voiceFirstOf(plan: EditPlanT): { stepN: number; spec: VideoSpecT; ttsSteps: number[] } | null {
+  for (const s of plan.steps) {
+    const spec = s.tool === 'composition.applyOps' ? s.args['sceneCompose'] as VideoSpecT | undefined : undefined;
+    if (!spec || s.args['measured'] === true || !spec.voice?.clips?.some((c) => !c.assetId) || spec.voice.generate === false) continue;
+    const tts = plan.steps.filter((x) => x.tool === 'tts.generate' && (x.dependsOn.includes(s.n) || typeof x.args['clipId'] === 'string')).map((x) => x.n);
+    return { stepN: s.n, spec, ttsSteps: tts };
+  }
+  return null;
+}
 const DESTRUCTIVE = new Set(['op:clip.remove', 'op:caption.clear', 'op:background.clear', ...Object.entries(OPERATIONS).filter(([, d]) => d.destructive).map(([k]) => k)]);
 /** API: baseVersion may be the head hash or the head version id. */
 export const isHeadRef = (head: { hash: string; versionId: string }, ref: string): boolean => ref === head.hash || ref === head.versionId;
@@ -121,7 +133,8 @@ export class Workflow {
       ...(b.assetId ? { assetId: b.assetId } : {}), ...(b.text ? { text: b.text } : {}),
       ...(b.elementEdit ? { elementEdit: Object.fromEntries(Object.entries(b.elementEdit).filter(([, v]) => v !== undefined)) as unknown as NonNullable<DesignPick['elementEdit']> } : {}),
       ...(b.splitEdit ? { splitEdit: { atMs: b.splitEdit.atMs, items: b.splitEdit.items.map((x) => ({ kind: x.kind, id: x.id })) } } : {}),
-      ...(b.itemsEdit ? { itemsEdit: { action: b.itemsEdit.action, items: b.itemsEdit.items.map((x) => ({ kind: x.kind, ...(x.id !== undefined ? { id: x.id } : {}), ...(x.index !== undefined ? { index: x.index } : {}) })) } } : {}),
+      ...(b.itemsEdit ? { itemsEdit: { action: b.itemsEdit.action, items: b.itemsEdit.items.map((x) => ({ kind: x.kind, ...(x.id !== undefined ? { id: x.id } : {}), ...(x.index !== undefined ? { index: x.index } : {}) })),
+        ...(b.itemsEdit.paste ? { paste: { atMs: b.itemsEdit.paste.atMs, entries: b.itemsEdit.paste.entries.map((e) => ({ kind: e.kind, offsetMs: e.offsetMs, durationMs: e.durationMs, op: { op: e.op.op, ...(e.op.target ? { target: e.op.target } : {}), args: e.op.args } })) } } : {}) } } : {}),
       ...(b.transformEdit ? { transformEdit: Object.fromEntries(Object.entries(b.transformEdit).filter(([, v]) => v !== undefined)) as unknown as NonNullable<DesignPick['transformEdit']> } : {}),
       ...(b.clipEdit ? { clipEdit: { clipId: b.clipEdit.clipId, ...(b.clipEdit.toIndex !== undefined ? { toIndex: b.clipEdit.toIndex } : {}), ...(b.clipEdit.trimBeforeMs !== undefined ? { trimBeforeMs: b.clipEdit.trimBeforeMs } : {}), ...(b.clipEdit.durationMs !== undefined ? { durationMs: b.clipEdit.durationMs } : {}) } } : {}),
     };
@@ -316,7 +329,7 @@ export class Workflow {
   }
   private emitPlanReady(planId: string, runId?: string): void {
     const r = this.planRow(planId);
-    this.ctx.bus.emit('plan.ready', { at: this.ctx.now(), projectId: r.project_id, plan: planDto(r, { withOps: false }), ...(runId ? { runId } : {}) });
+    this.ctx.bus.emit('plan.ready', { at: this.ctx.now(), projectId: r.project_id, plan: planDto(r, { withOps: true }), ...(runId ? { runId } : {}) });   // QA 2026-10-28 #4 / #17: the Plan Card previews the ops and the destructive check needs them
   }
   private emitPlanInvalid(projectId: string, plan: Pick<EditPlanT, 'id' | 'validation' | 'touchesLockedKeys'>, status: string, code: string): void {
     this.ctx.bus.emit('plan.invalid', { at: this.ctx.now(), projectId, planId: plan.id, status, code, validation: plan.validation.map((v) => ({ ...v, severity: 'block' })), touchesLockedKeys: plan.touchesLockedKeys });
@@ -425,10 +438,12 @@ export class Workflow {
       const onDelta = extras.onDelta ?? (own ? (d: string) => own.push(d) : null);
       try {
         const progress = extras.onProgress ?? (external ? undefined : (p: RunProgress) => this.ctx.bus.emit('agent.run.progress', { at: this.ctx.now(), projectId, runId, agent: 'editor', ...p }));
+        const research = researchToolsFor(this.ctx, 'editor', projectId, ac.signal, message ?? '');
         const r = await runEditorAgent(env, provider, { model: head.model, baseVersion: head.hash, assets, tier, lockedKeys, newId: this.ctx.newId, planId, projectId, language: head.model.settings.language, ...(toolModels ? { toolModels } : {}) },
-          { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId), tools: brainstormTools(this.ctx, projectId, head.model.settings.language), ...(progress ? { onProgress: progress } : {}),
+          { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId), tools: { ...brainstormTools(this.ctx, projectId, head.model.settings.language), ...research.handlers }, research: research.cfg, ...(progress ? { onProgress: progress } : {}),
             ...(onDelta ? { onDelta: (d: string) => { if (!ac.signal.aborted) onDelta(d); } } : {}), ...(extras.images?.length ? { images: extras.images } : {}) }).finally(() => own?.flush());
         usage = r.usage;
+        if (r.ok && (r.sources?.length || research.images.length)) { try { extras.onSources?.({ sources: r.sources ?? [], images: research.images }); } catch { /* chat hint only */ } }
         // Usage is recorded under the run that made the request (the S3 chat's run when external, FR-074).
         if (usage.length) { try { this.ctx.hooks.recordUsage(projectId, 'editor', runId, usage); } catch (e) { this.ctx.log.warn({ err: String(e) }, 'recordUsage failed'); } }
         const current = this.planRow(planId);
@@ -540,7 +555,12 @@ export class Workflow {
     if (row.status === 'stale') throw stale(this.store.head(row.project_id).hash, plan.baseVersion);
     if (row.status === 'cancelled' || row.status === 'invalid') throw new EmError('EM-2303', 'This plan cannot be executed.', { details: { planId, status: row.status } });
     const destructive = [...new Set(planOps(plan).filter((op) => DESTRUCTIVE.has(op.op)).map((op) => op.op))];
-    if (destructive.length && !o.confirmDestructive) throw new EmError('EM-9002', 'This plan removes content; confirm to continue.', { status: 422, path: 'body.confirmDestructive', details: { destructive } });
+    // QA 2026-10-28 #17: was EM-9002 "Request not valid", which hid the reason. EM-4310 names what will be removed; the Plan Card asks
+    // inline and executes again with confirmDestructive: true.
+    if (destructive.length && !o.confirmDestructive) {
+      const items = planOps(plan).filter((op) => DESTRUCTIVE.has(op.op)).slice(0, 20).map((op) => ({ op: op.op, ...(op.target ? { target: op.target } : {}) }));
+      throw new EmError('EM-4310', `This plan removes ${items.length} item(s) from the video; confirm the removal to continue.`, { status: 409, path: 'body.confirmDestructive', details: { destructive, items } });
+    }
     // FR-084: the plan is `executing` from here; a Cancel that arrives before the transaction starts aborts it (nothing is committed).
     // Inside the transaction the commit is atomic (SQLite), so a later Cancel can never leave a partial Composition Version.
     this.updatePlan(planId, plan, 'executing');
@@ -548,7 +568,57 @@ export class Workflow {
     await new Promise<void>((r) => setImmediate(r));
     this.pendingExec.delete(planId);
     if (this.cancelledExec.delete(planId)) throw new EmError('EM-4303', 'The change was cancelled before it was applied. Nothing changed.', { status: 409, details: { planId } });
+    // FR-224: a scene.compose plan with voice clips → voices FIRST, measure them, compose again with the real durations, then one
+    // Composition Version. A failed voice-over stops Execute with the reason (never invented timing; nothing is applied).
+    const vf = voiceFirstOf(plan);
+    if (vf && this.ctx.hooks.voiceBatch) {
+      const t0 = performance.now(); const head = this.store.head(row.project_id);
+      try {
+        const next = await this.prepareVoiceFirst(row.project_id, planId, plan, vf);
+        this.updatePlan(planId, next, 'valid');
+      } catch (e) {
+        const em = e instanceof EmError ? e : new EmError('EM-7101', 'The voice-over could not be generated.', { cause: e });
+        this.ctx.log.warn({ projectId: row.project_id, planId, code: em.code }, 'voice-first execute stopped: voice-over failed');
+        const result: ExecutionResultT = { planId, ok: false, fromVersion: head.hash, appliedOps: 0, diff: [], error: { code: /^EM-\d{4}$/.test(em.code) ? em.code : 'EM-7101', message: `${em.message} Nothing was changed: the scene timing needs the real voice clips.` }, durationMs: Math.round(performance.now() - t0) };
+        this.updatePlan(planId, plan, 'failed', { result });
+        this.emitPlanInvalid(row.project_id, { ...plan, validation: [{ path: '', message: result.error!.message, code: result.error!.code }] }, 'failed', result.error!.code as EmCode);
+        this.planProgress(row.project_id, planId, 'failed', {});
+        return result;
+      }
+    }
     return this.executeRow(this.planRow(planId), { checkpoint: true, ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}) }).result;
+  }
+
+  /** FR-223: Execute phases for the Plan Card (voices n/m → measure → compose → apply). */
+  private planProgress(projectId: string, planId: string, phase: 'voice' | 'measure' | 'compose' | 'apply' | 'failed', extra: { done?: number; total?: number; totalMs?: number }) {
+    this.ctx.bus.emit('plan.progress', { at: this.ctx.now(), projectId, planId, phase, ...extra });
+  }
+
+  /** FR-224: generates the plan's voice clips (one batch job), fills their asset ids / measured durations into the VideoSpec and composes again. */
+  private async prepareVoiceFirst(projectId: string, planId: string, plan: EditPlanT, vf: NonNullable<ReturnType<typeof voiceFirstOf>>): Promise<EditPlanT> {
+    const spec = vf.spec;
+    const clips = (spec.voice?.clips ?? []).filter((c) => !c.assetId);
+    const language = spec.language ?? this.store.head(projectId).model.settings.language;
+    this.planProgress(projectId, planId, 'voice', { done: 0, total: clips.length });
+    const tts = plan.steps.find((s) => s.tool === 'tts.generate' && typeof s.args['voiceId'] === 'string');
+    const voiceId = spec.voice?.voiceId ?? (tts?.args['voiceId'] as string | undefined) ?? (language === 'en' ? 'natural, warm, clear voice' : 'suara natural, hangat, jelas');
+    const r = await this.ctx.hooks.voiceBatch!(projectId, { clips: clips.map((c) => ({ id: c.id, text: c.text })), voiceId, language, ...(spec.voice?.speed ? { speed: spec.voice.speed } : {}),
+      ...(spec.maxDurationMs ? { maxTotalMs: spec.maxDurationMs } : {}), ...(spec.voice?.gapMs !== undefined ? { gapMs: spec.voice.gapMs } : {}), ...(spec.voice?.tailMs !== undefined ? { sceneGapMs: spec.voice.tailMs } : {}), insert: false });
+    const got = new Map(r.clips.map((c) => [c.id, c] as const));
+    const missing = clips.filter((c) => !got.get(c.id)?.assetId);
+    if (missing.length) throw new EmError('EM-7101', `The voice clips ${missing.map((c) => c.id).join(', ')} were not generated.`);
+    this.planProgress(projectId, planId, 'measure', { done: clips.length, total: clips.length, totalMs: r.totalMs });
+    const filled: VideoSpecT = { ...spec, voice: { ...spec.voice!, clips: spec.voice!.clips.map((c) => { const g = got.get(c.id); return g ? { ...c, assetId: g.assetId, durationMs: Math.max(100, Math.round(g.durationMs)) } : c; }) } };
+    this.planProgress(projectId, planId, 'compose', { totalMs: r.totalMs });
+    const head = this.store.head(projectId);
+    const c = composeScenes(filled, { model: head.model, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), language });
+    if (!c.ok) throw new EmError('EM-2102', `The scenes could not be composed with the measured voice: ${c.problem}`);
+    const ttsN = new Set(vf.ttsSteps);
+    const secs = (c.totalMs / 1000).toFixed(1);
+    const steps = plan.steps.filter((s) => !ttsN.has(s.n)).map((s) => (s.n === vf.stepN ? { ...s, ops: c.ops, args: { ...s.args, sceneCompose: filled, measured: true } } : s));
+    const note = language === 'en' ? `Scene lengths follow the generated voice: ${c.scenes.length} scenes, ${secs} s in total.` : `Durasi adegan mengikuti suara yang dibuat: ${c.scenes.length} adegan, total ${secs.replace('.', ',')} dtk.`;
+    this.planProgress(projectId, planId, 'apply', { totalMs: c.totalMs });
+    return { ...plan, steps, risks: [...plan.risks.filter((x) => x.code !== 'voice-measured'), { code: 'voice-measured', message: note, severity: 'info' }] };
   }
 
   /** The Execute core shared by R-073 and the compile-now path. One transaction; rollback reported as ExecutionResult ok:false. */

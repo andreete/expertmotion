@@ -23,4 +23,28 @@ ALTER TABLE assets ADD COLUMN source_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_assets_source_key ON assets(project_id, source_key) WHERE source_key IS NOT NULL;
 `,
   },
+  {
+    version: 22,
+    name: 's2_voice_keys_transcripts',
+    // FR-246: the ElevenLabs key (AES-256-GCM sealed like provider keys, label 'voice-secrets'; only the hint is ever returned).
+    // FR-249: the timed transcript of every generated voice clip (built from the known script; JSON + SubRip), one per Asset.
+    sql: `
+CREATE TABLE IF NOT EXISTS voice_keys (
+  provider     TEXT PRIMARY KEY CHECK(provider IN ('elevenlabs')),
+  secret_enc   BLOB NOT NULL,
+  secret_hint  TEXT NOT NULL,
+  created_at   TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS voice_transcripts (
+  asset_id     TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  voice_id     TEXT NOT NULL,
+  method       TEXT NOT NULL CHECK(method IN ('engine','aligned','proportional','srt')),
+  json         TEXT NOT NULL CHECK(json_valid(json)),
+  srt          TEXT NOT NULL,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_voice_transcripts_project ON voice_transcripts(project_id);
+`,
+  },
 ];

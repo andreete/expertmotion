@@ -336,6 +336,7 @@ describe('FR-090 / FR-097 Performance Profile through the Intent Queue', () => {
     expect(spy.mock.calls.at(-1)![1]).toMatchObject({ category: 'output', output: { kind: 'performanceProfile', value: 'turbo' } });
     await waitFor(async () => expect((await runtime.api.getSettings()).defaultPerformanceProfile).toBe('turbo'));
     await waitFor(() => { if (!queue().some((i) => i.textContent?.includes('Performance profile Turbo') && i.getAttribute('data-status') === 'executed')) throw new Error(queue().map((i) => i.textContent).join('|')); });
+    fireEvent.click(el('agent.chat.tab.editor')!);                                // ADR-033: "Applied directly" lines are in the Editor tab
     await waitFor(() => { if (!els('agent.editor.message.applied').some((x) => /Applied directly: Performance profile Turbo/.test(x.textContent ?? ''))) throw new Error('no applied line'); });
     await act(async () => { fireEvent.click(el('agent.output.profile.accelerated')!); });
     await waitFor(() => { if (!els('agent.editor.intentqueue.item.superseded').some((i) => i.textContent?.includes('Turbo'))) throw new Error('turbo not superseded'); });

@@ -23,26 +23,41 @@ export interface ChatMessage {
   /** assistant: the provider's own content of this turn (thinking blocks with signatures, tool_use …), replayed unchanged. */
   providerRaw?: unknown;
 }
-/** Progress the adapter sees on the wire (thinking started, a tool call being written); hints only. */
-export type ChatActivity = { type: 'thinking' } | { type: 'tool'; name: string } | { type: 'text' };
+/** Progress the adapter sees on the wire (thinking started, a tool call being written, a provider-side web search); hints only. */
+export type ChatActivity = { type: 'thinking' } | { type: 'tool'; name: string } | { type: 'text' } | { type: 'web'; kind: 'search' | 'fetch'; query?: string; url?: string };
+/** FR-216: a web source the answer used (provider citation or search result); shown as a link in the chat. */
+export interface WebSource { url: string; title?: string; citedText?: string; pageAge?: string; cited?: boolean }
+/**
+ * FR-216: provider-native internet research for this call (Anthropic web_search / web_fetch server tools). The provider runs the
+ * searches itself; results and citations come back in the same answer. Other providers use the client tools web.search / web.fetch.
+ */
+export interface WebResearchRequest { search: boolean; fetch: boolean; maxSearches?: number; maxFetches?: number }
 export interface ChatRequest { system: string; messages: ChatMessage[]; maxTokens: number; temperature: number; signal?: AbortSignal; timeoutMs?: number;
   /** Called before a rate-limit retry waits (withRateLimitRetry): retry n of `of`, waiting `waitMs` (progress text only). */
   onRetry?: (r: { n: number; of: number; waitMs: number; code: string }) => void;
   /** Native tools (only for providers with `nativeTools`); `toolChoice: 'none'` = answer now, no further calls. */
   tools?: ToolSpec[]; toolChoice?: 'auto' | 'none';
+  /** FR-216: provider-native web research (only for providers with `nativeWebResearch`). */
+  webResearch?: WebResearchRequest;
   onActivity?: (a: ChatActivity) => void }
 export interface ChatUsage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean }
 /**
  * `finishReason` / `reasoningTokens` are reported when the provider gives them ('length' = the reply hit maxTokens, so a JSON
  * reply is truncated); diagnostics only, never shown to the Creator. `toolCalls` / `providerRaw`: native tool calling.
  */
-export interface ChatResult { text: string; usage: ChatUsage; finishReason?: string; reasoningTokens?: number; toolCalls?: ToolCall[]; providerRaw?: unknown }
+export interface ChatResult { text: string; usage: ChatUsage; finishReason?: string; reasoningTokens?: number; toolCalls?: ToolCall[]; providerRaw?: unknown;
+  /** FR-216: sources of a provider-native web research (cited ones first), the queries it ran, and why it could not run. */
+  citations?: WebSource[]; webQueries?: string[]; webFetches?: number;
+  /** EM-4403 account disabled web search / EM-4404 the model refused it: the call was answered WITHOUT web research. */
+  webNotice?: { code: string; reason: string } }
 export interface ChatProvider {
   readonly id: string; readonly model: string; complete(req: ChatRequest): Promise<ChatResult>;
   /** FR-075: same as complete, but text deltas are reported as they arrive (provider stream). Optional: callers fall back to complete. */
   stream?(req: ChatRequest, onDelta: (delta: string) => void): Promise<ChatResult>;
   /** AI_WORKFLOW §8.1: the adapter sends `req.tools` through the provider's tools API and returns `toolCalls`. */
   readonly nativeTools?: boolean;
+  /** FR-216: the adapter honours `req.webResearch` with the provider's own server-side web tools. */
+  readonly nativeWebResearch?: boolean;
 }
 
 /** Price per million tokens (USD) for providers that do not report cost; values come from the Capability Table, labelled approximate. */
@@ -65,7 +80,12 @@ export function mapProviderError(e: unknown): EmError {
   reason = reason.replace(/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/g, '$1…').replace(/(AIza[A-Za-z0-9_-]{4})[A-Za-z0-9_-]+/g, '$1…').slice(0, 300);
   const status = typeof err?.statusCode === 'number' ? err.statusCode : undefined;
   switch (err?.statusCode) {
-    case 401: case 403: return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
+    case 401: return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
+    case 403:
+      // QA 2026-10-28: a 403 is often not about the key (Anthropic permission_error: a feature or model not enabled for the account,
+      // e.g. web search off in the Console). Only a reason that names the key / authentication is "key not accepted".
+      if (!reason || /api[ _-]?key|x-api-key|authenticat|credential|unauthori[sz]ed|invalid key|key (is )?(invalid|disabled|revoked)/i.test(reason)) return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
+      return new EmError('EM-4105', `The AI provider refused the request: ${reason}`, { cause: e, details: { status, reason } });
     case 402: return new EmError('EM-4201', 'The provider account has no credit left.', { cause: e, details: { status } });
     case 404: return new EmError('EM-4004', 'This model is not available from the provider.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
     case 400: case 413: case 422:
@@ -138,7 +158,7 @@ export function withRateLimitRetry(p: ChatProvider, o: RateLimitRetry = {}): Cha
     }
   };
   return {
-    id: p.id, model: p.model, ...(p.nativeTools ? { nativeTools: true } : {}),
+    id: p.id, model: p.model, ...(p.nativeTools ? { nativeTools: true } : {}), ...(p.nativeWebResearch ? { nativeWebResearch: true } : {}),
     complete: (req) => run(req, () => p.complete(req), () => false),
     ...(p.stream ? { stream: (req: ChatRequest, onDelta: (d: string) => void) => { let shown = false; return run(req, () => p.stream!(req, (d) => { shown = true; onDelta(d); }), () => shown); } } : {}),
   };
@@ -218,9 +238,9 @@ export function openRouterProvider(opts: { apiKey: string; model: string; fetch:
 }
 
 /** A scripted reply: text, or (native tool calling) text plus tool calls. */
-export type FakeReply = string | { text?: string; toolCalls?: ToolCall[] };
+export type FakeReply = string | { text?: string; toolCalls?: ToolCall[]; citations?: WebSource[]; webQueries?: string[]; webNotice?: { code: string; reason: string } };
 /** Scripted provider for tests and golden-scenario replay (GOLDEN_SCENARIOS §4b). `nativeTools` makes it a tools-capable provider. */
-export function fakeProvider(replies: Array<FakeReply | ((req: ChatRequest, attempt: number) => FakeReply) | Error>, model = 'fake/model', opts: { nativeTools?: boolean } = {}): ChatProvider & { calls: ChatRequest[] } {
+export function fakeProvider(replies: Array<FakeReply | ((req: ChatRequest, attempt: number) => FakeReply) | Error>, model = 'fake/model', opts: { nativeTools?: boolean; nativeWebResearch?: boolean } = {}): ChatProvider & { calls: ChatRequest[] } {
   const calls: ChatRequest[] = [];
   const complete = async (req: ChatRequest): Promise<ChatResult> => {
     const i = calls.length; calls.push({ ...req, messages: [...req.messages] });
@@ -229,11 +249,13 @@ export function fakeProvider(replies: Array<FakeReply | ((req: ChatRequest, atte
     const v = typeof r === 'function' ? r(req, i) : r!;
     const text = typeof v === 'string' ? v : v.text ?? '';
     const toolCalls = typeof v === 'string' ? undefined : v.toolCalls;
+    const web = typeof v === 'string' ? {} : { ...(v.citations ? { citations: v.citations } : {}), ...(v.webQueries ? { webQueries: v.webQueries } : {}), ...(v.webNotice ? { webNotice: v.webNotice } : {}) };
+    if (typeof v !== 'string') for (const q of v.webQueries ?? []) req.onActivity?.({ type: 'web', kind: 'search', query: q });
     return { text, usage: { model, inputTokens: Math.ceil(JSON.stringify(req).length / 4), outputTokens: Math.ceil(text.length / 4), costUsd: 0, approximate: false },
-      ...(toolCalls?.length ? { toolCalls, providerRaw: [{ fake: true, text, toolCalls }] } : {}) };
+      ...(toolCalls?.length ? { toolCalls, providerRaw: [{ fake: true, text, toolCalls }] } : {}), ...web };
   };
   // Streams the scripted reply in 8-character chunks so streaming consumers can be tested without a network.
-  return { id: 'fake', model, calls, complete, ...(opts.nativeTools ? { nativeTools: true } : {}), async stream(req, onDelta) {
+  return { id: 'fake', model, calls, complete, ...(opts.nativeTools ? { nativeTools: true } : {}), ...(opts.nativeWebResearch ? { nativeWebResearch: true } : {}), async stream(req, onDelta) {
     const res = await complete(req);
     for (let k = 0; k < res.text.length; k += 8) { if (req.signal?.aborted) throw new EmError('EM-4303', 'Cancelled.'); onDelta(res.text.slice(k, k + 8)); }
     return res;
