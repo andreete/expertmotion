@@ -1,7 +1,8 @@
-// SSE client per docs/API_SPECIFICATION.md §7.4: EventSource on /api/v1/events?token=…, `seq` dedupe (drop seq ≤ lastSeq),
+// SSE client per docs/API_SPECIFICATION.md §7.4: /api/v1/events read with FetchEventSource (Bearer header, SEC-016), `seq` dedupe (drop seq ≤ lastSeq),
 // heartbeat watchdog (35 s silence = dead), offline after 3 consecutive failures within 30 s with /health polling every 2 s,
 // resync (R-016 + R-112) on `service.notice {kind:'resync'}` or when the Service restarted (health.seq < lastSeq).
 import { EVENT_NAMES, type EventName, type ServiceEvent } from './types.js';
+import { FetchEventSource } from './sse-fetch.js';
 
 export interface MessageLike { data: string; lastEventId?: string }
 export interface EventSourceLike {
@@ -15,6 +16,8 @@ export type StreamStatus = 'connecting' | 'open' | 'reconnecting' | 'offline';
 export interface EventStreamOptions {
   url: string;
   createSource?: (url: string) => EventSourceLike;
+  /** Service Token for the default reader (FetchEventSource sends it as the Authorization header; never in the URL). */
+  token?: () => string;
   onEvent: (ev: ServiceEvent) => void;
   onStatus?: (status: StreamStatus, attempt: number) => void;
   /** Called when state must be reloaded from REST (gap larger than the replay buffer, or Service restart). */
@@ -50,7 +53,8 @@ export function parseEvent(name: string, raw: string): ServiceEvent | null {
 
 export function createEventStream(opts: EventStreamOptions): EventStream {
   const timers = opts.timers ?? { setInterval: (fn: () => void, ms: number) => globalThis.setInterval(fn, ms), clearInterval: (h: unknown) => globalThis.clearInterval(h as ReturnType<typeof setInterval>), now: () => Date.now() };
-  const create = opts.createSource ?? ((url: string) => new EventSource(url) as unknown as EventSourceLike);
+  const token = opts.token;
+  const create = opts.createSource ?? (token ? (url: string) => new FetchEventSource(url, { token }) : (url: string) => new EventSource(url) as unknown as EventSourceLike);
   let lastSeq = readSeq(opts.storageKey);
   let source: EventSourceLike | null = null;
   let status: StreamStatus = 'connecting';

@@ -54,8 +54,8 @@ function customProviderHosts(db: { prepare(sql: string): { all(): unknown[] } })
 
 export async function boot(cfg: ServiceConfig, opts: { resources?: Resources; modules?: readonly ServiceModule[]; echoLogs?: boolean } = {}) {
   const p = makePaths(cfg.dataDir);
-  const log = createLogger(p.logs, { echo: opts.echoLogs ?? cfg.dev });
-  setEngineLog(createLogger(p.logs, { prefix: 'engine' }));
+  const log = createLogger(p.logs, { echo: opts.echoLogs ?? cfg.dev, secrets: [cfg.token] });            // SEC-016: never the token
+  setEngineLog(createLogger(p.logs, { prefix: 'engine', secrets: [cfg.token] }));
   try { pruneLogs(p.logs); } catch { /* ignore */ }
   const dbStart = Date.now();
   const { db, openedVia, migrated } = openDatabase(p.db, cfg.dbKeyHex);

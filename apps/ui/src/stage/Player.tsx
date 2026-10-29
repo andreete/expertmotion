@@ -211,6 +211,19 @@ export function StagePlayer() {
 
   const fit = meta ? Math.min((size.w - 32) / meta.width, (size.h - 32) / meta.height) : 1;
   const w = meta ? Math.max(1, Math.floor(meta.width * fit)) : 0, h = meta ? Math.max(1, Math.floor(meta.height * fit)) : 0;
+  // Round 2 (QA 2026-10-29 "weight-500 headings look heavier in the Player than in the MP4"): the Player and the export load the
+  // same bundled font files and weights (pixel parity at 1080×1920: ≤ 0.5 % of pixels differ). The heavier look came from Chrome
+  // rasterising the text AT the preview scale (hinting at ~8 px); the export is rasterised at full size and then shown smaller.
+  // `.em-raster` (index.css) gives the Player's scaled container `will-change: transform` (its own compositing layer); measured in
+  // Chrome Headless Shell at 270×480 the extra text "ink" against the downscaled export fell from 2.2–5.5 % to 0.2–1.0 %. The class
+  // is re-applied after the preview size changes so the layer is rasterised again for the new size.
+  const rasterRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = rasterRef.current; if (!el) return;
+    el.classList.remove('em-raster');
+    const id = requestAnimationFrame(() => el.classList.add('em-raster'));
+    return () => cancelAnimationFrame(id);
+  }, [w, h]);
   const ratio = head?.settings.ratio ?? '16:9';
   const safe = meta && pp.safeArea ? safeAreaFor(ratio, meta.width, meta.height) : null;
   const quality = t(draft ? 'ui.stage.player.quality.draft' : 'ui.stage.player.quality.full');   // FR-058
@@ -287,7 +300,7 @@ export function StagePlayer() {
             <RecentStrip />
           </div>
         ) : (
-          <div className="relative" style={{ width: w, height: h }}>
+          <div ref={rasterRef} className="relative em-raster" style={{ width: w, height: h }}>
             <RemotionPlayer key={remountKey} ref={ref} component={Timeline} inputProps={inputProps as unknown as Record<string, unknown>}
               durationInFrames={meta.durationInFrames} compositionWidth={meta.width} compositionHeight={meta.height} fps={meta.fps}
               style={{ width: w, height: h, ...(state.headLoading ? { visibility: 'hidden' as const } : {}) }} controls={false} loop={pp.loop} clickToPlay spaceKeyToPlayOrPause={false} acknowledgeRemotionLicense initialFrame={Math.min(meta.durationInFrames - 1, Math.round((state.playheadMs / 1000) * meta.fps))}

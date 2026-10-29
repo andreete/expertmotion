@@ -29,7 +29,7 @@ import { randomBytes, createPublicKey, verify as nodeVerify } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { arch, cpus, homedir, release, totalmem } from 'node:os';
 import { join } from 'node:path';
-import { redact } from '@expertmotion/shared';
+import { redact, redactLiterals } from '@expertmotion/shared';
 import {
   APP_HOST, APP_ORIGIN, APP_SCHEME, EM, IPC, isAllowedExternal, isPlayableOutput, READY_TIMEOUT_MS, type UpdateAction, SHELL_CALLER_HEADER, SHELL_CALLER_VALUE,
   SHELL_METRICS_MS, SHUTDOWN_KILL_AFTER_MS, SHUTDOWN_REQUEST_WAIT_MS,
@@ -81,8 +81,9 @@ const FEED_URL = typeof __EM_FEED_URL__ === 'string' ? __EM_FEED_URL__ : 'https:
 // Logging with redaction (SEC-100). Every line passes through `redact` before it touches disk.
 // ---------------------------------------------------------------------------------------------
 let shellLog: RotatingLog | null = null;    // logs/shell-YYYY-MM-DD.log, 20 MB cap, 7 days (SEC-101)
+let liveServiceToken: string | null = null;  // SEC-016 (round 2): redacted literally from every Shell log line
 function logLine(level: 'info' | 'warn' | 'error', msg: string, extra?: Record<string, unknown>): void {
-  const line = redact(JSON.stringify({ ts: new Date().toISOString(), level, component: 'shell', msg, ...extra }));
+  const line = redactLiterals(redact(JSON.stringify({ ts: new Date().toISOString(), level, component: 'shell', msg, ...extra })), [liveServiceToken]);
   if (level === 'error') console.error(line);
   else console.log(line);
   shellLog?.write(line);
@@ -208,7 +209,7 @@ async function startService(): Promise<void> {
   if (dbKeyHex === null) throw new Error('Database Key not loaded');
   const port = await pickPort({ exclude: triedPorts });
   const token = randomBytes(32).toString('base64url');
-  endpoint = { port, token };
+  endpoint = { port, token }; liveServiceToken = token;
 
   const proc = utilityProcess.fork(serviceModulePath(), [], {
     serviceName: 'Expertmotion Helper',

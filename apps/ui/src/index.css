@@ -51,6 +51,8 @@ button { font: inherit; color: inherit; }
 .em-pulse { animation: em-pulse var(--t-base) var(--ease) 3; }
 @keyframes em-spin { to { transform: rotate(360deg); } }
 .em-spin { animation: em-spin 900ms linear infinite; }
+/* Round 2: the Player's scaled composition is rasterised as one layer, like the exported video shown small (stage/Player.tsx). */
+.em-raster [style*="scale("] { will-change: transform; }
 @keyframes em-shimmer { 0% { opacity: .5; } 50% { opacity: 1; } 100% { opacity: .5; } }
 .em-skeleton { background: var(--em-panel-2); animation: em-shimmer 1.2s ease-in-out infinite; }
 /* FR-214: the assistant is working (typing indicator in the chat thread). */

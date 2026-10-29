@@ -105,7 +105,7 @@ Likelihood and impact: L/M/H. Residual risk is what remains after the listed SEC
 | T-01 | **S**poofing: a local process or web page calls the API without the Service Token | read/modify projects, start renders, spend provider budget | H (any page can hit loopback) | SEC-001, 004, 012 | L: token must leak first |
 | T-02 | **S**poofing: DNS-rebinding or `Host` spoofing to make a browser treat `127.0.0.1` as a site origin | same as T-01 via browser | M | SEC-006 (Host/Origin), SEC-012 (no cookies) | L |
 | T-03 | **T**ampering: oversize or malformed JSON/Composition Model | crash, memory exhaustion | M | SEC-009, Zod validation everywhere | L |
-| T-04 | **I**nformation disclosure: token in URLs or logs (`/api/events?token=`) | token theft → T-01 | M | SEC-005, SEC-015, SEC-100 | L: query token is loopback-only and per-launch |
+| T-04 | **I**nformation disclosure: token in URLs or logs (was `/api/events?token=` until 2026-10-30) | token theft → T-01 | M | SEC-005 (SSE via fetch + header, `?token=` refused), SEC-015, SEC-100 (+ literal-token redaction) | L: the token is never in a URL; per-launch |
 | T-05 | **I**nformation disclosure: path traversal in `/media/<grant>/…` (assets and `outputs/<outputId>` variants) | read arbitrary files | M | SEC-010 | L |
 | T-06 | **D**enial of service: flood of render/provider requests | machine unusable, money spent | M | SEC-011, one render per project (ARCHITECTURE §9) | M: a token holder can still queue work |
 | T-07 | **E**levation: Engine (Chrome) uses media grants to reach other routes | Chrome page content reads project data | L | grants are route-bound and job-scoped (SEC-010); Chrome has no token | L |

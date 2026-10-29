@@ -53,17 +53,20 @@ describe('FR-171 Service restart in the Editor', () => {
     const h = harness();
     await boot(h.runtime);
     await waitFor(() => { if (!h.sources.length) throw new Error('no SSE'); });
-    expect(h.sources[0]).toContain(`token=${encodeURIComponent(h.api.serviceToken)}`);
+    expect(h.sources[0]).not.toContain('token=');                      // SEC-016 round 2: the stream sends the token as a header
+    expect(h.sources[0]).not.toContain(h.api.serviceToken);
 
     await h.push({ status: 'offline', code: 'EM-8001' });
     await waitFor(() => { if (!el('sys.offline')) throw new Error('no offline banner'); });
 
     const fresh = 'fresh-token-after-restart-0001';
     h.accepted.add(fresh);
-    const before = h.calls.length;
+    const before = h.calls.length, sourcesBefore = h.sources.length;
     await h.push({ status: 'ready', bootstrap: { port: 42322, token: fresh } });
     expect(h.api.baseUrl).toBe('http://127.0.0.1:42322');
-    await waitFor(() => { if (!h.sources.some((u) => u.includes(`token=${fresh}`))) throw new Error('SSE not reconnected'); });
+    await waitFor(() => { if (h.sources.length <= sourcesBefore || !h.sources.at(-1)!.startsWith('http://127.0.0.1:42322/')) throw new Error('SSE not reconnected'); });
+    expect(h.api.serviceToken).toBe(fresh);                              // FetchEventSource reads this token on (re)connect
+    expect(h.sources.some((u) => u.includes(fresh))).toBe(false);
     await waitFor(() => { if (!h.calls.slice(before).some((c) => /\/projects\/[^/]+\/open$/.test(c.url))) throw new Error('project not refetched'); });
     const after = h.calls.slice(before);
     expect(after.every((c) => c.url.startsWith('http://127.0.0.1:42322/') && c.auth === `Bearer ${fresh}`)).toBe(true);

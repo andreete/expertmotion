@@ -122,8 +122,8 @@ export function removalSteps(model: CompositionModelT, items: readonly ItemRef[]
 }
 
 // ───────────────────────────── Duplicate ─────────────────────────────
-/** Kinds Duplicate supports (existing add ops can rebuild them); audio, captions, transitions, effects and the background cannot be copied faithfully. */
-export const DUPLICABLE_KINDS: ReadonlySet<ItemKind> = new Set(['clip', 'text', 'image', 'shape']);
+/** Kinds Duplicate supports (the add ops rebuild them with every field); captions, transitions, effects, the background and audio beds are not duplicated. */
+export const DUPLICABLE_KINDS: ReadonlySet<ItemKind> = new Set(['clip', 'text', 'image', 'shape', 'audio']);
 type TextT = CompositionModelT['tracks']['text'][number];
 type ImageT = Extract<CompositionModelT['tracks']['overlay'][number], { kind: 'image' }>;
 type ShapeT = Extract<CompositionModelT['tracks']['overlay'][number], { kind: 'shape' }>;
@@ -163,9 +163,36 @@ const SHAPE_FIELDS: Fields<ShapeT> = {
   fill: (v) => ({ fill: v }), stroke: (v) => opt('stroke', v), strokeWidth: (v) => opt('strokeWidth', v), opacity: (v) => opt('opacity', v),
   scale: (v) => opt('scale', v), rotation: (v) => opt('rotation', v), params: (v) => ({ params: structuredClone(v ?? {}) }), motion: (v) => motionArg(v),
 };
-function argsOf<T extends object>(x: T, fields: Fields<T>): Args {
+type ClipT = CompositionModelT['tracks']['video'][number];
+type AudioT = CompositionModelT['tracks']['audio'][number];
+/** Round 2 (QA 2026-10-29): a clip copy keeps its sound, fades, fit / crop, frame transform, rate, motion and effects. Media clips
+ *  rebuild with op:clip.insert, scene clips with op:scene.add (assetId / scene name the op); durationMs is clamped for scene.add. */
+const CLIP_FIELDS: { [K in Exclude<keyof ClipT, 'id'>]-?: (v: ClipT[K], x: ClipT) => Args } = {
+  assetId: (v) => (v === undefined ? {} : { assetId: v }),
+  scene: (v) => (v ? { background: v.presetId, backgroundParams: structuredClone(v.params ?? {}) } : {}),
+  trimBeforeMs: (v, x) => (x.assetId !== undefined ? { trimBeforeMs: v } : {}),
+  durationMs: (v, x) => ({ durationMs: x.assetId !== undefined ? v : Math.max(500, Math.min(120_000, v)) }),
+  playbackRate: (v) => (v !== 1 ? { playbackRate: v } : {}), volume: (v) => ({ volume: v }), muted: (v) => ({ muted: v }),
+  fadeInMs: (v) => ({ fadeInMs: v }), fadeOutMs: (v) => ({ fadeOutMs: v }), objectFit: (v) => ({ objectFit: v }),
+  crop: (v) => opt('crop', v), transform: (v) => opt('transform', v),
+  motion: (v) => (v ? motionArg(v) : {}),
+  effects: (v) => (v.length ? { effects: v.map((e) => ({ presetId: e.presetId, params: { ...structuredClone(e.params ?? {}), motion: e.motion } })) } : {}),
+};
+/** Round 2: a voice / sfx copy keeps its trim, length, volume, loop, fades and ducking (lane: the lane rule; atMs: the copy's time). */
+const AUDIO_FIELDS: { [K in Exclude<keyof AudioT, 'id' | 'atMs' | 'lane'>]-?: (v: AudioT[K], x: AudioT) => Args } = {
+  assetId: (v) => ({ assetId: v }), role: (v) => ({ role: v }), durationMs: (v) => opt('durationMs', v), trimBeforeMs: (v) => ({ trimBeforeMs: v }),
+  volume: (v) => ({ volume: v }), loop: (v) => ({ loop: v }), fadeInMs: (v) => ({ fadeInMs: v }), fadeOutMs: (v) => ({ fadeOutMs: v }),
+  ducking: (v) => (v ? { ducking: { presetId: v.presetId, params: structuredClone(v.params ?? {}) } } : {}),
+};
+const clipCopy = (c: ClipT, atIndex?: number): OperationT => ({ op: c.assetId !== undefined ? 'op:clip.insert' : 'op:scene.add', target: { kind: 'sequence' },
+  args: { ...argsOf(c, CLIP_FIELDS), ...(atIndex === undefined ? {} : { atIndex }) } });
+/** null for a bed (op:audio.addLayer takes voice / sfx only; a project has one bed). */
+const audioCopy = (a: AudioT, atMs: number): OperationT | null => (a.role === 'bed' ? null : { op: 'op:audio.addLayer', args: { ...argsOf(a, AUDIO_FIELDS), atMs } });
+/** Heard length of an audio layer (its own length, else the asset's rest is unknown here: 0). */
+const audioLen = (a: AudioT): number => a.durationMs ?? 0;
+function argsOf<T extends object>(x: T, fields: { [k: string]: (v: never, x: T) => Args }): Args {
   const out: Args = {};
-  for (const k of Object.keys(fields) as Array<keyof Fields<T>>) Object.assign(out, (fields[k] as (v: unknown, x: T) => Args)((x as Record<PropertyKey, unknown>)[k as PropertyKey], x));
+  for (const k of Object.keys(fields)) Object.assign(out, (fields[k] as unknown as (v: unknown, x: T) => Args)((x as Record<PropertyKey, unknown>)[k], x));
   return out;
 }
 const textCopy = (x: TextT, atMs: number): OperationT => ({ op: 'op:text.add', args: { ...argsOf(x, TEXT_FIELDS), atMs, durationMs: x.timing.durationMs } });
@@ -177,7 +204,8 @@ const overlayCopy = (o: CompositionModelT['tracks']['overlay'][number], atMs: nu
  * lane rule puts it on a free lane); a clip copy is inserted right after the clip with the same media, trim and length; a scene
  * clip copy (op:scene.add) brings copies of its own texts / images / shapes at the same offsets. Clips are processed from the
  * last to the first so every insert index and time is computed on the model it is applied to. Texts / images / shapes keep every
- * field (TEXT_FIELDS / IMAGE_FIELDS / SHAPE_FIELDS). Not copied (no add op takes them): clip volume / fades / motion / effects / framing.
+ * field (TEXT_FIELDS / IMAGE_FIELDS / SHAPE_FIELDS); clips keep every field too (CLIP_FIELDS, round 2), and a voice / sfx layer
+ * copy (AUDIO_FIELDS) starts where the original ends, on a free audio lane. Audio beds are not duplicated.
  */
 export function duplicationSteps(model: CompositionModelT, items: readonly ItemRef[]): ItemStep[] {
   const list = unique(model, items).filter((r) => DUPLICABLE_KINDS.has(r.kind));
@@ -189,6 +217,12 @@ export function duplicationSteps(model: CompositionModelT, items: readonly ItemR
   // Texts / images / shapes first (their times are still the original ones), then the clips from the last to the first.
   for (const r of list.filter((x) => x.kind !== 'clip')) {
     if (covered.has(`${r.kind}:${r.id}`)) continue;                  // copied with its scene below
+    if (r.kind === 'audio') {
+      const a = model.tracks.audio.find((y) => y.id === r.id);
+      const op = a ? audioCopy(a, a.atMs + audioLen(a)) : null;
+      if (op && audioLen(a!) > 0) steps.push({ target: { kind: 'audio', id: r.id! }, op });
+      continue;
+    }
     const x = r.kind === 'text' ? model.tracks.text.find((y) => y.id === r.id) : model.tracks.overlay.find((y) => y.id === r.id && y.kind === r.kind);
     if (!x) continue;
     steps.push({ target: { kind: r.kind, id: r.id! }, op: 'kind' in x ? overlayCopy(x, x.timing.atMs + x.timing.durationMs) : textCopy(x, x.timing.atMs + x.timing.durationMs) });
@@ -196,8 +230,8 @@ export function duplicationSteps(model: CompositionModelT, items: readonly ItemR
   for (const { i } of clips) {
     const c = v[i]!;
     const at = i + 1;
-    if (c.assetId !== undefined) { steps.push({ target: { kind: 'clip', id: c.id }, op: { op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: c.assetId, atIndex: at, trimBeforeMs: c.trimBeforeMs, durationMs: c.durationMs } } }); continue; }
-    steps.push({ target: { kind: 'clip', id: c.id }, op: { op: 'op:scene.add', target: { kind: 'sequence' }, args: { durationMs: Math.max(500, Math.min(120_000, c.durationMs)), ...(c.scene ? { background: c.scene.presetId, backgroundParams: c.scene.params } : {}), atIndex: at } } });
+    steps.push({ target: { kind: 'clip', id: c.id }, op: clipCopy(c, at) });
+    if (c.assetId !== undefined) continue;
     // The copy starts where the next clip started (the transition on cut i stays between the original and the copy).
     const copyStart = i < v.length - 1 ? timing.cutStartMs[i]! : timing.clipStartMs[i]! + c.durationMs;
     const from = timing.elementWindows[c.id]!.fromMs;
@@ -219,7 +253,7 @@ export const stepFor = (steps: readonly ItemStep[], target: ElementRefT | undefi
  * changed. `op` is the add operation that rebuilds the item (the same copies Duplicate uses) with its time made relative:
  * `offsetMs` is the item's start minus the start of the earliest copied item. Clips (`clip` = media clip, `scene` = scene clip)
  * are inserted into the video Track at Paste time; everything else is placed at the paste time + offset (the lane rule picks a
- * free lane). Audio voice / sfx layers paste as op:audio.addLayer (their trim and length are not carried; beds are skipped);
+ * free lane). Audio voice / sfx layers paste as op:audio.addLayer with every field (round 2: trim, length, loop, ducking; beds are skipped);
  * captions, transitions, effects and the background are not copied.
  */
 export type ClipboardKind = 'clip' | 'scene' | 'text' | 'image' | 'shape' | 'audio';
@@ -253,13 +287,12 @@ export function copySnapshot(model: CompositionModelT, items: readonly ItemRef[]
     if (r.kind === 'clip') {
       const i = model.tracks.video.findIndex((c) => c.id === r.id); const c = model.tracks.video[i]!;
       const w = timing.elementWindows[c.id]!;
-      if (c.assetId !== undefined) raw.push({ kind: 'clip', anchor: c.id, fromMs: w.fromMs, order: i, durationMs: c.durationMs, op: { op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: c.assetId, trimBeforeMs: c.trimBeforeMs, durationMs: c.durationMs } } });
-      else raw.push({ kind: 'scene', anchor: c.id, fromMs: w.fromMs, order: i, durationMs: c.durationMs, op: { op: 'op:scene.add', target: { kind: 'sequence' }, args: { durationMs: Math.max(500, Math.min(120_000, c.durationMs)), ...(c.scene ? { background: c.scene.presetId, backgroundParams: c.scene.params } : {}) } } });
+      raw.push({ kind: c.assetId !== undefined ? 'clip' : 'scene', anchor: c.id, fromMs: w.fromMs, order: i, durationMs: c.durationMs, op: clipCopy(c) });
     } else if (r.kind === 'audio') {
       const a = model.tracks.audio.find((x) => x.id === r.id)!;
-      if (a.role === 'bed') { skipped++; continue; }
-      raw.push({ kind: 'audio', fromMs: a.atMs, order: 1e6, durationMs: a.durationMs ?? 0, op: { op: 'op:audio.addLayer', args: { assetId: a.assetId, atMs: 0, volume: a.volume, role: a.role,
-        ...(a.fadeInMs !== undefined ? { fadeInMs: a.fadeInMs } : {}), ...(a.fadeOutMs !== undefined ? { fadeOutMs: a.fadeOutMs } : {}) } } });
+      const op = audioCopy(a, 0);
+      if (!op) { skipped++; continue; }
+      raw.push({ kind: 'audio', fromMs: a.atMs, order: 1e6, durationMs: a.durationMs ?? 0, op });
     } else {
       const x = r.kind === 'text' ? model.tracks.text.find((y) => y.id === r.id) : model.tracks.overlay.find((y) => y.id === r.id && y.kind === r.kind);
       if (!x) continue;

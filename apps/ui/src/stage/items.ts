@@ -22,7 +22,7 @@ export function itemRefs(selection: readonly ElementRefT[]): ItemRef[] {
   }
   return out;
 }
-/** The part of the selection Duplicate can copy (clips, scene clips, texts, images, shapes). */
+/** The part of the selection Duplicate can copy (clips, scene clips, texts, images, shapes, voice / sfx audio). */
 export const duplicableRefs = (selection: readonly ElementRefT[]): ItemRef[] => itemRefs(selection).filter((r) => DUPLICABLE_KINDS.has(r.kind));
 
 const CATEGORY: Partial<Record<ItemKind, IntentCategory>> = { text: 'text', shape: 'shape', audio: 'audio', cut: 'transition', effect: 'effect', background: 'background', caption: 'caption' };
@@ -54,7 +54,7 @@ export function runDelete(o: { selection: readonly ElementRefT[]; itemsEdit: (ed
   void o.itemsEdit({ action: 'remove', items }, o.t('ui.stage.timeline.delete.done', { count: items.length }));
   return true;
 }
-/** Context menu "Duplicate": one pick for every duplicable selected item (audio, captions, transitions and effects are skipped). */
+/** Context menu "Duplicate": one pick for every duplicable selected item (captions, transitions, effects and audio beds are skipped). */
 export function runDuplicate(o: { selection: readonly ElementRefT[]; itemsEdit: (edit: ItemsEdit, label: string) => Promise<boolean>; toast: Toast; t: T }): boolean {
   const items = duplicableRefs(o.selection);
   if (!items.length) { o.toast('info', 'ui.stage.itemmenu.duplicate.none'); return false; }

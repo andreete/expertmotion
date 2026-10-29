@@ -36,7 +36,7 @@ describe('pure helpers', () => {
   it('itemRefs keeps deletable refs once; duplicable refs and the category follow the kinds', () => {
     const sel = [{ kind: 'clip' as const, id: 'c1' }, { kind: 'clip' as const, id: 'c1' }, { kind: 'cut' as const, index: 0 }, { kind: 'caption' as const }, { kind: 'playhead' as const }, { kind: 'audio' as const, id: 'a1' }];
     expect(itemRefs(sel)).toEqual([{ kind: 'clip', id: 'c1' }, { kind: 'cut', index: 0 }, { kind: 'audio', id: 'a1' }]);
-    expect(duplicableRefs(sel)).toEqual([{ kind: 'clip', id: 'c1' }]);
+    expect(duplicableRefs(sel)).toEqual([{ kind: 'clip', id: 'c1' }, { kind: 'audio', id: 'a1' }]);   // round 2: voice / sfx audio duplicates too
     expect(itemsCategory([{ kind: 'text', id: 'x' }])).toBe('text');
     expect(itemsCategory([{ kind: 'text', id: 'x' }, { kind: 'clip', id: 'y' }])).toBe('asset');
     expect(isMenuKey({ key: 'F10', shiftKey: true })).toBe(true);
@@ -59,7 +59,8 @@ describe('pure helpers', () => {
     expect(itemMenuState({ refs: clip, model: m, playheadMs: 1500, privateMode: false, t })).toEqual({ copy: null, cut: null, paste: t('ui.stage.itemmenu.paste.empty'), delete: null, split: null, duplicate: null, ask: null });
     const off = itemMenuState({ refs: [{ kind: 'audio', id: m.tracks.audio[0]!.id }], model: m, playheadMs: 5900, privateMode: true, t });
     expect(off.split).toBe(t('ui.stage.itemmenu.split.outside'));
-    expect(off.duplicate).toBe(t('ui.stage.itemmenu.duplicate.none'));
+    expect(off.duplicate).toBeNull();                                    // round 2: a voice layer can be duplicated
+    expect(itemMenuState({ refs: [{ kind: 'cut', index: 0 }], model: m, playheadMs: 5900, privateMode: false, t }).duplicate).toBe(t('ui.stage.itemmenu.duplicate.none'));
     expect(off.ask).toBeTruthy();
     expect(off.delete).toBeNull();
   });

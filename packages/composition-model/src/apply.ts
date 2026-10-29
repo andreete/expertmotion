@@ -86,6 +86,16 @@ function addVisual(m: CompositionModelT, item: VisualItem, layer: number | undef
   if ('kind' in item) m.tracks.overlay.push(item); else m.tracks.text.push(item);
   if (layer !== undefined) placeVisual(visualItems(m), item, layer);
 }
+/** op:audio.addLayer (round 2: trimBeforeMs / durationMs / loop / ducking so Duplicate and Paste rebuild a layer exactly). */
+function audioLayerFrom(a: { role: 'voice' | 'sfx'; atMs: number; volume: number; fadeInMs?: number; fadeOutMs?: number; trimBeforeMs?: number; durationMs?: number; loop?: boolean; ducking?: { presetId: string; params?: Record<string, unknown> } },
+  as: AssetFacts, id: string, ctx: ApplyContext, path: string, warnings: Issue[]): AudioLayerT {
+  const trim = a.trimBeforeMs ?? 0;
+  if (as.durationMs !== undefined && trim >= as.durationMs) stop('EM-2306', `The audio starts ${trim} ms into a ${as.durationMs} ms file.`, `${path}.args.trimBeforeMs`);
+  const len = a.durationMs ?? (as.durationMs ? (a.trimBeforeMs === undefined ? as.durationMs : Math.max(100, as.durationMs - trim)) : undefined);
+  if (a.ducking && a.ducking.presetId !== 'preset:audio.duck-voice') stop('EM-2101', `${a.ducking.presetId} is not a ducking preset.`, `${path}.args.ducking.presetId`);
+  return { id, assetId: as.id, role: a.role, atMs: a.atMs, ...(len !== undefined ? { durationMs: len } : {}), lane: 0, trimBeforeMs: trim, volume: a.volume, loop: a.loop ?? false, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0,
+    ducking: a.ducking ? { presetId: a.ducking.presetId, params: preset(a.ducking.presetId, 'audio', a.ducking.params ?? {}, ctx, `${path}.args.ducking`, warnings) } : null };
+}
 function addAudio(m: CompositionModelT, layer: AudioLayerT): void {
   m.tracks.audio.push(layer);
   layer.lane = freeAudioLane(m.tracks.audio, layer);
@@ -197,6 +207,37 @@ const overlayZoom = (a: { scale?: number; rotation?: number }): { scale?: number
   return { ...(s !== 1 ? { scale: s } : {}), ...(r !== 0 ? { rotation: r } : {}) };
 };
 const isIdentity = (t: ClipTransformT) => t.x === 0 && t.y === 0 && t.scale === 1 && t.rotation === 0;
+type ClipLookArgsT = { volume?: number; muted?: boolean; fadeInMs?: number; fadeOutMs?: number; objectFit?: 'cover' | 'contain'; crop?: { left: number; right: number; top: number; bottom: number };
+  transform?: { x?: number; y?: number; scale?: number; rotation?: number }; playbackRate?: number; motion?: MotionArgT; effects?: Array<{ presetId: string; params?: Record<string, unknown> }> };
+/**
+ * FR-261 + round 2 (QA 2026-10-29): the look of a clip given with op:clip.insert / op:scene.add (Duplicate and Paste carry every
+ * field of the source clip): sound, fades, fit / crop, frame transform, playback rate, motion and effects. Absent = the defaults.
+ */
+function applyClipLook(clip: ClipT, a: ClipLookArgsT, opName: string, ctx: ApplyContext, path: string, warnings: Issue[]): void {
+  if (a.volume !== undefined) clip.volume = a.volume;
+  if (a.muted !== undefined) clip.muted = a.muted;
+  if (a.fadeInMs !== undefined) clip.fadeInMs = a.fadeInMs;
+  if (a.fadeOutMs !== undefined) clip.fadeOutMs = a.fadeOutMs;
+  if (a.objectFit !== undefined) clip.objectFit = a.objectFit;
+  if (a.playbackRate !== undefined) clip.playbackRate = a.playbackRate;
+  if (a.crop && (a.crop.left || a.crop.right || a.crop.top || a.crop.bottom)) {
+    if (a.crop.left + a.crop.right >= 0.95 || a.crop.top + a.crop.bottom >= 0.95) stop('EM-2102', `${opName}: the crop leaves nothing of the picture.`, `${path}.args.crop`);
+    clip.crop = a.crop;
+  }
+  if (a.transform) {
+    const t: ClipTransformT = { x: round(a.transform.x ?? 0, 4), y: round(a.transform.y ?? 0, 4), scale: round(a.transform.scale ?? 1, 4), rotation: normaliseRotation(a.transform.rotation ?? 0) };
+    if (!isIdentity(t)) clip.transform = t;
+  }
+  if (a.motion) clip.motion = motionOf(a.motion, undefined, ctx, path, warnings);
+  for (const e of a.effects ?? []) {
+    const { motion, ...rest } = preset(e.presetId, 'effect', e.params, ctx, `${path}.args.effects`, warnings);
+    const existing = clip.effects.find((x) => x.presetId === e.presetId);
+    if (existing) { existing.params = rest; existing.motion = motion as 'static'; continue; }
+    if (clip.effects.length >= MAX_EFFECTS(ctx.tier)) stop('EM-2105', `A clip can have at most ${MAX_EFFECTS(ctx.tier)} effects on this computer.`, `${path}.args.effects`);
+    clip.effects.push({ presetId: e.presetId, params: rest, motion: motion as 'static' });
+  }
+  if (clip.fadeInMs + clip.fadeOutMs > clip.durationMs) stop('EM-2102', `${opName}: the fades are longer than the clip.`, `${path}.args.fadeInMs`);
+}
 
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 const quote = (s: string) => JSON.stringify(s.length > 80 ? `${s.slice(0, 77)}…` : s);
@@ -246,17 +287,8 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const as = asset(ctx, a.assetId, ['video', 'image'], path);
       const trimBeforeMs = as.kind === 'image' ? 0 : (a.trimBeforeMs ?? 0);
       const durationMs = a.durationMs ?? (as.kind === 'image' ? IMAGE_DEFAULT_MS : Math.max(100, (as.durationMs ?? IMAGE_DEFAULT_MS) - trimBeforeMs));
-      const clip: ClipT = { id: ctx.newId(), assetId: as.id, trimBeforeMs, durationMs, playbackRate: 1, volume: a.volume ?? 1, muted: a.muted ?? false, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, objectFit: a.objectFit ?? 'cover', motion: null, effects: [] };
-      // FR-261: crop / transform at insert (absent or identity = nothing stored, as before)
-      if (a.crop && (a.crop.left || a.crop.right || a.crop.top || a.crop.bottom)) {
-        if (a.crop.left + a.crop.right >= 0.95 || a.crop.top + a.crop.bottom >= 0.95) stop('EM-2102', 'op:clip.insert: the crop leaves nothing of the picture.', `${path}.args.crop`);
-        clip.crop = a.crop;
-      }
-      if (a.transform) {
-        const t: ClipTransformT = { x: round(a.transform.x ?? 0, 4), y: round(a.transform.y ?? 0, 4), scale: round(a.transform.scale ?? 1, 4), rotation: normaliseRotation(a.transform.rotation ?? 0) };
-        if (!isIdentity(t)) clip.transform = t;
-      }
-      if (clip.fadeInMs + clip.fadeOutMs > durationMs) stop('EM-2102', 'op:clip.insert: the fades are longer than the clip.', `${path}.args.fadeInMs`);
+      const clip: ClipT = { id: ctx.newId(), assetId: as.id, trimBeforeMs, durationMs, playbackRate: 1, volume: 1, muted: false, fadeInMs: 0, fadeOutMs: 0, objectFit: 'cover', motion: null, effects: [] };
+      applyClipLook(clip, a, 'op:clip.insert', ctx, path, warnings);     // FR-261 / round 2: absent or identity = nothing stored, as before
       checkSource(clip, as, `${path}.args`);
       const at = a.atIndex ?? v.length;
       if (at > v.length) stop('EM-2102', `atIndex ${at} is beyond the end (${v.length}).`, `${path}.args.atIndex`);
@@ -328,6 +360,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const at: number = a.atIndex ?? v.length;
       if (at > v.length) stop('EM-2102', `atIndex ${at} is beyond the end (${v.length}).`, `${path}.args.atIndex`);
       const clip: ClipT = { id: ctx.newId(), scene: { presetId: bg, params }, trimBeforeMs: 0, durationMs: a.durationMs, playbackRate: 1, volume: 1, muted: false, fadeInMs: 0, fadeOutMs: 0, objectFit: 'cover', motion: null, effects: [] };
+      applyClipLook(clip, a, 'op:scene.add', ctx, path, warnings);       // round 2: a scene copy keeps its look
       shiftCutsForInsert(m, at);
       v.splice(at, 0, clip);
       let tIn = 0;
@@ -556,7 +589,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const as = asset(ctx, a.assetId, ['audio'], path);
       const layer: AudioLayerT = op.op === 'op:audio.addBed'
         ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, lane: 0, trimBeforeMs: 0, volume: a.volume, loop: a.loop, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: a.duckingPresetId ? { presetId: a.duckingPresetId, params: preset(a.duckingPresetId, 'audio', a.duckingParams ?? {}, ctx, path, warnings) } : null }
-        : { id: ctx.newId(), assetId: as.id, role: a.role, atMs: a.atMs, ...(as.durationMs ? { durationMs: as.durationMs } : {}), lane: 0, trimBeforeMs: 0, volume: a.volume, loop: false, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: null };
+        : audioLayerFrom(a as Parameters<typeof audioLayerFrom>[0], as, ctx.newId(), ctx, path, warnings);
       addAudio(m, layer);
       return;
     }

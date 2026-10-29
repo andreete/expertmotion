@@ -1007,6 +1007,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     const stream = createEventStream({
       url: runtime.api.eventsUrl(projectId ? { projectId } : {}),
       ...(runtime.createSource ? { createSource: runtime.createSource } : {}),
+      token: () => runtime.api.serviceToken,                                          // SEC-016: header, never the URL
       onEvent,
       onStatus: (status, attempt) => dispatch({ type: 'stream', status, attempt }),
       onResync: () => { void actions.reloadState(); void runtime.api.listRenders(projectId ? { projectId } : {}).then((p) => dispatch({ type: 'renders', renders: p.items })).catch(() => undefined); },

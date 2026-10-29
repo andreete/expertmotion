@@ -112,6 +112,8 @@ Node 22 LTS · Electron (current LTS) · Remotion ≥ 4.0.535 (evaluate 4.0.537+
 
 - Found 2026-10-29 (QA P1 round 1): `route()` handlers that stream must `await sendFile()` (it returns a promise and sets `res.locals.emStreaming`); before the first chunk `headersSent` is false and route() used to answer 204. Popovers / menus / parameter panels render into ONE floating layer (`apps/ui/src/components/Layer.tsx`, z 85) — never an `absolute z-*` box inside the header or a panel. Windows import policy: `apps/service/src/s2/import-paths-win32.ts` (any local drive, system / app folders refused, UNC only from the picker). Caption pages: `pageBreaks` (no break inside numbers / units, pauses via `silences()`). Thumbnail stills: `settledCaptureMs` (after entrances + counters, before exits). The Shell's update check knows Private Mode as on / off / unknown (`planUpdateCheck`).
 
+- Found 2026-10-30 (round 2): (a) "heavier text in the Player" was Chrome rasterising text at the preview scale, not a different font (same files; 1:1 parity ≤ 0.5 % pixels) — `.em-raster` (will-change on the Player's scaled container) fixes it; (b) composer timing must be in whole frames (Engine rounds each clip / transition separately); (c) the SSE stream is read with fetch + Bearer header, `?token=` is refused; (d) Text Layer line breaks are chosen by `balancedLineTexts` with MEASURED Inter widths (`inter-metrics.generated.ts`) and rendered as explicit lines.
+
 ## 7. Stable conventions
 
 - Requirement IDs: `PRD-`, `BRD-`, `FR-`, `NFR-`, `UX-`, `AI-`, `SEC-`, `QA-`, `ADR-`, `RISK-`, `POC-`, `EM-`; preset IDs `preset:<category>.<name>`; ops `op:<entity>.<verb>`; element IDs `el:<region>.<group>.<element>`.

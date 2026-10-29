@@ -67,8 +67,8 @@ describe('hardware, settings and events over HTTP', () => {
   });
 
   it('hardware.tick only reaches clients that asked for it, and stops when they leave', async () => {
-    const plain = collectSse(`${s.base}/api/v1/events?token=${s.token}`, () => false, 400);
-    const ticks = await collectSse(`${s.base}/api/v1/events?token=${s.token}&hardware=1`, (ev) => ev.filter((e) => e.event === 'hardware.tick').length >= 2, 3000);
+    const plain = collectSse(`${s.base}/api/v1/events`, () => false, 400, s.token);
+    const ticks = await collectSse(`${s.base}/api/v1/events?hardware=1`, (ev) => ev.filter((e) => e.event === 'hardware.tick').length >= 2, 3000, s.token);
     expect(ticks.filter((e) => e.event === 'hardware.tick').length).toBeGreaterThanOrEqual(2);
     expect((await plain).some((e) => e.event === 'hardware.tick')).toBe(false);
     await waitFor(() => s3(s.ctx).hardwareSubscribers === 0);
@@ -85,7 +85,7 @@ describe('hardware, settings and events over HTTP', () => {
     expect((await body<{ error: { code: string } }>(etc)).error.code).toBe('EM-8302');
     const folder = path.join(os.homedir(), 'Videos', 'Expertmotion');
     expect(await body(await s.api('/settings', { method: 'PUT', json: { outputFolder: folder, uiLanguage: 'id' } }))).toMatchObject({ outputFolder: folder, uiLanguage: 'id', privateMode: false });
-    const ev = collectSse(`${s.base}/api/v1/events?token=${s.token}`, (e) => e.some((x) => x.event === 'settings.changed' && x.data['scope'] === 'privateMode'));
+    const ev = collectSse(`${s.base}/api/v1/events`, (e) => e.some((x) => x.event === 'settings.changed' && x.data['scope'] === 'privateMode'), 4000, s.token);
     await new Promise((r) => setTimeout(r, 50));
     await s.api('/settings', { method: 'PUT', json: { privateMode: true } });
     const pm = (await ev).find((x) => x.data['scope'] === 'privateMode')!;

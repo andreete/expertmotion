@@ -5,7 +5,7 @@
 // mood (varied, seeded by scene index) or the explicit crossfade-rise of an editorial spec, then the quality gate (qualityCheck +
 // autoFixOps). No LLM, no randomness, no invented figures: numbers and sources are rendered only when the spec contains them.
 import { getPreset } from '@expertmotion/catalogue';
-import { applyOperations, autoFixOps, textWidthEm, deriveTiming, frameInUnits, qualityCheck, qualityChecklist, safeAreaU, textGeometry, type AssetFacts, type BoxU, type CompositionModelT, type OperationT, type QualityIssue, type Ratio, type TextLayerT, type Tier } from '@expertmotion/composition-model';
+import { applyOperations, autoFixOps, textWidthEm, deriveFrameTiming, framesOf, frameInUnits, qualityCheck, qualityChecklist, safeAreaU, textGeometry, type AssetFacts, type BoxU, type CompositionModelT, type OperationT, type QualityIssue, type Ratio, type TextLayerT, type Tier } from '@expertmotion/composition-model';
 import { normalizeVideoSpec, VideoSpec, type SceneRole, type SpecAnchorT, type SpecBarT, type SpecEasingT, type SpecSceneT, type SpecStatT, type SpecTextT, type VideoSpecT } from './auto-motion-spec.js';
 
 import { findSaid, footageClipArgs, footageSceneMs, footageWindow, isFootageRole, pipBox, splitSide, type FootageWindow } from './auto-motion-footage.js';
@@ -192,6 +192,11 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     return { clips, offsets, len, narr };
   });
   const narrationEstimateMs = sceneTiming.reduce((a, t) => a + t.narr, 0);
+  // Round 2 (QA nikel: voice −130 … +83 ms off its scene start): the Engine rounds every clip and transition to frames one by
+  // one (deriveFrameTiming), so scene lengths, overlaps and starts are whole frames here and the voice / text times are placed
+  // from exactly those frame starts (footage rounds down so a clip never runs past its window).
+  const fr = (ms: number) => framesOf(ms, fps);
+  sceneTiming.forEach((t, i) => { t.len = toMs(Math.max(1, footageWins[i] ? Math.floor((t.len * fps) / 1000) : fr(t.len))); });
 
   // ───── scene clips + transitions ─────
   const existing = base.tracks.video.length;
@@ -204,7 +209,7 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     const prev = i > 0 ? sceneTiming[i - 1]!.len : existing ? prevExistingMs : 0;
     if (!prev) return 0;
     const v = Math.min(T, Math.floor(prev / 2), Math.floor(sceneTiming[i]!.len / 2));
-    return v >= 100 ? v : 0;
+    return v >= 100 ? toMs(Math.max(1, framesOf(v, fps))) : 0;    // round 2: a whole number of frames, as the Engine plays it
   };
   const pool = TRANSITIONS_BY_MOOD[mood] ?? TRANSITIONS_BY_MOOD['calm']!;
   const gpuOk = (p: string) => ctx.tier !== 'T0' || !getPreset(p)?.flags.includes('gpu');
@@ -219,8 +224,10 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     return { presetId, params: getPreset(presetId)?.defaults && 'direction' in (getPreset(presetId)!.defaults as object) ? { direction: dirs[(seed + i) % dirs.length] } : {} };
   };
   const scenes: ComposedScene[] = [];
-  const startBase = existing ? deriveTiming(base).durationMs : 0;
-  let cursor = startBase;
+  const baseFt = existing ? deriveFrameTiming(base) : null;
+  const startBaseF = baseFt ? baseFt.clipStartFrames[existing - 1]! + baseFt.clipFrames[existing - 1]! : 0;
+  const startBase = toMs(startBaseF);
+  let cursorF = startBaseF;
   let prevTr: string | undefined;
   const transitions: Array<{ cut: number; presetId: string; params: Record<string, unknown>; ms: number }> = [];
   const footagePlaced: ComposeOk['footage'] = [];
@@ -231,9 +238,9 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     const trIn = cutIn ? transitionFor(i, prevTr) : null;
     const tIn = trIn ? cutIn : 0;
     if (trIn) { transitions.push({ cut: existing + i - 1, presetId: trIn.presetId, params: trIn.params, ms: tIn }); prevTr = trIn.presetId; }
-    if (i === 0 && existing && trIn) cursor -= tIn;      // the first scene overlaps the existing last clip by its transition
+    if (i === 0 && existing && trIn) cursorF -= fr(tIn);      // the first scene overlaps the existing last clip by its transition
     const tOut = hasOut && trType !== 'cut' ? cutMsIn(i + 1) : 0;
-    const clipDur = t.len + tOut;
+    const clipDur = toMs(fr(t.len) + fr(tOut));
     const bgId = editorial ? 'preset:background.solid' : (BACKGROUND_BY_ROLE[s.role] ?? 'preset:background.gradient');
     const bgParams: Record<string, unknown> = editorial ? { colourA: style.bg } : { colourA: style.bg, colourB: i % 2 ? c.accent2 : c.accent, intensity: 0.55, ...(bgId === 'preset:background.gradient' ? { angle: 140 + ((seed + i * 40) % 80), animate: true } : {}) };
     const fwin = footageWins[i];
@@ -242,11 +249,11 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
       add('op:clip.insert', args, { kind: 'sequence' });
       footagePlaced.push({ scene: i, assetId: fwin.assetId, hasAudio: fwin.hasAudio, volume: Number(args['volume']) });
     } else add('op:scene.add', { durationMs: clipDur, background: bgId, backgroundParams: bgParams }, { kind: 'sequence' });
-    scenes.push({ role: s.role, startMs: cursor, durationMs: t.len, clipDurationMs: clipDur, narrationMs: t.narr, ...(trIn ? { transitionIn: trIn.presetId } : {}) });
-    cursor += t.len;
+    scenes.push({ role: s.role, startMs: toMs(cursorF), durationMs: t.len, clipDurationMs: clipDur, narrationMs: t.narr, ...(trIn ? { transitionIn: trIn.presetId } : {}) });
+    cursorF += fr(t.len);
   });
   for (const x of transitions) add('op:transition.set', { presetId: x.presetId, durationMs: x.ms, timing: 'linear', params: x.params }, { kind: 'cut', index: x.cut });
-  const totalMs = cursor;
+  const totalMs = toMs(cursorF);
   if (spec.maxDurationMs && totalMs - startBase > spec.maxDurationMs) risks.push({ code: 'too-long', severity: 'warn', message: id ? `Video ${(totalMs - startBase) / 1000} dtk, lebih dari batas ${spec.maxDurationMs / 1000} dtk; percepat suara sedikit (jangan potong narasi).` : `The video is ${(totalMs - startBase) / 1000} s, over the ${spec.maxDurationMs / 1000} s limit; speed the voice up slightly (do not cut the narration).` });
 
   // ───── voice layers ─────

@@ -10,10 +10,12 @@ export interface TextLayerFit {
   weight: number; wantU: number; boxW: number; boxLeft: number; anchor: { left: number; top: number }; fit: FitResult;
   /** Font size actually used, in u (smaller than `wantU` when the text was shrunk to stay inside the safe area). */
   fontSizeU: number; lineHeight: number;
+  /** Round 2: the lines to render (explicit breaks chosen by the shared estimator; bound groups glued with U+00A0). */
+  lineTexts: string[];
 }
 export function textLayerFit(layer: TextLayerT, layout: Layout, textDefaults: ThemeT['textDefaults']): TextLayerFit {
   const g = textGeometry(layer, layout.ratio, textDefaults, { w: layout.width, h: layout.height });
   const u = layout.u;
   return { weight: g.weight, wantU: g.wantU, boxW: g.boxW * u, boxLeft: g.boxCx * u, anchor: { left: g.anchor.x * u, top: g.anchor.y * u },
-    fit: { ...g.fit, fontSize: g.fit.fontSize * u }, fontSizeU: Math.round(g.fontSizeU), lineHeight: g.lineHeight };
+    fit: { ...g.fit, fontSize: g.fit.fontSize * u }, fontSizeU: Math.round(g.fontSizeU), lineHeight: g.lineHeight, lineTexts: g.lineTexts };
 }

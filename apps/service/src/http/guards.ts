@@ -52,7 +52,9 @@ export function hostOriginGuard(cfg: ServiceConfig, mediaOrigins: ReadonlySet<st
   };
 }
 
-/** Bearer token on every /api/v1 route except GET /health; `?token=` only on the SSE routes; wrong tokens rate-limited (SEC-011 as amended by POC-010). */
+/** Bearer token on every /api/v1 route except GET /health, the SSE routes included (SEC-016 round 2: the Editor reads SSE with
+ *  fetch + the Authorization header; a `?token=` query is no longer accepted, so the token never sits in a URL, a console line
+ *  or a log). Wrong tokens rate-limited (SEC-011 as amended by POC-010). */
 export function authGuard(cfg: ServiceConfig, opts: { failMax?: number; lockMs?: number } = {}) {
   const matches = makeTokenMatcher(cfg.token);
   const failMax = opts.failMax ?? 20, lockMs = opts.lockMs ?? 60_000;
@@ -60,11 +62,9 @@ export function authGuard(cfg: ServiceConfig, opts: { failMax?: number; lockMs?:
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.path.startsWith('/api/v1/')) return next();
     if (req.method === 'GET' && req.path === '/api/v1/health') return next();
-    const sse = req.method === 'GET' && (req.path === '/api/v1/events' || /^\/api\/v1\/renders\/[^/]+\/events$/.test(req.path));
     const header = req.headers.authorization;
     let presented: string | null = null;
     if (typeof header === 'string' && header.startsWith('Bearer ')) presented = header.slice(7);
-    else if (sse && typeof req.query['token'] === 'string') presented = req.query['token'];
     if (presented === null) { res.setHeader('WWW-Authenticate', 'Bearer realm="expertmotion"'); return err(res, 401, 'EM-8004', 'Authentication required.'); }
     if (matches(presented)) return next();
     const now = Date.now();

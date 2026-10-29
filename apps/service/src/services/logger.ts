@@ -3,7 +3,7 @@
 // previous `.old`, so the oldest lines go first), files older than 7 days deleted at start (pruneLogs).
 import fs from 'node:fs';
 import path from 'node:path';
-import { redact, type Logger } from '@expertmotion/shared';
+import { redact, redactLiterals, type Logger } from '@expertmotion/shared';
 
 export const LOG_MAX_BYTES = 20 * 1024 * 1024;
 export const LOG_KEEP_DAYS = 7;
@@ -11,7 +11,8 @@ export type LogPrefix = 'service' | 'engine' | 'shell';
 
 interface Sink { file: string; bytes: number }
 
-export function createLogger(dir: string, opts: { echo?: boolean; bindings?: object; prefix?: LogPrefix; maxBytes?: number; now?: () => Date } = {}): Logger {
+/** `secrets`: literal values (the Service Token) replaced by [REDACTED] in every line, whatever field or text carries them (SEC-016 round 2). */
+export function createLogger(dir: string, opts: { echo?: boolean; bindings?: object; prefix?: LogPrefix; maxBytes?: number; now?: () => Date; secrets?: readonly string[] } = {}): Logger {
   const prefix = opts.prefix ?? 'service';
   const max = opts.maxBytes ?? LOG_MAX_BYTES;
   const now = opts.now ?? (() => new Date());
@@ -19,10 +20,10 @@ export function createLogger(dir: string, opts: { echo?: boolean; bindings?: obj
   return makeLogger(dir, opts, prefix, max, now, sink);
 }
 
-function makeLogger(dir: string, opts: { echo?: boolean; bindings?: object }, prefix: LogPrefix, max: number, now: () => Date, sink: Sink): Logger {
+function makeLogger(dir: string, opts: { echo?: boolean; bindings?: object; secrets?: readonly string[] }, prefix: LogPrefix, max: number, now: () => Date, sink: Sink): Logger {
   const write = (level: string, o: object, msg?: string) => {
     const d = now();
-    const line = `${redact(JSON.stringify({ t: d.toISOString(), level, ...(opts.bindings ?? {}), ...o, ...(msg ? { msg } : {}) }))}\n`;
+    const line = `${redactLiterals(redact(JSON.stringify({ t: d.toISOString(), level, ...(opts.bindings ?? {}), ...o, ...(msg ? { msg } : {}) })), opts.secrets ?? [])}\n`;
     try {
       const file = path.join(dir, `${prefix}-${d.toISOString().slice(0, 10)}.log`);
       if (sink.file !== file) { sink.file = file; try { sink.bytes = fs.statSync(file).size; } catch { sink.bytes = 0; } }

@@ -33,6 +33,15 @@ const MotionArg = z.object({ presetId: PresetId, durationMs: z.number().int().mi
 /** ADR-028 overlay zoom / rotation given with an add op (Duplicate / Paste copy them; absent = 1 / 0). */
 const OverlayScaleArg = z.number().min(0.05).max(20), RotationArg = z.number().min(-360).max(360);
 const EffectArg = z.object({ presetId: PresetId, params: Params.optional() }).strict();
+/** Round 2 (QA 2026-10-29: Duplicate / Paste of a video clip lost its look): what a clip copy carries besides media and length.
+ *  Absent = the defaults before (volume 1, not muted, no fades, cover, no crop, identity transform, rate 1, no motion, no effects). */
+const ClipCrop = z.object({ left: z.number().min(0).max(0.9), right: z.number().min(0).max(0.9), top: z.number().min(0).max(0.9), bottom: z.number().min(0).max(0.9) }).strict();
+const ClipLookArgs = {
+  volume: z.number().min(0).max(1).optional(), muted: z.boolean().optional(), fadeInMs: z.number().int().min(0).optional(), fadeOutMs: z.number().int().min(0).optional(),
+  objectFit: z.enum(['cover', 'contain']).optional(), crop: ClipCrop.optional(),
+  transform: z.object({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.1).max(10).optional(), rotation: z.number().min(-360).max(360).optional() }).strict().optional(),
+  playbackRate: z.number().min(0.25).max(4).optional(), motion: MotionArg.optional(), effects: z.array(EffectArg).max(3).optional(),
+};
 
 export type PropertyClass = 'scalar' | 'list' | 'exclusive-group';
 export interface OpDef { args: z.ZodType; targets: readonly TargetKind[] | null; propertyClass: PropertyClass | null; destructive: boolean }
@@ -42,10 +51,7 @@ const def = (args: z.ZodRawShape, targets: readonly TargetKind[] | null, propert
 export const OPERATIONS = {
   // FR-261 (footage + auto motion): the clip's sound, fit / crop and frame position can be given at insert (the composer cannot
   // target a clip id it has not created yet); absent = the defaults before (volume 1, cover, no crop, identity transform).
-  'op:clip.insert': def({ assetId: z.string(), atIndex: z.number().int().min(0).optional(), trimBeforeMs: ms.optional(), durationMs: dur.optional(),
-    volume: z.number().min(0).max(1).optional(), muted: z.boolean().optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional(), objectFit: z.enum(['cover', 'contain']).optional(),
-    crop: z.object({ left: z.number().min(0).max(0.9), right: z.number().min(0).max(0.9), top: z.number().min(0).max(0.9), bottom: z.number().min(0).max(0.9) }).strict().optional(),
-    transform: z.object({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.1).max(10).optional(), rotation: z.number().min(-360).max(360).optional() }).strict().optional() }, ['sequence'], 'list'),
+  'op:clip.insert': def({ assetId: z.string(), atIndex: z.number().int().min(0).optional(), trimBeforeMs: ms.optional(), durationMs: dur.optional(), ...ClipLookArgs }, ['sequence'], 'list'),
   'op:clip.remove': def({}, ['clip'], null, true),
   'op:clip.move': def({ toIndex: z.number().int().min(0) }, ['clip'], null),
   'op:clip.setTrim': def({ trimBeforeMs: ms, durationMs: dur }, ['clip'], 'scalar'),
@@ -64,7 +70,7 @@ export const OPERATIONS = {
   // the transition from the previous scene; appended unless atIndex is given.
   'op:scene.add': def({ durationMs: z.number().int().min(500).max(120_000), background: PresetId.optional(), backgroundParams: Params.optional(), atIndex: z.number().int().min(0).optional(),
     title: z.string().min(1).max(200).optional(), text: z.string().min(1).max(500).optional(), titleVariant: PresetId.optional(), textVariant: PresetId.optional(), motionId: PresetId.optional(),
-    transition: PresetId.optional(), transitionMs: z.number().int().min(100).max(2000).optional() }, ['sequence'], 'list'),
+    transition: PresetId.optional(), transitionMs: z.number().int().min(100).max(2000).optional(), ...ClipLookArgs }, ['sequence'], 'list'),
   'op:scene.setBackground': def({ presetId: PresetId, params: Params.optional() }, ['clip'], 'scalar'),
   'op:text.setContent': def({ text: z.string().min(1).max(500) }, ['text'], 'scalar'),
   // FR-025: `variant` re-applies a text variant to an existing layer (variantId, variant position; size/weight/align follow the variant).
@@ -111,7 +117,9 @@ export const OPERATIONS = {
   // height; scale 1 = the objectFit result (clip, 0.1…10) or the stored size (image / shape, 0.05…20); rotation in degrees.
   'op:element.setTransform': def({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }, ['clip', 'image', 'shape', 'text'], 'scalar'),   // ADR-034: a text takes x / y only (quality-gate re-flow)
   'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), duckingParams: Params.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),   // FR-266: duckingParams (e.g. volume / duckTo of preset:audio.duck-voice)
-  'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, null, 'list'),
+  // Round 2: trimBeforeMs / durationMs / loop / ducking let Duplicate and Paste rebuild a voice / sfx layer exactly (absent = as before).
+  'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional(),
+    trimBeforeMs: ms.optional(), durationMs: dur.optional(), loop: z.boolean().optional(), ducking: z.object({ presetId: PresetId, params: Params.optional() }).strict().optional() }, null, 'list'),
   'op:audio.setDucking': def({ presetId: PresetId, params: Params.optional() }, ['audio'], 'exclusive-group'),
   'op:audio.setFades': def({ fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['audio'], 'scalar'),
   'op:audio.remove': def({}, ['audio'], null, true),

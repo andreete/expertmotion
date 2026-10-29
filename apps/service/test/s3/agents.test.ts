@@ -36,7 +36,7 @@ describe('agents module', () => {
 
   it('brainstorm: 202, run events on the project stream only, assistant message with a pending handoff card, usage recorded', async () => {
     expect((await thread()).messages.total).toBe(0);
-    const sse = collectSse(`${s.base}/api/v1/events?token=${s.token}&projectId=${projectId}`, (ev) => ev.some((e) => e.event === 'agent.run.done'));
+    const sse = collectSse(`${s.base}/api/v1/events?projectId=${projectId}`, (ev) => ev.some((e) => e.event === 'agent.run.done'), 4000, s.token);
     await new Promise((r) => setTimeout(r, 50));
     s.ctx.bus.emit('probe.other', { projectId: otherProject });
     s.ctx.bus.emit('probe.global', { kind: 'x' });
@@ -66,7 +66,7 @@ describe('agents module', () => {
   it('FR-075: streams agent.run.delta with reply text only, runs read-only tools, never emits composition.updated', async () => {
     const before = provider;
     provider = fakeProvider(['{"tool":"catalogue.search","input":{"query":"pudar"}}', JSON.stringify({ reply: 'Coba transisi Pudar yang lembut di setiap potongan.' })]);
-    const sse = collectSse(`${s.base}/api/v1/events?token=${s.token}&projectId=${otherProject}`, (ev) => ev.some((e) => e.event === 'agent.run.done'));
+    const sse = collectSse(`${s.base}/api/v1/events?projectId=${otherProject}`, (ev) => ev.some((e) => e.event === 'agent.run.done'), 4000, s.token);
     await new Promise((r) => setTimeout(r, 50));
     const r = await s.api(`/projects/${otherProject}/conversations/brainstorm/messages`, { method: 'POST', json: { text: 'transisi halus?', baseVersion: 'v1' } });
     expect(r.status).toBe(202);

@@ -27,4 +27,10 @@ export function redact(text: string): string {
   for (const re of REDACTION_PATTERNS) out = out.replace(re, (_m, p1?: string) => (typeof p1 === 'string' ? `${p1}[REDACTED]` : '[REDACTED]'));
   return out.replace(WINDOWS_USER_PATH, (_m, p1: string) => `${p1}%USER%`).replace(POSIX_USER_PATH, (_m, p1: string) => `${p1}%USER%`);
 }
+/** SEC-016 (round 2): replaces literal secret values (the Service Token of this run) wherever they appear; values < 8 chars are ignored. */
+export function redactLiterals(text: string, secrets: readonly (string | null | undefined)[]): string {
+  let out = text;
+  for (const x of secrets) if (typeof x === 'string' && x.length >= 8) out = out.split(x).join('[REDACTED]');
+  return out;
+}
 export const silentLogger: Logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return silentLogger; } };

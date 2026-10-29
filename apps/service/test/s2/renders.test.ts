@@ -126,11 +126,11 @@ describe('renders (R-110…R-119) with a fake renderer', () => {
   it('per-job SSE sends the current state, then the job events, and closes after the final event', async () => {
     fake = fakeRenderer({ mode: 'ok', steps: 3, stepMs: 40 });
     const j = await json<Job>(await create());
-    const r = await fetch(`${s.base}/api/v1/renders/${j.id}/events?token=${s.token}`);
+    const r = await fetch(`${s.base}/api/v1/renders/${j.id}/events`, { headers: { Authorization: `Bearer ${s.token}` } });
     expect(r.status).toBe(200);
     const text = await r.text();                                                                   // resolves only because the stream closes
     expect(text).toMatch(/event: render\.(queued|progress)/); expect(text).toContain('event: render.done');
-    expect((await fetch(`${s.base}/api/v1/renders/01ARZ3NDEKTSV4RRFFQ69G5FAV/events?token=${s.token}`)).status).toBe(404);
+    expect((await fetch(`${s.base}/api/v1/renders/01ARZ3NDEKTSV4RRFFQ69G5FAV/events`, { headers: { Authorization: `Bearer ${s.token}` } })).status).toBe(404);
   });
 
   it('cancel: a queued job is cancelled at once, a rendering job stops and leaves no file', async () => {

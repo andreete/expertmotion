@@ -60,6 +60,7 @@ Format per Master Project Prompt §6: problem, alternatives, selected solution, 
 - **Selected**: Express on `127.0.0.1` with a random per-launch Service Token injected by the Desktop Shell, Host/Origin allow-list, token in a header (no cookies, so no CSRF), path-restricted file access, JSON size limits. SSE for progress. Kept as HTTP (not IPC-only) so the Editor can run in a browser during development. Two documented exceptions to "token in a header": the `EventSource` connection carries the Service Token in the query string (browsers cannot set headers on SSE), and media URLs for Chrome Headless Shell and the Player carry a per-session media grant token in the path (`/media/<grant>/<assetId>/…`, SEC-010); both are loopback-only and read-only.
 - **Trade-offs**: token plumbing in dev mode; one open port.
 - **Consequences**: `API_SPECIFICATION.md` documents the header; `SECURITY.md` and `VULNERABILITY_CHECKLIST.md` test it.
+- **Amendment 2026-10-30 (round 2)**: the `EventSource` `?token=` exception is withdrawn; the Editor reads SSE with `fetch()` + the Bearer header (`FetchEventSource`), the Service refuses `?token=`, and the loggers redact the literal token (SEC-005, SEC-016). The media-grant path token is the only remaining credential outside the header.
 
 ## ADR-006 Encrypted SQLite with OS-wrapped key; media on the filesystem
 

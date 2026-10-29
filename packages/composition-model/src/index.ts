@@ -11,5 +11,6 @@ export * from './model.js';
 export * from './summarize.js';
 export * from './items.js';
 export * from './text-box.js';
+export * from './glue.js';
 export * from './quality.js';
 export * from './voice-anchors.js';

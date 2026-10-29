@@ -151,10 +151,11 @@ describe('SSE over HTTP', () => {
   const sse: ServiceModule = { name: 'sse', register(router, ctx) { router.get('/events', (req, res) => ctx.bus.attach(req, res)); } };
   beforeAll(async () => { s = await startService({ modules: [health, sse] }); });
   afterAll(async () => { await s.close(); });
-  it('replays after Last-Event-ID and accepts ?token=', async () => {
+  it('replays after Last-Event-ID with the Bearer header; ?token= is refused (SEC-016 round 2)', async () => {
     s.ctx.bus.emit('a', { v: 1 }); s.ctx.bus.emit('b', { v: 2 });
+    expect((await fetch(`${s.base}/api/v1/events?token=${s.token}`)).status).toBe(401);
     const ac = new AbortController();
-    const r = await fetch(`${s.base}/api/v1/events?token=${s.token}`, { headers: { 'Last-Event-ID': '1' }, signal: ac.signal });
+    const r = await fetch(`${s.base}/api/v1/events`, { headers: { 'Last-Event-ID': '1', Authorization: `Bearer ${s.token}` }, signal: ac.signal });
     expect(r.status).toBe(200);
     const reader = r.body!.getReader(); let text = '';
     while (!text.includes('event: b')) text += new TextDecoder().decode((await reader.read()).value);
@@ -189,7 +190,7 @@ describe('SSE resync notice', () => {
     try {
       for (let i = 0; i < 600; i++) s.ctx.bus.emit('x', { i });
       const ac = new AbortController();
-      const r = await fetch(`${s.base}/api/v1/events?token=${s.token}`, { headers: { 'Last-Event-ID': '3' }, signal: ac.signal });
+      const r = await fetch(`${s.base}/api/v1/events`, { headers: { 'Last-Event-ID': '3', Authorization: `Bearer ${s.token}` }, signal: ac.signal });
       const reader = r.body!.getReader(); let text = '';
       while (!text.includes('service.notice')) text += new TextDecoder().decode((await reader.read()).value);
       expect(text).toContain('"kind":"resync"');

@@ -38,12 +38,13 @@ export function addProject(s: TestService, language: 'id' | 'en' = 'id'): string
 export async function body<T = Record<string, unknown>>(r: Response): Promise<T> { return (await r.json()) as T; }
 
 /** Opens an SSE stream and collects events until `until` returns true (or timeout). */
-export async function collectSse(url: string, until: (events: Array<{ event: string; data: Record<string, unknown> }>) => boolean, timeoutMs = 4000) {
+/** SEC-016: the token goes in the Authorization header (pass it), never in the URL. */
+export async function collectSse(url: string, until: (events: Array<{ event: string; data: Record<string, unknown> }>) => boolean, timeoutMs = 4000, token?: string) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   const events: Array<{ event: string; data: Record<string, unknown> }> = [];
   try {
-    const r = await fetch(url, { signal: ac.signal });
+    const r = await fetch(url, { signal: ac.signal, headers: token ? { Authorization: `Bearer ${token}` } : {} });
     const reader = r.body!.getReader(); let buf = '';
     while (!until(events)) {
       const { value, done } = await reader.read(); if (done) break;

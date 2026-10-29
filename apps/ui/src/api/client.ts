@@ -314,7 +314,7 @@ export class ApiClient {
   listRenders(query: { projectId?: Id; status?: string; limit?: number; cursor?: string } = {}): Promise<Page<RenderJobDto>> { return this.get('/renders', query); } // R-112
   getRender(jobId: Id): Promise<RenderJobDto> { return this.get(`/renders/${jobId}`); }                                     // R-113
   cancelRender(jobId: Id): Promise<RenderJobDto> { return this.post(`/renders/${jobId}/cancel`); }                          // R-114
-  renderEventsUrl(jobId: Id): string { return `${this.url(`/renders/${jobId}/events`)}?token=${encodeURIComponent(this.token)}`; } // R-115
+  renderEventsUrl(jobId: Id): string { return this.url(`/renders/${jobId}/events`); }   // R-115 (read with FetchEventSource: token in the header)
   listOutputs(id: Id): Promise<Page<OutputDto>> { return this.get(`/projects/${id}/outputs`); }                            // R-116
   getOutput(outputId: Id): Promise<OutputDto> { return this.get(`/outputs/${outputId}`); }                                 // R-117
   deleteOutput(outputId: Id): Promise<void> { return this.del(`/outputs/${outputId}`); }                                   // R-118
@@ -383,12 +383,12 @@ export class ApiClient {
   diagnosticsLogs(lines = 200, level = 'warn'): Promise<{ lines: string[] }> { return this.get('/diagnostics/logs', { lines, level }); } // R-181
   diagnosticsCodes(limit = 50): Promise<{ items: RecentCodeDto[] }> { return this.get('/diagnostics/codes', { limit }); }  // R-182
   // ── 7 events ──
-  /** R-190 URL: the token goes in the query string because EventSource cannot set headers (ADR-005 exception 1). */
+  /** R-190 URL. SEC-016 (round 2): never carries the token; the stream is read with FetchEventSource and the Bearer header. */
   eventsUrl(opts: { projectId?: Id; hardware?: boolean } = {}): string {
-    const q = [`token=${encodeURIComponent(this.token)}`];
+    const q: string[] = [];
     if (opts.projectId) q.push(`projectId=${encodeURIComponent(opts.projectId)}`);
     if (opts.hardware) q.push('hardware=1');
-    return `${this.url('/events')}?${q.join('&')}`;
+    return q.length ? `${this.url('/events')}?${q.join('&')}` : this.url('/events');
   }
 }
 

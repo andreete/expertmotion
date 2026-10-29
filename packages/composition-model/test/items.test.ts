@@ -123,9 +123,10 @@ describe('ADR-031 Duplicate (duplicationSteps)', () => {
     const t = deriveTiming(both);
     both.tracks.text.forEach((x) => { const inside = both.tracks.video.some((c) => x.timing.atMs >= t.elementWindows[c.id]!.fromMs && x.timing.atMs + x.timing.durationMs <= t.elementWindows[c.id]!.toMs); expect(inside, x.text).toBe(true); });
   });
-  it('audio, captions, transitions, effects and the background are not duplicable', () => {
+  it('captions, transitions, effects and the background are not duplicable (audio layers are since round 2)', () => {
     const m = must(base(), [op('op:audio.addLayer', { assetId: 'vo', atMs: 0, volume: 1 })]);
-    expect(duplicationSteps(m, [{ kind: 'audio', id: m.tracks.audio[0]!.id }, { kind: 'background' }, { kind: 'cut', index: 0 }])).toEqual([]);
+    expect(duplicationSteps(m, [{ kind: 'background' }, { kind: 'cut', index: 0 }])).toEqual([]);
+    expect(duplicationSteps(m, [{ kind: 'audio', id: m.tracks.audio[0]!.id }]).map((s) => s.op.op)).toEqual(['op:audio.addLayer']);
   });
 });
 

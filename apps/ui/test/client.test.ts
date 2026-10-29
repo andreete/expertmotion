@@ -61,13 +61,14 @@ describe('ApiClient', () => {
     expect((call(0)[1].headers as Record<string, string>)['X-Expertmotion-Caller']).toBe('shell');
   });
 
-  it('builds media and SSE URLs (grant in the path, token in the query only for EventSource)', () => {
+  it('builds media and SSE URLs (grant in the path; SSE URLs never carry the token, SEC-016)', () => {
     const { api } = client(() => json(200, {}));
     const grant: MediaGrantDto = { grant: 'G'.repeat(43), projectId: 'P', kind: 'preview', expiresAt: '', baseUrl: 'http://127.0.0.1:4110/media/' + 'G'.repeat(43) };
     expect(api.mediaUrl(grant, 'A1', 'proxy')).toBe(`http://127.0.0.1:4110/media/${'G'.repeat(43)}/A1/proxy`);
     expect(api.outputMediaUrl(grant, 'O1', 'file')).toBe(`http://127.0.0.1:4110/media/${'G'.repeat(43)}/outputs/O1/file`);
-    expect(api.eventsUrl({ projectId: 'P', hardware: true })).toBe('http://127.0.0.1:4110/api/v1/events?token=tok-123456&projectId=P&hardware=1');
-    expect(api.renderEventsUrl('J')).toBe('http://127.0.0.1:4110/api/v1/renders/J/events?token=tok-123456');
+    expect(api.eventsUrl({ projectId: 'P', hardware: true })).toBe('http://127.0.0.1:4110/api/v1/events?projectId=P&hardware=1');
+    expect(api.eventsUrl()).toBe('http://127.0.0.1:4110/api/v1/events');
+    expect(api.renderEventsUrl('J')).toBe('http://127.0.0.1:4110/api/v1/renders/J/events');
   });
 
   it('resolves the bootstrap from VITE_EM_API / VITE_EM_TOKEN in development', async () => {
