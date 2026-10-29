@@ -8,7 +8,10 @@ import { getPreset } from '@expertmotion/catalogue';
 import { applyOperations, autoFixOps, textWidthEm, deriveTiming, frameInUnits, qualityCheck, qualityChecklist, safeAreaU, textGeometry, type AssetFacts, type BoxU, type CompositionModelT, type OperationT, type QualityIssue, type Ratio, type TextLayerT, type Tier } from '@expertmotion/composition-model';
 import { normalizeVideoSpec, VideoSpec, type SceneRole, type SpecAnchorT, type SpecBarT, type SpecEasingT, type SpecSceneT, type SpecStatT, type SpecTextT, type VideoSpecT } from './auto-motion-spec.js';
 
+import { findSaid, footageClipArgs, footageSceneMs, footageWindow, isFootageRole, pipBox, splitSide, type FootageWindow } from './auto-motion-footage.js';
+
 export * from './auto-motion-spec.js';
+export * from './auto-motion-footage.js';
 
 export interface ComposeContext {
   model: CompositionModelT; assets: readonly AssetFacts[]; tier?: Tier; lockedKeys?: readonly string[]; language?: 'id' | 'en';
@@ -25,11 +28,15 @@ export interface ComposeOk {
   ok: true; spec: VideoSpecT; ops: OperationT[]; scenes: ComposedScene[]; elements: ComposedElement[]; voice: VoicePlacement[];
   totalMs: number; narrationEstimateMs: number; frame: { w: number; h: number }; safeArea: Safe; risks: ComposeRisk[];
   quality: { fixed: number; remaining: QualityIssue[] }; fixes: string[];
+  /** FR-261: the footage clips placed (scene index, asset, whether it carries sound, the clip volume) — for captions / ducking steps. */
+  footage: Array<{ scene: number; assetId: string; hasAudio: boolean; volume: number }>;
 }
 export type ComposeResult = ComposeOk | { ok: false; problem: string; fixes: string[] };
 type Safe = { top: number; right: number; bottom: number; left: number };
 
 export const WORDS_PER_MINUTE_ID = 150;
+/** op:scene.add durationMs range and the op:transition.set maximum (operations.ts); the composer stays inside them (C5 / C6). */
+const SCENE_MIN_MS = 500, SCENE_MAX_MS = 120_000, TRANSITION_MAX_MS = 2000;
 const words = (s: string | undefined) => (s ?? '').trim().split(/\s+/).filter(Boolean).length;
 /** Spoken length of a text at ~150 words / minute (Indonesian voice-over), in ms. */
 export const narrationMs = (text: string | undefined, wpm = WORDS_PER_MINUTE_ID) => Math.round((words(text) / wpm) * 60_000);
@@ -158,6 +165,9 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
   const onScreenWords = (s: SpecSceneT) => [s.kicker, s.headline, s.sub, s.note, s.quote, s.attribution, s.handle, s.action, s.button, ...(s.bullets ?? [])].reduce((a, t) => a + words(textOf(t)), 0)
     + (s.stats ?? []).reduce((a, x) => a + 1 + words(textOf(x.label)) + words(textOf(x.note)), 0) + (s.bars ?? []).reduce((a, b) => a + 1 + words(b.label), 0);
   const last = spec.scenes.length - 1;
+  // FR-261: footage scenes play a window of a video asset; their length follows that window (and the voice, when shorter)
+  const footageWins: Array<FootageWindow | null> = spec.scenes.map((s, i) => (isFootageRole(s.role) ? footageWindow(s, i, ctx.assets, id, risks) : null));
+  const underVoice = (spec.voice?.clips.length ?? 0) > 0;
   const sceneTiming = spec.scenes.map((s, i) => {
     const clips = (s.clips ?? []).filter((cid) => { if (clipFacts.has(cid)) return true; risks.push({ code: 'unknown-clip', severity: 'warn', message: id ? `Adegan ${i + 1}: klip suara "${cid}" tidak ada di voice.clips.` : `Scene ${i + 1}: voice clip "${cid}" is not in voice.clips.` }); return false; });
     const offsets: Record<string, { at: number; dur: number }> = {};
@@ -166,16 +176,36 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     const narr = clips.length ? cursor : narrationMs(s.narration);
     const reading = 1500 + 260 * onScreenWords(s);
     const tail = s.tailMs ?? (i === last && clips.length ? Math.max(tailMs, 1000) : tailMs);
-    const len = clips.length ? cursor + tail + (s.holdMs ?? 0)
-      : Math.min(120_000, Math.max(2500, s.durationMs ?? 0, narr ? narr + tail : 0, s.durationMs ? 0 : reading) + (s.holdMs ?? 0));
-    return { clips, offsets, len: Math.round(len), narr };
+    const raw = clips.length ? cursor + tail + (s.holdMs ?? 0)
+      : Math.max(2500, s.durationMs ?? 0, narr ? narr + tail : 0, s.durationMs ? 0 : reading) + (s.holdMs ?? 0);
+    // C6 (review 2026-10-29): a scene clip is op:scene.add durationMs 500…120 000 ms including its outgoing transition (≤ 2000 ms)
+    const fwin = footageWins[i];
+    if (fwin) {
+      const want = clips.length ? Math.round(raw) : s.durationMs ?? (narr ? narr + tail : null);
+      const reserve = i < last && trType !== 'cut' ? Math.min(TRANSITION_MAX_MS, style.transition.ms) : 0;
+      const flen = footageSceneMs(fwin, want, reserve);
+      if (want !== null && want > flen + 200) risks.push({ code: 'footage-shorter', severity: 'warn', message: id ? `Adegan ${i + 1}: footage ${fwin.name} hanya ${(flen / 1000).toFixed(1).replace('.', ',')} dtk, lebih pendek dari narasinya; tambahkan footage atau bagi narasinya.` : `Scene ${i + 1}: footage ${fwin.name} is only ${(flen / 1000).toFixed(1)} s, shorter than its narration; add footage or split the narration.` });
+      return { clips, offsets, len: flen, narr };
+    }
+    const len = Math.max(SCENE_MIN_MS, Math.min(SCENE_MAX_MS - TRANSITION_MAX_MS, Math.round(raw)));
+    if (raw > SCENE_MAX_MS - TRANSITION_MAX_MS) risks.push({ code: 'scene-too-long', severity: 'warn', message: id ? `Adegan ${i + 1} lebih dari 2 menit; dipotong menjadi ${(len / 1000).toFixed(0)} dtk. Bagi narasinya ke beberapa adegan.` : `Scene ${i + 1} is longer than 2 minutes; cut to ${(len / 1000).toFixed(0)} s. Split its narration over several scenes.` });
+    return { clips, offsets, len, narr };
   });
   const narrationEstimateMs = sceneTiming.reduce((a, t) => a + t.narr, 0);
 
   // ───── scene clips + transitions ─────
   const existing = base.tracks.video.length;
   if (!existing && (base.tracks.text.length || base.tracks.overlay.length)) risks.push({ code: 'existing-content', severity: 'warn', message: id ? 'Proyek sudah berisi teks / bentuk tanpa klip; adegan baru dimulai dari awal dan bisa menumpuk dengannya.' : 'The project already has texts / shapes without clips; the new scenes start at 0 and may overlap them.' });
-  const T = Math.max(0, style.transition.ms);
+  const T = Math.max(0, Math.min(TRANSITION_MAX_MS, style.transition.ms));
+  // C5 (review 2026-10-29): ONE length per cut, used for the transition op AND the clip overlap: min(T, 2000, half of each
+  // neighbour); under 100 ms (the op:transition.set minimum) the cut is a hard cut without overlap.
+  const prevExistingMs = existing ? base.tracks.video[existing - 1]!.durationMs : 0;
+  const cutMsIn = (i: number): number => {
+    const prev = i > 0 ? sceneTiming[i - 1]!.len : existing ? prevExistingMs : 0;
+    if (!prev) return 0;
+    const v = Math.min(T, Math.floor(prev / 2), Math.floor(sceneTiming[i]!.len / 2));
+    return v >= 100 ? v : 0;
+  };
   const pool = TRANSITIONS_BY_MOOD[mood] ?? TRANSITIONS_BY_MOOD['calm']!;
   const gpuOk = (p: string) => ctx.tier !== 'T0' || !getPreset(p)?.flags.includes('gpu');
   const seed = hash(spec.title ?? spec.scenes.map((s) => textOf(s.headline) ?? s.role).join('|'));
@@ -193,22 +223,29 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
   let cursor = startBase;
   let prevTr: string | undefined;
   const transitions: Array<{ cut: number; presetId: string; params: Record<string, unknown>; ms: number }> = [];
+  const footagePlaced: ComposeOk['footage'] = [];
   spec.scenes.forEach((s, i) => {
     const t = sceneTiming[i]!;
     const hasIn = i > 0 || existing > 0, hasOut = i < last;
-    const trIn = hasIn ? transitionFor(i, prevTr) : null;
-    const tIn = trIn ? Math.min(T, Math.floor(t.len / 2)) : 0;
+    const cutIn = hasIn ? cutMsIn(i) : 0;
+    const trIn = cutIn ? transitionFor(i, prevTr) : null;
+    const tIn = trIn ? cutIn : 0;
     if (trIn) { transitions.push({ cut: existing + i - 1, presetId: trIn.presetId, params: trIn.params, ms: tIn }); prevTr = trIn.presetId; }
     if (i === 0 && existing && trIn) cursor -= tIn;      // the first scene overlaps the existing last clip by its transition
-    const tOut = hasOut ? Math.min(T, Math.floor(t.len / 2), Math.floor(sceneTiming[i + 1]!.len / 2)) : 0;
+    const tOut = hasOut && trType !== 'cut' ? cutMsIn(i + 1) : 0;
     const clipDur = t.len + tOut;
     const bgId = editorial ? 'preset:background.solid' : (BACKGROUND_BY_ROLE[s.role] ?? 'preset:background.gradient');
     const bgParams: Record<string, unknown> = editorial ? { colourA: style.bg } : { colourA: style.bg, colourB: i % 2 ? c.accent2 : c.accent, intensity: 0.55, ...(bgId === 'preset:background.gradient' ? { angle: 140 + ((seed + i * 40) % 80), animate: true } : {}) };
-    add('op:scene.add', { durationMs: clipDur, background: bgId, backgroundParams: bgParams }, { kind: 'sequence' });
+    const fwin = footageWins[i];
+    if (fwin) {                                                                 // FR-261: the Creator's footage is the base of this scene
+      const args = footageClipArgs(s.role, fwin, clipDur, f, safe, portrait, s.side, { underVoice, last: i === last });
+      add('op:clip.insert', args, { kind: 'sequence' });
+      footagePlaced.push({ scene: i, assetId: fwin.assetId, hasAudio: fwin.hasAudio, volume: Number(args['volume']) });
+    } else add('op:scene.add', { durationMs: clipDur, background: bgId, backgroundParams: bgParams }, { kind: 'sequence' });
     scenes.push({ role: s.role, startMs: cursor, durationMs: t.len, clipDurationMs: clipDur, narrationMs: t.narr, ...(trIn ? { transitionIn: trIn.presetId } : {}) });
     cursor += t.len;
   });
-  for (const x of transitions) add('op:transition.set', { presetId: x.presetId, durationMs: Math.max(100, x.ms), timing: 'linear', params: x.params }, { kind: 'cut', index: x.cut });
+  for (const x of transitions) add('op:transition.set', { presetId: x.presetId, durationMs: x.ms, timing: 'linear', params: x.params }, { kind: 'cut', index: x.cut });
   const totalMs = cursor;
   if (spec.maxDurationMs && totalMs - startBase > spec.maxDurationMs) risks.push({ code: 'too-long', severity: 'warn', message: id ? `Video ${(totalMs - startBase) / 1000} dtk, lebih dari batas ${spec.maxDurationMs / 1000} dtk; percepat suara sedikit (jangan potong narasi).` : `The video is ${(totalMs - startBase) / 1000} s, over the ${spec.maxDurationMs / 1000} s limit; speed the voice up slightly (do not cut the narration).` });
 
@@ -227,11 +264,11 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
   const elements: ComposedElement[] = [];
   spec.scenes.forEach((s, i) => {
     const sc = scenes[i]!, t = sceneTiming[i]!;
-    const tOut = i < last ? Math.min(T, Math.floor(t.len / 2), Math.floor(sceneTiming[i + 1]!.len / 2)) : 0;
+    const tOut = scenes[i]!.clipDurationMs - scenes[i]!.durationMs;          // the same overlap the clip got (C5)
     const exitMs = style.transition.type === 'crossfade-rise' ? tOut : Math.min(350, tOut || 350);
     const end = i < last ? sc.startMs + sc.durationMs + (style.transition.type === 'crossfade-rise' ? tOut : Math.round(tOut * 0.5)) : sc.startMs + sc.durationMs;
     const enterDelay = style.transition.type === 'crossfade-rise' || i === 0 ? 0 : Math.round(T * 0.5);
-    const L = new SceneLayout({ i, scene: s, start: sc.startMs + enterDelay, end, exitMs: i < last ? exitMs : 0, style, frame: f, W, X0, toMs, offsets: t.offsets, risks, id, ops, elements, mutedOpacity, portrait, seed });
+    const L = new SceneLayout({ i, scene: s, start: sc.startMs + enterDelay, end, exitMs: i < last ? exitMs : 0, style, frame: f, W, X0, toMs, offsets: t.offsets, risks, id, ops, elements, mutedOpacity, portrait, seed, footage: footageWins[i] ?? null, clipStart: sc.startMs, captions: spec.captions === true });
     // lay the scene out; when the content runs into the source line / safe bottom, lay it out again smaller (max 5 tries)
     const ops0 = ops.length, els0 = elements.length, risks0 = risks.length;
     for (let attempt = 0; ; attempt++) {
@@ -264,7 +301,8 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
   } else risks.push({ code: 'compose-invalid', severity: 'warn', message: r1.issues.map((x) => x.message).join('; ').slice(0, 300) });
   for (const line of qualityChecklist(remaining.filter((q) => q.severity === 'warn'), lang === 'en' ? 'en' : 'id')) risks.push({ code: 'quality', severity: 'warn', message: line });
   for (const s of spec.scenes) if (DATA_ROLES.includes(s.role) && !s.source) { risks.push({ code: 'no-source', severity: 'warn', message: id ? `Adegan data "${textOf(s.headline) ?? textOf(s.kicker) ?? s.role}" belum punya sumber.` : `Data scene "${textOf(s.headline) ?? textOf(s.kicker) ?? s.role}" has no source.` }); break; }
-  return { ok: true, spec, ops, scenes, elements, voice, totalMs, narrationEstimateMs, frame: f, safeArea: safe, risks, quality: { fixed, remaining }, fixes };
+  for (const [i, sc] of spec.scenes.entries()) if (isFootageRole(sc.role) && (sc.stats ?? []).length && !sc.source) { risks.push({ code: 'no-source', severity: 'warn', message: id ? `Angka di adegan footage ${i + 1} belum punya sumber.` : `The figure in footage scene ${i + 1} has no source.` }); break; }
+  return { ok: true, spec, ops, scenes, elements, voice, totalMs, narrationEstimateMs, frame: f, safeArea: safe, risks, quality: { fixed, remaining }, fixes, footage: footagePlaced };
 }
 
 /**
@@ -300,6 +338,8 @@ interface LayoutInput {
   i: number; scene: SpecSceneT; start: number; end: number; exitMs: number; style: Style; frame: { w: number; h: number }; W: number; X0: number;
   toMs: (frames: number) => number; offsets: Record<string, { at: number; dur: number }>; risks: ComposeRisk[]; id: boolean; ops: OperationT[]; elements: ComposedElement[];
   mutedOpacity: number | undefined; portrait: boolean; seed: number;
+  /** FR-261: the scene's footage window (footage roles), where its clip starts, and whether captions will be on screen. */
+  footage?: FootageWindow | null; clipStart?: number; captions?: boolean;
 }
 type TextDefaults = { size: number; weight: number; color: string; lineHeight?: number; opacity?: number; align?: 'left' | 'center' | 'right'; variant?: string; box?: { colour: string; padX: number; padY: number; radius: number } };
 type Entrance = { presetId?: string; ms?: number; rise?: number; ease?: Ease; params?: Record<string, unknown> };
@@ -328,7 +368,7 @@ class SceneLayout {
   /** Bottom of the content so far and where it must end (above the source line / the safe bottom). */
   overflow(): number {
     const f = this.p.frame, st = this.st;
-    let limit = f.h - st.safe.bottom;
+    let limit = Math.min(f.h - st.safe.bottom, this.limitY ?? Infinity);
     if (this.s.source) {
       const o = asObj(this.s.source), size = Math.max(34, o.sizePx !== undefined ? this.ex(o.sizePx) : this.sz(44));
       const g = textGeometry({ text: o.text, variantId: 'preset:text.subtitle', position: { x: 0, y: 0 }, maxWidth: this.p.W, valign: 'top', style: { fontSize: size, weight: o.weight ?? 400, lineHeight: o.lineHeight } as TextLayerT['style'] }, ratioOf(f), { fontSize: 64, weight: 400, colour: st.c.muted, align: 'left', opacity: 1 }, f);
@@ -341,6 +381,7 @@ class SceneLayout {
     if (!a) return fallback;
     if ('ms' in a) return this.p.start + a.ms;
     if ('frames' in a) return this.p.start + this.p.toMs(a.frames);
+    if ('footageMs' in a || 'say' in a) return this.footageAt(a, fallback);
     const o = this.p.offsets[a.clip];
     if (!o) { this.p.risks.push({ code: 'unknown-anchor', severity: 'warn', message: this.p.id ? `Adegan ${this.p.i + 1}: jangkar "${a.clip}" bukan klip adegan ini.` : `Scene ${this.p.i + 1}: anchor "${a.clip}" is not a clip of this scene.` }); return fallback; }
     const t = this.p.start + o.at + (a.edge === 'end' ? o.dur : 0) + Math.round((a.pct ?? 0) * o.dur) + (a.offsetMs ?? 0);
@@ -414,15 +455,16 @@ class SceneLayout {
     this.y = b.y1 + gap;
   }
   private source(): void {
-    if (!this.s.source) return;
+    if (!this.s.source || this.sourceDone) return;
+    // C9 (review 2026-10-29): the source line spans the whole content width, also after a split layout narrowed p.X0 / p.W
     const st = this.st, f = this.p.frame, size = this.sz(44);
     const o = asObj(this.s.source);
     // estimate the height first (bottom edge sits sourceBottom above the frame bottom), then place; never smaller than 34 u
-    const g = textGeometry({ text: o.text, variantId: 'preset:text.subtitle', position: { x: 0, y: 0 }, maxWidth: this.p.W, valign: 'top', style: { fontSize: Math.max(34, o.sizePx !== undefined ? this.ex(o.sizePx) : size), weight: o.weight ?? 400, lineHeight: o.lineHeight } as TextLayerT['style'] }, ratioOf(f), { fontSize: 64, weight: 400, colour: st.c.muted, align: 'left', opacity: 1 }, f);
+    const g = textGeometry({ text: o.text, variantId: 'preset:text.subtitle', position: { x: 0, y: 0 }, maxWidth: this.W0, valign: 'top', style: { fontSize: Math.max(34, o.sizePx !== undefined ? this.ex(o.sizePx) : size), weight: o.weight ?? 400, lineHeight: o.lineHeight } as TextLayerT['style'] }, ratioOf(f), { fontSize: 64, weight: 400, colour: st.c.muted, align: 'left', opacity: 1 }, f);
     const h = g.box.y1 - g.box.y0;
     const top = Math.max(this.y + this.sz(24), f.h - st.sourceBottom - h);
     const { sizePx: _sp, ...rest } = o; void _sp;
-    this.text(rest, { ...this.muted(Math.max(34, o.sizePx !== undefined ? this.ex(o.sizePx) : size)), align: st.editorial ? 'left' : st.align }, this.p.X0, top, this.p.W, this.p.start, {}, undefined, 'source');
+    this.text(rest, { ...this.muted(Math.max(34, o.sizePx !== undefined ? this.ex(o.sizePx) : size)), align: st.editorial ? 'left' : st.align }, this.X0, top, this.W0, this.p.start, {}, undefined, 'source');
   }
   private stat(x: SpecStatT, idx: number): void {
     const st = this.st, from = this.at(x.at, this.p.start);
@@ -454,21 +496,23 @@ class SceneLayout {
   private bars(): void {
     const s = this.s, st = this.st, bars = s.bars ?? [], f = this.p.frame;
     if (!bars.length) return;
-    const gap = s.barGapPx !== undefined ? this.ex(s.barGapPx) : this.sz(56);
-    const bw = s.barWidthPx !== undefined ? this.ex(s.barWidthPx) : Math.min(this.sz(300), (this.p.W - gap * (bars.length - 1)) / bars.length);
+    // C9 (review 2026-10-29): the gaps take at most half the width, so a large barGapPx never gives a negative bar width
+    const gap0 = s.barGapPx !== undefined ? this.ex(s.barGapPx) : this.sz(56);
+    const gap = bars.length > 1 ? Math.max(0, Math.min(gap0, (this.p.W * 0.5) / (bars.length - 1))) : gap0;
+    const bw = Math.max(1, s.barWidthPx !== undefined ? this.ex(s.barWidthPx) : Math.min(this.sz(300), (this.p.W - gap * (bars.length - 1)) / bars.length));
     const valueSize = this.sz(52), labelSize = this.sz(52);
     // label rows below the baseline: tallest wrapped label
     const labelH = Math.max(...bars.map((b) => textGeometry({ text: b.label, variantId: 'preset:text.subtitle', position: { x: 0, y: 0 }, maxWidth: bw + gap * 0.6, valign: 'top', style: { fontSize: labelSize, weight: 400, align: 'center' } as TextLayerT['style'] }, ratioOf(f), { fontSize: 64, weight: 400, colour: '#FFFFFF', align: 'center', opacity: 1 }, f)).map((g) => g.box.y1 - g.box.y0));
     const srcH = s.source ? textGeometry({ text: textOf(s.source)!, variantId: 'preset:text.subtitle', position: { x: 0, y: 0 }, maxWidth: this.p.W, valign: 'top', style: { fontSize: Math.max(34, this.sz(44)), weight: 400 } as TextLayerT['style'] }, ratioOf(f), { fontSize: 64, weight: 400, colour: '#FFFFFF', align: 'left', opacity: 1 }, f) : null;
     const sourceTop = f.h - st.sourceBottom - (srcH ? srcH.box.y1 - srcH.box.y0 : 0);
     const baseline = sourceTop - this.sz(56) - labelH - this.sz(16);
-    const room = baseline - (this.y + valueSize * 1.15 + this.sz(12));
+    const room = Math.max(0, baseline - (this.y + valueSize * 1.15 + this.sz(12)));      // C9: never negative (no NaN / negative heights)
     const maxV = Math.max(...bars.map((b) => b.value ?? 0), 0);
     let heights = bars.map((b) => (b.heightPx !== undefined ? this.ex(b.heightPx) : undefined) ?? (maxV > 0 && b.value !== undefined ? (b.value / maxV) * room : room * 0.5));
     const tallest = Math.max(...heights);
-    if (tallest > room) {
+    if (tallest > room && tallest > 0) {
       heights = heights.map((h) => (h * room) / tallest);
-      this.p.risks.push({ code: 'bars-scaled', severity: 'info', message: this.p.id ? `Adegan ${this.p.i + 1}: tinggi batang diperkecil ${Math.round((100 * room) / tallest)} % agar muat di area aman.` : `Scene ${this.p.i + 1}: bars scaled to ${Math.round((100 * room) / tallest)} % to fit the safe area.` });
+      this.p.risks.push({ code: 'bars-scaled', severity: 'info', message: this.p.id ? `Adegan ${this.p.i + 1}: tinggi batang diperkecil ke ${Math.round((100 * room) / tallest)} % agar muat di area aman.` : `Scene ${this.p.i + 1}: bars scaled to ${Math.round((100 * room) / tallest)} % to fit the safe area.` });
     }
     const totalW = bw * bars.length + gap * (bars.length - 1);
     const left = st.align === 'center' ? this.p.X0 + (this.p.W - totalW) / 2 : this.p.X0;
@@ -568,6 +612,199 @@ class SceneLayout {
     else { this.p.X0 += imgW + this.sz(64); this.p.W -= imgW + this.sz(64); }
     this.headline(84, 500, 36); this.sub(56);
   }
+
+  // ───────────── FR-261: footage scenes ─────────────
+  /** Set by a footage layout: the content must end above this y (split with the footage below), the source line is placed already. */
+  private limitY: number | null = null;
+  private sourceDone = false;
+  /** Runs `fn` with a shorter element window (overlays over footage stay a few seconds) and their own exit fade. */
+  private within<T>(end: number, exitMs: number, fn: () => T): T {
+    const e = this.p.end, x = this.p.exitMs;
+    this.p.end = Math.max(this.p.start + 200, Math.min(e, end)); this.p.exitMs = exitMs;
+    try { return fn(); } finally { this.p.end = e; this.p.exitMs = x; }
+  }
+  private measure(text: string, size: number, weight: number, maxW: number, variant = 'preset:text.subtitle'): { w: number; h: number } {
+    const f = this.p.frame;
+    const g = textGeometry({ text, variantId: variant, position: { x: 0, y: 0 }, maxWidth: maxW, valign: 'top', style: { fontSize: size, weight, fontFamily: this.st.font } as TextLayerT['style'] }, ratioOf(f), { fontSize: 64, weight, colour: '#FFFFFF', align: 'left', opacity: 1 }, f);
+    return { w: g.box.x1 - g.box.x0, h: g.box.y1 - g.box.y0 };
+  }
+  /** {footageMs} / {say} anchors: source time of the scene's footage → timeline time. */
+  private footageAt(a: SpecAnchorT, fallback: number): number {
+    const fw = this.p.footage, n = this.p.i + 1;
+    if (!fw) { this.p.risks.push({ code: 'footage-anchor', severity: 'warn', message: this.p.id ? `Adegan ${n}: jangkar footage tanpa footage di adegan ini.` : `Scene ${n}: a footage anchor in a scene without footage.` }); return fallback; }
+    const clip0 = this.p.clipStart ?? this.p.start;
+    let src: number | null = null;
+    if ('footageMs' in a) src = a.footageMs;
+    else if ('say' in a) {
+      src = findSaid(fw.words, a.say, fw.trimBeforeMs, fw.availMs, a.edge ?? 'start');
+      if (src === null) { this.p.risks.push({ code: 'say-not-found', severity: 'info', message: this.p.id ? `Adegan ${n}: "${a.say}" tidak ditemukan di ${fw.words.length ? 'transkrip' : 'footage (belum ada transkrip)'}; teks muncul di awal adegan.` : `Scene ${n}: "${a.say}" was not found in the ${fw.words.length ? 'transcript' : 'footage (no transcript yet)'}; the text appears at the scene start.` }); return fallback; }
+    }
+    const off = 'offsetMs' in a && typeof a.offsetMs === 'number' ? a.offsetMs : 0;
+    const t = clip0 + (src! - fw.trimBeforeMs) + off;
+    return Math.max(this.p.start, Math.min(Math.round(t), this.p.end - 400));
+  }
+  private footageScene(): void {
+    const s = this.s, fw = this.p.footage;
+    this.limitY = null; this.sourceDone = false;
+    if (!fw) { this.kicker(); this.headline(96, 800, 40); this.sub(); return; }       // no usable footage: a plain title scene (risk already given)
+    if (s.role === 'footage-split') { this.footageSplit(); return; }
+    if (s.role === 'footage-pip') { this.footagePip(); return; }
+    this.footageOverlays();
+  }
+  /** The scene's own content (kicker, headline, sub, stats, bullets, note) in the area set up by split / pip. */
+  private flow(): void {
+    const st = this.st, s = this.s;
+    this.kicker();
+    if (s.headline) this.headline(this.p.portrait ? 84 : 72, st.editorial ? 600 : 800, 36);
+    this.sub(52, 36);
+    (s.stats ?? []).forEach((x, k) => { if (k) this.y += this.sz(56); this.stat(x, Math.min(k, 1) + (this.p.portrait ? 0 : 1)); });
+    this.bullets();
+    this.note();
+  }
+  /** Landscape split / pip: the text block is centred vertically in the content height (shifts every op it added). */
+  private centreSince(o0: number, e0: number, y0: number): void {
+    const st = this.st, f = this.p.frame, h = this.y - y0;
+    const dy = Math.max(st.safe.top, st.safe.top + (f.h - st.safe.top - st.safe.bottom - h) / 2) - y0;
+    if (Math.abs(dy) <= 1) return;
+    for (const op of this.p.ops.slice(o0)) { const a = op.args as Record<string, { x: number; y: number }>; if (a['position']) a['position'] = { x: a['position'].x, y: round1(a['position'].y + dy) }; }
+    for (const el of this.p.elements.slice(e0)) el.box = { ...el.box, y0: el.box.y0 + dy, y1: el.box.y1 + dy };
+    this.y += dy;
+  }
+  private footageSplit(): void {
+    const f = this.p.frame, st = this.st, half = splitSide(this.p.portrait, this.s.side);
+    const o0 = this.p.ops.length, e0 = this.p.elements.length;
+    if (half === 'top') this.y = f.h / 2 + this.sz(56);
+    else if (half === 'bottom') { this.y = st.safe.top + this.sz(24); this.limitY = f.h / 2 - this.sz(40); }
+    else if (half === 'left') { this.p.X0 = f.w / 2 + this.sz(64); this.p.W = f.w - st.safe.right - this.p.X0; this.y = st.safe.top; }
+    else { this.p.W = f.w / 2 - this.sz(64) - this.p.X0; this.y = st.safe.top; }
+    const y0 = this.y;
+    this.flow();
+    if (half === 'left' || half === 'right') this.centreSince(o0, e0, y0);
+  }
+  private footagePip(): void {
+    const f = this.p.frame, st = this.st, b = pipBox(f, st.safe, this.p.portrait, this.s.side);
+    const o0 = this.p.ops.length, e0 = this.p.elements.length;
+    // a thin accent frame around the footage window (an outline: never covers the picture)
+    const fw = this.sz(10);
+    this.shape('preset:shape.rect', (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, b.x1 - b.x0 + fw, b.y1 - b.y0 + fw, st.c.accent, this.p.start, { presetId: 'preset:motion.draw-on', ms: 700 },
+      { params: { cornerRadius: 0, outline: true }, stroke: st.c.accent, strokeWidth: 6 }, 'footage');
+    if (this.p.portrait) this.y = b.y1 + this.sz(64);
+    else if (this.s.side === 'left') { this.p.X0 = b.x1 + this.sz(64); this.p.W = f.w - st.safe.right - this.p.X0; this.y = st.safe.top; }
+    else { this.p.W = b.x0 - this.sz(64) - this.p.X0; this.y = st.safe.top; }
+    const y0 = this.y;
+    this.flow();
+    if (!this.p.portrait) this.centreSince(o0 + 1, e0 + 1, y0);
+  }
+  /**
+   * Full-frame footage: a few overlays, one after the other, each only a few seconds and only in the top / bottom third on the side
+   * away from the subject (footage.focus): kinetic title → lower-third → stat callouts → list callouts → note. With captions on (they
+   * sit at the bottom), the lower-third moves to the top third.
+   */
+  private footageOverlays(): void {
+    const s = this.s, st = this.st, f = this.p.frame, fw = this.p.footage!;
+    const mode = s.overlay ?? 'auto';
+    const y0 = this.y;
+    this.y = st.safe.top;                                                          // nothing flows: overflow() stays negative
+    if (mode === 'none') return;
+    const topY = st.safe.top + this.sz(24), bottomY = f.h - st.safe.bottom;
+    const subjectTop = fw.focus === 'top';
+    const lowerAtTop = (this.p.captions === true || mode === 'top') && !subjectTop;
+    const right = fw.focus === 'left';
+    const maxW = Math.min(this.p.W, f.w * (this.p.portrait ? 0.86 : 0.52));
+    const x0 = right ? this.p.X0 + this.p.W - maxW : this.p.X0;
+    const align: 'left' | 'right' = right ? 'right' : 'left';
+    const sceneEnd = this.p.end, exit = 300;
+    let t = this.p.start + 250;
+    const slot = (at: SpecAnchorT | undefined, ms: number) => { const from = this.at(at, t); const to = Math.min(sceneEnd, from + ms); t = Math.max(t, to + 250); return { from, to }; };
+    const panel = (px0: number, top: number, w: number, h: number, from: number, key: string) => this.shape('preset:shape.rect', px0 + w / 2, top + h / 2, w, h, '#000000', from,
+      { presetId: 'preset:motion.wipe-reveal', ms: 450, params: { direction: right ? 'from-right' : 'from-left' } }, { opacity: 0.62, params: { cornerRadius: this.sz(12) } }, key);
+    const room = () => t < sceneEnd - 1200;
+    // overlays that show at the same time never share space: a later one stacks under (top third) / over (bottom third) the earlier
+    const placed: Array<{ from: number; to: number; y0: number; y1: number }> = [];
+    const gapY = this.sz(20);
+    const fit = (pref: number, h: number, from: number, to: number, down: boolean): number => {
+      let top = pref;
+      for (let guard = 0; guard < 8; guard++) {
+        const hit = placed.find((q) => q.from < to && from < q.to && top < q.y1 + gapY && q.y0 < top + h + gapY);
+        if (!hit) break;
+        top = down ? hit.y1 + gapY : hit.y0 - gapY - h;
+      }
+      placed.push({ from, to, y0: top, y1: top + h });
+      return top;
+    };
+    // 1. kinetic title (boxed words, word by word) in the top third — or the bottom third when the subject is at the top
+    if (s.headline && mode !== 'callout') {
+      const o = asObj(s.headline), size = o.sizePx !== undefined ? this.ex(o.sizePx) : this.sz(this.p.portrait ? 84 : 72);
+      const m = this.measure(o.text, size, 800, maxW, 'preset:text.title');
+      const { from, to } = slot(o.at, Math.max(2600, 1200 + 320 * words(o.text)));
+      const bh = m.h + this.sz(12) * 2;
+      const top = fit(subjectTop ? bottomY - bh - this.sz(40) : topY, bh, from, to, !subjectTop) + this.sz(12);
+      const kw = s.keywords?.length ? { presetId: 'preset:texteffect.keyword', params: { words: s.keywords, colour: st.c.accent } } : undefined;
+      this.within(to, exit, () => this.text(s.headline!, { size, weight: 800, color: '#FFFFFF', variant: 'preset:text.title', align, box: { colour: '#111111', padX: this.sz(26), padY: this.sz(12), radius: this.sz(14) } },
+        x0, top, maxW, from, { presetId: 'preset:motion.word-stagger', params: { staggerFrames: 3 } }, kw, 'footage-title'));
+    }
+    // 2. lower-third: name (+ role / place) on a dark panel with an accent bar
+    const lt = s.lowerThird ?? (s.kicker && !s.headline ? { name: s.kicker, ...(s.sub ? { title: s.sub } : {}) } : undefined);
+    if (lt && room() && (mode === 'auto' || mode === 'lower-third' || mode === 'top')) {
+      const pad = this.sz(26), bar = this.sz(10), gap = this.sz(6);
+      const name = asObj(lt.name), title = lt.title ? asObj(lt.title) : null;
+      const ns = name.sizePx !== undefined ? this.ex(name.sizePx) : this.sz(60), ts = title?.sizePx !== undefined ? this.ex(title.sizePx) : this.sz(42);
+      const inner = maxW - pad * 2 - bar;
+      const mn = this.measure(name.text, ns, 700, inner), mt = title ? this.measure(title.text, ts, 400, inner) : { w: 0, h: 0 };
+      const pw = Math.min(maxW, Math.max(mn.w, mt.w) + pad * 2 + bar + this.sz(6)), ph = mn.h + (title ? gap + mt.h : 0) + pad * 2;
+      const px0 = right ? this.p.X0 + this.p.W - pw : this.p.X0;
+      const { from, to } = slot(lt.at, lt.ms ?? 4000);
+      const top = fit(lowerAtTop ? topY : bottomY - ph, ph, from, to, lowerAtTop);
+      this.within(to, exit, () => {
+        panel(px0, top, pw, ph, from, 'lower-third');
+        this.shape('preset:shape.rect', right ? px0 + pw - bar / 2 : px0 + bar / 2, top + ph / 2, bar, ph, st.c.accent, from + 150, { presetId: 'preset:motion.grow', ms: 400, params: { direction: 'up' } }, { params: { cornerRadius: 0 } }, 'lower-third');
+        const tx = right ? px0 + pad : px0 + bar + pad;
+        this.text({ ...name, align }, { size: ns, weight: 700, color: '#FFFFFF' }, tx, top + pad, pw - pad * 2 - bar, from + 200, { presetId: 'preset:motion.rise', rise: this.sz(18), ms: 450 }, undefined, 'lower-third-name');
+        if (title) this.text({ ...title, align }, { size: ts, weight: 400, color: '#E6E6E6' }, tx, top + pad + mn.h + gap, pw - pad * 2 - bar, from + 350, { presetId: 'preset:motion.rise', rise: this.sz(14), ms: 450 }, undefined, 'lower-third-title');
+      });
+    }
+    // 3. stat callouts (counting number + label on a panel), top third, with the source under the panel while it shows
+    for (const x of s.stats ?? []) {
+      if (!room()) { this.p.risks.push({ code: 'footage-dense', severity: 'info', message: this.p.id ? `Adegan ${this.p.i + 1}: footage terlalu pendek untuk semua teks; sebagian tidak ditampilkan.` : `Scene ${this.p.i + 1}: the footage is too short for every text; some were left out.` }); break; }
+      const pad = this.sz(28), vs = x.sizePx !== undefined ? this.ex(x.sizePx) : this.sz(this.p.portrait ? 140 : 120), ls = this.sz(44);
+      const label = [x.prefix ? textOf(x.prefix) : '', x.unit ? textOf(x.unit) : '', x.label ? textOf(x.label) : ''].filter(Boolean).join(' · ');
+      const mv = this.measure(x.value, vs, 800, maxW - pad * 2, 'preset:text.title'), ml = label ? this.measure(label, ls, 400, maxW - pad * 2) : { w: 0, h: 0 };
+      const pw = Math.min(maxW, Math.max(mv.w, ml.w) + pad * 2), ph = mv.h + (label ? this.sz(8) + ml.h : 0) + pad * 2;
+      const px0 = right ? this.p.X0 + this.p.W - pw : this.p.X0;
+      const { from, to } = slot(x.at, 3600);
+      const srcH = s.source ? this.measure(textOf(s.source)!, Math.max(34, this.sz(36)), 400, maxW).h + this.sz(14) : 0;
+      const top = fit(subjectTop ? bottomY - ph - srcH : topY, ph + srcH, from, to, !subjectTop);
+      const counting = x.count !== false && /\d/.test(x.value);
+      const ease = easeOf(x.easing, { easingId: 'preset:easing.out-cubic' });
+      const effect = counting ? { presetId: 'preset:texteffect.counter', params: { from: (x.from ? parseLoose(x.from) : 0) ?? 0, durationMs: Math.max(100, x.countMs ?? 1200), ...(ease.bezier ? { bezier: ease.bezier } : { easingId: ease.easingId }) } } : undefined;
+      this.within(to, exit, () => {
+        panel(px0, top, pw, ph, from, 'callout');
+        this.text({ text: x.value, align }, { size: vs, weight: 800, color: hex6(x.color) ?? this.toneColour(x.tone, x.value), variant: 'preset:text.title' }, px0 + pad, top + pad, pw - pad * 2, from + 150, { presetId: 'preset:motion.pop', ms: 500 }, effect, 'callout-value');
+        if (label) this.text({ text: label, align }, { size: ls, weight: 400, color: '#E6E6E6' }, px0 + pad, top + pad + mv.h + this.sz(8), pw - pad * 2, from + 300, {}, undefined, 'callout-label');
+        if (s.source) { const so = asObj(s.source); this.text({ ...so, align }, { size: Math.max(34, this.sz(36)), weight: 400, color: '#E6E6E6' }, x0, top + ph + this.sz(14), maxW, from, {}, undefined, 'source'); }
+      });
+      if (s.source) this.sourceDone = true;
+    }
+    // 4. list callouts: one boxed line at a time
+    for (const b of s.bullets ?? []) {
+      if (!room()) break;
+      const o = asObj(b), size = this.sz(56);
+      const { from, to } = slot(o.at, Math.max(2200, 900 + 300 * words(o.text)));
+      const bh = this.measure(o.text, size, 600, maxW).h + this.sz(10) * 2;
+      const top = fit(subjectTop ? bottomY - bh - this.sz(40) : topY, bh, from, to, !subjectTop) + this.sz(10);
+      this.within(to, exit, () => this.text({ ...o, align }, { size, weight: 600, color: '#FFFFFF', box: { colour: '#111111', padX: this.sz(22), padY: this.sz(10), radius: this.sz(12) } }, x0, top, maxW, from, { presetId: 'preset:motion.rise', rise: this.sz(24), ms: 450 }, undefined, 'callout-bullet'));
+    }
+    // 5. note (a short remark), boxed in the tone colour
+    if (s.note && room()) {
+      const o = asObj(s.note), size = this.sz(52);
+      const { from, to } = slot(o.at, 3000);
+      const bh = this.measure(o.text, size, 600, maxW).h + this.sz(10) * 2;
+      const top = fit(subjectTop ? bottomY - bh - this.sz(40) : topY, bh, from, to, !subjectTop) + this.sz(10);
+      this.within(to, exit, () => this.text({ ...o, align }, { size, weight: 600, color: '#FFFFFF', box: { colour: hex6(this.toneColour(s.noteTone ?? 'accent')) ?? '#111111', padX: this.sz(22), padY: this.sz(10), radius: this.sz(12) } }, x0, top, maxW, from, {}, undefined, 'note'));
+    }
+    if (s.source && !this.sourceDone && !(s.stats ?? []).length) void 0;          // a source without a figure: shown by finish() as usual
+    void y0;
+  }
   build(withSource = true): void {
     const s = this.s, st = this.st, f = this.p.frame;
     const centreVertically = !st.editorial && ['hook', 'title', 'question', 'quote', 'stat', 'body', 'list', 'cta', 'split'].includes(s.role) && s.topPx === undefined;
@@ -604,6 +841,7 @@ class SceneLayout {
       }
       case 'cta': case 'cta-handle': this.cta(); break;
       case 'split': this.split(); break;
+      case 'footage': case 'footage-split': case 'footage-pip': this.footageScene(); break;
     }
     if (centreVertically) {
       // centre the whole block in the content area: shift every op of this scene by the same dy

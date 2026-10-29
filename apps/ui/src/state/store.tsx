@@ -19,7 +19,8 @@ import { localModelByRef, localModelName } from './model-names.js';
 import { normalizeKey } from './key-retry.js';
 import { itemsCategory } from '../stage/items.js';
 import { DESTRUCTIVE_OPS, destructiveItems, removalLabel } from '../agent/plan-preview.js';
-import { bootDecision, noteProjectClosed, noteProjectOpening } from '../startup/session-guard.js';
+import { bootDecision, isBlocked, loadGuard, noteProjectClosed, noteProjectOpening } from '../startup/session-guard.js';
+import { clearScratch, isUntouched, loadScratch, promoteIfTouched, saveScratch } from '../startup/scratch.js';
 
 export interface Actions {
   openProject(id: string): Promise<void>;
@@ -28,6 +29,10 @@ export interface Actions {
   createProject(input: ProjectCreateInput): Promise<void>;
   /** QA #5 / FR-009: File ▸ New Project (Ctrl+N): a Project with the default settings, opened at once; resolves with its id. */
   newProject(): Promise<string | null>;
+  /** FR-260: the empty project a launch / Close lands in — the untouched blank project of the last launch, else a new one (quiet). */
+  openBlankProject(): Promise<string | null>;
+  /** FR-260: File ▸ Close project — the open project closes and an empty project opens (the unsaved prompt runs first, by the caller). */
+  closeProject(): Promise<void>;
   renameProject(name: string): Promise<boolean>;
   refreshHead(): Promise<void>;
   save(): Promise<void>;
@@ -64,9 +69,13 @@ export interface Actions {
   removeIntent(id: string): Promise<void>;
   clearIntents(): Promise<void>;
   plan(message?: string): Promise<void>;
+  /** Review U1: Re-plan / Run again of the plan on the card — the same picks and message on the current head (not the whole queue). */
+  replan(): Promise<void>;
   /** `confirmed`: the Creator confirmed the removals the plan makes (EM-4310 inline confirmation, QA 2026-10-28 #17). */
   execute(confirmed?: boolean): Promise<void>;
   cancelPlan(): Promise<void>;
+  /** FR-214 / review U2: Stop of the agent's current run — also while the send is in flight (the run is cancelled once its id is known). */
+  stopRun(agent: AgentKind): Promise<void>;
   setNotes(notes: string): Promise<void>;
   /** FR-067 / FR-080: the Editor message carries the inspector target (if any), the selection and the playhead. */
   send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null, targets?: ChatTarget[], documents?: string[]): Promise<boolean>;
@@ -78,7 +87,8 @@ export interface Actions {
   pointAt(target: ChatTarget, mode?: AgentKind): void;
   setChatTargets(targets: ChatTarget[]): void;
   /** R-082: hands proposed intents to the Intent Queue; resolves true when the Service accepted the hand-off. */
-  handoff(message: MessageDto, intentIds: string[]): Promise<boolean>;
+  /** `opts.plan` (review U10): plan exactly the picks this hand-off queued — nothing when none was accepted, never the whole queue. */
+  handoff(message: MessageDto, intentIds: string[], opts?: { plan?: boolean }): Promise<boolean>;
   dismissHandoff(message: MessageDto): void;
   /** Closes the removal confirmation of the current plan (nothing is executed). */
   dismissRemoval(): void;
@@ -136,6 +146,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   const stateRef = useRef(state);
   const providersLoad = useRef<{ running: Promise<void> | null; again: boolean }>({ running: null, again: false });
   const modelsInFlight = useRef(new Set<string>());
+  /** Review U2: Stop pressed while the send is still in flight (run id unknown): the run is cancelled as soon as the 202 names it. */
+  const stopAsked = useRef<Record<AgentKind, boolean>>({ brainstorm: false, editor: false });
   stateRef.current = state;
   const dispatch = useCallback((a: Action) => { if (a.type === 'projectClosed') noteProjectClosed(); rawDispatch(a); }, []);
   const prefsRef = useRef<Prefs>({ ...loadPrefs(), ...(initialPrefs ?? {}) });
@@ -174,9 +186,20 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       const id = pid(); if (!id) return;
       try { const c = await api.getComposition(id); if (pid() === id) dispatch({ type: 'head', head: c.head, canUndo: c.canUndo, canRedo: c.canRedo }); } catch (e) { error(e); }
     };
+    // FR-260: leaving the untouched blank project (another project opens) deletes it, so an empty project never piles up.
+    const discardBlank = (leaving: string | null, next: string, was: { project: AppState['project']; assets: number; msgs: number }) => {
+      const s = loadScratch();
+      if (!leaving || leaving === next || s?.projectId !== leaving) return;
+      const p = was.project;
+      if (!p || p.id !== leaving || !isUntouched(p, s) || was.msgs > 0 || was.assets > 0) { clearScratch(); return; }
+      clearScratch();
+      void api.deleteProject(leaving, { permanent: true }).catch(() => undefined);
+    };
     const openProject = async (id: string, keepView = false) => {
       try {
         if (!keepView) noteProjectOpening(id);                                 // FR-202: crash-loop guard + Reload reopens it
+        const leaving = keepView ? null : pid();
+        const leavingState = leaving ? { project: stateRef.current.project, assets: stateRef.current.assets.length, msgs: stateRef.current.messages.brainstorm.length + stateRef.current.messages.editor.length } : null;
         const open = await api.openProject(id);
         const [assets, brainstorm, editor] = await Promise.all([
           api.listAssets(id, { limit: 200 }).then((p) => p.items),
@@ -184,6 +207,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           api.getConversation(id, 'editor').catch(() => null),
         ]);
         dispatch({ type: 'projectOpened', open, assets, messages: { brainstorm: brainstorm?.messages.items ?? [], editor: editor?.messages.items ?? [] }, contextUsage: { brainstorm: brainstorm?.contextUsage ?? null, editor: editor?.contextUsage ?? null }, keepView });
+        if (leavingState) discardBlank(leaving, id, leavingState);
         if (!open.head.model) await refreshHead();
         api.listOutputs(id).then((o) => dispatch({ type: 'outputs', outputs: o.items })).catch(() => undefined);
         if (open.checkpointNewerThanSave) dispatch({ type: 'screen', screen: { kind: 'project.recover' } });
@@ -259,6 +283,16 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       toast('info', 'err.EM-1006.title', { name: existing?.name ?? name ?? '' }, { code: 'EM-1006', ...(existingId ? { action: { labelKey: 'err.EM-1006.action', run: () => focusAssetCard(existingId) } } : {}) });
     };
     const setScreen = (screen: Screen | null) => dispatch({ type: 'screen', screen });
+    /** A Stop the Service could not apply is said (the run may still be working); "already finished" (EM-9003) is not an error. */
+    const stopFailed = (e: unknown) => { if (errCode(e) !== 'EM-9003') error(e); };
+    /** Review U2: Stop was pressed before the send answered: cancel the run it started now; true = do not show it as running. */
+    const stoppedEarly = (agent: AgentKind, runId: string): boolean => {
+      if (!stopAsked.current[agent]) return false;
+      stopAsked.current[agent] = false;
+      dispatch({ type: 'streamingStop', agent, runId });
+      void api.cancelAgentRun(runId).catch(() => undefined);
+      return true;
+    };
     /** FR-195: a stale plan is never executed; "Timeline berubah — rencana disusun ulang" and a fresh plan on the current head. */
     const replanStale = async (plan: PlanDto) => {
       dispatch({ type: 'plan', plan: { ...plan, status: 'stale' } });
@@ -268,30 +302,62 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const c = await api.getComposition(id);                        // plan on the head the Creator sees now (not a cached hash)
         if (pid() !== id) return;
         dispatch({ type: 'head', head: c.head, canUndo: c.canUndo, canRedo: c.canRedo });
-        const res = await api.createPlan(id, { baseVersion: c.head.hash });
+        // Review U1: the same request again — the stale plan's own picks and the Creator's message, never the whole queue.
+        const res = await api.createPlan(id, { baseVersion: c.head.hash, ...replanRequest(plan, stateRef.current.queue) });
         dispatch({ type: 'plan', plan: 'plan' in res ? res.plan : res });
       } catch (e) { error(e); }
+    };
+    const createBlank = async (quiet: boolean): Promise<string | null> => {
+      // Default settings (FR-009): Settings defaults or 30 fps · 9:16 · 1080p, fit-content, default output folder. The name is
+      // "Untitled" ("Tanpa judul"), then "Untitled 2", … while a Project with that name exists (EM-6103, unique per data dir).
+      // FR-260: every such project is the blank project until its first edit (reused by the next launch, hidden from Recent).
+      const s = stateRef.current;
+      const base = translate(s.settings?.uiLanguage ?? 'en', 'ui.hdr.title.untitled');
+      const { ratio, resolution } = outputDefaults(s);
+      for (let n = 1; n <= 99; n++) {
+        try {
+          const p = await api.createProject({ name: n === 1 ? base : `${base} ${n}`, settings: { fps: s.settings?.defaultFps ?? 30, ratio, resolution, autoRatio: false } });
+          const leaving = pid();
+          const prev = loadScratch();
+          saveScratch(p);
+          // the previous blank project (untouched) is not needed any more: deleted once the new one is open
+          const dropPrev = !!leaving && prev?.projectId === leaving && !!stateRef.current.project && isUntouched(stateRef.current.project, prev) && stateRef.current.assets.length === 0
+            && stateRef.current.messages.brainstorm.length + stateRef.current.messages.editor.length === 0;
+          await openProject(p.id);
+          if (dropPrev && leaving) void api.deleteProject(leaving, { permanent: true }).catch(() => undefined);
+          if (!quiet) toast('info', 'ui.sys.toast.project.created', { name: p.name });
+          return p.id;
+        } catch (e) { if (errCode(e) === 'EM-6103') continue; error(e); return null; }
+      }
+      return null;
     };
     const self: Actions = {
       openProject, openSampleProject, refreshHead, reloadState, error, toast, announce, undo, redo, setScreen,
       async createProject(input) {
         try { const p = await api.createProject(input); await openProject(p.id); } catch (e) { error(e); }
       },
-      async newProject() {
-        // Default settings (FR-009): Settings defaults or 30 fps · 9:16 · 1080p, fit-content, default output folder. The name is
-        // "Untitled" ("Tanpa judul"), then "Untitled 2", … while a Project with that name exists (EM-6103, unique per data dir).
-        const s = stateRef.current;
-        const base = translate(s.settings?.uiLanguage ?? 'en', 'ui.hdr.title.untitled');
-        const { ratio, resolution } = outputDefaults(s);
-        for (let n = 1; n <= 99; n++) {
+      async newProject() { return createBlank(false); },
+      async openBlankProject() {
+        // FR-260: reuse the blank project of the last launch while it is untouched (and did not crash-loop), else make a new one.
+        const s = loadScratch();
+        if (s) {
           try {
-            const p = await api.createProject({ name: n === 1 ? base : `${base} ${n}`, settings: { fps: s.settings?.defaultFps ?? 30, ratio, resolution, autoRatio: false } });
-            await openProject(p.id);
-            toast('info', 'ui.sys.toast.project.created', { name: p.name });
-            return p.id;
-          } catch (e) { if (errCode(e) === 'EM-6103') continue; error(e); return null; }
+            const p = await api.getProject(s.projectId);
+            const [b, e] = await Promise.all([api.getConversation(p.id, 'brainstorm').catch(() => null), api.getConversation(p.id, 'editor').catch(() => null)]);
+            const msgs = (b?.messages.items.length ?? 0) + (e?.messages.items.length ?? 0);
+            if (isUntouched(p, s) && msgs === 0 && !isBlocked(loadGuard(), p.id)) { await openProject(p.id); if (pid() === p.id) return p.id; }
+            else if (isUntouched(p, s) && msgs === 0) { clearScratch(); await api.deleteProject(p.id, { permanent: true }).catch(() => undefined); }
+            else clearScratch();                                                 // edited (e.g. in another window): an ordinary project now
+          } catch { clearScratch(); }                                            // deleted meanwhile
         }
-        return null;
+        return createBlank(true);
+      },
+      async closeProject() {
+        // FR-260: like other video editors, closing leaves an empty project open (not the Start screen). An untouched blank project
+        // stays as it is (closing it again would only make another one).
+        const cur = stateRef.current.project;
+        if (cur && loadScratch()?.projectId === cur.id && isUntouched(cur, loadScratch())) return;
+        await createBlank(true);
       },
       async renameProject(name) {
         const id = pid(); if (!id) return false;
@@ -474,6 +540,14 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           dispatch({ type: 'plan', plan });
         } catch (e) { error(e); }
       },
+      async replan() {
+        const plan = stateRef.current.plan; if (!plan) { await self.plan(); return; }
+        const id = pid(); if (!id) return;
+        try {
+          const res = await api.createPlan(id, { baseVersion: headHash(), ...replanRequest(plan, stateRef.current.queue) });
+          dispatch({ type: 'plan', plan: 'plan' in res ? res.plan : res });
+        } catch (e) { error(e); }
+      },
       async execute(confirmed = false) {
         const plan = stateRef.current.plan;
         if (!plan) return;
@@ -516,12 +590,15 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       },
       async sendDraftToEditor(message) {
         const id = pid(); if (!id) return false;
+        // Review U3: the Editor is busy — say so (with Stop) instead of sending: an EM-4305 answer used to wipe the live run's progress.
+        if (stateRef.current.streaming.editor) { toast('info', 'err.EM-4305.title', undefined, { code: 'EM-4305', action: { labelKey: 'err.EM-4305.action', run: () => { void self.stopRun('editor'); } } }); return false; }
         try {
           dispatch({ type: 'agentError', agent: 'editor', code: null });
           dispatch({ type: 'streamingStart', agent: 'editor', runId: PENDING_RUN, modelId: stateRef.current.assignments?.editor?.modelId ?? '' });
+          stopAsked.current.editor = false;
           const res = await api.sendDraftToEditor(id, message.id, headHash());
           dispatch({ type: 'messageAdded', agent: 'editor', message: res.message });
-          dispatch({ type: 'streamingStart', agent: 'editor', runId: res.runId, modelId: stateRef.current.assignments?.editor?.modelId ?? '' });
+          if (!stoppedEarly('editor', res.runId)) dispatch({ type: 'streamingStart', agent: 'editor', runId: res.runId, modelId: stateRef.current.assignments?.editor?.modelId ?? '' });
           dispatch({ type: 'messages', agent: 'brainstorm', messages: stateRef.current.messages.brainstorm.map((m) => (m.id === res.brainstormMessage.id ? safeMessage(res.brainstormMessage) : m)) });
           announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.agent.handoff.sent'));
           return true;
@@ -549,12 +626,24 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const s = stateRef.current, plan = s.plan;
         try {
           const run = s.streaming.editor;
-          if (run) await api.cancelAgentRun(run.runId).catch(() => undefined);
+          // Review U2: Stop while the message is still being sent: the run has no id yet. Nothing else is touched (the plan on the card
+          // belongs to an earlier run); the run is cancelled as soon as the Service names it (send / SSE).
+          if (run?.runId === PENDING_RUN) { stopAsked.current.editor = true; dispatch({ type: 'streamingStop', agent: 'editor' }); return; }
+          if (run) { await api.cancelAgentRun(run.runId).catch(stopFailed); dispatch({ type: 'streamingStop', agent: 'editor', runId: run.runId }); }
           const live = stateRef.current.plan;                                          // FR-084: may be `executing` by now
-          if (plan && plan.status !== 'executed' && live?.status !== 'executed') { const p = await api.cancelPlan(plan.id); dispatch({ type: 'plan', plan: { ...plan, ...p, status: 'cancelled' } }); }
+          // Review U2: a running chat only cancels its own plan (or a draft); an earlier valid plan on the card stays.
+          const own = !run || !plan || plan.status === 'draft' || plan.status === 'executing' || (!!plan.agentRunId && plan.agentRunId === run.runId);
+          if (own && plan && plan.status !== 'executed' && plan.status !== 'cancelled' && live?.status !== 'executed') { const p = await api.cancelPlan(plan.id); dispatch({ type: 'plan', plan: { ...plan, ...p, status: 'cancelled' } }); }
           dispatch({ type: 'agentError', agent: 'editor', code: null });
           const id = pid(); if (id) dispatch({ type: 'queue', queue: await api.listIntents(id) });
         } catch (e) { error(e); }
+      },
+      async stopRun(agent) {
+        if (agent === 'editor') { await self.cancelPlan(); return; }
+        const run = stateRef.current.streaming[agent]; if (!run) return;
+        if (run.runId === PENDING_RUN) { stopAsked.current[agent] = true; dispatch({ type: 'streamingStop', agent }); return; }
+        dispatch({ type: 'streamingStop', agent, runId: run.runId });
+        await api.cancelAgentRun(run.runId).catch(stopFailed);
       },
       async setNotes(notes) {
         const plan = stateRef.current.plan; if (!plan) return;
@@ -572,12 +661,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         try {
           dispatch({ type: 'agentError', agent, code: null });
           // FR-214: the working state shows at once (no silent gap while the Service accepts the message or waits for an image).
+          stopAsked.current[agent] = false;
           dispatch({ type: 'streamingStart', agent, runId: PENDING_RUN, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '', ...(attachments.length ? { attaching: true } : {}) });
           const s0 = stateRef.current;
           const editorCtx = agent === 'editor' ? { ...(target ? { target } : {}), ...(s0.selection.length ? { selection: s0.selection.slice(0, 50) } : {}), playheadMs: Math.max(0, Math.round(s0.playheadMs)) } : {};
           const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), ...(documents.length ? { documents: documents.map((documentId) => ({ documentId })) } : {}), baseVersion: headHash(), ...editorCtx, ...(targets.length ? { targets: targets.slice(0, 12) } : {}) });
           dispatch({ type: 'messageAdded', agent, message: res.message });
-          dispatch({ type: 'streamingStart', agent, runId: res.runId, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '' });
+          if (!stoppedEarly(agent, res.runId)) dispatch({ type: 'streamingStart', agent, runId: res.runId, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '' });
           return true;
         } catch (e) {
           const detail = e instanceof EmError ? { message: e.message, ...(e.details && typeof e.details === 'object' ? { details: e.details as Record<string, unknown> } : {}) } : null;
@@ -585,17 +675,25 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           return false;
         }
       },
-      async handoff(message, intentIds) {
+      async handoff(message, intentIds, opts = {}) {
         const id = pid(); if (!id) return false;
         try {
+          const before = new Set((stateRef.current.queue?.items ?? []).map((i) => i.id));
           const res = await api.handoff(id, { messageId: message.id, intentIds, baseVersion: headHash() });
           // QA 2026-10-28 #3/#4: the Service answered with the queue as a bare array, which emptied "Your picks"; read the queue DTO.
-          dispatch({ type: 'queue', queue: Array.isArray(res.queue) ? await api.listIntents(id) : res.queue });
+          const queue = Array.isArray(res.queue) || !res.queue ? await api.listIntents(id) : res.queue;
+          dispatch({ type: 'queue', queue });
           const msgs = stateRef.current.messages.brainstorm.map((m) => (m.id === message.id ? { ...m, blocks: m.blocks.map((b) => (b.type === 'proposed_intents' ? { ...b, handoffState: 'sent' as const } : b)) } : m));
           dispatch({ type: 'messages', agent: 'brainstorm', messages: msgs });
           await refreshHead();
           for (const r of res.rejected) toast('warn', `err.${r.code}.title`, undefined, { code: r.code });
           announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.agent.brainstorm.handoff.sent', { count: res.accepted.length }));
+          if (opts.plan) {
+            const fresh = queue.items.filter((i) => i.status === 'queued' && !before.has(i.id)).map((i) => i.id);
+            if (!res.accepted.length || !fresh.length) return res.accepted.length > 0;
+            const r = await api.createPlan(id, { baseVersion: headHash(), intentIds: fresh });
+            dispatch({ type: 'plan', plan: 'plan' in r ? r.plan : r });
+          }
           return true;
         } catch (e) { error(e); return false; }
       },
@@ -713,6 +811,16 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
 
   // ── follow-ups that SSE events require (REST refetches, toasts, live announcements) ──
   const onEvent = useCallback((ev: ServiceEvent) => {
+    // Review U2: the run a Stop-while-sending asked to cancel announced itself on the stream before the send answered: cancel it now.
+    if (ev.name === 'agent.run.started' || ev.name === 'agent.run.delta' || ev.name === 'agent.run.progress') {
+      const agent = ev.data.agent, runId = ev.name === 'agent.run.started' ? ev.data.run.id : ev.data.runId;
+      if (stopAsked.current[agent] && !stateRef.current.streaming[agent]) {
+        stopAsked.current[agent] = false;
+        dispatch({ type: 'streamingStop', agent, runId });
+        void runtime.api.cancelAgentRun(runId).catch(() => undefined);
+        return;
+      }
+    }
     dispatch({ type: 'event', event: ev });
     const L = stateRef.current.settings?.uiLanguage ?? 'en';
     switch (ev.name) {
@@ -755,11 +863,12 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
             action: { labelKey: 'ui.sys.toast.planstep.install', run: () => { void runtime.api.installModel(key).then(() => actions.loadModels()).catch(actions.error); } } });
         }
         if (ev.data.kind === 'plan-step' && ev.data['status'] === 'resumed' && ev.data.projectId === stateRef.current.project?.id) actions.toast('info', 'ui.sys.toast.planstep.resumed');
-        if (ev.data.kind === 'plan-step' && ev.data['status'] === 'failed' && typeof ev.data.code === 'string' && ev.data.projectId === stateRef.current.project?.id) actions.toast('danger', `err.${ev.data.code}.title`, undefined, { code: ev.data.code });
-        // FR-223: a failed generator step is never silent (the QA's voice-over failed with EM-7001 and nothing said so).
+        // FR-223: a failed generator step is never silent (the QA's voice-over failed with EM-7001 and nothing said so). Review U4: ONE
+        // toast per failed step (was two), naming the step's own tool.
         if (ev.data.kind === 'plan-step' && ev.data['status'] === 'failed' && ev.data.projectId === stateRef.current.project?.id) {
           const code = typeof ev.data.code === 'string' ? ev.data.code : 'EM-7101';
-          actions.toast('danger', 'ui.agent.plan.step.failed', { n: Number(ev.data['step'] ?? 0), tool: translate(L, ev.data['tool'] === 'tts.generate' ? 'ui.agent.plan.tool.tts.short' : 'ui.agent.plan.tool.captions.short'), code }, { code, sticky: true });
+          const tool = ev.data['tool'] === 'tts.generate' ? translate(L, 'ui.agent.plan.tool.tts.short') : ev.data['tool'] === 'captions.generate' ? translate(L, 'ui.agent.plan.tool.captions.short') : String(ev.data['tool'] ?? '');
+          actions.toast('danger', 'ui.agent.plan.step.failed', { n: Number(ev.data['step'] ?? 0), tool, code }, { code, sticky: true });
         }
         if (ev.data.kind === 'plan-step' && ev.data['status'] === 'done') void actions.refreshHead();
         // FR-128: the Service sends EM-6402 once per session; the banner stays until dismissed and opens the Hardware Monitor.
@@ -772,7 +881,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           if (ev.data.code === 'EM-6303') actions.toast('info', 'err.EM-6303.title', { name: typeof ev.data['name'] === 'string' ? ev.data['name'] : '' }, { code: 'EM-6303', action: { labelKey: 'err.EM-6303.action', run: () => { void actions.openProject(restoredId); } } });
         }
         // FR-052: removed assets back in use after Undo/Redo reappear in the Asset Panel.
-        if (ev.data.kind === 'assets-restored' && typeof ev.data.projectId === 'string' && ev.data.projectId === stateRef.current.project?.id) {
+        // Review A3: unused voice clips of a failed / cancelled / replaced batch left the Library (assets-removed): same reload.
+        if ((ev.data.kind === 'assets-restored' || ev.data.kind === 'assets-removed') && typeof ev.data.projectId === 'string' && ev.data.projectId === stateRef.current.project?.id) {
           const id = ev.data.projectId;
           void runtime.api.listAssets(id, { limit: 200 }).then((p) => { if (stateRef.current.project?.id === id) dispatch({ type: 'assets', assets: p.items }); }).catch(() => undefined);
         }
@@ -848,9 +958,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         const fallback = async () => last ?? runtime.seededProjectId ?? (await runtime.api.listProjects({ limit: 1 }).catch(() => ({ items: [] }))).items[0]?.id ?? null;
         const decision = runtime.startScreen ? bootDecision({ seed: null, lastProjectId: last }) : { open: await fallback(), action: null };
         if (decision.open) await actions.openProject(decision.open);
+        // FR-260 (Operator 2026-10-29): a launch without a project to restore lands in an EMPTY project (the untouched blank project of
+        // the last launch, else a new one), never on the Start screen; a crash-loop / abnormal-end notice is shown inside it.
+        else if (runtime.startScreen && decision.action !== 'new') await actions.openBlankProject();
         if (!cancelled) {
           dispatch({ type: 'boot', boot: 'ready' });
           if (decision.action === 'new') void actions.newProject();
+          if (decision.action === 'pick') dispatch({ type: 'screen', screen: { kind: 'project.open' } });
           // FR-004: the onboarding record lives server-side (settings.onboardingDone); prefs mirror it for older services and the mock.
           if (!prefsRef.current.onboardingDone && settings.onboardingDone !== true) dispatch({ type: 'screen', screen: { kind: 'onboarding' } });
         }
@@ -862,6 +976,13 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   }, [runtime, actions, dispatch, setPrefs, bootNonce]);
 
   // Activation (or a licence.changed back to licensed) while the boot stopped at the licence screen: continue without a restart.
+  // FR-260: the first edit of the blank project (another head, an asset, a chat message, a rename) makes it an ordinary project.
+  const openId = state.project?.id ?? null, openName = state.project?.name ?? '', openHead = state.head?.hash ?? null;
+  const assetCount = state.assets.length, msgCount = state.messages.brainstorm.length + state.messages.editor.length;
+  useEffect(() => {
+    if (!openId || openHead === null) return;                                     // head not loaded yet: nothing to compare
+    promoteIfTouched({ id: openId, name: openName, headHash: openHead, assets: assetCount, messages: msgCount });
+  }, [openId, openName, openHead, assetCount, msgCount]);
   const licensedNow = state.licence?.status === 'licensed';
   useEffect(() => { if (state.boot === 'unlicensed' && licensedNow) rebootNow(); }, [state.boot, licensedNow]);
 
@@ -897,6 +1018,19 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const value = useMemo<Store>(() => ({ state, dispatch, runtime, actions, prefs: prefsRef.current, setPrefs, t, lang }), [state, dispatch, runtime, actions, setPrefs, t, lang, prefsVersion]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+}
+
+/** Review U1: what a re-plan of `plan` asks for — its picks that are still queued, the Creator's message (an agent plan's goal) and
+ *  the agent mode, so a stale / cancelled Editor-chat plan is planned again instead of becoming EM-9002 or a plan of the whole queue. */
+export function replanRequest(plan: Pick<PlanDto, 'origin' | 'goal' | 'intentIds'>, queue: AppState['queue']): { intentIds?: string[]; message?: string; mode?: 'agent' } {
+  const agent = plan.origin === 'editor-agent';
+  const message = agent && plan.goal && plan.goal !== 'Plan the queued picks' ? plan.goal : undefined;
+  const queued = queue ? new Set(queue.items.filter((i) => i.status === 'queued').map((i) => i.id)) : null;
+  const all = plan.intentIds ?? [];
+  const left = all.filter((i) => !queued || queued.has(i));
+  // nothing of the request is left and there is no message: ask for the old ids so the Service says so (EM-9003), never the whole queue
+  const ids = left.length || message ? left : all;
+  return { ...(ids.length ? { intentIds: ids } : {}), ...(message ? { message } : {}), ...(agent ? { mode: 'agent' as const } : {}) };
 }
 
 /** FR-095: the Project defaults Reset restores (Settings defaults; 9:16 · 1080p when unset). */

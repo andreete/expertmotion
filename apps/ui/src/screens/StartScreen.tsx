@@ -12,6 +12,8 @@ import { AppMark } from '../components/AppMark.js';
 import { formatDate, formatDuration, type Lang } from '../i18n/index.js';
 import { ProjectThumb } from './ProjectDialogs.js';
 import { lastBootDecision, setSafeMode, type StartNotice } from '../startup/session-guard.js';
+import { withoutScratch } from '../startup/scratch.js';
+import { guardUnsaved } from './Lifecycle.js';
 
 export function StartScreen() {
   const { actions, runtime, t, lang } = useStore();
@@ -22,7 +24,7 @@ export function StartScreen() {
   useEffect(() => {
     let alive = true;
     void runtime.api.recentProjects()
-      .then(async (r) => (r.items.length ? r.items : (await runtime.api.listProjects({ limit: 20 })).items))
+      .then(async (r) => withoutScratch(r.items.length ? r.items : (await runtime.api.listProjects({ limit: 20 })).items))   // FR-260
       .then((list) => { if (alive) setItems(list.slice(0, 12)); })
       .catch((e) => { if (alive) { actions.error(e); setItems([]); } });
     return () => { alive = false; };
@@ -108,5 +110,67 @@ export function SafeModePlaceholder({ part, onShow }: { part: 'chat' | 'preview'
       <p>{t(part === 'chat' ? 'ui.safe.chat.hidden' : 'ui.safe.preview.hidden')}</p>
       <Button el={`sys.safe.${part}.show`} size={28} onClick={onShow}>{t(part === 'chat' ? 'ui.safe.chat.show' : 'ui.safe.preview.show')}</Button>
     </div>
+  );
+}
+
+/**
+ * sys.launch.notice (FR-260): a launch opens an empty project; when the last project stopped the Editor twice right after opening
+ * (crash-loop guard, FR-202) or the last session ended abnormally, this notice says so INSIDE the empty project and offers safe
+ * open / open again. Dismissable; nothing here renders the other project's content.
+ */
+export function LaunchNotice() {
+  const { actions, runtime, t, state } = useStore();
+  const [notice, setNotice] = useState<StartNotice>(() => lastBootDecision()?.notice ?? null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!notice) return undefined;
+    let alive = true;
+    void runtime.api.getProject(notice.projectId).then((p) => { if (alive) setName(p.name); }).catch(() => { if (alive) setNotice(null); });   // gone: nothing to offer
+    return () => { alive = false; };
+  }, [notice, runtime]);
+  if (!notice || state.project?.id === notice.projectId) return null;
+  const loop = notice.kind === 'crash-loop';
+  const open = (safe: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    setSafeMode(safe, notice.projectId);
+    void actions.openProject(notice.projectId).finally(() => { setBusy(false); setNotice(null); });
+  };
+  return (
+    <div data-el="sys.launch.notice" data-kind={notice.kind} role="alert" className={cx('flex items-center gap-2 border-b border-l-2 border-em-line bg-em-panel px-3 py-1.5 text-[12px]', loop ? 'border-l-em-danger' : 'border-l-em-warn')}>
+      <AlertTriangle size={14} className={loop ? 'text-em-danger' : 'text-em-warn'} aria-hidden />
+      <span className="min-w-0 flex-1 truncate"><b>{t(loop ? 'ui.scr.start.notice.loop.title' : 'ui.scr.start.notice.abnormal.title')}</b>{' · '}{loop ? t('ui.launch.notice.loop', { name: name || '—' }) : t('ui.launch.notice.abnormal', { name: name || '—' })}</span>
+      {loop
+        ? <Button el="sys.launch.notice.safe" size={28} icon={<ShieldCheck size={14} />} loading={busy} onClick={() => open(true)}>{t('ui.scr.start.safe')}</Button>
+        : <Button el="sys.launch.notice.open" size={28} loading={busy} onClick={() => open(false)}>{t('ui.launch.notice.reopen')}</Button>}
+      <Button el="sys.launch.notice.dismiss" size={28} variant="ghost" onClick={() => setNotice(null)}>{t('ui.launch.notice.dismiss')}</Button>
+    </div>
+  );
+}
+
+/**
+ * stage.recent (FR-260): the small "Terakhir dibuka" row in the empty project — up to three recent projects (the blank project
+ * itself is not listed) and "Semua…" (File ▸ Open). Hidden when there is nothing to list.
+ */
+export function RecentStrip() {
+  const { actions, runtime, t, state } = useStore();
+  const [items, setItems] = useState<ProjectDto[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void runtime.api.recentProjects().then((r) => { if (alive) setItems(withoutScratch(r.items).filter((p) => p.id !== state.project?.id).slice(0, 3)); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [runtime, state.project?.id]);
+  if (!items.length) return null;
+  return (
+    <nav data-el="stage.recent" aria-label={t('ui.stage.recent.title')} className="flex max-w-full flex-wrap items-center justify-center gap-1 text-[12px] text-em-muted">
+      <span>{t('ui.stage.recent.title')}:</span>
+      {items.map((p) => (
+        <button key={p.id} type="button" data-el="stage.recent.item" data-project={p.id} title={p.name}
+          className="max-w-[160px] truncate rounded-full border border-em-line px-2 py-0.5 text-em-text-2 hover:border-em-accent hover:text-em-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-em-accent"
+          onClick={() => guardUnsaved({ state, actions }, () => { void actions.openProject(p.id); })}>{p.name}</button>
+      ))}
+      <button type="button" data-el="stage.recent.all" className="rounded-full px-2 py-0.5 text-em-accent hover:underline" onClick={() => actions.setScreen({ kind: 'project.open' })}>{t('ui.stage.recent.all')}</button>
+    </nav>
   );
 }

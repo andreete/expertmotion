@@ -448,14 +448,18 @@ function pdfText(buf: Buffer, warnings: string[]): { text: string; pages: number
   const streamOrder: number[] = [];
   let streams = 0;
   // 1. Objects, top level. Stream data is skipped using /Length (direct) or the next `endstream`.
-  const objRe = /(\d+)\s+(\d+)\s+obj\b/g;
+  // R8: bounded quantifiers (a long run of digits or blanks cannot backtrack quadratically) and the next `endobj` / `stream`
+  // memoised while the scan position stays below them, so objects without `endobj` cost O(length) in total, not O(objects × length)
+  const objRe = /(\d{1,10})\s{1,64}(\d{1,5})\s{1,64}obj\b/g;
+  let nextEndobj = -2; let nextStream = -2;   // -2: not searched yet; -1: none after the last search
+  const findFrom = (cached: number, word: string, from: number): number => (cached === -1 || cached >= from ? cached : src.indexOf(word, from));
   for (let pos = 0; ;) {
     objRe.lastIndex = pos;
     const m = objRe.exec(src);
     if (!m) break;
     const num = Number(m[1]); const bodyStart = m.index + m[0].length;
-    const endobj = src.indexOf('endobj', bodyStart);
-    const st = src.indexOf('stream', bodyStart);
+    const endobj = (nextEndobj = findFrom(nextEndobj, 'endobj', bodyStart));
+    const st = (nextStream = findFrom(nextStream, 'stream', bodyStart));
     if (st >= 0 && (endobj < 0 || st < endobj)) {
       const dict = src.slice(bodyStart, st);
       let ds = st + 6; if (src[ds] === '\r') ds++; if (src[ds] === '\n') ds++;
@@ -475,7 +479,8 @@ function pdfText(buf: Buffer, warnings: string[]): { text: string; pages: number
       streams++;
       pos = Math.max(after, bodyStart);
     } else {
-      const end = endobj < 0 ? Math.min(src.length, bodyStart + 65536) : endobj;
+      let end = endobj < 0 ? Math.min(src.length, bodyStart + 65536) : endobj;
+      if (endobj < 0) { objRe.lastIndex = bodyStart; const nx = objRe.exec(src); if (nx && nx.index < end) end = nx.index; }   // never overlaps the next object
       objs.set(num, { dict: src.slice(bodyStart, Math.min(end, bodyStart + (1 << 20))) });
       pos = endobj < 0 ? bodyStart : endobj + 6;
     }

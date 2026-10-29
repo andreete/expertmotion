@@ -197,12 +197,14 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
   const [seen, setSeen] = useState<Record<AgentKind, number>>(counts);
   useEffect(() => { setSeen((x) => ({ ...x, [mode]: counts[mode] })); }, [mode, counts[mode]]); // eslint-disable-line react-hooks/exhaustive-deps
   const unread = { brainstorm: counts.brainstorm > seen.brainstorm, editor: counts.editor > seen.editor };
+  // FR-265: an empty thread starts with the automatic path — a one-line hint and example prompts that fill the Editor composer
+  const pickExample = (text: string) => { setMode('editor'); setValue(text); window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent: 'editor' } })); };
   const empty = state.messages[mode].length === 0 && !(mode === 'editor' && plan)
-    ? <div className="mx-auto max-w-[90%] text-center text-[12px] text-em-muted">{t(mode === 'brainstorm' ? 'ui.agent.brainstorm.first' : 'ui.agent.editor.first')}</div> : null;
+    ? <ChatStarter mode={mode} onPick={pickExample} hasFootage={state.assets.some((a) => a.kind === 'video' && a.status === 'ready')} /> : null;
   const onKeyDown = (e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === '1' || e.key === '2')) { e.preventDefault(); e.stopPropagation(); setMode(e.key === '1' ? 'brainstorm' : 'editor'); return; }
     if (e.key === 'Escape' && (state.streaming.editor || plan?.status === 'draft')) { e.stopPropagation(); void actions.cancelPlan(); }
-    else if (e.key === 'Escape' && state.streaming.brainstorm) { e.stopPropagation(); void runtime.api.cancelAgentRun(state.streaming.brainstorm.runId).catch(() => undefined); actions.stopStreaming('brainstorm'); }
+    else if (e.key === 'Escape' && state.streaming.brainstorm) { e.stopPropagation(); void actions.stopRun('brainstorm'); }   // review U2: also while still sending
   };
   return (
     <section data-el="agent.chat" data-mode={mode} data-maximized={layout.maximized ? 'true' : undefined} aria-label={t('ui.agent.chat.title')} className="flex min-h-0 flex-1 flex-col overflow-hidden" onKeyDown={onKeyDown}>
@@ -222,5 +224,39 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
       <Composer mode={mode} setMode={setMode} placeholder={t(mode === 'brainstorm' ? 'ui.agent.brainstorm.placeholder' : 'ui.agent.editor.placeholder')} targets={targets}
         onRemoveTarget={removeTarget} value={value} setValue={setValue} onSend={(att, docs) => void send(att, docs)} />
     </section>
+  );
+}
+
+/** FR-265: example prompts of the empty chat (Indonesian copy in id.json): a short faceless video, footage, a data video, music. */
+export const EXAMPLE_PROMPTS = ['ui.agent.chat.example.faceless', 'ui.agent.chat.example.footage', 'ui.agent.chat.example.data', 'ui.agent.chat.example.music'] as const;
+const HINT_NUDGE = 'chat:start-hint';
+/**
+ * agent.chat.start (FR-265): the first-run hint row ("Tulis ide atau tempel prompt lengkap — Expertmotion membuat videonya otomatis",
+ * dismissable, remembered) and example prompts as chips. A chip fills the Editor composer (nothing is sent) so the Creator can
+ * edit the placeholders first; the footage chip shows once the project has a video.
+ */
+export function ChatStarter({ mode, onPick, hasFootage }: { mode: AgentKind; onPick: (text: string) => void; hasFootage: boolean }) {
+  const { t, prefs, setPrefs } = useStore();
+  const hintOn = !prefs.nudgesDismissed.includes(HINT_NUDGE);
+  const chips = EXAMPLE_PROMPTS.filter((k) => k !== 'ui.agent.chat.example.footage' || hasFootage);
+  return (
+    <div data-el="agent.chat.start" className="mx-auto flex w-full max-w-[96%] flex-col gap-2 text-[12px]">
+      {hintOn && (
+        <div data-el="agent.chat.start.hint" role="note" className="flex items-start gap-2 rounded-[8px] border border-em-accent/40 bg-em-accent/5 px-2 py-1.5 text-em-text">
+          <Lightbulb size={14} className="mt-0.5 shrink-0 text-em-accent" aria-hidden />
+          <span className="min-w-0 flex-1">{t('ui.agent.chat.start.hint')}</span>
+          <button type="button" data-el="agent.chat.start.hint.dismiss" aria-label={t('ui.agent.chat.start.hint.dismiss')} className="shrink-0 rounded px-1 text-em-muted hover:text-em-text"
+            onClick={() => setPrefs({ nudgesDismissed: [...prefs.nudgesDismissed, HINT_NUDGE] })}>×</button>
+        </div>
+      )}
+      <p className="text-center text-em-muted">{t(mode === 'brainstorm' ? 'ui.agent.brainstorm.first' : 'ui.agent.editor.first')}</p>
+      <div data-el="agent.chat.examples" role="group" aria-label={t('ui.agent.chat.examples')} className="flex flex-wrap justify-center gap-1">
+        {chips.map((k) => (
+          <button key={k} type="button" data-el="agent.chat.example" data-key={k} title={t('ui.agent.chat.example.tip')}
+            className="max-w-full truncate rounded-full border border-em-line px-2 py-0.5 text-left text-em-text-2 hover:border-em-accent hover:text-em-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-em-accent"
+            onClick={() => onPick(t(`${k}.text`))}>{t(k)}</button>
+        ))}
+      </div>
+    </div>
   );
 }

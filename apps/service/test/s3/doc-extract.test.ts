@@ -181,7 +181,7 @@ describe('extractDocumentText: DOCX', () => {
     expect(r.pages).toBeUndefined();
     expect(r.text).toBe('Judul: Kopi & Teh di Yogyakarta\nHarga naik 5 < 10 persen\t"café" — \'ok\'\nbaris\nbaru\n\nAkhir\n\nSumber: BPS 2025');
   });
-  it('guards zip bombs: an entry over 50 MB uncompressed is not read', async () => {
+  it('guards zip bombs: an entry over 50 MB uncompressed is not read', { timeout: 30_000 }, async () => {   // 51 MB deflate: > 5 s while the shared server swaps
     const declared = docx(body, [], { fakeSize: 60 * 1024 * 1024 });
     expect((await emCode(extractDocumentText(declared, 'bom.docx'))).code).toBe('EM-4309');
     const zeros = Buffer.alloc(51 * 1024 * 1024, 0x20);

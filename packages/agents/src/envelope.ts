@@ -12,13 +12,15 @@ export interface PointedTarget { kind: 'asset' | 'clip' | 'text' | 'image' | 'sh
 /** A pointed target with the facts the model needs to use it (resolved deterministically; `missing` when it no longer exists). */
 export type ResolvedTarget = PointedTarget & { facts?: Record<string, unknown>; missing?: true };
 /** ADR-030: generator plan steps the Editor Agent may use, with the local model state. */
-export interface PlanToolsCapability { 'tts.generate': { available: boolean; model?: string }; 'captions.generate': { script: true; sequence: boolean } }
+export interface PlanToolsCapability { 'tts.generate': { available: boolean; model?: string }; 'captions.generate': { script: true; sequence: boolean };
+  /** FR-266: background music from the CC0 library (no model; blocked in Private Mode unless a track is already downloaded). */ 'music.generate'?: { available: boolean; tracks: number } }
 
 export interface RewriteEnvelope {
   task: 'produce EditPlan'; baseVersion: string;
   project: { id: string; fps: number; ratio: string; resolution: string; language: 'id' | 'en' };
   composition: ReturnType<typeof summarizeForAgent>;
-  assets: Array<{ id: string; kind: string; name: string; durationMs?: number; hasAudio?: boolean }>;
+  assets: Array<{ id: string; kind: string; name: string; durationMs?: number; hasAudio?: boolean; width?: number; height?: number;
+    /** FR-261: what the footage says, in source time ("[mm:ss.s–mm:ss.s] text" lines, budgeted), when it was transcribed. */ transcript?: string[] }>;
   intents: Array<Pick<EditIntentT, 'id' | 'category' | 'presetId' | 'params' | 'resolvedTargets' | 'propertyKey' | 'needsInterpretation' | 'instruction'>>;
   lockedKeys: string[]; creatorMessage: string; creatorNotes: string;
   /** FR-080: what the Creator had selected on the Timeline and where the playhead was when the message was sent. */
@@ -79,7 +81,7 @@ export function buildRewriteEnvelope(input: { model: CompositionModelT; baseVers
     task: 'produce EditPlan', baseVersion: input.baseVersion,
     project: { id: input.model.projectId, fps: input.model.settings.fps, ratio: input.model.settings.ratio, resolution: input.model.settings.resolution, language: input.model.settings.language },
     composition: summarizeForAgent(input.model, input.assets, input.maxTokens ?? 4000),
-    assets: input.assets.filter((a) => a.status === 'ready').map((a) => ({ id: a.id, kind: a.kind, name: a.name ?? a.id, ...(a.durationMs !== undefined ? { durationMs: a.durationMs } : {}), ...(a.hasAudio !== undefined ? { hasAudio: a.hasAudio } : {}) })),
+    assets: envelopeAssets(input.assets),
     intents: input.intents.filter((i) => i.status === 'queued' && !i.propertyKey.startsWith('group:')).map((i) => {
       const params = Object.fromEntries(Object.entries(i.params).filter(([k]) => !k.startsWith('__')));
       return { id: i.id, category: i.category, ...(i.presetId ? { presetId: i.presetId } : {}), params, resolvedTargets: i.resolvedTargets, propertyKey: i.propertyKey, needsInterpretation: i.needsInterpretation, ...(i.instruction ? { instruction: i.instruction } : {}) };
@@ -99,6 +101,21 @@ export function buildRewriteEnvelope(input: { model: CompositionModelT; baseVers
       // QA 2026-10-28 #15: "sinkronkan" an mp3 longer than the whole video ended in an error instead of a plan.
       ...(input.assets.some((x) => x.kind === 'audio' && (x.durationMs ?? 0) > deriveTiming(input.model).durationMs + 500) ? ['an audio asset is longer than the video: to "sync" / "sinkronkan" it, extend the scenes (op:element.setTiming on scene clips, proportionally, or a longer last scene) so the video ends with the audio; if the Creator wants the video length kept, trim the audio layer to the video and fade it out (fadeOutMs); if it is unclear which, keep the video length, trim + fade, and add one info risk saying the other option exists; never block the plan for it'] : []),
       ...(/jangan tanya|jangan bertanya|tanpa (bertanya|tanya)|don'?t ask|do not ask|sudah (saya )?tentukan|semua sudah|follow (it )?exactly|ikuti persis/i.test(input.creatorMessage ?? '') ? ['the Creator specified everything and said not to ask back: build it now, never ask a question, keep every number, on-screen text, colour, size, timing and narration line exactly as written (voice clips = the narration lines verbatim, one clip per line)'] : []),
+      ...(input.assets.some((x) => x.kind === 'video' && x.status === 'ready') ? [FOOTAGE_CONSTRAINT] : []),
       ...(noClips ? ['the video track is empty: a video without media is built with a scene.compose step (or op:scene.add per scene) and needs no assets; imported assets may be inserted with op:clip.insert or used as assetId of a split scene'] : [])],
   };
+}
+
+/** FR-261: the Editor's rule for the Creator's own footage (shown when the project has a ready video asset). */
+export const FOOTAGE_CONSTRAINT = 'the Creator imported footage (assets of kind video): to "make a video from this footage" use ONE scene.compose step whose scenes are footage | footage-split | footage-pip with footage {assetId, fromMs, toMs} (source trims that follow the story: the transcript lines show what is said when; drop dead air, repeats and false starts; keep the order of the story, usually the order of the files), interleaved with designed scenes (hook / title first, stat / list / quote in between, cta last); overlays on footage: headline (kinetic title), lowerThird {name, title} for a speaker, stats as callouts, bullets, note; anchors {footageMs} or {say: "words in the transcript"}; captions: true gives kinetic captions from the footage audio (or the voice-over); footage sound stays, under a voice-over it is ducked; music {mood} adds a ducked CC0 bed; never invent figures or sources; images may be split scenes (assetId)';
+/** Envelope asset rows: facts + a budgeted transcript for footage / audio (≤ 40 lines per asset, ≤ 120 lines in all). */
+export function envelopeAssets(assets: readonly AssetFacts[]): RewriteEnvelope['assets'] {
+  let budget = 120;
+  const t = (ms: number) => { const s = Math.max(0, ms) / 1000, m = Math.floor(s / 60); return `${m}:${(s - m * 60).toFixed(1).padStart(4, '0')}`; };
+  return assets.filter((a) => a.status === 'ready').map((a) => {
+    const lines = (a.transcript?.segments ?? []).slice(0, Math.min(40, budget)).map((g) => `[${t(g.fromMs)}–${t(g.toMs)}] ${g.text.slice(0, 160)}`);
+    budget -= lines.length;
+    return { id: a.id, kind: a.kind, name: a.name ?? a.id, ...(a.durationMs !== undefined ? { durationMs: a.durationMs } : {}), ...(a.hasAudio !== undefined ? { hasAudio: a.hasAudio } : {}),
+      ...(a.kind === 'video' && a.width && a.height ? { width: a.width, height: a.height } : {}), ...(lines.length ? { transcript: lines } : {}) };
+  });
 }

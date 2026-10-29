@@ -31,6 +31,10 @@ export const SpecAnchor = z.union([
   z.object({ clip: z.string().min(1).max(40), edge: z.enum(['start', 'end']).optional(), pct: z.number().min(0).max(1).optional(), offsetMs: z.number().int().min(-60_000).max(60_000).optional() }).strict(),
   z.object({ ms }).strict(),
   z.object({ frames }).strict(),
+  /** FR-261: a moment of the scene's own footage, in SOURCE time ("di detik 12 video" = {footageMs: 12000}). */
+  z.object({ footageMs: ms, offsetMs: z.number().int().min(-60_000).max(60_000).optional() }).strict(),
+  /** FR-261: when a phrase is spoken in the scene's footage (its transcript; first match inside the scene's window). */
+  z.object({ say: z.string().min(1).max(80), edge: z.enum(['start', 'end']).optional(), offsetMs: z.number().int().min(-60_000).max(60_000).optional() }).strict(),
 ]);
 export type SpecAnchorT = z.infer<typeof SpecAnchor>;
 
@@ -69,8 +73,24 @@ export const SpecBar = z.object({
 }).strict();
 export type SpecBarT = z.infer<typeof SpecBar>;
 
-export const SCENE_ROLES = ['hook', 'title', 'body', 'list', 'stat', 'stat-compare', 'bar-chart', 'hbar-compare', 'question', 'quote', 'cta', 'cta-handle', 'split'] as const;
+export const SCENE_ROLES = ['hook', 'title', 'body', 'list', 'stat', 'stat-compare', 'bar-chart', 'hbar-compare', 'question', 'quote', 'cta', 'cta-handle', 'split',
+  /** FR-261 (the Creator's own footage): full-frame footage with overlays in the thirds; footage on one half + text; footage window + text. */
+  'footage', 'footage-split', 'footage-pip'] as const;
 export type SceneRole = (typeof SCENE_ROLES)[number];
+export const FOOTAGE_ROLES: readonly SceneRole[] = ['footage', 'footage-split', 'footage-pip'];
+/**
+ * FR-261: which part of a video asset a footage scene plays. fromMs / toMs are SOURCE times (the trim); absent = from the start /
+ * to the end (the composer keeps the scene inside the asset). volume: the clip's own sound (default 1, 0.2 under a voice-over).
+ * focus: where the person / subject is, so overlays keep to the other thirds.
+ */
+export const SpecFootage = z.object({
+  assetId: z.string().min(1).max(80), fromMs: ms.optional(), toMs: ms.optional(),
+  volume: z.number().min(0).max(1).optional(), muted: z.boolean().optional(), fit: z.enum(['cover', 'contain']).optional(),
+  focus: z.enum(['center', 'left', 'right', 'top', 'bottom']).optional(),
+}).strict();
+export type SpecFootageT = z.infer<typeof SpecFootage>;
+/** FR-261: a lower-third (name + role / place) over footage, shown for `ms` (default 4 s) from `at`. */
+export const SpecLowerThird = z.object({ name: SpecText, title: SpecText.optional(), at: SpecAnchor.optional(), ms: z.number().int().min(1000).max(12_000).optional() }).strict();
 export const MOODS = ['editorial', 'energetic', 'calm', 'serious', 'playful', 'tech', 'luxury', 'friendly', 'dramatic'] as const;
 
 export const SpecScene = z.object({
@@ -94,6 +114,9 @@ export const SpecScene = z.object({
   mood: z.enum(MOODS).optional(),
   /** An image asset id for the split layout (only ids from the project's assets). */
   assetId: z.string().min(1).max(80).optional(),
+  /** FR-261: footage roles — the video asset and its trim; `overlay` = where texts go over full-frame footage; `side` = footage half / window side. */
+  footage: SpecFootage.optional(), lowerThird: SpecLowerThird.optional(),
+  overlay: z.enum(['auto', 'lower-third', 'top', 'callout', 'none']).optional(), side: z.enum(['left', 'right', 'top', 'bottom']).optional(),
   /** Source line of a data scene, visible for the whole scene ("Sumber: …"). Required in spirit for every figure. */
   source: SpecText.optional(),
   /** Explicit top of the content block in px from the safe-area top (e.g. 280 for "sekitar 280px dari atas area aman"). */
@@ -134,7 +157,8 @@ export const VideoSpec = z.object({
     }).strict().optional(),
   }).strict().optional(),
   voice: z.object({
-    clips: z.array(SpecVoiceClip).max(40),
+    // A7 (review 2026-10-29): clip ids are keys (scene clips, anchors, the voice-first Execute map); a duplicate would drop audio
+    clips: z.array(SpecVoiceClip).max(40).superRefine((cs, c) => { const seen = new Set<string>(); cs.forEach((x, i) => { if (seen.has(x.id)) c.addIssue({ code: 'custom', message: `voice clip id "${x.id}" is used twice; give every clip its own id`, path: [i, 'id'] }); seen.add(x.id); }); }),
     /** Pause between clips inside a scene and after the last clip of a scene (defaults 300 / 500 ms). */
     gapMs: ms.optional(), tailMs: ms.optional(),
     /** Voice-over steps for clips without an asset (default true): one tts.generate step per clip. */
@@ -142,6 +166,10 @@ export const VideoSpec = z.object({
   }).strict().optional(),
   /** Captions from the voice-over (default false: on-screen texts are already there). */
   captions: z.boolean().optional(),
+  /** FR-261: caption look for those captions (default preset:caption.karaoke on footage). */
+  captionStyle: z.string().regex(/^preset:caption\.[a-z0-9-]+$/).optional(),
+  /** FR-266: a background music bed from the CC0 library, best fit for the mood / words, ducked under speech. */
+  music: z.object({ mood: z.string().min(1).max(40).optional(), prompt: z.string().min(1).max(200).optional(), volume: z.number().min(0.02).max(1).optional() }).strict().optional(),
   scenes: z.array(SpecScene).min(1).max(20),
 }).strict();
 export type VideoSpecT = z.infer<typeof VideoSpec>;
@@ -152,10 +180,11 @@ export type SceneSpecT = VideoSpecT;
 /** Compact signature shown to the Editor Agent (capabilities.stepTools['scene.compose']). Keep in sync with the schema above. */
 export const SCENE_COMPOSE_SIGNATURE =
   'args = VideoSpec {title?, ratio?, mood?: editorial|energetic|calm|serious|playful|tech|luxury|friendly|dramatic, style?: {background?: #hex, fontFamily?: Inter|…, colors?: {text, muted, positive, negative, warning, neutral, accent, pill}, safeArea?: {left, right, top, bottom} px, sourceBottomPx?, transition?: {type: auto|crossfade-rise|cut|preset id, ms|frames, risePx, easing}}, ' +
-  'voice?: {clips: [{id, text (spoken words), assetId?, durationMs?}], gapMs?, tailMs?}, scenes: [{role: hook|title|body|list|stat|stat-compare|bar-chart|hbar-compare|question|quote|cta|cta-handle|split, clips?: [clip ids], durationMs?, holdMs?, narration?, ' +
+  'voice?: {clips: [{id, text (spoken words), assetId?, durationMs?}], gapMs?, tailMs?}, captions?: bool, captionStyle?: preset:caption.*, music?: {mood?: calm|upbeat|corporate|cinematic|…, prompt?, volume?}, scenes: [{role: hook|title|body|list|stat|stat-compare|bar-chart|hbar-compare|question|quote|cta|cta-handle|split|footage|footage-split|footage-pip, clips?: [clip ids], durationMs?, holdMs?, narration?, ' +
+  'footage?: {assetId (a VIDEO asset), fromMs?, toMs? (source trim), volume?, muted?, fit?: cover|contain, focus?: center|left|right|top|bottom} (roles footage|footage-split|footage-pip), lowerThird?: {name, title?, at?, ms?}, overlay?: auto|lower-third|top|callout|none, side?: left|right|top|bottom, ' +
   'kicker?, headline?, sub?, bullets?: [], stats?: [{value: "+17,2%", from?: "+0,0%", countMs|countFrames?, easing?, prefix?: "US$", unit?: "miliar", label?, note?, tone?: positive|negative|warning|neutral, sizePx?, weight?, color?, at?}], ' +
   'bars?: [{label, value?, display?: "25,96", heightPx? (vertical) | widthPct? (horizontal 0..1), style?: solid|dashed, tone?|color?, caption?, at?, growMs|growFrames?, easing?}], barGapPx?, note?, noteTone?, quote?, attribution?, handle?, action?, button?, keywords?, assetId?, source?, topPx?}]}. ' +
-  'A text is "string" or {text, sizePx?, weight?, color?, lineHeight?, at?, fadeMs|fadeFrames?, risePx?}; at = {clip: "v2", edge?: start|end, pct?: 0..1, offsetMs?} | {ms} | {frames}; easing = name or [x1,y1,x2,y2]. Never invent numbers or sources.';
+  'A text is "string" or {text, sizePx?, weight?, color?, lineHeight?, at?, fadeMs|fadeFrames?, risePx?}; at = {clip: "v2", edge?: start|end, pct?: 0..1, offsetMs?} | {ms} | {frames} | {footageMs} (source time of the scene footage) | {say: "phrase"} (when the footage speaker says it); easing = name or [x1,y1,x2,y2]. Never invent numbers or sources.';
 
 /**
  * Deterministic repair of unambiguous slips a model makes in a VideoSpec (numbers sent as strings, "frames" spelled as
@@ -168,8 +197,10 @@ export function normalizeVideoSpec(raw: unknown): { value: unknown; fixes: strin
   if (!isObj(raw)) return { value: raw, fixes };
   const roleAlias: Record<string, string> = { 'stat-counter': 'stat', counter: 'stat', number: 'stat', 'big-number': 'stat', stats: 'stat-compare', compare: 'stat-compare', 'stat-comparison': 'stat-compare',
     chart: 'bar-chart', bars: 'bar-chart', 'bar': 'bar-chart', 'vertical-bars': 'bar-chart', 'hbar': 'hbar-compare', 'horizontal-bars': 'hbar-compare', 'bar-compare': 'hbar-compare',
+    video: 'footage', broll: 'footage', 'b-roll': 'footage', 'talking-head': 'footage', clip: 'footage', 'full-footage': 'footage', 'footage-full': 'footage', 'footage-overlay': 'footage',
+    pip: 'footage-pip', 'picture-in-picture': 'footage-pip', 'footage-window': 'footage-pip', 'split-footage': 'footage-split', 'footage-text': 'footage-split', 'video-split': 'footage-split',
     intro: 'hook', opening: 'hook', closing: 'cta', outro: 'cta', handle: 'cta-handle', follow: 'cta-handle', bullet: 'list', bullets: 'list', tips: 'list', text: 'body', content: 'body', 'image-text': 'split', image: 'split' };
-  const numKeys = /^(sizePx|weight|lineHeight|fadeMs|fadeFrames|risePx|countMs|countFrames|heightPx|widthPct|borderPx|growMs|growFrames|durationMs|holdMs|gapMs|tailMs|barGapPx|barWidthPx|barHeightPx|topPx|ms|frames|offsetMs|pct|value|left|right|top|bottom|sourceBottomPx|padXPx|padYPx|radiusPx|fps|speed|maxDurationMs)$/;
+  const numKeys = /^(sizePx|weight|lineHeight|fadeMs|fadeFrames|risePx|countMs|countFrames|heightPx|widthPct|borderPx|growMs|growFrames|durationMs|holdMs|gapMs|tailMs|barGapPx|barWidthPx|barHeightPx|topPx|ms|frames|offsetMs|pct|value|left|right|top|bottom|sourceBottomPx|padXPx|padYPx|radiusPx|fps|speed|maxDurationMs|fromMs|toMs|footageMs|volume)$/;
   const walk = (v: unknown, path: string, key: string): unknown => {
     if (Array.isArray(v)) return v.map((x, i) => walk(x, `${path}[${i}]`, key));
     if (isObj(v)) {

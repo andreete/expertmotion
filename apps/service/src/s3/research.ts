@@ -32,23 +32,115 @@ export function researchConfigFor(opts: { privateMode: boolean; setting: boolean
 
 // ── HTML → text ──
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—', hellip: '…', laquo: '«', raquo: '»', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“', copy: '©', reg: '®', deg: '°', euro: '€' };
+const ENTITY_RE = /^(#x[0-9a-f]{1,6}|#\d{1,7}|[a-z]{1,12});/i;
+/** HTML character references → characters. R2: an indexOf scan (a global `replace` with hundreds of thousands of matches was measured at seconds). */
 export function decodeEntities(s: string): string {
-  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
-    if (e[0] === '#') { const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return Number.isFinite(n) && n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m; }
-    return ENTITIES[e.toLowerCase()] ?? m;
-  });
+  if (!s.includes('&')) return s;
+  const out: string[] = []; let from = 0;
+  for (let k = s.indexOf('&'); k >= 0; k = s.indexOf('&', k + 1)) {
+    const m = ENTITY_RE.exec(s.slice(k + 1, k + 16)); if (!m) continue;
+    const e = m[1]!; let rep: string | undefined;
+    if (e[0] === '#') { const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); if (Number.isFinite(n) && n > 0 && n < 0x110000) rep = String.fromCodePoint(n); }
+    else rep = ENTITIES[e.toLowerCase()];
+    if (rep === undefined) continue;
+    out.push(s.slice(from, k), rep); from = k + 1 + m[0].length; k = from - 1;
+  }
+  out.push(s.slice(from));
+  return out.join('');
 }
-/** Readable text of an HTML page: title + main text (scripts, styles, navigation, forms dropped; blocks → lines). */
+/** Spaces / tabs / nbsp runs → one space, no spaces around line breaks, at most one empty line, trimmed. One char pass (R2). */
+function normaliseWhitespace(s: string): string {
+  const out: string[] = []; let run = -1; let space = false; let newlines = 0; let any = false;
+  const flush = (k: number) => { if (run >= 0) { out.push(s.slice(run, k)); run = -1; } };
+  for (let k = 0; k < s.length; k++) {
+    const c = s.charCodeAt(k);
+    if (c === 32 || c === 9 || c === 0xa0) { flush(k); space = true; continue; }
+    if (c === 10) { flush(k); newlines++; space = false; continue; }
+    if (run < 0) {
+      if (any && newlines > 0) out.push(newlines > 1 ? '\n\n' : '\n'); else if (any && space) out.push(' ');
+      newlines = 0; space = false; run = k; any = true;
+    }
+  }
+  flush(s.length);
+  return out.join('').trim();
+}
+/** R2: HTML beyond this is not read (a 4 MB page of markup has far less text than this; the text is clipped to 20 000 anyway). */
+export const HTML_MAX_CHARS = 1_000_000;
+const SKIP_BLOCKS = new Set(['script', 'style', 'noscript', 'svg', 'nav', 'footer', 'header', 'form', 'iframe', 'template', 'aside', 'button', 'select', 'title', 'head']);
+const LINE_AFTER = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'section', 'article', 'blockquote', 'pre', 'table', 'ul', 'ol', 'dd', 'dt', 'figcaption']);
+const isNameChar = (c: number): boolean => (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 45 || c === 58 || c === 95;   // a-z 0-9 - : _
+/** ASCII-only lower case: same length as the input (String#toLowerCase can change the length, e.g. "İ"), so indexes match. */
+const asciiLower = (s: string): string => {
+  const l = s.toLowerCase(); if (l.length === s.length) return l;   // only an expansion (e.g. "İ" → "i̇") changes the length
+  const out: string[] = []; for (let k = 0; k < s.length; k += 4096) { const part = s.slice(k, k + 4096); out.push(part.replace(/[A-Z]/g, (m) => m.toLowerCase())); }
+  return out.join('');
+};
+/** Index of `<name` followed by a non-name character (a real tag of that name), at or after `from`; -1 if none. Linear. */
+function findTag(lower: string, name: string, from: number): number {
+  const needle = `<${name}`;
+  for (let k = lower.indexOf(needle, from); k >= 0; k = lower.indexOf(needle, k + 1)) if (!isNameChar(lower.charCodeAt(k + needle.length))) return k;
+  return -1;
+}
+/**
+ * Readable text of an HTML page: title + main text (scripts, styles, navigation, forms dropped; blocks → lines). R2: one linear
+ * pass with indexOf (no backtracking regexes): every closing-tag search is memoised per tag name, so a page with thousands of
+ * unclosed `<nav>` tags costs O(length), and input beyond HTML_MAX_CHARS is ignored.
+ */
 export function htmlToText(html: string): { title: string; text: string } {
-  const title = decodeEntities(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
-  let h = html.replace(/<!--[\s\S]*?-->/g, ' ');
-  const main = /<(main|article)\b[\s\S]*?<\/\1>/i.exec(h)?.[0];
-  if (main && main.length > 500) h = main;
-  h = h.replace(/<(script|style|noscript|svg|nav|footer|header|form|iframe|template|aside|button|select|title)\b[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<head\b[\s\S]*?<\/head>/i, ' ')
-    .replace(/<(br|hr)\b[^>]*>/gi, '\n').replace(/<\/(p|div|li|h[1-6]|tr|section|article|blockquote|pre|table|ul|ol|dd|dt|figcaption)>/gi, '\n')
-    .replace(/<li\b[^>]*>/gi, '\n• ').replace(/<(td|th)\b[^>]*>/gi, ' \t').replace(/<[^>]+>/g, ' ');
-  const text = decodeEntities(h).replace(/[ \t ]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  let h = html.length > HTML_MAX_CHARS ? html.slice(0, HTML_MAX_CHARS) : html;
+  let lower = asciiLower(h);
+  // title: the first <title>…</title>
+  let title = '';
+  const t0 = findTag(lower, 'title', 0);
+  if (t0 >= 0) { const gt = lower.indexOf('>', t0); const t1 = gt < 0 ? -1 : lower.indexOf('</title', gt); if (t1 > gt) title = decodeEntities(h.slice(gt + 1, Math.min(t1, gt + 1 + 2000))).replace(/\s+/g, ' ').trim().slice(0, 200); }
+  // comments out (an unclosed comment drops the rest, as a browser does)
+  if (lower.includes('<!--')) {
+    const parts: string[] = []; let at = 0;
+    for (;;) { const c0 = h.indexOf('<!--', at); if (c0 < 0) { parts.push(h.slice(at)); break; } parts.push(h.slice(at, c0), ' '); const c1 = h.indexOf('-->', c0 + 4); if (c1 < 0) break; at = c1 + 3; }
+    h = parts.join(''); lower = asciiLower(h);
+  }
+  // the first <main>/<article> block when it holds real content
+  const m0 = [findTag(lower, 'main', 0), findTag(lower, 'article', 0)].filter((k) => k >= 0).sort((a, b) => a - b)[0];
+  if (m0 !== undefined) {
+    const name = lower.startsWith('<main', m0) && !isNameChar(lower.charCodeAt(m0 + 5)) ? 'main' : 'article';
+    const close = lower.indexOf(`</${name}`, m0); const end = close < 0 ? -1 : lower.indexOf('>', close);
+    if (end > 0 && end + 1 - m0 > 500) { h = h.slice(m0, end + 1); lower = lower.slice(m0, end + 1); }
+  }
+  const closeAt = new Map<string, number>();   // name → index of the next `</name` at or after the last search (-1: none left)
+  const nextClose = (name: string, from: number): number => {
+    const c = closeAt.get(name);
+    if (c !== undefined && (c === -1 || c >= from)) return c;
+    const k = lower.indexOf(`</${name}`, from); closeAt.set(name, k); return k;
+  };
+  const out: string[] = []; let pos = 0; let textFrom = 0; const n = h.length;
+  const nameRe = /<(\/?)([a-z][a-z0-9:_-]*)/y;
+  while (pos < n) {
+    const lt = h.indexOf('<', pos);
+    if (lt < 0) break;
+    nameRe.lastIndex = lt; const mm = nameRe.exec(lower);
+    if (!mm) {   // "<" that does not start a tag ("a < b", "<!doctype", "<?xml"): markup up to ">" goes, a bare "<" stays text
+      if (lower[lt + 1] === '!' || lower[lt + 1] === '?') { const gt = h.indexOf('>', lt); out.push(h.slice(textFrom, lt), ' '); pos = textFrom = gt < 0 ? n : gt + 1; }
+      else pos = lt + 1;
+      continue;
+    }
+    const gt = h.indexOf('>', lt + mm[0].length);
+    if (gt < 0) { out.push(h.slice(textFrom, lt)); textFrom = pos = n; break; }   // an unterminated tag at the end: nothing readable follows
+    out.push(h.slice(textFrom, lt));
+    const closing = mm[1] === '/'; const name = mm[2]!;
+    pos = textFrom = gt + 1;
+    if (!closing && SKIP_BLOCKS.has(name)) {
+      const c = nextClose(name, pos);
+      if (c >= 0) { const e = h.indexOf('>', c); pos = textFrom = e < 0 ? n : e + 1; }   // unclosed: only the opening tag is dropped
+      out.push(' '); continue;
+    }
+    if (name === 'br' || name === 'hr') out.push('\n');
+    else if (closing && LINE_AFTER.has(name)) out.push('\n');
+    else if (!closing && name === 'li') out.push('\n• ');
+    else if (!closing && (name === 'td' || name === 'th')) out.push(' \t');
+    else out.push(' ');
+  }
+  if (textFrom < n) out.push(h.slice(textFrom));
+  const text = normaliseWhitespace(decodeEntities(out.join('')));
   return { title, text };
 }
 const clip = (s: string, n: number): { text: string; truncated: boolean } => {

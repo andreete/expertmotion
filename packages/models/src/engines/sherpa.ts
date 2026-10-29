@@ -12,7 +12,9 @@ export const WAV_MAX_BYTES = 500 * 1024 * 1024;
 export type TtsVoice =
   | { kind: 'vits'; modelPath: string; tokensPath: string; dataDir?: string }
   /** Kokoro flag names are UNVERIFIED against the sherpa-onnx v2.0.0 CLI (LOCAL_AI_MODELS §3.2). */
-  | { kind: 'kokoro'; modelPath: string; voicesPath: string; tokensPath: string; dataDir?: string; speakerId?: number; lexiconPath?: string };
+  | { kind: 'kokoro'; modelPath: string; voicesPath: string; tokensPath: string; dataDir?: string; speakerId?: number; lexiconPath?: string }
+  /** FR-267: Supertonic 3 (sherpa-onnx ≥ 1.13.2; flags read from the shipped 1.13.8 `--help`): five model files + a speaker table, `--lang`, `--speed`, `--num-steps`. */
+  | { kind: 'supertonic'; dir: string; speakerId?: number; lang: string; steps?: number };
 
 export interface TtsInput {
   voice: TtsVoice;
@@ -70,7 +72,17 @@ export function ttsArgText(text: string, platform: NodeJS.Platform = process.pla
 /** A chunk with no letter or digit (e.g. "..." alone) yields no audio in sherpa-onnx; such chunks are skipped. */
 const speakable = (chunk: string): boolean => /[\p{L}\p{N}]/u.test(chunk);
 
+/** FR-267: the files of a Supertonic 3 install (names of the sherpa-onnx int8 export). */
+export const SUPERTONIC_FILES = { durationPredictor: 'duration_predictor.int8.onnx', textEncoder: 'text_encoder.int8.onnx', vectorEstimator: 'vector_estimator.int8.onnx', vocoder: 'vocoder.int8.onnx', ttsJson: 'tts.json', unicodeIndexer: 'unicode_indexer.bin', voiceStyle: 'voice.bin' } as const;
 export function sherpaTtsArgs(voice: TtsVoice, opts: { engineDir: string; threads: number; outPath: string; text: string; speed?: number }): string[] {
+  if (voice.kind === 'supertonic') {
+    const f = (n: string) => join(voice.dir, n);
+    return [`--supertonic-duration-predictor=${f(SUPERTONIC_FILES.durationPredictor)}`, `--supertonic-text-encoder=${f(SUPERTONIC_FILES.textEncoder)}`, `--supertonic-vector-estimator=${f(SUPERTONIC_FILES.vectorEstimator)}`,
+      `--supertonic-vocoder=${f(SUPERTONIC_FILES.vocoder)}`, `--supertonic-tts-json=${f(SUPERTONIC_FILES.ttsJson)}`, `--supertonic-unicode-indexer=${f(SUPERTONIC_FILES.unicodeIndexer)}`, `--supertonic-voice-style=${f(SUPERTONIC_FILES.voiceStyle)}`,
+      `--lang=${/^[a-z]{2}$/.test(voice.lang) ? voice.lang : 'id'}`, `--sid=${Math.max(0, Math.min(9, Math.round(voice.speakerId ?? 0)))}`, `--num-steps=${Math.max(2, Math.min(16, Math.round(voice.steps ?? 8)))}`,
+      ...(opts.speed !== undefined && opts.speed !== 1 ? [`--speed=${Math.max(0.5, Math.min(2, opts.speed)).toFixed(3)}`] : []),
+      `--num-threads=${opts.threads}`, `--output-filename=${opts.outPath}`, safeArgValue(opts.text)];
+  }
   const dataDir = voice.dataDir ?? join(opts.engineDir, 'espeak-ng-data');
   const scale = opts.speed !== undefined && opts.speed !== 1 ? (1 / opts.speed).toFixed(3) : null;
   const args = voice.kind === 'vits'
@@ -132,7 +144,8 @@ export async function synthesize(input: TtsInput, ctx: EngineContext): Promise<T
   const chars = [...input.text.trim()].length;
   if (chars > TTS_MAX_CHARS) throw emError('EM-7106', 'Text too long', { chars, limit: TTS_MAX_CHARS });
   if (input.speed !== undefined && !(input.speed >= 0.8 && input.speed <= 1.2)) throw emError('EM-9002', 'speed must be 0.8..1.2', { speed: input.speed });
-  assertAbsolute(input.voice.modelPath, 'voice model'); assertAbsolute(input.voice.tokensPath, 'voice tokens');
+  if (input.voice.kind === 'supertonic') assertAbsolute(input.voice.dir, 'voice model folder');
+  else { assertAbsolute(input.voice.modelPath, 'voice model'); assertAbsolute(input.voice.tokensPath, 'voice tokens'); }
   const fs = ctx.fs ?? nodeFs;
   const report = reporter(ctx);
   const chunks = splitTtsText(text, input.chunkChars ?? TTS_CHUNK_CHARS).filter(speakable);

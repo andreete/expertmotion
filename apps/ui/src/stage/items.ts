@@ -2,7 +2,7 @@
 // (Compile path, no LLM; one Composition Version, so Ctrl+Z restores everything at once). The same path as drag / trim / split:
 // actions.itemsEdit → R-060 → Intent Queue → Compile → Execute. Pure helpers (tested without the DOM) plus the runners the
 // Delete key, the context menu and the inspector share.
-import { COPYABLE_KINDS, DUPLICABLE_KINDS, ITEM_KINDS, copySnapshot, type CompositionModelT, type ElementRefT, type ItemKind } from '@expertmotion/composition-model';
+import { CLIPBOARD_MAX_ENTRIES, COPYABLE_KINDS, DUPLICABLE_KINDS, ITEM_KINDS, copySnapshot, type CompositionModelT, type ElementRefT, type ItemKind } from '@expertmotion/composition-model';
 import { timelineClipboard } from './clipboard.js';
 import type { IntentCategory, ItemsEdit } from '../api/types.js';
 
@@ -77,11 +77,21 @@ export function runCopy(o: { model: CompositionModelT | null | undefined; projec
 }
 /** Cut: Copy, then the Delete pick for the copied items (one version, one Undo; the clipboard keeps the snapshots). */
 export function runCut(o: { model: CompositionModelT | null | undefined; projectId?: string | null; selection: readonly ElementRefT[]; itemsEdit: (edit: ItemsEdit, label: string) => Promise<boolean>; toast: Toast; t: T }): boolean {
-  const n = runCopy({ ...o, cut: true });
+  // Review U7: Cut removes only what reaches the clipboard. Music beds are never copied (they stay on the timeline), and a selection
+  // the clipboard cannot hold whole (CLIPBOARD_MAX_ENTRIES) is not cut at all — nothing disappears that Paste cannot bring back.
+  const all = copyableRefs(o.selection);
+  const items = o.model ? cutRefs(o.model, all) : [];
+  if (!o.model || !items.length) { o.toast('info', 'ui.stage.itemmenu.copy.none'); return false; }
+  if (copySnapshot(o.model, items).entries.length >= CLIPBOARD_MAX_ENTRIES) { o.toast('info', 'ui.stage.itemmenu.cut.toomany', { max: CLIPBOARD_MAX_ENTRIES }); return false; }
+  const n = runCopy({ ...o, selection: items, cut: true });
   if (!n) return false;
-  const items = copyableRefs(o.selection);
   void o.itemsEdit({ action: 'remove', items }, o.t('ui.stage.itemmenu.cut.done', { count: items.length }));
+  if (items.length < all.length) o.toast('info', 'ui.stage.itemmenu.cut.partial', { count: items.length });
   return true;
+}
+/** Review U7: the refs Cut may remove — the copyable ones whose snapshot goes onto the clipboard (music beds stay). */
+export function cutRefs(model: CompositionModelT, refs: readonly ItemRef[]): ItemRef[] {
+  return refs.filter((r) => !(r.kind === 'audio' && model.tracks.audio.find((a) => a.id === r.id)?.role === 'bed'));
 }
 /** Paste: the clipboard at the playhead as ONE pick (one version, one Undo). Empty clipboard → a hint, nothing sent. */
 export function runPaste(o: { playheadMs: number; itemsEdit: (edit: ItemsEdit, label: string) => Promise<boolean>; toast: Toast; t: T }): boolean {

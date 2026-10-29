@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// FR-202 (QA 2026-10-27 #2 / #6 / #7): Start screen on launch, crash-loop guard, safe open, and the crash card's way out.
+// FR-202 (QA 2026-10-27 #2 / #6 / #7) + FR-260 (2026-10-29): launch into an empty project, crash-loop guard, safe open, and the crash card's way out.
 import { vi, describe, it, expect, afterEach, beforeEach } from 'vitest';
 vi.mock('@remotion/player', () => import('./player-mock.js'));
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
@@ -8,6 +8,7 @@ import { App } from '../src/App.js';
 import { StoreProvider } from '../src/state/store.js';
 import { createMockRuntime, type Runtime } from '../src/state/runtime.js';
 import { ErrorBoundary } from '../src/startup/ErrorBoundary.js';
+import { loadScratch } from '../src/startup/scratch.js';
 import {
   BOOT_ACTION_KEY, CRASH_MEMORY_MS, CRASH_WINDOW_MS, GUARD_KEY, REOPEN_KEY, decideBoot, getSafeMode, loadGuard, noteEditorCrash, noteLogsDir,
   notePageHidden, noteProjectOpening, resetGuardForTests, type GuardState,
@@ -91,50 +92,104 @@ describe('guard bookkeeping in the window', () => {
 });
 
 /** The App over the mock Service, but booting like the packaged (live) Editor: no seeded auto-open. */
-async function renderLive(): Promise<{ runtime: Runtime; container: HTMLElement }> {
-  const mock = createMockRuntime({ seed: 'sample', delays: false });
+async function renderLive(mock = createMockRuntime({ seed: 'sample', delays: false })): Promise<{ runtime: Runtime; container: HTMLElement }> {
   const runtime: Runtime = { ...mock, mode: 'live', startScreen: true };
   const { container } = render(<StoreProvider runtime={runtime} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
-  await waitFor(() => { if (!document.querySelector('[data-el="scr.start"]')) throw new Error('no start screen'); });
+  await waitFor(() => { if (!document.querySelector('[data-region="stage"]') && !document.querySelector('[data-el="scr.start"]')) throw new Error('not booted'); });
   return { runtime, container };
 }
 const q = (sel: string) => document.querySelector<HTMLElement>(sel);
+const title = () => q('[data-el="hdr.title"]')?.textContent?.trim() ?? '';
 
-describe('Start screen (scr.start)', () => {
-  it('a launch shows the Start screen with recent projects instead of reopening the last one; a click opens it', async () => {
-    await renderLive();
-    expect(q('[data-region="stage"]')).toBeNull();
-    await waitFor(() => expect(document.querySelectorAll('[data-el="scr.start.item"]').length).toBeGreaterThan(0));
-    expect(q('[data-el="scr.start.new"]')).not.toBeNull();
-    expect(q('[data-el="scr.start.open"]')).not.toBeNull();
-    fireEvent.click(q('[data-el="scr.start.item.open"]')!);
-    await waitFor(() => expect(q('[data-region="stage"]')).not.toBeNull());
-    expect(q('[data-el="sys.safe.banner"]')).toBeNull();
-    expect(sessionStorage.getItem(REOPEN_KEY)).toBeTruthy();
+// FR-260 (Operator 2026-10-29) supersedes the FR-202 Start screen on launch: a launch opens an EMPTY project like other video
+// editors; the last project is one click away ("Terakhir dibuka", File ▸ Recent); an untouched blank project never piles up.
+describe('launch → an empty new project (FR-260)', () => {
+  it('a launch opens an empty project, not the last one; "Terakhir dibuka" lists the last project and opens it; the untouched blank is deleted', async () => {
+    const { runtime } = await renderLive();
+    await waitFor(() => expect(title()).toMatch(/Untitled|Tanpa judul/));
+    expect(q('[data-el="scr.start"]')).toBeNull();
+    await waitFor(() => expect(q('[data-el="stage.player.state.empty"]')).not.toBeNull());
+    const blank = loadScratch()!.projectId;
+    await waitFor(() => expect(document.querySelectorAll('[data-el="stage.recent.item"]').length).toBeGreaterThan(0));
+    expect([...document.querySelectorAll('[data-el="stage.recent.item"]')].map((n) => n.getAttribute('data-project'))).not.toContain(blank);
+    fireEvent.click(q('[data-el="stage.recent.item"]')!);
+    await waitFor(() => expect(title()).not.toMatch(/Untitled|Tanpa judul/));
+    await waitFor(async () => expect((await runtime.api.listProjects({ limit: 50 })).items.map((p) => p.id)).not.toContain(blank));
+    expect(loadScratch()).toBeNull();
   });
-  it('"Proyek baru" creates and opens a project', async () => {
-    await renderLive();
-    fireEvent.click(q('[data-el="scr.start.new"]')!);
-    await waitFor(() => expect(q('[data-region="stage"]')).not.toBeNull());
+  it('the next launch reuses the untouched blank project (no "Untitled 2"); the File ▸ Recent list hides it', async () => {
+    const mock = createMockRuntime({ seed: 'sample', delays: false });
+    await renderLive(mock);
+    await waitFor(() => expect(loadScratch()).not.toBeNull());
+    const first = loadScratch()!.projectId;
+    cleanup(); resetGuardForTests();
+    await renderLive(mock);
+    await waitFor(() => expect(title()).toMatch(/Untitled|Tanpa judul/));
+    expect(loadScratch()!.projectId).toBe(first);
+    expect((await mock.api.listProjects({ limit: 50 })).items.filter((p) => /Untitled|Tanpa judul/.test(p.name))).toHaveLength(1);
+    fireEvent.click(q('[data-el="hdr.menu.file"]')!);
+    fireEvent.click(q('[data-el="hdr.menu.file.recent"]')!);
+    await waitFor(() => expect(document.querySelectorAll('[data-el="hdr.menu.file.recent.item"]').length).toBeGreaterThan(0));
+    expect([...document.querySelectorAll('[data-el="hdr.menu.file.recent.item"]')].map((n) => n.textContent ?? '').join('|')).not.toMatch(/Untitled|Tanpa judul/);
   });
-  it('a project blocked by the crash-loop guard: notice, "Gagal dibuka" row, safe open hides chat and preview until asked', async () => {
+  it('the first edit makes the blank an ordinary project: the next launch opens a NEW empty one and lists the edited one', async () => {
+    const mock = createMockRuntime({ seed: 'sample', delays: false });
+    await renderLive(mock);
+    await waitFor(() => expect(loadScratch()).not.toBeNull());
+    const first = loadScratch()!.projectId;
+    await mock.api.createIntent(first, { source: 'ui', category: 'text', presetId: 'preset:text.title', text: 'Halo', target: { kind: 'playhead' }, plan: 'auto', baseVersion: (await mock.api.getComposition(first)).head.hash, selection: [], playheadMs: 0 });
+    await waitFor(() => expect(loadScratch()).toBeNull());
+    cleanup(); resetGuardForTests();
+    await renderLive(mock);
+    await waitFor(() => expect(loadScratch()).not.toBeNull());
+    expect(loadScratch()!.projectId).not.toBe(first);
+    expect((await mock.api.listProjects({ limit: 50 })).items.map((p) => p.id)).toContain(first);
+  });
+  it('File ▸ Close project leaves an empty project open (not the Start screen)', async () => {
+    await renderLive();
+    await waitFor(() => expect(document.querySelectorAll('[data-el="stage.recent.item"]').length).toBeGreaterThan(0));
+    fireEvent.click(q('[data-el="stage.recent.item"]')!);
+    await waitFor(() => expect(title()).not.toMatch(/Untitled|Tanpa judul/));
+    fireEvent.click(q('[data-el="hdr.menu.file"]')!);
+    fireEvent.click(q('[data-el="hdr.menu.file.close"]')!);
+    await waitFor(() => expect(title()).toMatch(/Untitled|Tanpa judul/));
+    expect(q('[data-el="scr.start"]')).toBeNull();
+  });
+  it('a project blocked by the crash-loop guard: the notice is shown INSIDE the empty project; safe open hides chat and preview until asked', async () => {
     const mock = createMockRuntime({ seed: 'sample', delays: false });
     const id = (await mock.api.listProjects({ limit: 1 })).items[0]!.id;
     localStorage.setItem(GUARD_KEY, JSON.stringify({ crashes: { [id]: [Date.now() - 20_000] }, open: { projectId: id, at: Date.now() - 5000, settled: false } }));
-    render(<StoreProvider runtime={{ ...mock, mode: 'live', startScreen: true }} initialPrefs={{ onboardingDone: true }}><App /></StoreProvider>);
-    await waitFor(() => expect(q('[data-el="scr.start.notice"]')?.dataset['kind']).toBe('crash-loop'));
-    await waitFor(() => expect(q('[data-el="scr.start.item.failed"]')).not.toBeNull());
-    fireEvent.click(q('[data-el="scr.start.notice.safe"]')!);
+    await renderLive(mock);
+    await waitFor(() => expect(q('[data-el="sys.launch.notice"]')?.dataset['kind']).toBe('crash-loop'));
+    expect(title()).toMatch(/Untitled|Tanpa judul/);
+    fireEvent.click(q('[data-el="sys.launch.notice.safe"]')!);
     await waitFor(() => expect(q('[data-el="sys.safe.banner"]')).not.toBeNull());
     expect(getSafeMode()).toMatchObject({ on: true, projectId: id });
     expect(q('[data-el="sys.safe.chat"]')).not.toBeNull();
     expect(q('[data-el="sys.safe.preview"]')).not.toBeNull();
     expect(q('[data-el="agent.chat"]')).toBeNull();
+    expect(q('[data-el="sys.launch.notice"]')).toBeNull();
     fireEvent.click(q('[data-el="sys.safe.preview.show"]')!);
     await waitFor(() => expect(q('[data-el="sys.safe.preview"]')).toBeNull());
     fireEvent.click(q('[data-el="sys.safe.exit"]')!);
     await waitFor(() => expect(q('[data-el="sys.safe.banner"]')).toBeNull());
-    expect(q('[data-el="sys.safe.chat"]')).toBeNull();
+  });
+  it('an abnormal end of the last session: notice with "Buka lagi"; Dismiss hides it', async () => {
+    const mock = createMockRuntime({ seed: 'sample', delays: false });
+    const id = (await mock.api.listProjects({ limit: 1 })).items[0]!.id;
+    localStorage.setItem(GUARD_KEY, JSON.stringify({ crashes: {}, open: { projectId: id, at: Date.now() - 5000, settled: false } }));
+    await renderLive(mock);
+    await waitFor(() => expect(q('[data-el="sys.launch.notice"]')?.dataset['kind']).toBe('abnormal'));
+    expect(q('[data-el="sys.launch.notice.open"]')).not.toBeNull();
+    fireEvent.click(q('[data-el="sys.launch.notice.dismiss"]')!);
+    await waitFor(() => expect(q('[data-el="sys.launch.notice"]')).toBeNull());
+  });
+  it('the Start screen stays as the fallback when no empty project can be made', async () => {
+    const mock = createMockRuntime({ seed: 'sample', delays: false });
+    mock.api.createProject = () => Promise.reject(new Error('disk full'));
+    await renderLive(mock);
+    await waitFor(() => expect(q('[data-el="scr.start"]')).not.toBeNull());
+    await waitFor(() => expect(document.querySelectorAll('[data-el="scr.start.item"]').length).toBeGreaterThan(0));
   });
 });
 

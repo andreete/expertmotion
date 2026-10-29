@@ -17,6 +17,7 @@ import { SHAPES } from '../presets/shapes.js';
 import { TextElement } from '../presets/text.js';
 import { CaptionPageView } from '../presets/captions.js';
 import { clipTransformStyle, overlayTransform } from '../transform.js';
+import { duckedVolume } from '../audio-duck.js';
 
 const clampOpts = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 
@@ -141,10 +142,10 @@ const AudioLayerView: React.FC<{ layer: AudioLayerT; src: string; startFrame: nu
   let vol = layer.volume;
   if (layer.ducking && duck.length) {
     const p = layer.ducking.params as Record<string, unknown>;
-    const full = Number(p['volume'] ?? layer.volume), low = Number(p['duckTo'] ?? 0.15), ramp = Math.max(1, framesOf(Number(p['rampMs'] ?? 500), fps));
+    const ramp = Math.max(1, framesOf(Number(p['rampMs'] ?? 500), fps));
     const abs = startFrame + frame;
     const k = Math.max(0, ...duck.map(([a, b]) => Math.min(interpolate(abs, [a - ramp, a], [0, 1], clampOpts), interpolate(abs, [b, b + ramp], [1, 0], clampOpts))));
-    vol = full + (low - full) * k;
+    vol = duckedVolume(layer.volume, p, k);                                    // FR-266: the bed's own level, dipped by the preset's ratio
   }
   return <Audio src={src} trimBefore={framesOf(layer.trimBeforeMs, fps)} loop={layer.loop} volume={vol * fadeIn * fadeOut} />;
 };

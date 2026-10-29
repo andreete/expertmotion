@@ -54,6 +54,8 @@ export const IPC = {
   pickSavePath: 'em:pick-save-path',
   openFolder: 'em:open-folder',
   openExternal: 'em:open-external',
+  /** R1 (FR-216): open a research citation / picture source page (any public https host; refused in Private Mode). */
+  openSource: 'em:open-source',
   serviceState: 'em:service-state',
   /** FR-152 updater: state push, current state, Creator consent (download / restart / later / check). */
   updateState: 'em:update-state',
@@ -78,7 +80,7 @@ export type IpcChannel = (typeof IPC)[keyof typeof IPC];
  * The complete key set of `window.expertmotion` (SEC-003, SEC-031). A test enumerates it.
  * `pickSavePath` is the save dialog required by the Desktop Shell brief; see README "Bridge surface".
  */
-export const BRIDGE_KEYS = ['getBootstrap', 'pickFiles', 'pickFolder', 'pickSavePath', 'openFolder', 'openExternal', 'getPathsForFiles', 'onServiceState',
+export const BRIDGE_KEYS = ['getBootstrap', 'pickFiles', 'pickFolder', 'pickSavePath', 'openFolder', 'openExternal', 'openSource', 'getPathsForFiles', 'onServiceState',
   'onUpdateState', 'getUpdateState', 'updateAction', 'openPath', 'copyText', 'readClipboardText', 'logError', 'retryStartup'] as const;
 /** Update actions the Editor may request (FR-152); anything else is ignored by main. */
 export const UPDATE_ACTIONS = ['download', 'restart', 'later', 'check'] as const;

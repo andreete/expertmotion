@@ -163,5 +163,10 @@ export interface AssetFacts {
   durationMs?: number; width?: number; height?: number; hasAudio?: boolean; name?: string;
   /** For subtitle assets: pages parsed at ingest (parseSrt/parseVtt + createTikTokStyleCaptions), used by op:caption.importSrt. */
   captionPages?: CaptionPageT[];
+  /**
+   * FR-261: what is said in a video / audio asset, in SOURCE time (from its last transcription, Generate Captions or the
+   * footage read of an Editor run). The composer anchors {say} to it; the Editor envelope shows it so trims follow the story.
+   */
+  transcript?: { language?: 'id' | 'en'; segments: Array<{ text: string; fromMs: number; toMs: number }>; words?: Array<{ text: string; fromMs: number; toMs: number }> };
 }
 export type Tier = 'T0' | 'T1' | 'T2';

@@ -48,7 +48,8 @@ export const ValidateInput = z.object({ baseVersion: z.string().min(1).max(128),
 /** API §6.7 DesignPickInput, plus the deterministic Text Panel / Output fields of the agents package DesignPick (field/value, output, assetId, text). */
 /** FR-256: one clipboard snapshot of R-060 `itemsEdit.paste` (the add op of its kind; args are checked again by applyOperations). */
 const ClipboardEntryInput = z.object({ kind: z.enum(['clip', 'scene', 'text', 'image', 'shape', 'audio']), offsetMs: z.number().int().min(0).max(86_400_000), durationMs: z.number().int().min(0).max(86_400_000),
-  op: z.object({ op: z.string().max(64), target: z.object({ kind: z.literal('sequence') }).strict().optional(), args: z.record(z.string(), z.unknown()) }).strict() }).strict()
+  op: z.object({ op: z.string().max(64), target: z.object({ kind: z.literal('sequence') }).strict().optional(), args: z.record(z.string(), z.unknown()) }).strict(),
+  clip: z.object({ index: z.number().int().min(0).max(49), offsetMs: z.number().int().min(0).max(86_400_000) }).strict().optional() }).strict()
   .refine((e) => PASTE_OPS[e.kind] === e.op.op, { message: 'clipboard op does not match its kind' });
 export const DesignPickInput = z.object({
   source: z.enum(['ui', 'chat']),

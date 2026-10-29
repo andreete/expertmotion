@@ -31,7 +31,8 @@ import { layoutOf, type PanelSizes } from './prefs.js';
 import { Splash } from './startup/Splash.js';
 import { rememberLang, startupLang } from './startup/progress.js';
 import { SectionBoundary } from './startup/ErrorBoundary.js';
-import { SafeModeBanner, SafeModePlaceholder, StartScreen } from './screens/StartScreen.js';
+import { TooltipLayer } from './components/Tooltip.js';
+import { LaunchNotice, SafeModeBanner, SafeModePlaceholder, StartScreen } from './screens/StartScreen.js';
 import { revealInSafeMode, setSafeMode, useSafeMode } from './startup/session-guard.js';
 
 function useWindowWidth(): number {
@@ -93,6 +94,7 @@ export function App() {
         <SectionBoundary section="licence"><LicenseGate /></SectionBoundary>
         <Toasts />
         <LiveRegion />
+        <TooltipLayer />
         {state.fatal && <FatalOverlay />}
       </I18nContext.Provider>
     );
@@ -105,8 +107,9 @@ export function App() {
           <SectionBoundary section="header" className="flex h-12 items-center px-3"><Header /></SectionBoundary>
           <Banners />
           <SectionBoundary section="start"><StartScreen /></SectionBoundary>
-          <SectionBoundary section="toasts" className="hidden"><Toasts /></SectionBoundary>
+          <SectionBoundary section="toasts" className={TOASTS_FAILED_CLS}><Toasts /></SectionBoundary>
           <LiveRegion />
+        <TooltipLayer />
           <Screens />
           <LifecycleEffects />
           {state.fatal && <FatalOverlay />}
@@ -119,6 +122,7 @@ export function App() {
       <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ minWidth: 1024 }}>
         <SectionBoundary section="header" className="flex h-12 items-center px-3"><Header /></SectionBoundary>
         <Banners />
+        <SectionBoundary section="launch-notice" className="hidden"><LaunchNotice /></SectionBoundary>
         {safeActive && <SafeModeBanner onExit={() => setSafeMode(false)} />}
         <main className="relative flex min-h-0 flex-1">
           {libCollapsed ? (
@@ -147,8 +151,9 @@ export function App() {
             </>
           )}
         </main>
-        <SectionBoundary section="toasts" className="hidden"><Toasts /></SectionBoundary>
+        <SectionBoundary section="toasts" className={TOASTS_FAILED_CLS}><Toasts /></SectionBoundary>
         <LiveRegion />
+        <TooltipLayer />
         <Screens />
         <LifecycleEffects />
         <SectionBoundary section="tour" className="hidden"><Tour /></SectionBoundary>
@@ -297,6 +302,8 @@ function Toasts() {
   );
 }
 
+/** Review U11: where the toast stack's error card shows when Toasts itself fails (it was `hidden`, so every later toast vanished silently). */
+export const TOASTS_FAILED_CLS = 'fixed bottom-3 right-3 z-[70] flex';
 /** sys.live: visually hidden polite region; at most one announcement per 2 s, coalesced (ACCESSIBILITY_AND_I18N.md §2). */
 function LiveRegion() {
   const { state } = useStore();

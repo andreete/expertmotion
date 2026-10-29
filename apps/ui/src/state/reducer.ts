@@ -144,7 +144,7 @@ export type Action =
   | { type: 'agentError'; agent: AgentKind; code: string | null; detail?: AgentErrorDetail | null }
   | { type: 'chatTargets'; targets: ChatTarget[] }
   | { type: 'streamingStart'; agent: AgentKind; runId: string; modelId: string; /** FR-214: the message carries an image still being imported */ attaching?: boolean }
-  | { type: 'streamingStop'; agent: AgentKind }
+  | { type: 'streamingStop'; agent: AgentKind; /** review U2: the stopped run; its later events are ignored */ runId?: string }
   | { type: 'providers'; connections?: ConnectionDto[]; assignments?: AssignmentsDto | null }
   | { type: 'capabilities'; connectionId: string; rows: CapabilityRow[] }
   | { type: 'models'; models: ModelStateDto[] }
@@ -196,7 +196,7 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     if (ev.name !== 'render.done' && ev.name !== 'render.failed' && ev.name !== 'service.notice') return state;
   }
   switch (ev.name) {
-    case 'intent.updated': return { ...state, queue: ev.data.queue, pending: [] };     // the server item replaces the optimistic one
+    case 'intent.updated': return { ...state, queue: safeQueue(ev.data.queue), pending: [] };     // the server item replaces the optimistic one (review U9: normalised too)
     case 'plan.ready': return setPlan(state, ev.data.plan);
     case 'plan.invalid': {
       const patch = (p: PlanDto): PlanDto => ({ ...p, status: ev.data.status, validation: ev.data.validation.map((v) => ({ path: v.path, message: v.message, code: v.code })), touchesLockedKeys: ev.data.touchesLockedKeys, errorCode: ev.data.code });
@@ -306,7 +306,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'projectOpened': {
       const o = action.open;
       return {
-        ...state, project: o.project, head: o.head, grant: o.mediaGrant, queue: o.intentQueue, plan: o.latestPlan && o.latestPlan.status !== 'executed' ? o.latestPlan : null, previousPlans: [],
+        ...state, project: o.project, head: o.head, grant: o.mediaGrant, queue: o.intentQueue ? safeQueue(o.intentQueue) : o.intentQueue, plan: o.latestPlan && o.latestPlan.status !== 'executed' ? o.latestPlan : null, previousPlans: [],
         renders: o.renderJobs, assets: action.assets, ingestStage: {}, pending: [], previewPresetId: null,
         // FR-171: a reload of the same Project (Service restart, resync) keeps selection and playhead
         ...(action.keepView && state.project?.id === o.project.id
@@ -353,7 +353,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, streaming: { ...state.streaming, [action.agent]: { ...(cur ?? {}), runId: action.runId === PENDING_RUN && cur ? cur.runId : action.runId, text: cur?.text ?? '', modelId: action.modelId || cur?.modelId || '',
         since: cur?.since ?? Date.now(), phase: cur?.phase ?? 'sending', ...(action.attaching ? { attaching: true } : {}) } } };
     }
-    case 'streamingStop': return { ...state, streaming: { ...state.streaming, [action.agent]: null } };
+    case 'streamingStop': return { ...state, streaming: { ...state.streaming, [action.agent]: null }, ...(action.runId && !state.doneRuns.includes(action.runId) ? { doneRuns: [action.runId, ...state.doneRuns].slice(0, 20) } : {}) };
     case 'providers': return { ...state, ...(action.connections ? { connections: action.connections } : {}), ...(action.assignments !== undefined ? { assignments: action.assignments } : {}) };
     case 'capabilities': return { ...state, capabilities: { ...state.capabilities, [action.connectionId]: action.rows } };
     case 'models': return { ...state, models: action.models };

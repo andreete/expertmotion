@@ -81,7 +81,9 @@ const file = (name: string, bytes: number, url: string): ModelFileDef => {
 const sum = (files: readonly ModelFileDef[]): number => files.reduce((a, f) => a + f.bytes, 0);
 
 const WHISPER_LICENCE: LicenceDef = { spdx: 'MIT', name: 'MIT (whisper.cpp engine) + MIT (OpenAI Whisper weights)', url: 'https://github.com/openai/whisper/blob/main/LICENSE', redistribution: 'yes' };
-const PIPER_LICENCE: LicenceDef = { spdx: 'MIT', name: 'MIT (repository label); training-dataset licence unverified (RISK-002)', url: 'https://huggingface.co/rhasspy/piper-voices', redistribution: 'verify' };
+// RISK-002 (2026-10-29): the id_ID news_tts card is a copy of another voice's card; the name and description match the ATR
+// INDspeech_NEWS_TTS corpus (CC BY-NC-SA 4.0, no public copies) — so the Indonesian voice's training data is very probably NC.
+const PIPER_LICENCE: LicenceDef = { spdx: 'MIT', name: 'MIT (repository label); training data probably INDspeech_NEWS_TTS, CC BY-NC-SA 4.0 (RISK-002)', url: 'https://huggingface.co/rhasspy/piper-voices', redistribution: 'verify' };
 
 function whisper(key: string, fileName: string, bytes: number, ramBytes: number, minTier: Tier, recommendedFor: Tier[], priority: 'P1' | 'P2', notes: string[]): ModelDef {
   const files = [file(fileName, bytes, HF('ggerganov/whisper.cpp', fileName))];
@@ -91,7 +93,7 @@ function whisper(key: string, fileName: string, bytes: number, ramBytes: number,
 
 function piper(key: string, label: string, lang: Language, dir: string, base: string, notes: string[], recommendedFor: Tier[]): ModelDef {
   const files = [file(`${base}.onnx`, 63 * MB, HF('rhasspy/piper-voices', `${dir}/${base}.onnx`)), file(`${base}.onnx.json`, 5_000, HF('rhasspy/piper-voices', `${dir}/${base}.onnx.json`))];
-  return { key, label, engine: 'sherpa-onnx', task: 'tts', version: REGISTRY_VERSION, availability: 'download', files, bytes: sum(files), licence: PIPER_LICENCE, commercialUse: 'yes',
+  return { key, label, engine: 'sherpa-onnx', task: 'tts', version: REGISTRY_VERSION, availability: 'download', files, bytes: sum(files), licence: PIPER_LICENCE, commercialUse: lang === 'id' ? 'conditional' : 'yes',
     languages: [lang], minTier: 'T0', recommendedFor, ramBytes: 300 * MB, flag: lang === 'id' ? 'model:piper-id' : 'model:piper-en', priority: 'P1', postInstall: 'piper-tokens', notes };
 }
 
@@ -121,6 +123,19 @@ const MODEL_LIST: ModelDef[] = [
       licence: { spdx: 'Apache-2.0', name: 'Apache-2.0', url: 'https://huggingface.co/csukuangfj/kokoro-multi-lang-v1_0', redistribution: 'yes' }, commercialUse: 'yes',
       languages: ['en'], minTier: 'T0', recommendedFor: ['T2'], ramBytes: 600 * MB, flag: 'model:kokoro', priority: 'P2',
       notes: ['no Indonesian', 'sherpa-onnx Kokoro v1.0 export; US English lexicon; espeak-ng-data from the engine'] } satisfies ModelDef;
+  })(),
+  (() => {
+    // FR-267 (ADR-036, provisional): Supertonic 3 — 31 languages incl. Indonesian, 10 speakers, sherpa-onnx ≥ 1.13.2 (shipped 1.13.8),
+    // no espeak-ng; the upstream OpenRAIL-M licence file ships with the weights (its use restrictions must be passed on).
+    const S = (f: string) => HF('csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11', f);
+    const files = [file('duration_predictor.int8.onnx', 3.7 * MB, S('duration_predictor.int8.onnx')), file('text_encoder.int8.onnx', 36.4 * MB, S('text_encoder.int8.onnx')),
+      file('vector_estimator.int8.onnx', 78.4 * MB, S('vector_estimator.int8.onnx')), file('vocoder.int8.onnx', 26 * MB, S('vocoder.int8.onnx')), file('unicode_indexer.bin', 262_144, S('unicode_indexer.bin')),
+      file('voice.bin', 517_168, S('voice.bin')), file('tts.json', 8253, S('tts.json')), file('LICENSE', 15_007, HF('Supertone/supertonic-3', 'LICENSE'))];
+    return { key: 'supertonic-3-int8', label: 'Supertonic 3 (int8)', engine: 'sherpa-onnx', task: 'tts', version: REGISTRY_VERSION, availability: 'download', files, bytes: sum(files),
+      licence: { name: 'OpenRAIL-M (weights) + MIT (code)', url: 'https://huggingface.co/Supertone/supertonic-3/blob/main/LICENSE', redistribution: 'yes',
+        useRestrictions: 'OpenRAIL-M Attachment A: no impersonation / deepfakes of people without consent, no unlawful, discriminatory or harmful use; the restrictions pass on to every user' },
+      commercialUse: 'conditional', languages: ['id', 'en'], minTier: 'T0', recommendedFor: ['T0', 'T1', 'T2'], ramBytes: 700 * MB, flag: 'model:supertonic', priority: 'P1',
+      notes: ['ADR-036 provisional: Operator to confirm the OpenRAIL-M terms', '10 speakers (sid 0–4 female, 5–9 male: inferred)', 'ramBytes / speed measured on the shared server (LOCAL_AI_MODELS §2.2b)'] } satisfies ModelDef;
   })(),
   { key: 'espeak-ng-data', label: 'espeak-ng phonemiser data', engine: 'sherpa-onnx', task: 'tts', version: REGISTRY_VERSION, availability: 'bundled', files: [], bytes: 15 * MB,
     licence: { spdx: 'GPL-3.0-or-later', name: 'GPL-3.0-or-later (espeak-ng)', url: 'https://github.com/espeak-ng/espeak-ng', redistribution: 'yes' }, commercialUse: 'yes',
@@ -208,7 +223,9 @@ export interface TierChoice { default: ModelKey; offered: ModelKey[] }
 export type TierTable = Record<Tier, TierChoice>;
 export const TIER_DEFAULTS: Readonly<{ stt: TierTable; 'tts.id': TierTable; 'tts.en': TierTable; music: TierTable; image: TierTable }> = Object.freeze({
   stt: { T0: { default: 'whisper-small', offered: ['whisper-medium'] }, T1: { default: 'whisper-large-v3-turbo', offered: [] }, T2: { default: 'whisper-large-v3-turbo', offered: ['whisper-large-v3'] } },
-  'tts.id': { T0: { default: 'piper-id-news-medium', offered: [] }, T1: { default: 'piper-id-news-medium', offered: [] }, T2: { default: 'piper-id-news-medium', offered: [] } },
+  // FR-267 (ADR-036, provisional): Supertonic 3 is the default offline Indonesian voice (more natural; OpenRAIL-M allows commercial
+  // use); Piper news_tts stays offered (smaller, but its training data is probably non-commercial, RISK-002).
+  'tts.id': { T0: { default: 'supertonic-3-int8', offered: ['piper-id-news-medium'] }, T1: { default: 'supertonic-3-int8', offered: ['piper-id-news-medium'] }, T2: { default: 'supertonic-3-int8', offered: ['piper-id-news-medium'] } },
   'tts.en': { T0: { default: 'piper-en-lessac-medium', offered: [] }, T1: { default: 'piper-en-lessac-medium', offered: ['kokoro-82m-v1.0'] }, T2: { default: 'kokoro-82m-v1.0', offered: [] } },
   music: { T0: { default: 'loop-library-cc0', offered: [] }, T1: { default: 'loop-library-cc0', offered: [] }, T2: { default: 'loop-library-cc0', offered: [] } },
   image: { T0: { default: 'frame-composite', offered: ['sd15-emaonly'] }, T1: { default: 'sd15-emaonly', offered: [] }, T2: { default: 'flux1-schnell-q4', offered: [] } },

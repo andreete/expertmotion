@@ -106,9 +106,11 @@ function failRun(ctx: ServiceContext, run: RunRow, convId: string, e: unknown) {
   const em = e instanceof EmError ? e : new EmError('EM-9001', 'Something went wrong.');
   if (!(e instanceof EmError)) ctx.log.error({ runId: run.id, err: errorMessage(e) }, 'agent run crashed');
   if (!finishRun(ctx, run.id, 'failed', em.code)) return;
+  if (run.agent === 'editor') updateHandoff(ctx, run.project_id, run.id, 'failed');   // review A4: the Diskusi card never stays at "planning"
   const details = failureDetails(ctx, run, em);
   logAgentRun(ctx, run, { status: 'failed', code: em.code, details });
-  const hint = em.code === 'EM-4002' && details['recentKey'] ? ' New keys can take 1–2 minutes to become active.' : '';
+  // QA P1 2026-10-29: the provider's reason first; the activation hint only for a recent key and only next to that reason
+  const hint = em.code === 'EM-4002' && typeof details['reason'] === 'string' && details['reason'] ? ` ("${details['reason']}")${details['recentKey'] ? ' New keys can take 1–2 minutes to become active.' : ''}` : '';
   insertMessage(ctx, convId, 'system', [{ type: 'text', text: `${em.code}: ${em.message}${hint}` }], run.id);
   emit(ctx, 'agent.run.failed', { projectId: run.project_id, runId: run.id, agent: run.agent, code: em.code, message: `${em.message}${hint}`, details,
     retryable: ['EM-4101', 'EM-4102', 'EM-4103', 'EM-4003', 'EM-4301', 'EM-4105'].includes(em.code) || (em.code === 'EM-4002' && details['recentKey'] === true) });
@@ -118,7 +120,10 @@ function cancelRun(ctx: ServiceContext, runId: string, code: 'EM-4303' | 'EM-430
   const live = s3(ctx).runs.get(runId);
   const row = getRun(ctx, runId);
   live?.controller.abort();
-  if (row && finishRun(ctx, runId, 'cancelled', code)) emit(ctx, 'agent.run.failed', { projectId: row.project_id, runId, agent: row.agent, code, retryable: true });
+  if (row && finishRun(ctx, runId, 'cancelled', code)) {
+    if (row.agent === 'editor') updateHandoff(ctx, row.project_id, runId, 'failed');   // review A4
+    emit(ctx, 'agent.run.failed', { projectId: row.project_id, runId, agent: row.agent, code, retryable: true });
+  }
 }
 
 /** Cancels every in-flight run (shutdown, Private Mode). */
@@ -357,14 +362,15 @@ async function executeEditor(ctx: ServiceContext, run: RunRow, convId: string, p
   // Usage is recorded by the intents module under this run (FR-074); only a module without a run id leaves it to us.
   if (plan.usage && !plan.runId) record(ctx, projectId, 'editor', run.id, [plan.usage]);
   if (signal.aborted) return;
+  // Review A5: the plan was cancelled while still a draft: the run ends as cancelled (EM-4303), never the goal stored as the reply.
+  if ((plan.status as string) === 'cancelled') { cancelRun(ctx, run.id, 'EM-4303'); return; }
   // QA 2026-10-26 #5: a run that produced no plan (provider error, EM-4301, …) is a failure with its reason and next action in the
   // chat — never the Creator's own message echoed back as the "reply" with an empty Plan Card.
   if ((plan.status === 'failed' || plan.status === 'invalid' || plan.status === 'stale') && plan.steps.length === 0) {
     const v = plan.validation?.[0];
     const code = (v?.code && /^EM-\d{4}$/.test(v.code) ? v.code : 'EM-4301') as EmError['code'];
     ctx.db.prepare('UPDATE agent_runs SET plan_id = COALESCE(plan_id, ?) WHERE id = ?').run(plan.planId, run.id);
-    updateHandoff(ctx, projectId, run.id, 'failed');
-    return failRun(ctx, run, convId, new EmError(code, v?.message ?? 'The model could not produce a valid plan.'));
+    return failRun(ctx, run, convId, new EmError(code, v?.message ?? 'The model could not produce a valid plan.'));   // marks the hand-off failed
   }
   const web = found as { sources: Array<{ url: string; title?: string }>; images: unknown[] } | null;
   const msg = insertMessage(ctx, convId, 'assistant', [{ type: 'text', text: plan.goal }, { type: 'tool_result', name: 'plan', output: { planId: plan.planId, planRunId: plan.runId ?? null, status: plan.status, steps: plan.steps.length, risks: plan.risks } },
@@ -510,7 +516,9 @@ export const agentsModule: ServiceModule = {
   name: 'agents',
   start(ctx) {
     // Service restart during a run → cancelled with EM-4304 (AI_WORKFLOW §12).
+    const open = ctx.db.prepare("SELECT id, project_id FROM agent_runs WHERE status = 'running' AND agent = 'editor'").all() as Array<{ id: string; project_id: string }>;
     const n = ctx.db.prepare("UPDATE agent_runs SET status = 'cancelled', error_code = 'EM-4304', finished_at = ? WHERE status = 'running'").run(ctx.now()).changes;
+    for (const r of open) updateHandoff(ctx, r.project_id, r.id, 'failed');        // review A4: a hand-off interrupted by the restart
     if (n) ctx.log.info({ interrupted: n }, 'agent runs marked interrupted');
     ctx.settings.onChange((s, keys) => { if (keys.includes('privateMode') && s.privateMode) cancelAllRuns(ctx, 'EM-8202'); });
   },
@@ -607,7 +615,17 @@ export const agentsModule: ServiceModule = {
     // R-089 (FR-217): import one openly licensed picture the Creator confirmed from a web.images answer. The picture is looked up
     // again by its catalogue id (never a URL from the model), downloaded through the egress module (research, ≤ 15 MB, image/*),
     // imported like any file, and its attribution stored (asset_attributions) and returned.
+    // A8: one import per picture at a time — a double click joins the running import instead of downloading it twice
+    const importsInFlight = new Map<string, Promise<{ assetId: string | undefined; attribution: string | null; duplicate: boolean }>>();
     route(router, 'post', '/projects/:id/research/images/import', { params: ProjectParams, body: ImageImportBody, status: 202 }, async ({ params, body }) => {
+      const key = `${params.id}:${body.messageId}:${body.source}:${body.id}`;
+      const running = importsInFlight.get(key);
+      if (running) return { ...(await running), duplicate: true };
+      const p = importPicture(params, body);
+      importsInFlight.set(key, p);
+      try { return await p; } finally { importsInFlight.delete(key); }
+    });
+    const importPicture = async (params: { id: string }, body: z.infer<typeof ImageImportBody>): Promise<{ assetId: string | undefined; attribution: string | null; duplicate: boolean }> => {
       const project = requireProject(ctx, params.id);
       if (ctx.egress.isPrivate()) throw new EmError('EM-8202', 'Private Mode is on, so the picture was not downloaded.');
       if (ctx.settings.get().webResearch === false) throw new EmError('EM-4405', 'Internet research is turned off, so the picture was not downloaded. Turn on "Izinkan riset internet" in Settings.', { status: 409 });
@@ -639,7 +657,7 @@ export const agentsModule: ServiceModule = {
         ctx.log.info({ projectId: project.id, assetId: row.id, source: candidate.source, license: candidate.license }, 'research picture imported');
         return { assetId: row.id, attribution, duplicate: false };
       } catch (e) { fs.rm(file, { force: true }, () => undefined); throw e; }
-    });
+    };
 
     route(router, 'delete', '/projects/:id/conversations/:agent', { params: AgentParams }, ({ params }) => {
       requireProject(ctx, params.id);

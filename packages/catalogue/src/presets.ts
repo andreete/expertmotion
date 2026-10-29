@@ -55,12 +55,15 @@ export const backgrounds = define('background', bgCommon, [
   { name: 'none', en: 'None', id: 'Tanpa latar', p: 'p0', tags: ['transparent', 'alpha'] },
 ]);
 
+/** C4 (review 2026-10-29): a cubic-bezier [x1, y1, x2, y2]; x must be in 0..1 (Remotion's Easing.bezier throws otherwise), y may overshoot. */
+const bezierX = z.number().min(0).max(1), bezierY = z.number().min(-2).max(3);
+export const bezierTuple = z.tuple([bezierX, bezierY, bezierX, bezierY]);
 // ADR-034 (auto motion): optional on every motion (absent = the behaviour before): exitMs (exit length, default = the entrance),
 // exitStyle (mirror = the entrance backwards, fade = opacity only), bezier (explicit cubic-bezier, wins over easingId), loop
 // (a subtle deterministic idle loop after the entrance), distanceU (rise / reveal distance).
 const motionCommon = { durationMs: ms(600, 100, 10_000), delayMs: ms(0, 0, 10_000), easingId: easingRef(), exit: z.boolean().default(true),
   exitMs: z.number().int().min(0).max(10_000).optional(), exitStyle: z.enum(['mirror', 'fade']).optional(),
-  bezier: z.array(z.number().min(-2).max(3)).length(4).optional(), loop: z.enum(['none', 'float', 'pulse', 'sway', 'spin']).optional() };
+  bezier: bezierTuple.optional(), loop: z.enum(['none', 'float', 'pulse', 'sway', 'spin']).optional() };
 const grow = z.enum(['up', 'down', 'left', 'right']);
 export const motions = define('motion', motionCommon, [
   { name: 'fade-in', en: 'Fade in', id: 'Pudar masuk', p: 'p0', tags: ['soft'] },
@@ -164,7 +167,7 @@ export const textEffects = define('texteffect', { colour: optionalHex() }, [
   { name: 'circle', en: 'Circle', id: 'Lingkari', p: 'p1' },
   { name: 'kinetic', en: 'Kinetic words', id: 'Kata bergerak', p: 'p0', tags: ['energetic', 'words'] },
   { name: 'counter', en: 'Number counter', id: 'Angka berjalan', p: 'p1', tags: ['number', 'angka'],
-    params: { from: z.number().optional(), durationMs: z.number().int().min(100).max(20_000).optional(), delayMs: z.number().int().min(0).max(60_000).optional(), easingId: easingRef(), bezier: z.array(z.number().min(-2).max(3)).length(4).optional() } },
+    params: { from: z.number().optional(), durationMs: z.number().int().min(100).max(20_000).optional(), delayMs: z.number().int().min(0).max(60_000).optional(), easingId: easingRef(), bezier: bezierTuple.optional() } },
   { name: 'keyword', en: 'Keyword colour', id: 'Warna kata kunci', p: 'p1', tags: ['emphasis', 'accent', 'kata kunci'], params: { words: z.array(z.string().min(1).max(40)).max(8).default([]) } },
 ]);
 

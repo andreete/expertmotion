@@ -7,6 +7,10 @@ import type { AssetFacts, CompositionModelT } from './schema.js';
 export const AUDIO_TIMING_OPS: ReadonlySet<string> = new Set(['op:element.setTiming', 'op:element.setLayer']);
 export interface VoiceAnchor { layerId: string; origin: number; fromMs: number; toMs: number; pages: number[] }
 
+const lengthOf = (a: CompositionModelT['tracks']['audio'][number], assets: readonly AssetFacts[]): number | null => {
+  const src = assets.find((x) => x.id === a.assetId)?.durationMs;
+  return a.durationMs ?? (typeof src === 'number' ? Math.max(0, src - a.trimBeforeMs) : null);
+};
 const windowOf = (m: CompositionModelT, a: CompositionModelT['tracks']['audio'][number], assets: readonly AssetFacts[]): { fromMs: number; toMs: number } => {
   const src = assets.find((x) => x.id === a.assetId)?.durationMs;
   const len = a.durationMs ?? (typeof src === 'number' ? Math.max(0, src - a.trimBeforeMs) : null);
@@ -33,7 +37,9 @@ export function followVoiceAnchors(m: CompositionModelT, before: readonly VoiceA
     const layer = m.tracks.audio.find((x) => x.id === a.layerId);
     if (!layer) continue;                                         // a deleted voice keeps its captions (the Creator removes them)
     const delta = layer.atMs - layer.trimBeforeMs - a.origin;
-    const w = windowOf(m, layer, assets);
+    // C9 (review 2026-10-29): a voice of unknown length keeps its own window (moved by its own delta); another voice moving
+    // earlier must not shorten it and drop its caption pages
+    const w = lengthOf(layer, assets) === null ? { fromMs: layer.atMs, toMs: a.toMs === Number.MAX_SAFE_INTEGER ? a.toMs : a.toMs + delta } : windowOf(m, layer, assets);
     if (delta === 0 && w.fromMs === a.fromMs && w.toMs === a.toMs) continue;
     for (const i of a.pages) {
       const p = m.tracks.caption.pages[i]!;

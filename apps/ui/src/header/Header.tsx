@@ -12,6 +12,7 @@ import { AppMark } from '../components/AppMark.js';
 import type { LibMode } from '../state/reducer.js';
 import { formatDuration, translate } from '../i18n/index.js';
 import { guardUnsaved } from '../screens/Lifecycle.js';
+import { withoutScratch } from '../startup/scratch.js';
 
 /** Sample projects (R-025) carry a visible "Sample · " / "Contoh · " marker in the project's language; a name that already starts with it is not doubled. */
 export function sampleTitle(name: string, language: 'en' | 'id'): { marker: string; rest: string } {
@@ -72,6 +73,7 @@ export function Header() {
             <MenuItem el="hdr.menu.file.open" shortcut="Ctrl+O" onClick={() => { close(); actions.setScreen({ kind: 'project.open' }); }}>{t('ui.hdr.menu.file.open')}</MenuItem>
             <MenuItem el="hdr.menu.file.recent" onClick={() => setMenu(menu === 'recent' ? 'file' : 'recent')}>{t('ui.hdr.menu.file.recent')} ▸</MenuItem>
             {menu === 'recent' && <RecentList onPick={(id) => { close(); if (id !== p?.id) guardUnsaved({ state, actions }, () => { void actions.openProject(id); }); }} />}
+            <MenuItem el="hdr.menu.file.close" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); guardUnsaved({ state, actions }, () => { void actions.closeProject(); }, { closing: true }); }}>{t('ui.hdr.menu.file.close')}</MenuItem>
             <MenuItem el="hdr.menu.file.save" shortcut="Ctrl+S" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); void actions.save(); }}>{t('ui.hdr.menu.file.save')}</MenuItem>
             <MenuItem el="hdr.menu.file.saveas" shortcut="Ctrl+Shift+S" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); actions.setScreen({ kind: 'project.new', saveAs: true }); }}>{t('ui.hdr.menu.file.saveas')}</MenuItem>
             <MenuItem el="hdr.menu.file.import" shortcut="Ctrl+I" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); requestImport(); }}>{t('ui.hdr.menu.file.import')}</MenuItem>
@@ -159,7 +161,8 @@ export function Header() {
 function RecentList({ onPick }: { onPick: (id: string) => void }) {
   const { runtime, t, state } = useStore();
   const [items, setItems] = useState<Array<{ id: string; name: string }> | null>(null);
-  useEffect(() => { void runtime.api.recentProjects().then((r) => setItems(r.items.map((x) => ({ id: x.id, name: x.name })))).catch(() => setItems([])); }, [runtime]);
+  // FR-260: the untouched blank project is not listed (it is not something the Creator made)
+  useEffect(() => { void runtime.api.recentProjects().then((r) => setItems(withoutScratch(r.items).map((x) => ({ id: x.id, name: x.name })))).catch(() => setItems([])); }, [runtime]);
   return (
     <div className="ml-3 border-l border-em-line pl-1">
       {items === null ? <div className="px-2 py-1 text-em-muted">{t('ui.common.loading')}</div>

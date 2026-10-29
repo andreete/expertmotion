@@ -25,3 +25,4 @@ export * from './graphics-mode.js';
 export * from './heartbeat.js';
 export * from './diagnostic-report.js';
 export * from './escape-hatches.js';
+export * from './open-source.js';

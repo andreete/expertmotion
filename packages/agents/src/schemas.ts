@@ -58,9 +58,11 @@ export type EditPlanT = z.infer<typeof EditPlan>;
  * script, the voice-over or the Sequence audio). Generator steps carry `args`, never ops.
  */
 // ADR-034: `scene.compose` (args = VideoSpec, auto-motion-spec.ts) is expanded into composition.applyOps (+ tts steps) before validation.
-export const PLAN_STEP_TOOLS = ['composition.applyOps', 'tts.generate', 'captions.generate', 'scene.compose'] as const;
+// FR-266: `music.generate` = a background music bed from the CC0 library (best fit for prompt / mood), ducked under speech.
+export const PLAN_STEP_TOOLS = ['composition.applyOps', 'tts.generate', 'captions.generate', 'scene.compose', 'music.generate'] as const;
 export type PlanStepTool = (typeof PLAN_STEP_TOOLS)[number];
 export const TtsStepArgs = z.object({ text: z.string().min(1).max(2000), atMs: z.number().int().min(0).optional(), /** FR-224: VideoSpec voice clip id */ clipId: z.string().min(1).max(40).optional(), voiceId: z.string().min(1).max(64).optional(), language: z.enum(['id', 'en']).optional(), speed: z.number().min(0.8).max(1.2).optional() }).strict();
+export const MusicStepArgs = z.object({ prompt: z.string().min(1).max(200).default('calm'), durationMs: z.number().int().min(1000).max(1_800_000).optional(), volume: z.number().min(0.02).max(1).optional(), trackId: z.string().min(1).max(80).optional() }).strict();
 export const CaptionsStepArgs = z.object({ source: z.enum(['script', 'voice', 'sequence']).default('script'), text: z.string().min(1).max(5000).optional(), atMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(500).optional(),
   presetId: z.string().regex(PresetIdRe).optional(), language: z.enum(['id', 'en']).optional() }).strict();
 

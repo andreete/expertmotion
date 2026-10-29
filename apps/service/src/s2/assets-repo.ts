@@ -73,6 +73,33 @@ export function toFacts(r: AssetRow): AssetFacts {
 }
 
 /**
+ * FR-261: what a video / audio asset says, in SOURCE time, from the newest finished transcription that covered it (Generate
+ * Captions on the asset, captions of the Sequence, the footage read of an Editor run): `sources` in the job result. Pages →
+ * segments, their tokens → words. Older jobs without `sources` are ignored. At most ~4000 words per asset.
+ */
+export function withTranscripts(ctx: ServiceContext, projectId: string, facts: AssetFacts[]): AssetFacts[] {
+  if (!facts.some((f) => f.kind === 'video' || f.kind === 'audio')) return facts;
+  let rows: Array<{ result_json: string | null }> = [];
+  try { rows = ctx.db.prepare("SELECT result_json FROM generator_jobs WHERE project_id = ? AND kind = 'captions' AND status = 'done' ORDER BY COALESCE(finished_at, created_at) DESC LIMIT 30").all(projectId) as typeof rows; } catch { return facts; }
+  const found = new Map<string, NonNullable<AssetFacts['transcript']>>();
+  for (const r of rows) {
+    let res: { language?: string; sources?: Array<{ assetId?: string; pages?: Array<{ text?: string; startMs?: number; durationMs?: number; tokens?: Array<{ text?: string; fromMs?: number; toMs?: number }> }> }> } = {};
+    try { res = JSON.parse(r.result_json ?? '{}'); } catch { continue; }
+    for (const src of res.sources ?? []) {
+      if (!src.assetId || found.has(src.assetId) || !Array.isArray(src.pages)) continue;
+      const segments: Array<{ text: string; fromMs: number; toMs: number }> = []; const words: Array<{ text: string; fromMs: number; toMs: number }> = [];
+      for (const p of src.pages) {
+        if (typeof p.text !== 'string' || typeof p.startMs !== 'number') continue;
+        segments.push({ text: p.text.trim(), fromMs: p.startMs, toMs: p.startMs + (p.durationMs ?? 0) });
+        for (const t of p.tokens ?? []) if (typeof t.text === 'string' && t.text.trim() && typeof t.fromMs === 'number' && typeof t.toMs === 'number' && words.length < 4000) words.push({ text: t.text.trim(), fromMs: t.fromMs, toMs: t.toMs });
+      }
+      if (segments.length) found.set(src.assetId, { ...(res.language === 'id' || res.language === 'en' ? { language: res.language } : {}), segments, ...(words.length ? { words } : {}) });
+    }
+  }
+  return found.size ? facts.map((f) => (found.has(f.id) ? { ...f, transcript: found.get(f.id)! } : f)) : facts;
+}
+
+/**
  * Sequence Badges (FR-044, R-034): unique per project, contiguous from 1. Assigning an occupied number shifts the holder and
  * everything after it up; clearing renumbers. Returns the ids whose badge changed.
  */

@@ -56,7 +56,7 @@ describe('research progress and sources (FR-216, QA #1)', () => {
   it('a research answer shows numbered source links (system browser), a picture to import with its licence, and the Web switch', { timeout: 30_000 }, async () => {
     const { bus, pid } = await boot();
     const opened: string[] = [];
-    (window as unknown as { expertmotion?: unknown }).expertmotion = { openExternal: async (u: string) => { opened.push(u); } };
+    (window as unknown as { expertmotion?: unknown }).expertmotion = { openSource: async (u: string) => { opened.push(u); return { ok: true }; } };   // R1: sources use the Shell's openSource route
     await act(async () => { bus.emit('agent.run.progress', { projectId: pid, runId: 'r1', agent: 'brainstorm', phase: 'tool', tool: 'web.search', query: 'ekspor nikel 2026' }); });
     await until(() => el('agent.chat.progress')?.textContent?.includes('Searching the internet: ekspor nikel 2026'), 'web progress');
     await act(async () => { bus.emit('agent.run.done', { projectId: pid, run: { id: 'r1', projectId: pid, agent: 'brainstorm', status: 'done', modelId: 'm', connectionId: null, planId: null, errorCode: null, usage: null, startedAt: 'x', finishedAt: 'y' }, message: research('01M61TESTRESEARCH0000000001'), usage: null, contextUsage: null }); });

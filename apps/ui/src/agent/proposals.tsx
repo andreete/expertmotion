@@ -73,6 +73,7 @@ export function ProposalCard({ message, intents, handoffState, onApplied, onSend
   const model = state.head?.model;
   const issues = Object.fromEntries(intents.map((i) => [i.id, proposalIssue(i, model, t)]));
   const [ticked, setTicked] = useState<string[]>(intents.filter((i) => !issues[i.id]).map((i) => i.id));
+  const [sending, setSending] = useState(false);                        // the hand-off request is out: the button says so (busy)
   if (handoffState !== 'pending') {
     return (
       <div data-el="agent.brainstorm.handoff" role="group" className="flex w-full items-center gap-2 rounded-[6px] border border-em-line px-2 py-1 text-[12px] text-em-muted">
@@ -100,11 +101,13 @@ export function ProposalCard({ message, intents, handoffState, onApplied, onSend
         })}
       </ul>
       <div className="flex gap-2">
-        <Button el="agent.chat.sendtoeditor" variant="primary" size={28} icon={<Clapperboard size={14} />} title={t('ui.agent.handoff.send.tip')} disabledReason={ticked.length ? null : t('ui.agent.brainstorm.handoff.none')} onClick={() => {
+        <Button el="agent.chat.sendtoeditor" variant="primary" size={28} icon={<Clapperboard size={14} />} title={t('ui.agent.handoff.send.tip')} loading={sending} disabledReason={ticked.length ? null : t('ui.agent.brainstorm.handoff.none')} onClick={() => {
           const valid = intents.filter((i) => !issues[i.id]).map((i) => i.id);
           if (onSendDraft && valid.every((id) => ticked.includes(id))) { onSendDraft(); return; }
           // QA 2026-10-28 #3/#4: a hand-off of picks now also starts the Editor run at once (it used to only queue them).
-          void actions.handoff(message, ticked.filter((id) => !issues[id])).then((ok) => { if (ok) { onApplied?.(); void actions.plan(); } });
+          // Review U10: plans only the picks this hand-off queued (nothing when every pick was refused), never the whole queue.
+          setSending(true);
+          void actions.handoff(message, ticked.filter((id) => !issues[id]), { plan: true }).then((ok) => { if (ok) onApplied?.(); }).finally(() => setSending(false));
         }}>{t('ui.agent.handoff.send')}</Button>
         <Button variant="ghost" size={28} onClick={() => actions.dismissHandoff(message)}>{t('ui.agent.brainstorm.handoff.dismiss')}</Button>
       </div>

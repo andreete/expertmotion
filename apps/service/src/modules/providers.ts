@@ -10,7 +10,7 @@ import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
 import { customBaseUrlProblem } from '../services/egress.js';
 import { createSecretBox, secretHint, type SecretBox } from '../s3/crypto.js';
-import { keyIsRecent, markKeyChanged, normalizeKey } from '../s3/keys.js';
+import { keyIsRecent, keyRefusedMessage, markKeyChanged, normalizeKey } from '../s3/keys.js';
 import { chatProviderFor, DEFAULT_CALL_TIMEOUT_MS, listModels, toolsRefused, VALIDATE_TIMEOUT_MS, validateKey, webOffNotice } from '../s3/adapters.js';
 import { providerSearch, researchConfigFor } from '../s3/research.js';
 import type { ResearchConfig, WebSource } from '@expertmotion/agents';
@@ -89,7 +89,7 @@ async function validateConn(ctx: ServiceContext, id: string): Promise<{ status: 
       const det = (em.details ?? {}) as { status?: number; reason?: string };
       const recentKey = keyIsRecent(ctx, id);
       ctx.log.warn({ connectionId: id, provider: r.provider, code: 'EM-4002', providerStatus: det.status ?? null, providerReason: det.reason ?? null, recentKey }, 'provider key not accepted');
-      throw new EmError('EM-4002', `${r.provider} did not accept this key. Check that it was copied completely and is still active.${recentKey ? ' New keys can take 1–2 minutes to become active.' : ''}`, { status: 422, details: { connectionId: id, status: 'invalid', recentKey, ...(det.status ? { providerStatus: det.status } : {}), ...(det.reason ? { reason: det.reason } : {}) } });
+      throw new EmError('EM-4002', keyRefusedMessage(r.provider, det.reason, recentKey), { status: 422, details: { connectionId: id, status: 'invalid', recentKey, ...(det.status ? { providerStatus: det.status } : {}), ...(det.reason ? { reason: det.reason } : {}) } });
     }
     throw em;
   }
@@ -370,7 +370,7 @@ export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModul
             // A key being validated before it is saved was just pasted: always "new" (FR-191 hint + automatic retry in the Editor).
             const det = (em.details ?? {}) as { status?: number; reason?: string };
             ctx.log.warn({ provider: body.provider, code: 'EM-4002', providerStatus: det.status ?? null, providerReason: det.reason ?? null, recentKey: true }, 'provider key not accepted (dry run)');
-            throw new EmError('EM-4002', `${body.provider} did not accept this key. Check that it was copied completely and is still active. New keys can take 1–2 minutes to become active.`, { status: 422, details: { provider: body.provider, status: 'invalid', recentKey: true, ...(det.status ? { providerStatus: det.status } : {}), ...(det.reason ? { reason: det.reason } : {}) } });
+            throw new EmError('EM-4002', keyRefusedMessage(body.provider, det.reason, true), { status: 422, details: { provider: body.provider, status: 'invalid', recentKey: true, ...(det.status ? { providerStatus: det.status } : {}), ...(det.reason ? { reason: det.reason } : {}) } });
           }
           if (em.code === 'EM-4003' && isOffline(em.cause ?? e)) throw new EmError('EM-8201', 'No internet connection.', { status: 503 });
           throw em;

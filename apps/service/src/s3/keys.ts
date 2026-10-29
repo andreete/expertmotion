@@ -19,3 +19,9 @@ export function keyIsRecent(ctx: ServiceContext, connectionId: string | null | u
   const r = ctx.db.prepare('SELECT created_at FROM provider_connections WHERE id = ?').get(connectionId) as { created_at: string } | undefined;
   return !!r && Date.now() - Date.parse(r.created_at) < NEW_KEY_WINDOW_MS;
 }
+/** QA P1 2026-10-29: the EM-4002 text. The provider's own reason ("invalid x-api-key") is always named; the "new keys can take
+ *  1–2 minutes" hint only for a key added / replaced in the last 5 minutes AND only next to that reason, never on its own. */
+export function keyRefusedMessage(provider: string, reason: string | undefined, recentKey: boolean): string {
+  const r = (reason ?? '').trim();
+  return `${provider} says this key is not valid${r ? `: "${r}"` : ''}. Check that it was copied completely and is still active.${recentKey && r ? ' New keys can take 1–2 minutes to become active.' : ''}`;
+}

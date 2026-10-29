@@ -68,11 +68,17 @@ export class MusicLibraryService {
   }
   cancel(id: string): void { this.live.get(id)?.ac.abort(); }
   /** A verified file (re-hashed on demand when its size matches but it was never verified in this session). */
+  /** track id → `size:mtime` of the file whose sha256 last verified (a few dozen short strings at most). */
+  private readonly verified = new Map<string, string>();
   async readyFile(id: string): Promise<string> {
     const t = this.require(id);
     if (!this.isReady(t)) throw em('EM-7001', 'Download this track first.', { details: { trackId: id, bytes: t.bytes } });
-    if ((await sha256File(this.filePath(t))) !== t.sha256) { fs.rmSync(this.filePath(t), { force: true }); throw em('EM-7108', 'The downloaded track is damaged; download it again.', { details: { trackId: id } }); }
-    return this.filePath(t);
+    // A8: the hash is checked once per file version (size + mtime), not on every Range request of the audio route
+    const file = this.filePath(t); const st = fs.statSync(file); const stamp = `${st.size}:${st.mtimeMs}`;
+    if (this.verified.get(id) === stamp) return file;
+    if ((await sha256File(file)) !== t.sha256) { this.verified.delete(id); fs.rmSync(file, { force: true }); throw em('EM-7108', 'The downloaded track is damaged; download it again.', { details: { trackId: id } }); }
+    this.verified.set(id, stamp);
+    return file;
   }
   /** The best downloaded track for a description, else the best one overall (downloaded first, FR-102 / FR-247). */
   async pickFor(description: string): Promise<MusicTrack> {

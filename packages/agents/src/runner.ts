@@ -105,19 +105,27 @@ function nativeWeb(cfg: ResearchConfig | undefined, editor = false): ChatRequest
   return cfg?.available && cfg.mode === 'native' ? { search: true, fetch: true, maxSearches: editor ? 3 : 5, maxFetches: editor ? 2 : 3 } : undefined;
 }
 
+/** Tool calls run per reply; any call after these still gets an error tool_result (C7, review 2026-10-29). */
+export const MAX_TOOL_CALLS_PER_TURN = 8;
 /**
  * Runs the tool calls of one reply (native or written as text) through the closed registry, in order. Native calls get one
- * tool_result each (errors flagged), so the next request carries every result in one user message.
+ * tool_result each (errors flagged), so the next request carries every result in one user message. Only the first
+ * MAX_TOOL_CALLS_PER_TURN run; every later call is answered with an EM-4503 error result (never left without a result, which
+ * providers reject on the next request).
  */
-async function runToolCalls(calls: ReadonlyArray<{ id?: string; name: string; input: unknown }>, handlers: ToolHandlers, allowed: readonly ToolName[], progress: (p: RunProgress) => void, records: ToolCallRecord[]): Promise<ToolResultPart[]> {
+export async function runToolCalls(calls: ReadonlyArray<{ id?: string; name: string; input: unknown }>, handlers: ToolHandlers, allowed: readonly ToolName[], progress: (p: RunProgress) => void, records: ToolCallRecord[]): Promise<ToolResultPart[]> {
   const out: ToolResultPart[] = [];
-  for (const c of calls.slice(0, 8)) {
+  for (const c of calls.slice(0, MAX_TOOL_CALLS_PER_TURN)) {
     const name = fromWireToolName(c.name, allowed);
     const inp = (c.input && typeof c.input === 'object' ? c.input : {}) as { query?: unknown; url?: unknown };
     progress({ phase: 'tool', tool: name, ...(typeof inp.query === 'string' && name.startsWith('web.') ? { query: inp.query.slice(0, 200) } : {}), ...(typeof inp.url === 'string' && name === 'web.fetch' ? { url: inp.url.slice(0, 300) } : {}) });
     const rec = await runTool(name, c.input, handlers, allowed);
     records.push(rec);
     out.push({ id: c.id ?? '', name: c.name, content: toolResultContent(rec), ...(rec.ok ? {} : { isError: true }) });
+  }
+  for (const c of calls.slice(MAX_TOOL_CALLS_PER_TURN)) {
+    const rec: ToolCallRecord = { name: fromWireToolName(c.name, allowed), input: c.input, output: { error: { code: 'EM-4503', message: `Not run: at most ${MAX_TOOL_CALLS_PER_TURN} tool calls per reply. Ask again for what you still need.` } }, ok: false };
+    out.push({ id: c.id ?? '', name: c.name, content: toolResultContent(rec), isError: true });
   }
   return out;
 }

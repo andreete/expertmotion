@@ -11,7 +11,8 @@ export const DISPLAY_NAMES: Readonly<Record<string, DisplayName>> = Object.freez
   'whisper-medium': { en: 'Auto Captions — Balanced', id: 'Teks Otomatis — Seimbang' },
   'whisper-large-v3-turbo': { en: 'Auto Captions — Accurate', id: 'Teks Otomatis — Akurat' },
   'whisper-large-v3': { en: 'Auto Captions — Best', id: 'Teks Otomatis — Terbaik' },
-  'piper-id-news-medium': { en: 'Indonesian Voice', id: 'Suara Indonesia' },
+  'piper-id-news-medium': { en: 'Indonesian Voice — News', id: 'Suara Indonesia — Berita' },
+  'supertonic-3-int8': { en: 'Indonesian Voices — Natural (10)', id: 'Suara Indonesia — Natural (10)' },   // FR-267
   'piper-en-lessac-medium': { en: 'English Voice', id: 'Suara Inggris' },
   'kokoro-82m-v1.0': { en: 'English Voice — Natural', id: 'Suara Inggris — Natural' },
   'espeak-ng-data': { en: 'Pronunciation Data', id: 'Data Pelafalan' },

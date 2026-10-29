@@ -15,7 +15,11 @@ import { boxesOverlap, textGeometry } from './text-box.js';
 import { pageHas, pagesNear, replaceInPage, retextPage } from './caption-text.js';
 
 export interface GeneratedResult { kind: 'voice' | 'music' | 'thumbnail' | 'captions'; assetId?: string; pages?: CaptionPageT[] }
-export interface ApplyContext { assets: readonly AssetFacts[]; tier: Tier; newId: () => string; jobs?: Readonly<Record<string, GeneratedResult>> }
+/**
+ * `onNewId` (C2, review 2026-10-29): called with every id an op creates and the index of that op in `ops`, so a caller (the
+ * quality gate) can tell which op made which element instead of pairing them by position.
+ */
+export interface ApplyContext { assets: readonly AssetFacts[]; tier: Tier; newId: () => string; jobs?: Readonly<Record<string, GeneratedResult>>; onNewId?: (id: string, opIndex: number) => void }
 
 const IMAGE_DEFAULT_MS = 5000;                                   // ASSET_INGESTION.md: images default to 5 s
 const MAX_EFFECTS = (tier: Tier) => (tier === 'T0' ? 2 : 3);     // CM-006
@@ -26,8 +30,12 @@ const stop = (code: string, message: string, path: string): never => { throw new
 export function applyOperations(model: CompositionModelT, ops: readonly OperationT[], ctx: ApplyContext): Result<{ model: CompositionModelT; diff: ElementDiff[] }> {
   const m: CompositionModelT = structuredClone(model);
   const warnings: Issue[] = [];
+  let current = -1;
+  const track = ctx.onNewId;
+  if (track) { const inner = ctx.newId; ctx = { ...ctx, newId: () => { const id = inner(); track(id, current); return id; } }; }
   try {
     ops.forEach((op, i) => {
+      current = i;
       const firstBefore = m.tracks.video[0]?.assetId;
       const anchors = CLIP_TIMING_OPS.has(op.op) ? sceneAnchors(m) : [];          // ADR-031: scene texts move with their scene clip
       const voiceAnch = AUDIO_TIMING_OPS.has(op.op) && op.target?.kind === 'audio' ? voiceAnchors(m, ctx.assets) : [];   // FR-250: captions follow their voice clip
@@ -183,6 +191,11 @@ function splitMotion(motion: MotionT | null): MotionT | null { return motion ? {
 const round = (v: number, digits: number) => { const f = 10 ** digits; return Math.round(v * f) / f; };
 /** Rotation stored in [0, 360) degrees, 0.01° steps. */
 export const normaliseRotation = (r: number): number => { const x = round(((r % 360) + 360) % 360, 2); return x >= 360 ? 0 : x; };
+/** ADR-028 overlay `scale` / `rotation` from an add op, stored like op:element.setTransform does (absent at 1 / 0). */
+const overlayZoom = (a: { scale?: number; rotation?: number }): { scale?: number; rotation?: number } => {
+  const s = a.scale === undefined ? 1 : round(a.scale, 4), r = a.rotation === undefined ? 0 : normaliseRotation(a.rotation);
+  return { ...(s !== 1 ? { scale: s } : {}), ...(r !== 0 ? { rotation: r } : {}) };
+};
 const isIdentity = (t: ClipTransformT) => t.x === 0 && t.y === 0 && t.scale === 1 && t.rotation === 0;
 
 const sec = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
@@ -233,7 +246,17 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const as = asset(ctx, a.assetId, ['video', 'image'], path);
       const trimBeforeMs = as.kind === 'image' ? 0 : (a.trimBeforeMs ?? 0);
       const durationMs = a.durationMs ?? (as.kind === 'image' ? IMAGE_DEFAULT_MS : Math.max(100, (as.durationMs ?? IMAGE_DEFAULT_MS) - trimBeforeMs));
-      const clip: ClipT = { id: ctx.newId(), assetId: as.id, trimBeforeMs, durationMs, playbackRate: 1, volume: 1, muted: false, fadeInMs: 0, fadeOutMs: 0, objectFit: 'cover', motion: null, effects: [] };
+      const clip: ClipT = { id: ctx.newId(), assetId: as.id, trimBeforeMs, durationMs, playbackRate: 1, volume: a.volume ?? 1, muted: a.muted ?? false, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, objectFit: a.objectFit ?? 'cover', motion: null, effects: [] };
+      // FR-261: crop / transform at insert (absent or identity = nothing stored, as before)
+      if (a.crop && (a.crop.left || a.crop.right || a.crop.top || a.crop.bottom)) {
+        if (a.crop.left + a.crop.right >= 0.95 || a.crop.top + a.crop.bottom >= 0.95) stop('EM-2102', 'op:clip.insert: the crop leaves nothing of the picture.', `${path}.args.crop`);
+        clip.crop = a.crop;
+      }
+      if (a.transform) {
+        const t: ClipTransformT = { x: round(a.transform.x ?? 0, 4), y: round(a.transform.y ?? 0, 4), scale: round(a.transform.scale ?? 1, 4), rotation: normaliseRotation(a.transform.rotation ?? 0) };
+        if (!isIdentity(t)) clip.transform = t;
+      }
+      if (clip.fadeInMs + clip.fadeOutMs > durationMs) stop('EM-2102', 'op:clip.insert: the fades are longer than the clip.', `${path}.args.fadeInMs`);
       checkSource(clip, as, `${path}.args`);
       const at = a.atIndex ?? v.length;
       if (at > v.length) stop('EM-2102', `atIndex ${at} is beyond the end (${v.length}).`, `${path}.args.atIndex`);
@@ -401,7 +424,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const accent = String(getPreset(m.theme.paletteId)?.data?.['accent'] ?? '#E8913A');
       const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
       const motion = motionOf(a.motion, typeof motionId === 'string' ? motionId : DEFAULT_SHAPE_MOTION[a.presetId] ?? DEFAULT_SHAPE_MOTION_ID, ctx, path, warnings);
-      addVisual(m, { kind: 'shape', id: ctx.newId(), presetId: a.presetId, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position: pos, size: { w: Number(size), h: a.height ?? Number(size) }, fill: typeof fill === 'string' ? fill : accent, ...(typeof stroke === 'string' ? { stroke } : {}), ...(Number(strokeWidth) > 0 ? { strokeWidth: Number(strokeWidth) } : {}), ...(a.opacity !== undefined ? { opacity: a.opacity } : {}), params: rest, motion }, a.layer);
+      addVisual(m, { kind: 'shape', id: ctx.newId(), presetId: a.presetId, timing: { atMs: a.atMs, durationMs: a.durationMs }, layer: 0, position: pos, size: { w: Number(size), h: a.height ?? Number(size) }, fill: typeof fill === 'string' ? fill : accent, ...(typeof stroke === 'string' ? { stroke } : {}), ...(Number(strokeWidth) > 0 ? { strokeWidth: Number(strokeWidth) } : {}), ...(a.opacity !== undefined ? { opacity: a.opacity } : {}), ...overlayZoom(a), params: rest, motion }, a.layer);
       return;
     }
     case 'op:shape.remove': m.tracks.overlay.splice(findIndex(m.tracks.overlay, needTarget(op, path).id, 'shape', path), 1); return;
@@ -410,7 +433,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const w = Number(a.size ?? 480);
       const h = as.width && as.height ? Math.round((w * as.height) / as.width) : w;
       const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
-      addVisual(m, { kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, layer: 0, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, motion: motionOf(a.motion, DEFAULT_IMAGE_MOTION_ID, ctx, path, warnings), effects: [] }, a.layer);
+      addVisual(m, { kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, layer: 0, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, ...overlayZoom(a), motion: motionOf(a.motion, DEFAULT_IMAGE_MOTION_ID, ctx, path, warnings), effects: [] }, a.layer);
       return;
     }
     case 'op:overlay.remove': {
@@ -532,7 +555,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
     case 'op:audio.addBed': case 'op:audio.addLayer': {
       const as = asset(ctx, a.assetId, ['audio'], path);
       const layer: AudioLayerT = op.op === 'op:audio.addBed'
-        ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, lane: 0, trimBeforeMs: 0, volume: a.volume, loop: a.loop, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: a.duckingPresetId ? { presetId: a.duckingPresetId, params: preset(a.duckingPresetId, 'audio', {}, ctx, path, warnings) } : null }
+        ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, lane: 0, trimBeforeMs: 0, volume: a.volume, loop: a.loop, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: a.duckingPresetId ? { presetId: a.duckingPresetId, params: preset(a.duckingPresetId, 'audio', a.duckingParams ?? {}, ctx, path, warnings) } : null }
         : { id: ctx.newId(), assetId: as.id, role: a.role, atMs: a.atMs, ...(as.durationMs ? { durationMs: as.durationMs } : {}), lane: 0, trimBeforeMs: 0, volume: a.volume, loop: false, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: null };
       addAudio(m, layer);
       return;

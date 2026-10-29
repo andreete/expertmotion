@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowRight, CheckCircle2, Clapperboard, Loader, XCircle } from 'lucide-react';
 import { useStore } from '../state/store.js';
-import type { AgentKind, MessageBlock } from '../api/types.js';
+import type { AgentKind, MessageBlock, PlanDto } from '../api/types.js';
 import { cx } from '../components/ui.js';
 import { PENDING_RUN } from '../state/reducer.js';
 
@@ -44,13 +44,26 @@ export function PhaseStepper({ agent = 'editor', done = false }: { agent?: Agent
   );
 }
 
+/**
+ * Review A4: a card still stored as "planning" whose run is not running any more (error, cancel, Service restart, reload) takes its
+ * state from the plan that run made; with no such plan it failed — never "ready … n adegan" for a run that produced nothing.
+ */
+export function handoffStateOf(runId: string | undefined, plans: ReadonlyArray<PlanDto | null | undefined>, otherRunLive: boolean): 'planning' | 'ready' | 'applied' | 'failed' {
+  const p = runId ? plans.find((x) => x && x.agentRunId === runId) : undefined;
+  if (!p) return otherRunLive && !runId ? 'planning' : 'failed';
+  if (p.status === 'executed') return 'applied';
+  if (p.status === 'valid' || p.status === 'stale' || p.status === 'executing') return 'ready';
+  if (p.status === 'draft') return otherRunLive ? 'planning' : 'failed';
+  return 'failed';
+}
+
 /** The hand-off card on a Diskusi draft: live progress of the Editor run it started, then its result, with "Lihat di Editor". */
 export function HandoffCard({ block, onOpenEditor }: { block: Extract<MessageBlock, { type: 'handoff' }>; onOpenEditor: () => void }) {
   const { state, t } = useStore();
   const live = state.streaming.editor;
   const running = block.state === 'planning' && Boolean(live) && (live?.runId === block.editorRunId || live?.runId === PENDING_RUN);
-  const st = running ? 'planning' : block.state === 'planning' && !live ? (state.agentError.editor ? 'failed' : 'ready') : block.state;
   const plan = state.plan;
+  const st = running ? 'planning' : block.state === 'planning' ? handoffStateOf(block.editorRunId, [state.plan, ...state.previousPlans], Boolean(live)) : block.state;
   return (
     <div data-el="agent.brainstorm.handoff.card" data-state={st} role="status" aria-live="polite" className={cx('flex w-full flex-col gap-1.5 rounded-[8px] border p-2 text-[12px]', st === 'failed' ? 'border-em-danger' : st === 'applied' ? 'border-em-success' : 'border-em-accent')}>
       <div className="flex items-center gap-1.5 font-semibold">

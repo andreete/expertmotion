@@ -43,12 +43,13 @@ import { isTrustedSender } from './lib/ipc.js';
 import { appMenuTemplate, showMenuBar } from './lib/window-chrome.js';
 import { buildServiceEnv } from './lib/child-env.js';
 import { IpcPath, OpenUrlArg, parseIpc, PickFilesArgs, PickFolderArgs, PickSaveArgs, UpdateActionArg } from './lib/ipc-schemas.js';
+import { decideOpenSource, OPEN_SOURCE_REFUSED, type OpenSourceResult } from './lib/open-source.js';
 import { crashFileName, dataLayout, directoriesToCreate, type DataLayout } from './lib/data-dir.js';
 import { createRotatingLog, pruneOldLogs, type RotatingLog } from './lib/log-file.js';
 import { editorEntryUrl, resolveDevRules, type DevRules } from './lib/dev-mode.js';
 import { buildBootstrap, buildMetrics, parseServiceMessage, shutdownMessage } from './lib/bootstrap.js';
 import { evaluateKeyring, keyringRefusalMessage, quarantineTargets, storageLockedDialog, unwrapDbKey } from './lib/keyring.js';
-import { DOWNLOAD_RETRY_MS, downloadDecision, installDecision, nextUpdateState, parsePendingUpdate, pendingUpdateOutcome, shouldCheckForUpdates, updaterConfig, UPDATE_TICK_MS, type UpdateEvent, type UpdateState } from './lib/updater-policy.js';
+import { DOWNLOAD_RETRY_MS, downloadDecision, installDecision, nextUpdateState, parsePendingUpdate, pausedBannerAllowed, pendingUpdateOutcome, planUpdateCheck, updaterConfig, UPDATE_TICK_MS, type PrivateModeState, type UpdateEvent, type UpdateState } from './lib/updater-policy.js';
 import { RENDER_RUNNING_DIALOG, choiceFromButton, parseShutdownResponse, remainingMs, type ShutdownAnswer } from './lib/close-flow.js';
 import { verifyManifest, type SignedManifest } from './lib/integrity.js';
 import { allowPermission, originOf } from './lib/permissions.js';
@@ -660,6 +661,14 @@ function registerIpc(): void {
     await shell.openExternal(url);
   });
 
+  ipcMain.handle(IPC.openSource, async (event, raw: unknown): Promise<OpenSourceResult> => {   // R1: research sources
+    if (!senderOk(event)) return { ok: false, code: 'EM-8203', message: OPEN_SOURCE_REFUSED.invalid };
+    const d = await decideOpenSource(raw, privateModeOn);
+    if (!d.ok) { logLine('info', 'source link refused', { code: d.code }); return d; }
+    await shell.openExternal(d.url);
+    return { ok: true };
+  });
+
   ipcMain.handle(IPC.openPath, async (event, raw: unknown) => {          // FR-146 Play: rendered media only
     const targetPath = IpcPath.safeParse(raw).data;
     if (!senderOk(event) || targetPath === undefined || !isPlayableOutput(targetPath) || !existsSync(targetPath)) return;
@@ -747,6 +756,7 @@ function configureUpdater(): void {
   // electron-updater reads resources/app-update.yml, which only an electron-builder NSIS publish writes. Test builds and
   // builds without a release feed have none: skip update checks quietly instead of logging EM-8101 every time.
   if (app.isPackaged && !existsSync(join(process.resourcesPath, 'app-update.yml'))) { logLine('info', 'updates disabled: no update feed in this build'); return; }
+  updatesEnabled = true;                                 // QA P1 2026-10-29: without a feed nothing about updates is shown
   const cfg = updaterConfig(FEED_URL);
   autoUpdater.autoDownload = cfg.autoDownload;           // FR-152: the Shell starts the background download itself (downloadDecision)
   autoUpdater.allowDowngrade = cfg.allowDowngrade;
@@ -781,17 +791,20 @@ function checkPendingUpdate(): void {
 /** FR-152: download in the background when allowed (not Private Mode, not metered, no Render Job); otherwise retry later. */
 let downloadRetry: NodeJS.Timeout | null = null;
 async function backgroundDownload(): Promise<void> {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || !updatesEnabled) return;
   if (downloadRetry) { clearTimeout(downloadRetry); downloadRetry = null; }
-  const d = downloadDecision({ privateMode: await privateModeOn(), metered: null /* no Electron API; unknown does not block */, renderActive: await renderActive(), status: updateState.status });
+  const pm = await privateModeState();
+  const d = downloadDecision({ privateMode: pm !== 'off', metered: null /* no Electron API; unknown does not block */, renderActive: await renderActive(), status: updateState.status });
   if (d.download) {
     updateStage = 'download';
     try { await autoUpdater.downloadUpdate(); } catch (err) { setUpdate({ type: 'error', message: (err as Error).message, stage: 'download' }); }
     return;
   }
   logLine('info', 'background update download waits', { reason: d.reason });
-  if (d.reason === 'private-mode') { setUpdate({ type: 'paused' }); return; }
-  if (d.reason === 'rendering' || d.reason === 'metered') { downloadRetry = setTimeout(() => { void backgroundDownload(); }, DOWNLOAD_RETRY_MS); downloadRetry.unref(); }
+  if (d.reason === 'private-mode' && pausedBannerAllowed(pm)) { setUpdate({ type: 'paused' }); return; }
+  if (d.reason === 'rendering' || d.reason === 'metered' || d.reason === 'private-mode') {   // private-mode here = unknown: ask again later
+    downloadRetry = setTimeout(() => { void backgroundDownload(); }, DOWNLOAD_RETRY_MS); downloadRetry.unref();
+  }
 }
 
 async function renderActive(): Promise<boolean> {
@@ -806,11 +819,12 @@ async function renderActive(): Promise<boolean> {
 }
 
 async function onUpdateAction(action: UpdateAction): Promise<void> {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || !updatesEnabled) return;
   if (action === 'check') { lastUpdateCheckAt = null; scheduleUpdateCheck(); return; }
   if (action === 'later') { logLine('info', 'update postponed', { version: updateState.version ?? null }); return; }
   if (action === 'download') {
-    if (await privateModeOn()) { setUpdate({ type: 'paused' }); return; }
+    const pm = await privateModeState();
+    if (pm !== 'off') { if (pausedBannerAllowed(pm)) setUpdate({ type: 'paused' }); return; }
     updateStage = 'download';
     try { await autoUpdater.downloadUpdate(); } catch (err) { setUpdate({ type: 'error', message: (err as Error).message, stage: 'download' }); }
     return;
@@ -831,15 +845,18 @@ async function onUpdateAction(action: UpdateAction): Promise<void> {
   autoUpdater.quitAndInstall(false, true);
 }
 
-async function privateModeOn(): Promise<boolean> {
-  if (endpoint === null) return true; // fail closed: no settings → no outbound.
+/** Private Mode as far as the Shell knows: `unknown` before the Service is ready or when its settings cannot be read. */
+async function privateModeState(): Promise<PrivateModeState> {
+  if (endpoint === null || lastServiceState.status !== 'ready') return 'unknown';
   try {
     const settings = await getJson<{ privateMode: boolean }>(`http://127.0.0.1:${endpoint.port}/api/v1/settings`);
-    return settings.privateMode === true;
+    return settings.privateMode === true ? 'on' : 'off';
   } catch {
-    return true;
+    return 'unknown';
   }
 }
+/** Outbound gate (fail closed): anything but a confirmed "off" blocks. Never used to tell the Creator Private Mode is on. */
+async function privateModeOn(): Promise<boolean> { return (await privateModeState()) !== 'off'; }
 
 function getJson<T>(url: string): Promise<T> {
   if (endpoint === null) return Promise.reject(new Error('no endpoint'));
@@ -855,11 +872,19 @@ function getJson<T>(url: string): Promise<T> {
   });
 }
 
+/** false until configureUpdater found an update feed (app-update.yml); a retry timer while Private Mode is still unknown. */
+let updatesEnabled = false;
+let updateCheckRetry: NodeJS.Timeout | null = null;
 function scheduleUpdateCheck(): void {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || !updatesEnabled) return;     // QA P1 2026-10-29: no feed → no check, no banner
   void (async () => {
-    const decision = shouldCheckForUpdates({ privateMode: await privateModeOn(), lastCheckAt: lastUpdateCheckAt, editorInteractive: true, now: Date.now() });
-    if (!decision.check) { logLine('info', 'update check skipped', { reason: decision.reason }); if (decision.reason === 'private-mode') setUpdate({ type: 'paused' }); return; }
+    const decision = planUpdateCheck({ feed: updatesEnabled, privateMode: await privateModeState(), lastCheckAt: lastUpdateCheckAt, editorInteractive: true, now: Date.now() });
+    if (!decision.check) {
+      logLine('info', 'update check skipped', { reason: decision.reason });
+      if (decision.banner === 'paused') setUpdate({ type: 'paused' });
+      if (decision.retryMs !== undefined && !updateCheckRetry) { updateCheckRetry = setTimeout(() => { updateCheckRetry = null; scheduleUpdateCheck(); }, decision.retryMs); updateCheckRetry.unref(); }
+      return;
+    }
     lastUpdateCheckAt = Date.now();
     updateStage = 'check';
     try { await autoUpdater.checkForUpdates(); } catch (err) { logLine('warn', 'update check failed', { code: EM.updateCheckFailed, error: (err as Error).message }); }

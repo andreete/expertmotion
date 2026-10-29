@@ -55,6 +55,8 @@ export interface DownloadOptions {
   /** Free-disk re-check interval in bytes (SEC-073: every 64 MB). */
   diskCheckEveryBytes?: number;
   maxRedirects?: number;
+  /** Called whenever an existing `.part` is read back from disk to hash it (diagnostics and tests; R9: once per call, not per retry). */
+  onPartHash?: (bytes: number) => void;
 }
 
 export interface DownloadSpec { name: string; url: string; bytes: number; bytesExact: boolean; sha256: string; modelKey?: string }
@@ -196,6 +198,7 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
 
   /** One HTTP transfer (following redirects); appends to `.part`; returns the hash of the whole part file. */
   let lastHost = '';
+  let running: { hash: Hash; bytes: number } | null = null;
   const transfer = async (): Promise<{ hash: string; size: number }> => {
     // FR-245: one AbortController per transfer — the caller's signal, the header timeout and the stall watchdog all end it.
     const tc = new AbortController(); let timedOut: 'headers' | 'stalled' | null = null;
@@ -212,7 +215,13 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
     let have = await fileSize(paths.partPath);
     if (have > cap) { await rm(paths.partPath, { force: true }); have = 0; }
     // hash the bytes we already have BEFORE asking for more: a multi-GB `.part` takes a while, and no watchdog runs meanwhile
-    const pre = have > 0 ? await hashFile(paths.partPath) : null;
+    // R9: within one downloadFile call the running hash of what this process wrote is kept, so a retry re-reads the part only
+    // when its size differs from the bytes that hash covers (first resume, a partial write, or a part changed by someone else)
+    let pre: Hash | null = null;
+    if (have > 0) {
+      if (running && running.bytes === have) pre = running.hash.copy();
+      else { opts.onPartHash?.(have); pre = await hashFile(paths.partPath); }
+    }
     let url = spec.url;
     let res: FetchResponseLike | undefined;
     for (let hop = 0; ; hop++) {
@@ -260,6 +269,7 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
     }
     const hasher = append && pre ? pre : createHash('sha256');
     if (!append) have = 0;
+    running = { hash: hasher, bytes: have };
     const fh = await open(paths.partPath, append ? 'a' : 'w');
     let written = have; let sinceDiskCheck = 0;
     arm(stallMs, 'stalled');
@@ -272,6 +282,7 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
           await fh.write(chunk);
           hasher.update(chunk);
           written += chunk.byteLength; sinceDiskCheck += chunk.byteLength;
+          running.bytes = written;
           if (sinceDiskCheck >= diskEvery) {
             sinceDiskCheck = 0;
             const free = await opts.freeBytes(dirname(paths.partPath));
@@ -288,6 +299,7 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
       }
     } finally { await fh.close().catch(() => undefined); }
     progress(written, true);
+    running = { hash: hasher.copy(), bytes: written };
     return { hash: hasher.digest('hex'), size: written };
   };
 

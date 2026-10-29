@@ -19,7 +19,8 @@ export function route<P = Record<string, string>, Q = Record<string, unknown>, B
       const b = spec.body ? spec.body.safeParse(req.body ?? {}) : { success: true as const, data: req.body as B };
       if (!b.success) throw zodToEm('body', b.error);
       const out = await handler({ params: p.data, query: q.data, body: b.data, req, res });
-      if (res.headersSent) return;
+      // a streamed body (sendFile) may not have sent its headers yet when the handler returns: never answer 204 over it
+      if (res.headersSent || res.writableEnded || res.locals['emStreaming'] === true) return;
       if (out === undefined) { res.status(spec.status ?? 204).end(); return; }
       res.status(spec.status ?? 200).json(out);
     } catch (e) { next(e); }

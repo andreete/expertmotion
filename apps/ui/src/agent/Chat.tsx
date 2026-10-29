@@ -4,9 +4,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AtSign, CircleHelp, Clapperboard, Copy, ExternalLink as ExternalIcon, FileText, Globe, ImagePlus, Info, Lightbulb, Loader, Maximize2, Minimize2, Music, Paperclip, Scissors, SendHorizontal, ShieldCheck, Square, TriangleAlert, X } from 'lucide-react';
 import { errCode, useStore } from '../state/store.js';
-import { PENDING_RUN } from '../state/reducer.js';
 import type { AgentKind, CapabilityRow, ChatDocumentDto, ChatTarget, ImageCandidateDto, MessageDto, WebSourceDto } from '../api/types.js';
-import { openExternal } from '../components/ExternalLink.js';
+import { useOpenSource } from '../components/ExternalLink.js';
 import type { AgentErrorDetail } from '../state/reducer.js';
 import { isRecentKey, keyRetryDelay } from '../state/key-retry.js';
 import { targetKey } from './targets.js';
@@ -135,12 +134,12 @@ function Elapsed({ since }: { since?: number | undefined }) {
 
 /** FR-214: stops the agent's current run (also before the Service answered the send: then only the local state is cleared). */
 export function useStopRun(agent: AgentKind): () => void {
-  const { state, actions, runtime } = useStore();
+  const { state, actions } = useStore();
+  // Review U2: the store cancels the run once its id is known (Stop while still "sending") and never an unrelated plan.
   return useCallback(() => {
-    const s = state.streaming[agent]; if (!s) return;
-    if (s.runId !== PENDING_RUN) void runtime.api.cancelAgentRun(s.runId).catch(() => undefined);
-    if (agent === 'editor') void actions.cancelPlan(); else actions.stopStreaming(agent);
-  }, [state.streaming, agent, actions, runtime]);
+    if (!state.streaming[agent]) return;
+    void actions.stopRun(agent);
+  }, [state.streaming, agent, actions]);
 }
 
 /**
@@ -183,6 +182,7 @@ const TOOL_PROGRESS: Record<string, string> = {
   'catalogue.search': 'ui.agent.progress.tool.catalogue', 'composition.get': 'ui.agent.progress.reading', 'assets.list': 'ui.agent.progress.tool.assets', 'assets.probe': 'ui.agent.progress.tool.probe',
   'hardware.profile': 'ui.agent.progress.tool.hardware', 'project.settings.get': 'ui.agent.progress.tool.settings', 'render.estimate': 'ui.agent.progress.tool.estimate', 'composition.validateOps': 'ui.agent.progress.tool.validate',
   'web.search': 'ui.agent.progress.tool.web.search', 'web.fetch': 'ui.agent.progress.tool.web.fetch', 'web.images': 'ui.agent.progress.tool.web.images',
+  'footage.read': 'ui.agent.progress.tool.footage',                                   // FR-262: transcribing the Creator's footage first
 };
 const hostOf = (u: string | undefined): string => { try { return u ? new URL(u).hostname.replace(/^www\./, '') : ''; } catch { return ''; } };
 /** QA 2026-10-26 #5 / FR-214: what the running agent is doing (agent.run.progress), in the Creator's words, per agent. */
@@ -225,6 +225,7 @@ export function ResearchBlocks({ m }: { m: MessageDto }) {
 }
 export function SourcesList({ items, queries }: { items: readonly WebSourceDto[]; queries: readonly string[] }) {
   const { t } = useStore();
+  const openExternal = useOpenSource();   // R1: Shell openSource route, Private Mode refusal with a copyable address
   return (
     <div data-el="agent.chat.message.sources" className="flex max-w-[92%] flex-col gap-0.5 rounded-[6px] border border-em-line px-2 py-1 text-[11px]">
       <span className="flex items-center gap-1 font-semibold text-em-text-2"><Globe size={11} aria-hidden />{t('ui.agent.research.sources', { n: items.length })}{queries.length ? <span className="font-normal text-em-muted" title={queries.join('\n')}> · {t('ui.agent.research.searched', { n: queries.length })}</span> : null}</span>
@@ -241,6 +242,7 @@ export function SourcesList({ items, queries }: { items: readonly WebSourceDto[]
 }
 export function ImageCandidates({ m, items }: { m: MessageDto; items: readonly ImageCandidateDto[] }) {
   const { t, actions } = useStore();
+  const openExternal = useOpenSource();
   const [busy, setBusy] = useState<string | null>(null);
   const licence = (x: ImageCandidateDto) => (x.license === 'cc0' ? 'CC0' : x.license === 'pdm' ? t('ui.agent.research.image.pd') : `CC ${x.license.toUpperCase()}${x.licenseVersion ? ` ${x.licenseVersion}` : ''}`);
   return (
@@ -292,12 +294,16 @@ export function ErrorCard({ agent, code, detail, stamp, onRetry, onRephrase, sav
     const fire = setTimeout(() => { setAuto((n) => n + 1); onRetry?.(); }, delay);
     return () => { clearInterval(tick); clearTimeout(fire); };
   }, [delay, code]); // eslint-disable-line react-hooks/exhaustive-deps
-  const title = t(`err.${code}.title`, vars);
+  // QA P1 2026-10-29: EM-4002 says "Key tidak valid" + the provider's own reason; the activation hint only for a recent key, only
+  // next to that reason, only while automatic retries remain; afterwards (or for an older key) "the key is wrong" + "Ganti key".
+  const keyReason = code === 'EM-4002' && typeof detail?.details?.['reason'] === 'string' ? String(detail.details['reason']).trim() : '';
+  const keyWrong = code === 'EM-4002' && delay === null;
+  const title = code === 'EM-4002' ? t('ui.agent.error.keyinvalid') : t(`err.${code}.title`, vars);
   // EM-4102 after the automatic retries: the Service's text is English provider wording; a free model gets its own copy.
   const free = code === 'EM-4102' && /:free$/.test(state.assignments?.[agent]?.modelId ?? '');
   const daily = code === 'EM-4102' && detail?.details?.['daily'] === true;
-  const reason = code === 'EM-4102' ? t(daily ? 'err.EM-4102.daily.body' : free ? 'err.EM-4102.free.body' : 'err.EM-4102.body', vars) : detail?.message && detail.message !== title ? detail.message : t(`err.${code}.body`, vars);
-  const list = errorActions(code).filter((a) => a !== 'retry' || onRetry).filter((a) => a !== 'rephrase' || onRephrase || true);
+  const reason = code === 'EM-4002' ? (keyReason ? t('ui.agent.error.keyreason', { provider: vars['provider'] ?? 'Provider', reason: keyReason }) : t('err.EM-4002.body', vars)) : code === 'EM-4102' ? t(daily ? 'err.EM-4102.daily.body' : free ? 'err.EM-4102.free.body' : 'err.EM-4102.body', vars) : detail?.message && detail.message !== title ? detail.message : t(`err.${code}.body`, vars);
+  const list = (keyWrong ? (['providers', 'retry'] as ErrorAction[]) : errorActions(code)).filter((a) => a !== 'retry' || onRetry).filter((a) => a !== 'rephrase' || onRephrase || true);
   const run = (a: ErrorAction) => {
     if (a === 'retry') onRetry?.();
     else if (a === 'providers') actions.setScreen({ kind: 'providers' });
@@ -305,13 +311,14 @@ export function ErrorCard({ agent, code, detail, stamp, onRetry, onRephrase, sav
     else if (a === 'switchmodel') openModelPicker(agent);
     else if (onRephrase) onRephrase(); else window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent } }));
   };
-  const label: Record<ErrorAction, string> = { retry: t('ui.sys.toast.tryagain'), providers: t('ui.agent.error.providers'), rephrase: t('ui.agent.error.rephrase'), switchmodel: t('ui.agent.common.switchmodel'), budget: t('err.EM-4201.action') };
+  const label: Record<ErrorAction, string> = { retry: t('ui.sys.toast.tryagain'), providers: code === 'EM-4002' ? t('ui.agent.error.replacekey') : t('ui.agent.error.providers'), rephrase: t('ui.agent.error.rephrase'), switchmodel: t('ui.agent.common.switchmodel'), budget: t('err.EM-4201.action') };
   return (
     <div data-el="agent.chat.message" data-agent={agent} data-role="system" data-code={code} role={saved ? undefined : 'alert'} className="rounded-[6px] border-l-2 border-em-danger bg-em-panel-2 px-2.5 py-1.5 text-[12px]">
       <div className="flex items-center gap-2"><ModeTag agent={agent} /><span className="flex-1 font-semibold">{title}</span><span className="t-mono text-[10px] text-em-muted">{code}</span>{stamp ? <span className="text-[10px] text-em-muted">{stamp}</span> : null}</div>
       <div data-el="agent.chat.error.reason" className="text-em-text-2">{reason}</div>
-      {recent && (
-        <div data-el="agent.chat.error.keyhint" role="status" className="mt-1 text-em-warn">{t('ui.agent.error.keyhint')}{left !== null ? ` ${t('ui.agent.error.keyhint.retry', { s: left })}` : ''}</div>
+      {keyWrong && <div data-el="agent.chat.error.keywrong" className="mt-1 text-em-text-2">{t('ui.agent.error.keywrong')}</div>}
+      {recent && delay !== null && (
+        <div data-el="agent.chat.error.keyhint" role="status" className="mt-1 text-em-warn">{keyReason ? t('ui.agent.error.keyhint') : ''}{left !== null ? ` ${t('ui.agent.error.keyhint.retry', { s: left })}` : ''}</div>
       )}
       {list.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-2">

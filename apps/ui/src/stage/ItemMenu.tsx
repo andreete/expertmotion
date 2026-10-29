@@ -11,6 +11,7 @@ import { formatTimecode } from '../i18n/index.js';
 import { splitPlayheadMs, splitTargets } from './split.js';
 import { copyableRefs, duplicableRefs, itemRefs, runCopy, runCut, runDelete, runDuplicate, runPaste } from './items.js';
 import { timelineClipboard } from './clipboard.js';
+import { playerBus } from './playerBus.js';
 import { cx } from '../components/ui.js';
 
 export interface ItemMenuAnchor { x: number; y: number; refs: ElementRefT[]; source: 'timeline' | 'canvas'; returnFocus?: HTMLElement | null }
@@ -46,7 +47,7 @@ export function ItemMenu({ anchor, onClose }: { anchor: ItemMenuAnchor; onClose:
     close(a !== 'ask');
     if (a === 'copy') runCopy({ model, projectId: state.project?.id ?? null, selection: anchor.refs, toast: actions.toast });
     else if (a === 'cut') runCut({ model, projectId: state.project?.id ?? null, selection: anchor.refs, itemsEdit: actions.itemsEdit, toast: actions.toast, t });
-    else if (a === 'paste') runPaste({ playheadMs: state.playheadMs, itemsEdit: actions.itemsEdit, toast: actions.toast, t });
+    else if (a === 'paste') runPaste({ playheadMs: playerBus.get()?.currentMs() ?? state.playheadMs, itemsEdit: actions.itemsEdit, toast: actions.toast, t });   // review U13: the live playhead, like Ctrl+V
     else if (a === 'delete') runDelete({ selection: anchor.refs, itemsEdit: actions.itemsEdit, toast: actions.toast, t });
     else if (a === 'duplicate') runDuplicate({ selection: anchor.refs, itemsEdit: actions.itemsEdit, toast: actions.toast, t });
     else if (a === 'split' && model) {

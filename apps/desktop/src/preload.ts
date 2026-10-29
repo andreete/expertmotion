@@ -10,6 +10,7 @@
  *   pickSavePath(options?)     → string | null
  *   openFolder(path)           → void       (reveal a folder/file in the OS file manager)
  *   openExternal(url)          → void       (system browser; HTTPS on EXTERNAL_HOSTS only, checked in main)
+ *   openSource(url)            → {ok} | {ok:false, code, message} (research source page: public https, refused in Private Mode)
  *   getPathsForFiles(files)    → string[]   (paths of files dropped on the Editor; Electron webUtils, no IPC)
  *   onServiceState(cb)         → unsubscribe (service up/down + re-bootstrap token push)
  *   onUpdateState(cb)          → unsubscribe (FR-152 updater state push)
@@ -26,6 +27,7 @@
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from './lib/constants.js';
+import type { OpenSourceResult } from './lib/open-source.js';
 import { parseServiceStatePush, type ServiceStatePush } from './lib/startup.js';
 import { EDITOR_MOUNT_SELECTOR, HEARTBEAT_MS } from './lib/heartbeat.js';
 
@@ -71,6 +73,7 @@ const api = {
   pickSavePath: (options?: PickSaveOptions): Promise<string | null> => ipcRenderer.invoke(IPC.pickSavePath, options ?? {}) as Promise<string | null>,
   openFolder: (targetPath: string): Promise<void> => ipcRenderer.invoke(IPC.openFolder, targetPath) as Promise<void>,
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke(IPC.openExternal, url) as Promise<void>,
+  openSource: (url: string): Promise<OpenSourceResult> => ipcRenderer.invoke(IPC.openSource, url) as Promise<OpenSourceResult>,
   // Drag-and-drop import: File.path was removed in Electron 32; webUtils returns the OS path of a dropped File ('' otherwise).
   getPathsForFiles: (files: readonly File[]): string[] => files.map((f) => webUtils.getPathForFile(f)).filter((p) => p.length > 0),
   onServiceState: (cb: (state: ServiceState) => void): (() => void) => {

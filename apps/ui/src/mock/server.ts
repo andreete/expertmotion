@@ -515,6 +515,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     p.plans.push(plan);
     for (const i of intents) if (i.status === 'queued') i.status = 'planned';
     const runId = newId(), modelId = assignments.editor?.modelId ?? 'mock-model';
+    plan.intentIds = intentIds; plan.agentRunId = runId;                         // as the Service's PlanDto (R-071)
     lastEditorRunId = runId;
     emit('agent.run.started', { projectId: p.dto.id, run: run(p, runId, 'editor', 'running', plan.id), agent: 'editor', modelId, planId: plan.id });
     // QA 2026-10-26 #5: what the agent is doing (agent.run.progress), as the Service reports it.
@@ -539,8 +540,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       p.usage.editor = { usedTokens: 1550, contextLength: 200_000 };
       const msg: MessageDto = { id: newId(), role: 'assistant', blocks: [{ type: 'text', text: `I prepared a plan: ${plan.goal}. Nothing changes until you press Execute.` }, { type: 'tool_result', name: 'plan', output: { planId: plan.id, status: 'valid', steps: plan.steps.length } }], agentRunId: runId, createdAt: nowIso() };
       p.messages.editor.push(msg);
+      emit('plan.ready', { projectId: p.dto.id, plan, runId });                // the Service announces the plan before the run ends
       emit('agent.run.done', { projectId: p.dto.id, run: run(p, runId, 'editor', 'done', plan.id), message: msg, usage: { inputTokens: 1240, outputTokens: 310, costUsd: 0.004, approximate: true, contextLength: 200_000 }, contextUsage: p.usage.editor });
-      emit('plan.ready', { projectId: p.dto.id, plan, runId });
       emit('intent.updated', { projectId: p.dto.id, queue: queueDto(p), changed: intentIds, reason: 'created' });
     });
     return plan;
@@ -580,7 +581,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       for (const i of p.intents) if (i.status === 'planned') { i.status = 'executed'; i.appliedVersion = p.pointer + 1; }
       settleParents(p);
       // Generator steps (tts.generate / captions.generate) start after the commit; a needs-model step is skipped.
-      const toolSteps = plan.steps.filter((st) => st.tool === 'tts.generate' || st.tool === 'captions.generate')
+      const toolSteps = plan.steps.filter((st) => st.tool === 'tts.generate' || st.tool === 'captions.generate' || st.tool === 'music.generate')
         .map((st) => ({ n: st.n, tool: st.tool, status: st.args['status'] === 'needs-model' ? 'skipped' as const : 'started' as const, ...(st.args['status'] === 'needs-model' ? { code: 'EM-7001' } : { jobId: newId() }) }));
       const res: ExecutionResult = { planId, ok: true, fromVersion: from, toVersion: v.hash, appliedOps: ops.length, diff: r.value.diff, durationMs: 41, ...(toolSteps.length ? { toolSteps } : {}) };
       p.results.set(planId, res);
@@ -1158,7 +1159,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     connections.push(c);
     if (!assignments.defaultConnectionId) assignments.defaultConnectionId = c.id;
     if (body['validateNow'] !== false && !settings.privateMode) {
-      if (/bad|invalid/i.test(secret)) { c.status = 'invalid'; throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.', { connectionId: c.id, status: 'invalid', recentKey: true }); }
+      if (/bad|invalid/i.test(secret)) { c.status = 'invalid'; throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.', { connectionId: c.id, status: 'invalid', recentKey: true, reason: 'User not found.' }); }
       c.status = 'valid'; c.validatedAt = nowIso(); c.modelsFetchedAt = nowIso();
     }
     emit('settings.changed', { scope: 'providers' });
@@ -1217,7 +1218,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     const body = obj(b), secret = String(body['secret'] ?? '').trim();
     if (body['provider'] !== 'openrouter') throw new HttpError(422, 'EM-9004', 'Not available in this version yet.', { feature: `provider.${String(body['provider'])}`, plannedPriority: 'P1' });
     if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.');
-    if (/bad|invalid/i.test(secret)) throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.', { status: 'invalid', recentKey: true });
+    if (/bad|invalid/i.test(secret)) throw new HttpError(422, 'EM-4002', 'The key was not accepted by the provider.', { status: 'invalid', recentKey: true, reason: 'User not found.' });
     return { status: 'valid', validatedAt: nowIso(), models: CAPABILITIES };
   });
   r('POST', '/providers/test', (_m, b) => {

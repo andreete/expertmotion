@@ -10,6 +10,7 @@ import type { CheckpointDto, DiskUsageDto, Fps, ProjectDto, ProjectSettingsExtra
 import { Button, Empty, Field, IconButton, Modal, Spinner, inputCls, cx } from '../components/ui.js';
 import { formatBytes, formatDate, formatDuration, type Lang } from '../i18n/index.js';
 import { guardUnsaved } from './Lifecycle.js';
+import { withoutScratch } from '../startup/scratch.js';
 
 const MIN_FIXED_S = 1, MAX_FIXED_S = 1800;     // FR-015: fixed duration 1 s … 30 min
 
@@ -114,7 +115,7 @@ export function OpenProjectDialog({ onClose }: { onClose: () => void }) {
   const [keepOutputs, setKeepOutputs] = useState(true);
   const [opening, setOpening] = useState<string | null>(null);              // FR-186: "Membuka proyek…" on the chosen row
   const load = () => {
-    void runtime.api.listProjects({ limit: 200 }).then((p) => setItems(p.items)).catch((e) => { actions.error(e); setItems([]); });
+    void runtime.api.listProjects({ limit: 200 }).then((p) => setItems(withoutScratch(p.items))).catch((e) => { actions.error(e); setItems([]); });   // FR-260
     void runtime.api.diskUsage().then(setUsage).catch(() => setUsage(null));
   };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -131,7 +132,7 @@ export function OpenProjectDialog({ onClose }: { onClose: () => void }) {
     try {
       await runtime.api.deleteProject(p.id, { permanent: true, keepOutputs });
       setConfirm(null); setTyped(''); setKeepOutputs(true);
-      if (p.id === state.project?.id) dispatch({ type: 'projectClosed' });
+      if (p.id === state.project?.id) { dispatch({ type: 'projectClosed' }); void actions.openBlankProject(); }   // FR-260: an empty project, not the Start screen
       actions.toast('success', 'ui.scr.project.open.deleted', { name: p.name });
       load();
     } catch (e) { actions.error(e); }

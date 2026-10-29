@@ -10,7 +10,7 @@ import { scriptPages, type ToolModel } from '@expertmotion/agents';
 import { applyOperations, deriveTiming, type CompositionModelT, type GeneratedResult, type OperationT } from '@expertmotion/composition-model';
 import { compileDefaults } from '@expertmotion/catalogue';
 import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
-import { CancelledError, JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, preparePiperVoice, removeJobDir, synthesize, transcribe, transcribeToPages,
+import { SUPERTONIC_FILES, CancelledError, JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, preparePiperVoice, removeJobDir, synthesize, transcribe, transcribeToPages,
   displayNameOf, buildTranscript, cuesToCaptionPages, energyFrames, parseWav, refineWordTimes, speechWindow, transcriptToSrt, wavDurationMs,
   MUSIC_LIBRARY, MUSIC_LIBRARY_LICENCE, type JobContext, type JobEvent, type ModelDef, type RecognisedToken, type Transcript } from '@expertmotion/models';
 import { voicesServiceOf, type VoiceDto } from './voices-service.js';
@@ -18,7 +18,7 @@ import { musicLibraryOf } from './music-library-service.js';
 import type { ServiceContext } from '../context.js';
 import { em, emit } from './common.js';
 import { getAsset, listAssets, toFacts } from './assets-repo.js';
-import { ingestOf, inspectSource } from './ingest.js';
+import { assetDir, ingestOf, inspectSource } from './ingest.js';
 import { modelsServiceOf } from './models-service.js';
 import { ToolError, getEngineLog, runTool } from './proc.js';
 import { defaultRemotionPort, type RendererLike } from './render-service.js';
@@ -27,6 +27,8 @@ import { getOutput, outputRelPath, toOutputDto } from './render-repo.js';
 import { s2, useModel } from './state.js';
 import { assertEngineSpawnAllowed } from './spawn-gate.js';
 
+/** Review A2: voice-first clips remembered for reuse (ids + durations only). */
+const VOICE_REUSE_MAX = 256;
 export const GENERATOR_KINDS = ['voice', 'music', 'thumbnail', 'captions', 'hashtags'] as const;
 /** FR-251 batch input / output (documented in API_SPECIFICATION R-138 and for the agent runtime). */
 export interface VoiceBatchInput { clips: Array<{ id: string; text: string; written?: string }>; voiceId: string; language?: 'id' | 'en'; speed?: number; style?: string; maxTotalMs?: number;
@@ -46,9 +48,15 @@ export const HASHTAG_TONES = ['casual', 'professional', 'energetic', 'informativ
 /** FR-104: caption style applied on Insert when the project has none (same default as op:caption.importSrt). */
 export const DEFAULT_CAPTION_STYLE = 'preset:caption.editorial';
 /** FR-102: an inserted music bed uses the preset:audio.bed-soft Compile defaults (volume, loop, fades). */
-export function musicBedOp(assetId: string): OperationT {
+export function musicBedOp(assetId: string, opts: { volume?: number } = {}): OperationT {
   const cd = compileDefaults('preset:audio.bed-soft');
-  return { op: 'op:audio.addBed', target: { kind: 'project' }, args: { volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000, ...(cd?.args ?? {}), assetId } } as OperationT;
+  const args: Record<string, unknown> = { volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000, ...(cd?.args ?? {}), assetId };
+  if (opts.volume !== undefined) args['volume'] = opts.volume;
+  // FR-266: the bed always ducks under speech (voice layers and footage with sound): its own level between speech, ~1/3 under it
+  const v = Number(args['volume']);
+  args['duckingPresetId'] = 'preset:audio.duck-voice';
+  args['duckingParams'] = { volume: v, duckTo: Math.round(v * 0.35 * 1000) / 1000, rampMs: 400 };
+  return { op: 'op:audio.addBed', target: { kind: 'project' }, args } as OperationT;
 }
 /** FR-104: Sequence-mode transcription: pages of one clip's source audio moved onto the Sequence timeline (trim, rate, window). */
 export function shiftPages(pages: unknown[], w: { fromMs: number; toMs: number; trimBeforeMs: number; playbackRate: number }): unknown[] {
@@ -104,7 +112,7 @@ export interface EngineStepCtx { engineDir: string; jobDir: string; signal: Abor
 /** Engine steps (default: packages/models adapters). Tests inject fakes; nothing here knows engine argv. */
 export interface GeneratorEngines {
   captions(i: { modelPath: string; wavPath: string; language: string; audioDurationMs: number }, c: EngineStepCtx): Promise<{ pages: unknown[]; language: string | null }>;
-  voice(i: { modelDir: string; text: string; speed?: number }, c: EngineStepCtx): Promise<{ wavPath: string }>;
+  voice(i: { modelDir: string; text: string; speed?: number; speakerId?: number; language?: 'id' | 'en' }, c: EngineStepCtx): Promise<{ wavPath: string }>;
   /** FR-249: word timings for alignment (whisper.cpp word tokens of a 16 kHz mono wav). Default: transcribeToPages captions. */
   wordTokens?(i: { modelPath: string; wavPath: string; language: string; audioDurationMs: number }, c: EngineStepCtx): Promise<RecognisedToken[]>;
   music(i: { modelDir: string; prompt: string; durationMs: number; seed: number; tier: 'T0' | 'T1' | 'T2' }, c: EngineStepCtx): Promise<{ wavPath: string }>;
@@ -146,7 +154,11 @@ function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
       .map((x) => ({ text: x.text, fromMs: x.startMs, toMs: x.endMs })),
     captions: async (i, c) => { const r = await transcribeToPages({ modelPath: i.modelPath, wavPath: i.wavPath, language: i.language, threads: threads(), audioDurationMs: i.audioDurationMs }, ectx(c)); return { pages: r.pages, language: r.language }; },
     voice: async (i, c) => {
-      // Kokoro (sherpa-onnx export) ships a voice table; Piper/VITS voices are one .onnx + tokens.txt.
+      // FR-267: Supertonic 3 (vector_estimator + voice.bin speaker table); Kokoro (sherpa-onnx export) ships a voice table;
+      // Piper/VITS voices are one .onnx + tokens.txt.
+      if (fs.existsSync(path.join(i.modelDir, SUPERTONIC_FILES.vectorEstimator))) {
+        return synthesize({ voice: { kind: 'supertonic', dir: i.modelDir, lang: i.language ?? 'id', ...(i.speakerId !== undefined ? { speakerId: i.speakerId } : {}) }, text: i.text, threads: threads(), ...(i.speed !== undefined ? { speed: i.speed } : {}) }, ectx(c));
+      }
       const kokoro = fs.existsSync(path.join(i.modelDir, 'voices.bin'));
       const lexicon = path.join(i.modelDir, 'lexicon-us-en.txt');
       const voice = kokoro
@@ -218,6 +230,9 @@ export class GeneratorsService {
   private readonly runner: JobRunner;
   private readonly engines: GeneratorEngines;
   private readonly inserts = new Map<string, boolean>();
+  /** Review A2: voice-first clips already made (project, voice, speed, language, style, text) → asset, so a re-planned stale plan reuses
+   *  them instead of paying for every voice again. Metadata only (ids + durations), at most VOICE_REUSE_MAX entries. */
+  private readonly voiceReuse = new Map<string, { assetId: string; durationMs: number }>();
   /** FR-252: plan generator steps waiting for a model install (model key → held runs). */
   private readonly held = new Map<string, Array<{ projectId: string; planId: string; steps: Array<{ n: number; tool: string; args: Record<string, unknown>; dependsOn: number[] }> }>>();
   constructor(private readonly ctx: ServiceContext, private readonly opts: GeneratorsOptions = {}) {
@@ -351,8 +366,15 @@ export class GeneratorsService {
               ...(typeof st.args['speed'] === 'number' ? { speed: st.args['speed'] } : {}), ...(typeof st.args['style'] === 'string' ? { style: st.args['style'] } : {}), insert: true });
             const wait = this.waitJob(String(job['id'])); voices.set(st.n, wait); voiceAt.set(wait, typeof st.args['atMs'] === 'number' ? st.args['atMs'] : 0);
             notice(st.n, st.tool, 'started', { jobId: job['id'] });
+          } else if (st.tool === 'music.generate') {
+            // FR-266: a best-fit CC0 library track (downloaded + verified on first use), looped / faded to the video, ducked under speech
+            const model = ctx.hooks.composition(projectId).model;
+            const durationMs = Math.max(1000, Math.min(1_800_000, typeof st.args['durationMs'] === 'number' ? st.args['durationMs'] : deriveTiming(model).durationMs));
+            const job = await this.create(projectId, 'music', { prompt: String(st.args['prompt'] ?? 'calm'), durationMs, modelKey: 'loop-library-cc0', insert: true,
+              ...(typeof st.args['volume'] === 'number' ? { volume: st.args['volume'] } : {}), ...(typeof st.args['trackId'] === 'string' ? { trackId: st.args['trackId'] } : {}) });
+            notice(st.n, st.tool, 'started', { jobId: job['id'] });
           } else if (st.tool === 'captions.generate' && st.args['source'] === 'sequence') {
-            const job = await this.create(projectId, 'captions', { source: 'sequence', language: lang(st.args), insert: true });
+            const job = await this.create(projectId, 'captions', { source: 'sequence', language: lang(st.args), insert: true, ...(typeof st.args['presetId'] === 'string' ? { presetId: st.args['presetId'] } : {}) });
             notice(st.n, st.tool, 'started', { jobId: job['id'] });
           } else if (st.tool === 'captions.generate') {
             const dep = st.dependsOn.map((n) => voices.get(n)).find(Boolean) ?? [...voices.values()][0];
@@ -392,6 +414,31 @@ export class GeneratorsService {
     })();
     void work.catch(() => undefined);
     return steps.map((st) => ({ n: st.n, tool: st.tool, status: 'started' as const }));
+  }
+  /**
+   * FR-262: transcription of the Creator's footage before an Editor run ("buat video dari footage ini"): one captions job per
+   * video asset (insert: false — nothing changes on the timeline), one at a time, bounded by `timeoutMs`; the result's `sources`
+   * become AssetFacts.transcript (assets-repo withTranscripts). Without an installed transcription model nothing runs (the
+   * plan then trims by duration only). Resolves with the ids that were read.
+   */
+  async readFootage(projectId: string, assetIds: string[], o: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string[]> {
+    const tier = this.ctx.hooks.tier();
+    const key = defaultModelFor('stt', tier);
+    const models = modelsServiceOf(this.ctx);
+    const stt = (await models.isInstalled(key)) ? key : (models.defs().find((d) => d.task === 'stt' && d.availability !== 'virtual')?.key ?? null);
+    if (!stt || !(await models.isInstalled(stt))) return [];
+    const done: string[] = [];
+    const until = Date.now() + (o.timeoutMs ?? 150_000);
+    for (const id of assetIds) {
+      if (o.signal?.aborted || Date.now() > until) break;
+      try {
+        const job = await this.create(projectId, 'captions', { assetId: id, modelKey: stt, insert: false, purpose: 'footage-read' });
+        const row = await Promise.race([this.waitJob(String(job['id'])), new Promise<undefined>((r) => { const h = setTimeout(() => r(undefined), Math.max(1000, until - Date.now())); h.unref?.(); })]);
+        if (row?.status === 'done') done.push(id);
+        else { if (!row) this.cancel(String(job['id'])); break; }
+      } catch (e) { this.ctx.log.info({ projectId, assetId: id, code: e instanceof EmError ? e.code : 'EM-7101' }, 'footage read skipped'); }
+    }
+    return done;
   }
   /** FR-252: continues the plan steps that waited for `modelKey` (called when the model is installed). */
   resumeHeld(modelKey: string): number {
@@ -542,7 +589,7 @@ export class GeneratorsService {
     if (!voice.cloud) {
       const def = await this.requireInstalled(voice.modelKey!, 'Generate Voice');
       const speed = o.speed === undefined ? undefined : Math.max(0.8, Math.min(1.2, o.speed));
-      const r = await this.engineStep(j, 'sherpa-onnx', 'synthesize', (c) => this.engines.voice({ modelDir: models.dirOf(def), text: clip.text, ...(speed !== undefined ? { speed } : {}) }, { ...c, onProgress: (f) => o.part?.(f * 0.6) }));
+      const r = await this.engineStep(j, 'sherpa-onnx', 'synthesize', (c) => this.engines.voice({ modelDir: models.dirOf(def), text: clip.text, language: o.language, ...(voice.speakerId !== undefined ? { speakerId: voice.speakerId } : {}), ...(speed !== undefined ? { speed } : {}) }, { ...c, onProgress: (f) => o.part?.(f * 0.6) }));
       if (voice.pitch) {
         const f = 2 ** (voice.pitch / 12); const sr = parseWav(fs.readFileSync(r.wavPath)).sampleRate;
         await this.ffmpeg(j, ['-i', r.wavPath, '-af', `asetrate=${Math.round(sr * f)},aresample=${sr},atempo=${(1 / f).toFixed(5)}`, '-ac', '1', '-c:a', 'pcm_s16le', wav], dir);
@@ -574,9 +621,18 @@ export class GeneratorsService {
         }
       }
     }
-    const frames = energyFrames(buf);
-    const transcript = buildTranscript({ spoken: clip.text, ...(clip.written ? { written: clip.written } : {}), language: o.language, durationMs, tokens, method, speech: speechWindow(buf) ?? { fromMs: 0, toMs: durationMs },
-      refine: (w) => refineWordTimes(w, frames) });
+    // R4: the audio is already made (and possibly paid for); a timing failure falls back to proportional timing, never loses the clip
+    const base = { spoken: clip.text, ...(clip.written ? { written: clip.written } : {}), language: o.language, durationMs, tokens, method };
+    let transcript: ReturnType<typeof buildTranscript>;
+    try {
+      const frames = energyFrames(buf);
+      transcript = buildTranscript({ ...base, speech: speechWindow(buf) ?? { fromMs: 0, toMs: durationMs }, refine: (w) => refineWordTimes(w, frames) });
+    } catch (e) {
+      ctx.log.warn({ jobId: j.jobId, err: (e instanceof Error ? e.message : String(e)).slice(0, 300) }, 'voice energy timing failed; timing without the energy envelope');
+      try { transcript = buildTranscript({ ...base, speech: { fromMs: 0, toMs: durationMs } }); } catch (e2) {
+        throw new EmError('EM-7101', 'The voice audio was generated but its word timing could not be computed.', { details: { engine: 'transcript', cause: 'timing', message: (e2 instanceof Error ? e2.message : String(e2)).slice(0, 2000) }, cause: e2 });
+      }
+    }
     o.part?.(1);
     const assetId = await this.register(projectId, wav, `${clip.name}.wav`);
     ctx.db.prepare('INSERT OR REPLACE INTO voice_transcripts (asset_id, project_id, voice_id, method, json, srt, created_at) VALUES (?,?,?,?,?,?,?)')
@@ -593,7 +649,7 @@ export class GeneratorsService {
       let src: string;
       if (!voice.cloud) {
         const def = await this.requireInstalled(voice.modelKey!, 'Generate Voice');
-        src = (await this.engineStep(j, 'sherpa-onnx', 'preview', (c) => this.engines.voice({ modelDir: modelsServiceOf(this.ctx).dirOf(def), text }, c))).wavPath;
+        src = (await this.engineStep(j, 'sherpa-onnx', 'preview', (c) => this.engines.voice({ modelDir: modelsServiceOf(this.ctx).dirOf(def), text, language, ...(voice.speakerId !== undefined ? { speakerId: voice.speakerId } : {}) }, c))).wavPath;
       } else {
         const res = await voicesServiceOf(this.ctx).synthesizeCloud(voice, text, { language, signal: ac.signal });
         src = path.join(dir, `cloud.${res.ext}`); fs.writeFileSync(src, res.audio);
@@ -603,7 +659,9 @@ export class GeneratorsService {
       const af = voice.pitch ? ['-af', `aresample=${sr},asetrate=${Math.round(sr * f)},aresample=${sr},atempo=${(1 / f).toFixed(5)}`] : [];
       const tmp = path.join(dir, 'preview.wav');
       await this.ffmpeg(j, ['-i', src, ...af, '-ac', '1', '-ar', String(sr), '-c:a', 'pcm_s16le', tmp], dir);
-      fs.copyFileSync(tmp, outFile);
+      // A8: atomic — the cache is served when the file exists, so a half-written WAV must never appear under its final name
+      const part = `${outFile}.${jobId}.part`;
+      try { fs.copyFileSync(tmp, part); fs.renameSync(part, outFile); } finally { fs.rmSync(part, { force: true }); }
     } finally { await removeJobDir(this.ctx.paths.tmp, jobId).catch(() => undefined); }
   }
   /** FR-247 (R-222): a downloaded library track copied into the project as an Asset (`music-<id>.mp3`). */
@@ -616,8 +674,9 @@ export class GeneratorsService {
     try { return { assetId: await this.register(projectId, copy, `music-${t.id}.mp3`) }; } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
   /** FR-249: the stored transcript of a voice Asset (built from its script), or null. */
-  transcriptOf(assetId: string): Transcript | null {
-    const r = this.ctx.db.prepare('SELECT json FROM voice_transcripts WHERE asset_id = ?').get(assetId) as { json: string } | undefined;
+  transcriptOf(assetId: string, projectId?: string): Transcript | null {   // A8: the route passes its project, so another project's transcript is never served
+    const r = (projectId === undefined ? this.ctx.db.prepare('SELECT json FROM voice_transcripts WHERE asset_id = ?').get(assetId)
+      : this.ctx.db.prepare('SELECT json FROM voice_transcripts WHERE asset_id = ? AND project_id = ?').get(assetId, projectId)) as { json: string } | undefined;
     if (!r) return null; try { return JSON.parse(r.json) as Transcript; } catch { return null; }
   }
   /** FR-250: ONE op:caption.setPages with the cues of every given clip at its timeline position; other pages outside those windows stay. */
@@ -646,24 +705,45 @@ export class GeneratorsService {
     const style = typeof b['style'] === 'string' ? b['style'] : undefined;
     const maxSpeed = voice.cloud ? (voice.provider === 'elevenlabs' ? 1.2 : 1.25) : 1.2;
     const gapAfter = (i: number): number => (i === clips.length - 1 ? 0 : scenes ? (sceneOf.get(clips[i]!.id) === sceneOf.get(clips[i + 1]!.id) ? gap : sceneGap) : gap);
+    const reuse = b['insert'] === false;                                    // review A2: only the agent's voice-first batches (never a "new take")
     return { modelKey: voice.cloud ? null : voice.modelKey ?? null, run: (j) => this.withJobDir(j, async () => {
       let speed = typeof b['speed'] === 'number' ? b['speed'] : 1;
+      const since = this.ctx.now();
+      const fresh: string[][] = [[], []];                                   // review A3: assets this batch registered, per pass
       const runAll = async (pass: number) => {
         const out: Array<{ id: string; assetId: string; durationMs: number; transcript: Transcript; usd: number }> = [];
         for (const [i, c] of clips.entries()) {
+          const key = [projectId, voice.id, speed, language, style ?? '', c.text, c.written ?? ''].join('\u0000');
+          const hit = reuse ? this.voiceReuse.get(key) : undefined;
+          const hitTranscript = hit && getAsset(this.ctx, hit.assetId, projectId)?.status === 'ready' ? this.transcriptOf(hit.assetId) : null;
+          if (hit && hitTranscript) { out.push({ id: c.id, assetId: hit.assetId, durationMs: hit.durationMs, transcript: hitTranscript, usd: 0 }); continue; }
+          if (hit) this.voiceReuse.delete(key);
           const r = await this.voiceClip(j, projectId, voice, { name: pass ? `${c.id}-${pass + 1}` : c.id, text: c.text, ...(c.written ? { written: c.written } : {}) },
             { language, speed, ...(style ? { style } : {}), part: (f) => j.progress(Math.min(0.94, (pass ? 0.5 : 0) + ((i + f) / clips.length) * (pass ? 0.45 : (maxTotal ? 0.5 : 0.9))), `clip ${c.id}`) });
+          fresh[pass]!.push(r.assetId);
+          if (reuse) { this.voiceReuse.delete(key); this.voiceReuse.set(key, { assetId: r.assetId, durationMs: r.durationMs }); while (this.voiceReuse.size > VOICE_REUSE_MAX) this.voiceReuse.delete(this.voiceReuse.keys().next().value!); }
           out.push({ id: c.id, ...r });
         }
         return out;
       };
       const total = (rs: ReadonlyArray<{ durationMs: number }>) => rs.reduce((s, r, i) => s + r.durationMs + gapAfter(i), 0);
-      let done = await runAll(0); let regenerated = false;
-      if (maxTotal !== null && total(done) > maxTotal && speed < maxSpeed) {
-        // shorten by speaking a little faster: the speech part must shrink by (total − max), gaps stay
-        const speech = done.reduce((s, r) => s + r.durationMs, 0); const gaps = total(done) - speech;
-        speed = Math.min(maxSpeed, Math.round(speed * (speech / Math.max(1, maxTotal - gaps)) * 1.02 * 100) / 100);
-        done = await runAll(1); regenerated = true;
+      let done: Awaited<ReturnType<typeof runAll>>; let regenerated = false;
+      try {
+        done = await runAll(0);
+        if (maxTotal !== null && total(done) > maxTotal && speed < maxSpeed) {
+          // shorten by speaking a little faster: the speech part must shrink by (total − max), gaps stay
+          const speech = done.reduce((s, r) => s + r.durationMs, 0); const gaps = total(done) - speech;
+          speed = Math.min(maxSpeed, Math.round(speed * (speech / Math.max(1, maxTotal - gaps)) * 1.02 * 100) / 100);
+          done = await runAll(1); regenerated = true;
+          // review A3: the first, too-long takes are replaced: they leave the Library
+          const kept = new Set(done.map((r) => r.assetId));
+          this.discardGenerated(projectId, fresh[0]!.filter((id) => !kept.has(id)), since);
+        }
+        if (j.signal.aborted) throw new CancelledError();                  // Cancel during the last clip: nothing is kept either
+      } catch (e) {
+        // review A3: a failed or cancelled batch places nothing, so the clips it already made leave the Library too (none is half-used)
+        this.discardGenerated(projectId, [...fresh[0]!, ...fresh[1]!], since);
+        throw e;
       }
       let at = startMs;
       const placed = done.map((r, i) => { const atMs = at; at += r.durationMs + gapAfter(i); return { ...r, atMs, endMs: atMs + r.durationMs, scene: sceneOf.get(r.id) ?? null }; });
@@ -675,10 +755,40 @@ export class GeneratorsService {
         clips: placed.map((p) => ({ id: p.id, assetId: p.assetId, name: getAsset(this.ctx, p.assetId, projectId)?.name ?? `${p.id}.wav`, durationMs: p.durationMs, atMs: p.atMs, endMs: p.endMs, scene: p.scene, timing: p.transcript.method, cues: p.transcript.cues.map(cueDto) })) }, ops };
     }) };
   }
-  /** FR-251 for the agent runtime: runs a batch and resolves with the clips once done; rejects with the job's EM code (nothing placed). */
-  async voiceBatch(projectId: string, body: VoiceBatchInput): Promise<VoiceBatchResult> {
+  /**
+   * Review A3: removes clips a voice batch registered but will not use (failed / cancelled batch, replaced first pass). Only assets made
+   * by this batch (created at or after `since`, so never an older asset the ingest de-duplicated to) and not on the current head.
+   */
+  private discardGenerated(projectId: string, ids: readonly string[], since: string): void {
+    const ctx = this.ctx; const gone: string[] = [];
+    let head = '';
+    try { head = JSON.stringify(ctx.hooks.composition(projectId).model); } catch { /* no head yet */ }
+    for (const id of new Set(ids)) {
+      const a = getAsset(ctx, id, projectId);
+      if (!a || a.created_at < since || head.includes(id)) continue;
+      try {
+        ctx.db.transaction(() => {
+          ctx.db.prepare('UPDATE generator_jobs SET result_asset_id = NULL WHERE result_asset_id = ?').run(id);
+          ctx.db.prepare('DELETE FROM voice_transcripts WHERE asset_id = ?').run(id);
+          ctx.db.prepare('DELETE FROM assets WHERE id = ?').run(id);
+        })();
+        fs.rmSync(assetDir(ctx, projectId, id), { recursive: true, force: true });
+        for (const [k, v] of this.voiceReuse) if (v.assetId === id) this.voiceReuse.delete(k);
+        gone.push(id);
+      } catch (e) { ctx.log.warn({ projectId, assetId: id, err: String(e).slice(0, 300) }, 'unused voice clip could not be removed'); }
+    }
+    // the Asset Panel reloads its list (same notice as FR-052 restores)
+    if (gone.length) ctx.bus.emit('service.notice', { at: ctx.now(), kind: 'assets-removed', projectId, assetIds: gone });
+  }
+  /** FR-251 for the agent runtime: runs a batch and resolves with the clips once done; rejects with the job's EM code (nothing placed).
+   *  Review A1: `signal` (Cancel on the Plan Card) cancels the batch job; the clips it already made are removed (A3). */
+  async voiceBatch(projectId: string, body: VoiceBatchInput, opts: { signal?: AbortSignal } = {}): Promise<VoiceBatchResult> {
+    if (opts.signal?.aborted) throw em('EM-4303', 'The change was cancelled before it was applied. Nothing changed.', { status: 409 });
     const job = await this.create(projectId, 'voice', { ...body, clips: body.clips, language: body.language ?? 'id', insert: body.insert ?? false });
-    const row = await this.waitJob(String(job['id']));
+    const onAbort = () => { this.cancel(String(job['id'])); };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    const row = await this.waitJob(String(job['id'])).finally(() => opts.signal?.removeEventListener('abort', onAbort));
+    if (opts.signal?.aborted) throw em('EM-4303', 'The change was cancelled before it was applied. Nothing changed.', { status: 409, details: { jobId: job['id'] } });
     if (!row || row.status !== 'done') throw em((row?.error_code ?? 'EM-7101') as 'EM-7101', 'The voice clips could not be generated.', { details: { jobId: job['id'], status: row?.status ?? 'missing' } });
     return { jobId: row.id, ...(JSON.parse(row.result_json ?? '{}') as Omit<VoiceBatchResult, 'jobId'>) };
   }
@@ -702,6 +812,7 @@ export class GeneratorsService {
     return { modelKey: def.key, run: (j) => this.withJobDir(j, async () => {
       const modelPath = firstWith(models.dirOf(def), /\.bin$/);
       const pages: unknown[] = []; let detected: string | null = null;
+      const sources: Array<{ assetId: string; pages: unknown[] }> = [];             // FR-261: what each clip says, in its SOURCE time
       for (const [i, sg] of segs.entries()) {
         const srcMs = Math.max(100, Math.round((sg.toMs - sg.fromMs) * sg.playbackRate));
         const wav = path.join(ctx.paths.tmp, 'jobs', j.jobId, `seg-${i + 1}.wav`);
@@ -711,9 +822,12 @@ export class GeneratorsService {
         detected ??= r.language;
         // the extracted segment starts at the clip's trim point: page times are relative to it
         pages.push(...shiftPages(r.pages, { fromMs: sg.fromMs, toMs: sg.toMs, trimBeforeMs: 0, playbackRate: sg.playbackRate }));
+        sources.push({ assetId: sg.assetId, pages: shiftPages(r.pages, { fromMs: sg.trimBeforeMs, toMs: sg.trimBeforeMs + srcMs, trimBeforeMs: 0, playbackRate: 1 }) });
       }
       pages.sort((a, b) => (a as { startMs: number }).startMs - (b as { startMs: number }).startMs);
-      return { result: { pages, language: detected, modelId: def.key, durationMs: timing.durationMs, source: 'sequence' }, ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT] };
+      // FR-261: a caption look asked by the plan (kinetic captions over footage) comes with the pages
+      const style = typeof b['presetId'] === 'string' && /^preset:caption\.[a-z0-9-]+$/.test(b['presetId']) ? [{ op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: b['presetId'] } } as OperationT] : [];
+      return { result: { pages, language: detected, modelId: def.key, durationMs: timing.durationMs, source: 'sequence', sources }, ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT, ...style] };
     }) };
   }
   private async prepare(projectId: string, kind: GeneratorKind, b: Record<string, unknown>): Promise<Prepared> {
@@ -743,7 +857,7 @@ export class GeneratorsService {
         let placements: AudioPlacement[] = [];
         try { placements = audioPlacements(ctx.hooks.composition(projectId).model, (id) => getAsset(ctx, id, projectId)?.duration_ms ?? null, { assetId: asset.id }); } catch { /* no head yet */ }
         const pages = placements.length ? placePages(r.pages, placements) : r.pages;
-        return { result: { pages, language: r.language, modelId: def.key, durationMs: asset.duration_ms, placements: placements.length }, ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } }] };
+        return { result: { pages, language: r.language, modelId: def.key, durationMs: asset.duration_ms, placements: placements.length, sources: [{ assetId: asset.id, pages: r.pages }] }, ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } }] };
       }) };
     }
     if (kind === 'voice') {
@@ -789,7 +903,7 @@ export class GeneratorsService {
           '-t', (durationMs / 1000).toFixed(3), '-af', `afade=t=out:st=${fadeOut}:d=1.5`, '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', wav], cwd: path.dirname(wav), timeoutMs: 120_000, signal: j.signal }));
         j.progress(0.9, 'ingest');
         const assetId = await this.register(projectId, wav, `music-${track.id}.wav`);
-        return { assetId, result: { assetId, durationMs, source: 'loop-library', instrumental: true, cc0: true, trackId: track.id, title: track.title, artist: track.artist, credit: track.credit, licence: MUSIC_LIBRARY_LICENCE.url }, ops: [musicBedOp(assetId)] };
+        return { assetId, result: { assetId, durationMs, source: 'loop-library', instrumental: true, cc0: true, trackId: track.id, title: track.title, artist: track.artist, credit: track.credit, licence: MUSIC_LIBRARY_LICENCE.url }, ops: [musicBedOp(assetId, typeof b['volume'] === 'number' && b['volume'] >= 0.02 && b['volume'] <= 1 ? { volume: b['volume'] } : {})] };
       }) };
     }
     if (kind === 'thumbnail') {
@@ -833,9 +947,13 @@ export class GeneratorsService {
       let model = structuredClone(head.model);
       const frameMs = typeof b['frameMs'] === 'number' ? b['frameMs'] : 0;
       if (title) {
-        const r = applyOperations(model, [{ op: 'op:text.add', args: { text: title, variant: THUMB_VARIANT[style], atMs: frameMs, durationMs: 1000 } }],
+        // QA P1 2026-10-29 "Title on the cover" missing: the variant's entrance motion (title = rise) starts at the captured frame, so
+        // the still showed it at opacity 0, and the other candidates fell outside its 1 s. The cover title is static (motion none)
+        // and spans the whole Sequence, so every candidate frame shows it fully.
+        const coverMs = Math.max(1000, Math.round(deriveTiming(model).durationMs));
+        const r = applyOperations(model, [{ op: 'op:text.add', args: { text: title, variant: THUMB_VARIANT[style], atMs: 0, durationMs: coverMs, motion: { presetId: 'preset:motion.none' } } }],
           { assets: listAssets(ctx, projectId).map(toFacts), tier, newId: ctx.newId });
-        if (r.ok) model = r.value.model;
+        if (r.ok) model = r.value.model; else ctx.log.warn({ projectId }, "thumbnail cover title could not be added");
       }
       const assetIds = [...new Set([...model.tracks.video.flatMap((c) => (c.assetId ? [c.assetId] : [])), ...model.tracks.audio.map((a) => a.assetId)])];
       // candidates: the chosen frame first, then frames spread over the Sequence (still + title overlay each)

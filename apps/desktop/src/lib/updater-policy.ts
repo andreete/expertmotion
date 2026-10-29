@@ -42,6 +42,32 @@ export function shouldCheckForUpdates(ctx: CheckContext, intervalMs: number = UP
   return { check: true };
 }
 
+/** Private Mode as the Shell can know it: `unknown` while the Local Service is not ready or its settings cannot be read. */
+export type PrivateModeState = 'on' | 'off' | 'unknown';
+export interface CheckPlanContext extends Omit<CheckContext, 'privateMode'> {
+  /** false when this build has no update feed (no app-update.yml): nothing about updates is ever shown. */
+  feed: boolean;
+  privateMode: PrivateModeState;
+}
+export type CheckPlan = { check: true }
+  | { check: false; reason: 'no-feed' | 'service-not-ready' | 'private-mode' | 'not-interactive' | 'too-soon'; banner: 'paused' | null; retryMs?: number };
+/** Re-try delay when Private Mode is unknown (the Service is still starting): no banner, no check, ask again shortly. */
+export const UNKNOWN_PRIVATE_MODE_RETRY_MS = 30_000;
+/**
+ * QA P1 2026-10-29: the update check ran before the Service was ready, read "unknown" as Private Mode and showed "Updates paused
+ * by Private Mode" on every launch — also in builds without any update feed. The "paused" banner now needs Private Mode really
+ * on; unknown skips the check silently and retries; no feed means no check and no banner at all.
+ */
+export function planUpdateCheck(ctx: CheckPlanContext, intervalMs: number = UPDATE_CHECK_INTERVAL_MS): CheckPlan {
+  if (!ctx.feed) return { check: false, reason: 'no-feed', banner: null };
+  if (ctx.privateMode === 'unknown') return { check: false, reason: 'service-not-ready', banner: null, retryMs: UNKNOWN_PRIVATE_MODE_RETRY_MS };
+  const d = shouldCheckForUpdates({ ...ctx, privateMode: ctx.privateMode === 'on' }, intervalMs);
+  if (d.check) return d;
+  return { check: false, reason: d.reason, banner: d.reason === 'private-mode' ? 'paused' : null };
+}
+/** The update banner may say "paused by Private Mode" only when Private Mode is actually on (never for unknown). */
+export const pausedBannerAllowed = (privateMode: PrivateModeState): boolean => privateMode === 'on';
+
 /** How often the Shell re-evaluates the 24 h rule (FR-152): an hourly tick; `shouldCheckForUpdates` decides. */
 export const UPDATE_TICK_MS = 60 * 60 * 1000;
 

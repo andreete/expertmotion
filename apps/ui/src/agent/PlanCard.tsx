@@ -30,7 +30,7 @@ export function diffSummary(r: PlanDto['result'], t: (k: string, v?: Record<stri
 }
 export const stepOps = (s: PlanDto['steps'][number]): number => (s.ops.length || s.opCount) ?? 0;
 /** Generator steps (tts.generate / captions.generate) run after the Composition Version is committed; they carry no ops. */
-export const isToolStep = (s: PlanDto['steps'][number]): boolean => s.tool === 'tts.generate' || s.tool === 'captions.generate';
+export const isToolStep = (s: PlanDto['steps'][number]): boolean => s.tool === 'tts.generate' || s.tool === 'captions.generate' || s.tool === 'music.generate';
 const excerpt = (v: unknown, n = 60): string => { const x = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : ''; return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
 /** Readable line for a generator step ("Suara narasi: \"…\"" / "Teks layar dari naskah"). */
 export function toolStepText(s: PlanDto['steps'][number], t: (k: string, v?: Record<string, string | number>) => string): string {
@@ -86,6 +86,8 @@ export function PlanPreview({ plan }: { plan: PlanDto }) {
   );
 }
 /** FR-224: voice clips a scene.compose plan still generates on Execute (its scene timing is an estimate until then). */
+/** Plan step statuses with their own words (service.notice plan-step); any other status reads as "working…". */
+const STEP_STATUS = new Set(['done', 'failed', 'skipped', 'started', 'needs-model', 'resumed']);
 export function voicePending(plan: PlanDto): number {
   for (const st of plan.steps) {
     const spec = st.args?.['sceneCompose'] as { voice?: { clips?: Array<{ assetId?: string }>; generate?: boolean } } | undefined;
@@ -185,7 +187,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
         <span className="flex-1" />
         <button type="button" aria-label={t('ui.agent.plan.history')} title={t('ui.agent.plan.history')} onClick={() => actions.setScreen({ kind: 'history' })} className="text-em-muted hover:text-em-text"><History size={14} /></button>
         {/* QA 2026-10-28 #16: the card can always be closed from its header (the footer may be scrolled away in a narrow panel). */}
-        <button type="button" data-el="agent.editor.plancard.close" aria-label={status === 'executed' ? t('ui.common.close') : t('ui.agent.plan.discard')} title={status === 'executed' ? t('ui.common.close') : t('ui.agent.plan.discard')}
+        <button type="button" data-el="agent.editor.plancard.close" aria-label={status === 'executed' ? t('ui.common.close') : t('ui.agent.plan.discard')} title={status === 'executed' ? t('ui.common.close') : status === 'executing' ? t('ui.agent.plan.close.executing') : t('ui.agent.plan.discard')}
           onClick={() => { if (status === 'executed') setCollapsed(true); else if (status !== 'executing') void actions.cancelPlan(); }} className="text-em-muted hover:text-em-text" disabled={status === 'executing'}><X size={14} /></button>
       </div>
       <div data-el="agent.editor.plancard.goal" className="text-[16px] font-semibold leading-[22px]">{plan.goal ? <ModelText inline text={plan.goal} /> : t('ui.agent.plan.goal.pending')}</div>
@@ -260,8 +262,10 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
         <ul data-el="agent.editor.plancard.steps.live" className="flex flex-col gap-0.5 text-[12px]">
           {plan.steps.filter(isToolStep).map((s) => { const st = plan.stepStatus?.[s.n]?.status ?? plan.result?.toolSteps?.find((x) => x.n === s.n)?.status ?? 'started'; const code = plan.stepStatus?.[s.n]?.code;
             return <li key={s.n} data-el="agent.editor.plancard.step.live" data-status={st} className={cx('flex items-center gap-1.5', st === 'failed' ? 'text-em-danger' : st === 'done' ? 'text-em-success' : 'text-em-text-2')}>
-              {st === 'done' ? <CheckCircle2 size={12} /> : st === 'failed' ? <XCircle size={12} /> : st === 'skipped' ? <Info size={12} /> : <Loader size={12} className="em-spin" />}
-              {toolStepText(s, t)} · {t(`ui.agent.plan.step.status.${st}`)}{code ? <span className="t-mono text-[10px]"> {code}</span> : null}</li>; })}
+              {/* review U5: only a step that is really working spins; a step waiting for its model says so and opens the Model Manager */}
+              {st === 'done' ? <CheckCircle2 size={12} /> : st === 'failed' ? <XCircle size={12} /> : st === 'skipped' || st === 'needs-model' ? <Info size={12} /> : <Loader size={12} className="em-spin" />}
+              {toolStepText(s, t)} · {t(`ui.agent.plan.step.status.${STEP_STATUS.has(st) ? st : 'started'}`)}{code ? <span className="t-mono text-[10px]"> {code}</span> : null}
+              {st === 'needs-model' && !modelMissing && <button type="button" data-el="agent.editor.plancard.models" className="ml-1 font-semibold text-em-accent underline" onClick={() => actions.setScreen({ kind: 'models' })}>{t('ui.agent.plan.openmodels')}</button>}</li>; })}
         </ul>
       )}
       {status === 'executed' && <div className="flex gap-3 text-[12px]"><ShowInTimeline plan={plan} /></div>}
@@ -282,7 +286,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
         {status === 'executing' && <Button size={28} variant="ghost" aria-label={t('ui.agent.plan.cancelexecute')} onClick={() => void actions.cancelPlan()}>{t('ui.common.cancel')}</Button>}
         <span className="flex-1" />
         {(status === 'stale' || status === 'invalid' || status === 'failed' || status === 'cancelled') && (
-          <Button el="agent.editor.plancard.replan" size={32} variant={status === 'stale' ? 'primary' : 'secondary'} onClick={() => void actions.plan()}>{status === 'cancelled' ? t('ui.agent.plan.rerun') : t('ui.agent.plan.replan')}</Button>
+          <Button el="agent.editor.plancard.replan" size={32} variant={status === 'stale' ? 'primary' : 'secondary'} onClick={() => void actions.replan()}>{status === 'cancelled' ? t('ui.agent.plan.rerun') : t('ui.agent.plan.replan')}</Button>
         )}
         {status === 'executed' && <Button el="agent.editor.plancard.undo" size={32} onClick={() => void actions.undo()}>{t('ui.sys.toast.undo')}</Button>}
         {status !== 'executed' && status !== 'cancelled' && (   /* stale: shown disabled with its reason next to Re-plan */

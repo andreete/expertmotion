@@ -1,12 +1,12 @@
 import React from 'react';
-import { Easing, interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
+import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Highlight, Underline, Circle as RoughCircle } from '@remotion/rough-notation';
 import { getPreset } from '@expertmotion/catalogue';
 import type { TextLayerT } from '@expertmotion/composition-model';
 import { useTheme } from '../theme.js';
 import type { Layout } from '../layout.js';
 import { motionCss, motionFrame } from '../motion.js';
-import { easingFn, springDamping } from '../easing.js';
+import { easingFn, safeBezier, springDamping } from '../easing.js';
 import { textLayerFit } from '../text-fit.js';
 import { parseNumberIn, withNumber } from '../format-number.js';
 
@@ -52,7 +52,7 @@ function counterValue(layer: TextLayerT, frame: number, fps: number, defaultEasi
   const delay = Math.round((Number(p['delayMs'] ?? 0) / 1000) * fps), dur = Math.max(1, Math.round((Number(p['durationMs'] ?? 1200) / 1000) * fps));
   const bz = p['bezier'];
   let k: number;
-  if (Array.isArray(bz) && bz.length === 4) k = interpolate(frame, [delay, delay + dur], [0, 1], { ...clampOpts, easing: Easing.bezier(Number(bz[0]), Number(bz[1]), Number(bz[2]), Number(bz[3])) });
+  if (Array.isArray(bz) && bz.length === 4) k = interpolate(frame, [delay, delay + dur], [0, 1], { ...clampOpts, easing: safeBezier(bz) });
   else {
     const id = typeof p['easingId'] === 'string' ? p['easingId'] : 'preset:easing.out-cubic';
     const damping = springDamping(id);
@@ -62,6 +62,17 @@ function counterValue(layer: TextLayerT, frame: number, fps: number, defaultEasi
   return withNumber(parsed, from + (parsed.value - from) * k);
 }
 
+/**
+ * C9 (review 2026-10-29): a word is a keyword when it IS one of the keyword words (punctuation and case ignored), or starts with
+ * one of at least 4 letters (Indonesian suffixes: "harganya" for "harga"). A one-letter keyword no longer colours every word
+ * that contains that letter.
+ */
+export function isKeywordWord(word: string, keywords: readonly string[]): boolean {
+  const clean = (t: string) => t.toLowerCase().replace(/[.,!?;:"“”'‘’()%]/g, '');
+  const w = clean(word);
+  if (!w) return false;
+  return keywords.some((k) => k.split(/\s+/).map(clean).filter(Boolean).some((kw) => w === kw || (kw.length >= 4 && w.startsWith(kw))));
+}
 function renderContent(layer: TextLayerT, frame: number, fps: number, accent: string, defaultEasingId: string): React.ReactNode {
   const fx = layer.effect?.presetId;
   if (fx === 'preset:texteffect.counter') return counterValue(layer, frame, fps, defaultEasingId);
@@ -73,7 +84,7 @@ function renderContent(layer: TextLayerT, frame: number, fps: number, accent: st
   }
   const keyColour = String(layer.effect?.params['colour'] ?? accent);
   const keywords = fx === 'preset:texteffect.keyword' ? ((layer.effect?.params['words'] as string[] | undefined) ?? []).map((w) => w.toLowerCase()) : [];
-  const isKey = (w: string) => keywords.length > 0 && keywords.some((k) => w.toLowerCase().replace(/[.,!?;:"“”'()]/g, '').includes(k.toLowerCase()));
+  const isKey = (w: string) => isKeywordWord(w, keywords);
   if (layer.motion?.presetId === 'preset:motion.word-stagger' || fx === 'preset:texteffect.kinetic' || fx === 'preset:texteffect.keyword') {
     const stagger = layer.motion?.presetId === 'preset:motion.word-stagger' || fx === 'preset:texteffect.kinetic' ? Number(layer.motion?.params['staggerFrames'] ?? 4) : 0;
     const start = Math.round(((layer.motion?.delayMs ?? 0) / 1000) * fps);

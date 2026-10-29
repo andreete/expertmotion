@@ -24,6 +24,8 @@ export interface ShellBridge {
   pickSavePath?: (options?: { defaultPath?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>;
   openFolder?: (path: string) => Promise<void> | void;
   openExternal?: (url: string) => Promise<void> | void;
+  /** R1: research citation / picture source page (public https; the Shell refuses in Private Mode with EM-8202). */
+  openSource?: (url: string) => Promise<{ ok: true } | { ok: false; code: string; message: string }>;
   getPathsForFiles?: (files: readonly File[]) => string[];
   /** Service up/down + re-bootstrap push after a restart (FR-171); returns an unsubscribe function. */
   onServiceState?: (cb: (state: unknown) => void) => (() => void) | void;
@@ -343,6 +345,11 @@ export class ApiClient {
   }
   setElevenLabsKey(key: string): Promise<{ provider: 'elevenlabs'; secretHint: string; status: 'valid' }> { return this.put('/voice-keys/elevenlabs', { key }); }
   deleteElevenLabsKey(): Promise<void> { return this.del('/voice-keys/elevenlabs'); }
+  /** FR-269 (R-217b / R-217c): Azure AI Speech key + region, Google Cloud Text-to-Speech key (checked by the Service before storing). */
+  setAzureKey(key: string, region: string): Promise<{ provider: 'azure'; secretHint: string; region: string; status: 'valid' }> { return this.put('/voice-keys/azure', { key, region }); }
+  deleteAzureKey(): Promise<void> { return this.del('/voice-keys/azure'); }
+  setGoogleCloudKey(key: string): Promise<{ provider: 'google-cloud'; secretHint: string; status: 'valid' }> { return this.put('/voice-keys/google-cloud', { key }); }
+  deleteGoogleCloudKey(): Promise<void> { return this.del('/voice-keys/google-cloud'); }
   createVoiceBatch(id: Id, body: Record<string, unknown>): Promise<GeneratorJobDto> { return this.post(`/projects/${id}/generators/voice-batch`, body); }   // R-138
   voiceTranscript(id: Id, assetId: Id): Promise<{ cues: TranscriptCueDto[]; method: string; spoken: string; written: string; durationMs: number }> { return this.get(`/projects/${id}/assets/${assetId}/transcript`); }   // R-139
   voiceTranscriptSrtUrl(id: Id, assetId: Id): string { return this.url(`/projects/${id}/assets/${assetId}/transcript`, { format: 'srt' }); }
@@ -350,7 +357,7 @@ export class ApiClient {
   downloadMusicTrack(trackId: string): Promise<MusicTrackDto> { return this.post(`/music-library/${encodeURIComponent(trackId)}/download`); }   // R-220
   async musicTrackAudio(trackId: string): Promise<Blob> {   // R-221
     const r = await this.fetchImpl(this.url(`/music-library/${encodeURIComponent(trackId)}/audio`), { method: 'GET', headers: { Authorization: `Bearer ${this.token}` } });
-    if (r.status !== 200) throw new EmError('EM-7001', 'Track not downloaded', { status: r.status });
+    if (r.status !== 200) { let code = r.status === 204 ? 'EM-9001' : 'EM-7001'; try { code = (JSON.parse(await r.text()) as { error: { code: string } }).error.code; } catch { /* not json */ } throw new EmError(toEmCode(code), 'Track audio failed', { status: r.status }); }   // the Service's own code, not always "not downloaded"
     return r.blob();
   }
   insertMusicTrack(id: Id, trackId: string): Promise<{ assetId: Id; versionId: Id }> { return this.post(`/projects/${id}/music-library/${encodeURIComponent(trackId)}/insert`); }   // R-222

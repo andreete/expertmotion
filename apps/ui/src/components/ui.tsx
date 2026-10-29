@@ -11,6 +11,8 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   el?: string; variant?: BtnVariant; size?: 28 | 32 | 36; icon?: ReactNode; loading?: boolean;
   /** Disabled with a reason: kept focusable with aria-disabled so the reason is reachable (A11Y-08). */
   disabledReason?: string | null; disabled?: boolean;
+  /** FR-264: tooltip text (hover after a short delay, keyboard focus at once; TooltipLayer). A disabled reason wins. */
+  tip?: string;
 }
 const VARIANT: Record<BtnVariant, string> = {
   primary: 'bg-em-accent text-em-accent-ink hover:bg-em-accent-hover font-semibold',
@@ -19,13 +21,13 @@ const VARIANT: Record<BtnVariant, string> = {
   danger: 'bg-em-danger text-white hover:brightness-110 font-semibold',
   'danger-ghost': 'bg-transparent text-em-danger hover:bg-em-panel-2',
 };
-export function Button({ el, variant = 'secondary', size = 32, icon, loading, disabledReason, disabled, className, children, onClick, title, ...rest }: ButtonProps) {
+export function Button({ el, variant = 'secondary', size = 32, icon, loading, disabledReason, disabled, className, children, onClick, title, tip, ...rest }: ButtonProps) {
   const isDisabled = Boolean(disabled || disabledReason);
   const descId = useId();
   return (
     <button
       type="button" data-el={el} aria-disabled={isDisabled || undefined} aria-describedby={disabledReason ? descId : undefined}
-      title={disabledReason ?? title}
+      title={disabledReason ?? title} data-tip={disabledReason ?? tip}
       className={cx('inline-flex items-center justify-center gap-1.5 rounded-[6px] px-3 whitespace-nowrap em-trans', VARIANT[variant], isDisabled && 'opacity-40 cursor-not-allowed', className)}
       style={{ height: size, minHeight: size }}
       onClick={(e) => { if (isDisabled || loading) { e.preventDefault(); return; } onClick?.(e); }}

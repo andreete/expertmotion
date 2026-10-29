@@ -8,7 +8,8 @@ import type { MusicTrackDto } from '../api/types.js';
 import { Badge, Button, Progress, cx } from '../components/ui.js';
 import { ExternalLink } from '../components/ExternalLink.js';
 
-const mmss = (s: number): string => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+/** m:ss — rounded to whole seconds FIRST (review U12: 119.6 s showed "1:60"). */
+export const mmss = (s: number): string => { const r = Math.max(0, Math.round(s)); return `${Math.floor(r / 60)}:${String(r % 60).padStart(2, '0')}`; };
 
 export function MusicLibraryPanel({ onInserted }: { onInserted?: () => void }) {
   const { runtime, actions, state, t } = useStore();
@@ -60,7 +61,7 @@ export function MusicLibraryPanel({ onInserted }: { onInserted?: () => void }) {
         {items?.map((x) => (
           <li key={x.id} data-el="scr.generate.music.library.track" data-track-id={x.id} className="flex flex-col gap-1 rounded-[6px] border border-em-line px-2 py-1">
             <div className="flex items-center gap-2">
-              <button type="button" data-el="scr.generate.music.library.play" aria-label={t('ui.scr.generate.music.library.play', { title: x.title })} disabled={x.status !== 'ready'} onClick={() => void play(x)} className="text-em-text-2 disabled:opacity-40">
+              <button type="button" data-el="scr.generate.music.library.play" aria-label={t('ui.scr.generate.music.library.play', { title: x.title })} title={x.status !== 'ready' ? t('ui.scr.generate.music.library.play.needsdownload') : undefined} disabled={x.status !== 'ready'} onClick={() => void play(x)} className="text-em-text-2 disabled:opacity-40">
                 {playing === x.id ? <Pause size={14} /> : <Play size={14} />}
               </button>
               <span className="min-w-0 flex-1 truncate text-[13px]">{x.title} <span className="text-[11px] text-em-muted">· {x.artist} · {t(`ui.scr.generate.music.mood.${x.mood}`)} · {x.genre} · {mmss(x.durationS)}</span></span>

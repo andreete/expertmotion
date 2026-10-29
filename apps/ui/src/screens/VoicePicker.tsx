@@ -1,7 +1,9 @@
 // FR-246 voice picker (scr.generate.voice.*; QA 2026-10-28 #8 "belum bisa memilih suara narator"): every narrator voice for the
 // language — local voices (offline) and cloud voices of the Creator's own connections — with a description search ("suara
 // perempuan hangat"), gender / local / cloud filters, a preview sample per voice, why a voice cannot run yet (install the model /
-// connect the provider / Private Mode), the ElevenLabs key, and a cost estimate for the current text.
+// connect the provider / Private Mode), the ElevenLabs / Azure / Google Cloud keys (FR-269), and a cost estimate for the current text.
+// FR-268: the Service sorts the list by naturalness for the language (what can run now first) and marks ONE recommended voice,
+// which is the default choice.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Pause, Play } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
@@ -32,15 +34,25 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
   const [elBusy, setElBusy] = useState(false);
   const audio = useRef<HTMLAudioElement | null>(null);
   const urls = useRef(new Map<string, string>());
-  const load = useMemo(() => (refresh = false) => runtime.api.listVoices(language, refresh).then(setList).catch(() => setList({ items: [], privateMode: false, elevenLabsKey: null })), [runtime, language]);
-  useEffect(() => { void load(); }, [load, state.models]);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  // Review U6: reload when a model is installed / removed (not on every download progress tick); only the newest answer is used
+  // (switching id → en while a request is out never shows the other language's list). A failed load says so with Try again.
+  const seq = useRef(0);
+  const load = useMemo(() => (refresh = false) => {
+    const n = ++seq.current;
+    return runtime.api.listVoices(language, refresh).then((l) => { if (seq.current === n) { setList(l); setLoadErr(null); } })
+      .catch((e: unknown) => { if (seq.current === n) { setList({ items: [], privateMode: false, elevenLabsKey: null }); setLoadErr(e instanceof EmError ? e.code : 'EM-9001'); } });
+  }, [runtime, language]);
+  const installedKey = state.models.filter((m) => m.status === 'installed').map((m) => m.key).sort().join('|');
+  useEffect(() => { void load(); }, [load, installedKey]);
   useEffect(() => () => { audio.current?.pause(); for (const u of urls.current.values()) URL.revokeObjectURL(u); }, []);
   const items = list?.items ?? [];
   const selected = items.find((v) => v.id === value) ?? null;
-  // the first voice that can run now becomes the default (local first: no cost, offline)
-  useEffect(() => { if (!value && items.length) onChange(items.find((v) => v.availability === 'ready' && !v.cloud) ?? items.find((v) => v.availability === 'ready') ?? items[0]!); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  const shown = items.filter((v) => (filter === 'all' || (filter === 'local' ? !v.cloud : filter === 'cloud' ? v.cloud : v.gender === filter)))
-    .map((v) => ({ v, s: matchVoice(v, q) })).filter((x) => !q.trim() || x.s > 0).sort((a, b) => b.s - a.s || Number(b.v.availability === 'ready') - Number(a.v.availability === 'ready')).map((x) => x.v);
+  // FR-268: the recommended voice (most natural that can run now) is the default; older Services: the first that can run
+  useEffect(() => { if (!value && items.length) onChange(items.find((v) => v.recommended) ?? items.find((v) => v.availability === 'ready') ?? items[0]!); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the Service order (naturalness) is kept; a search only moves better matches up
+  const shown = items.map((v, i) => ({ v, i })).filter(({ v }) => (filter === 'all' || (filter === 'local' ? !v.cloud : filter === 'cloud' ? v.cloud : v.gender === filter)))
+    .map((x) => ({ ...x, s: matchVoice(x.v, q) })).filter((x) => !q.trim() || x.s > 0).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.v);
   const play = async (v: VoiceDto) => {
     if (playing === v.id) { audio.current?.pause(); setPlaying(null); return; }
     setPreviewErr(null);
@@ -73,11 +85,13 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
       {list?.privateMode && <p data-el="scr.generate.voice.private" className="text-[12px] text-em-private">{t('ui.scr.generate.voice.privatemode')}</p>}
       <ul data-el="scr.generate.voice.list" role="listbox" aria-label={t('ui.scr.generate.voice')} className="flex max-h-56 flex-col gap-1 overflow-y-auto">
         {!list && <li className="text-[12px] text-em-muted">{t('ui.scr.generate.voice.loading')}</li>}
-        {list && shown.length === 0 && <li className="text-[12px] text-em-muted">{t('ui.scr.generate.voice.none')}</li>}
+        {loadErr && <li data-el="scr.generate.voice.error" role="alert" className="flex items-center gap-2 text-[12px] text-em-danger">{t(`err.${loadErr}.title`)} · {loadErr}
+          <button type="button" className="font-semibold text-em-accent underline" onClick={() => { setList(null); void load(true); }}>{t('ui.lib.assets.error.retry')}</button></li>}
+        {list && !loadErr && shown.length === 0 && <li className="text-[12px] text-em-muted">{t('ui.scr.generate.voice.none')}</li>}
         {shown.map((v) => (
           <li key={v.id} role="option" aria-selected={v.id === value} data-el="scr.generate.voice.row" data-voice-id={v.id}
             className={cx('flex items-center gap-2 rounded-[6px] border px-2 py-1', v.id === value ? 'border-em-accent' : 'border-em-line')}>
-            <button type="button" data-el="scr.generate.voice.preview" aria-label={t('ui.scr.generate.voice.preview', { name: v.name })} title={t('ui.scr.generate.voice.preview', { name: v.name })}
+            <button type="button" data-el="scr.generate.voice.preview" aria-label={t('ui.scr.generate.voice.preview', { name: v.name })} title={status(v) ?? t('ui.scr.generate.voice.preview', { name: v.name })}
               disabled={v.availability !== 'ready'} onClick={() => void play(v)} className="text-em-text-2 disabled:opacity-40">
               {playing === v.id ? <Pause size={14} /> : <Play size={14} />}
             </button>
@@ -86,9 +100,10 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
               {status(v) && <span className="text-[11px] text-em-warn">{status(v)}</span>}
               {previewErr?.id === v.id && <span className="text-[11px] text-em-danger">{t(`err.${previewErr.code}.title`)} · {previewErr.code}</span>}
             </button>
+            {v.recommended && <Badge el="scr.generate.voice.recommended" tone="accent" title={t('ui.scr.generate.voice.recommended.tip')}>{t('ui.scr.generate.voice.recommended')}</Badge>}
             <Badge tone={v.cloud ? 'info' : 'success'}>{v.cloud ? t(`ui.scr.generate.voice.provider.${v.provider}`) : t('ui.scr.generate.voice.offline')}</Badge>
             {v.cloud && v.usdPer1kChars ? <span className="t-mono shrink-0 text-[11px] text-em-muted" title={t('ui.scr.generate.voice.cost.hint')}>${formatNumber(v.usdPer1kChars, lang, 3)}/1k</span> : null}
-            {v.availability === 'model-missing' && <Button el="scr.generate.voice.install" size={28} icon={<Download size={12} />} onClick={() => install(v)}>{t('ui.scr.generate.voice.install')}</Button>}
+            {v.availability === 'model-missing' && <Button el="scr.generate.voice.install" size={28} icon={<Download size={12} />} loading={state.models.some((m) => m.key === v.modelKey && (m.status === 'downloading' || m.status === 'verifying'))} onClick={() => install(v)}>{t('ui.scr.generate.voice.install')}</Button>}
           </li>
         ))}
       </ul>
@@ -108,6 +123,35 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
         </div>
         <p className="mt-1 text-em-muted">{t('ui.scr.generate.voice.el.note')}</p>
       </details>
+      <CloudKeyForm el="scr.generate.voice.azure" hint={list?.azureKey ?? null} detail={list?.azureRegion ?? null} region privateMode={list?.privateMode === true}
+        save={(k, r) => runtime.api.setAzureKey(k, r ?? '')} remove={() => runtime.api.deleteAzureKey()} done={() => load(true)} provider="azure" />
+      <CloudKeyForm el="scr.generate.voice.google" hint={list?.googleCloudKey ?? null} detail={null} privateMode={list?.privateMode === true}
+        save={(k) => runtime.api.setGoogleCloudKey(k)} remove={() => runtime.api.deleteGoogleCloudKey()} done={() => load(true)} provider="google" />
     </div>
+  );
+}
+
+/** FR-269: a voice-only key (Azure AI Speech key + region, Google Cloud Text-to-Speech key): checked by the Service, hint only. */
+function CloudKeyForm({ el, hint, detail, region, privateMode, save, remove, done, provider }: { el: string; hint: string | null; detail: string | null; region?: boolean; privateMode: boolean;
+  save: (key: string, region?: string) => Promise<unknown>; remove: () => Promise<void>; done: () => Promise<void>; provider: 'azure' | 'google' }) {
+  const prefix = `ui.scr.generate.voice.${provider}`;
+  const { actions, t } = useStore();
+  const [key, setKey] = useState(''); const [reg, setReg] = useState(detail ?? 'southeastasia'); const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try { await save(key, region ? reg : undefined); setKey(''); await done(); actions.toast('success', `${prefix}.saved`); } catch (e) { actions.error(e); } finally { setBusy(false); }
+  };
+  const why = key.trim().length < 10 ? t(`${prefix}.key`) : region && !/^[a-z][a-z0-9]{2,30}$/.test(reg.trim().toLowerCase()) ? t(`${prefix}.region`) : privateMode ? t('err.EM-8202.title') : null;
+  return (
+    <details data-el={el} className="text-[12px]">
+      <summary className="cursor-pointer text-em-text-2">{hint ? t(`${prefix}.connected`, { hint: detail ? `${hint} · ${detail}` : hint }) : t(`${prefix}.add`)}</summary>
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <input type="password" autoComplete="off" data-el={`${el}.key`} aria-label={t(`${prefix}.key`)} placeholder={t(`${prefix}.key`)} className={cx(inputCls, '!h-7 min-w-[180px] flex-1')} value={key} onChange={(e) => setKey(e.target.value)} />
+        {region && <input data-el={`${el}.region`} aria-label={t(`${prefix}.region`)} title={t(`${prefix}.region`)} placeholder="southeastasia" className={cx(inputCls, '!h-7 w-[140px]')} value={reg} onChange={(e) => setReg(e.target.value)} />}
+        <Button el={`${el}.save`} size={28} loading={busy} disabledReason={why} onClick={() => void submit()}>{t('ui.common.save')}</Button>
+        {hint && <Button el={`${el}.remove`} size={28} variant="danger-ghost" onClick={() => void remove().then(done).catch(actions.error)}>{t('ui.common.remove')}</Button>}
+      </div>
+      <p className="mt-1 text-em-muted">{t(`${prefix}.note`)}</p>
+    </details>
   );
 }

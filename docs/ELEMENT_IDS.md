@@ -195,7 +195,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `agent.editor.message.origin` | "💡 Dari Diskusi" | FR-219: tag on an Editor request that came from a Diskusi draft ("(dikirim otomatis)" when "buatkan videonya" started it). |
 | `agent.editor.askdiscussion` | "Tanya Diskusi" | FR-219: on an Editor question: sends it to the Diskusi tab ("Editor butuh info ini …"). |
 | `agent.chat.phases` / `agent.chat.phase` / `agent.chat.phases.meta` | "Membaca draf → Menyusun adegan → Memeriksa → Siap" | FR-223: phase stepper with a progress bar (`role=progressbar`, `data-phase-index`), seconds and "percobaan n/m"; in the Editor's working bubble and on the hand-off card. |
-| `agent.chat.message.sources` / `agent.chat.message.source` | "Sumber (2)" + numbered links | FR-216: the web sources of an answer (cited first; publisher, host, page age); a link opens in the system browser (Shell `openExternal`). |
+| `agent.chat.message.sources` / `agent.chat.message.source` | "Sumber (2)" + numbered links | FR-216: the web sources of an answer (cited first; publisher, host, page age); a link opens in the system browser (Shell `openSource`: public https only, refused in Private Mode with a toast holding the copyable address; R1). |
 | `agent.chat.message.images` / `agent.chat.message.image` / `agent.chat.message.image.import` | "Gambar berlisensi terbuka (n)" + Impor | FR-217: picture candidates with licence chip, author, source page; `data-imported` after Import. |
 | `agent.chat.message.notice` | research notice | FR-216: why research did not run for this answer (`data-code` EM-4403 / EM-4404). |
 | `agent.chat.attach.audio` / `agent.chat.attach.document` / `agent.chat.attach.input` | "Musik atau suara…" / "Dokumen atau naskah…" | FR-221: attach menu entries; the hidden file input; chips `agent.chat.attach.chip` carry `data-kind` = `image` / `audio` / `document` (document chips show the character count, ✂ when truncated). |
@@ -427,6 +427,7 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.generate.voice.search` | Voice search | Free-text description ("perempuan hangat", "jelas, percaya diri") ranks the voices (FR-246). |
 | `scr.generate.voice.filter` | Voice filter | All / Female / Male / Offline / Cloud (FR-246). |
 | `scr.generate.voice.list` | Voice list | One `scr.generate.voice.row` per voice (`data-voice-id`), selectable (FR-246). |
+| `scr.generate.voice.error` | Voice list error | The voice list could not be loaded: the reason (EM code) and Try again (review U6, 2026-10-29). |
 | `scr.generate.voice.row` | Voice row | Name, gender, character words, provider badge, price per 1,000 characters (cloud), why it cannot run yet (FR-246). |
 | `scr.generate.voice.private` | Private Mode note | Cloud voices are off while Private Mode is on (FR-246, SEC-135). |
 | `scr.generate.voice.selected` | Chosen narrator | Name, licence / quality note, cost estimate for the current text (`scr.generate.voice.cost`) (FR-246). |
@@ -515,6 +516,10 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `agent.chat.error.keyhint` | "Key baru kadang perlu 1–2 menit untuk aktif" | EM-4002 on a key added or replaced in the last 5 minutes: hint, automatic retry countdown (every ~20 s, at most 3 times) and "Coba lagi"; also on the Providers add / validate forms (`scr.providers.keyhint`). |
 | `scr.providers.terms` | provider terms link under the provider select | Entry 28: opens the provider's terms in the system browser through the Shell (`ExternalLink`; EM-8202 with a copyable URL in Private Mode). |
 | `scr.providers.keyhint` | same hint on the Providers form | See `agent.chat.error.keyhint`; the retry re-runs the validation. |
+| `agent.chat.error.keywrong` | "Key ini salah atau sudah tidak aktif…" | QA P1 2026-10-29: EM-4002 when the key is not new or the automatic retries are used up; the card title is "Key tidak valid", the reason line names the provider's own reason, the action "Ganti key" opens Providers. |
+| `scr.providers.keywrong` | same line on the Providers forms | See `agent.chat.error.keywrong`; shown under "Key tidak valid" + the provider's reason after the retries. |
+| `scr.providers.keyreason` | the provider's own reason under "Key tidak valid" | e.g. Kata Anthropic: “invalid x-api-key” (QA P1 2026-10-29). |
+| `scr.providers.replacekey` | "Ganti key" button | Clears and focuses the key field (Providers add / Onboarding connect form). |
 | `scr.providers.busy` | "Memeriksa kunci…" / "Memuat daftar model…" / "Menguji koneksi…" / "Menyimpan…" / "Mencoba lagi (2/3)…" | Status line (never red) while a provider action runs (`data-busy` = `validate` / `models` / `test` / `save`); after 8 s the waited seconds and "free models can be slow or rate limited". Errors stay in the ErrorBox. |
 | `agent.chat.model.loading` | "Memuat daftar model…" | Model popover while the Capability Table loads / refreshes, or "Menyimpan…" while a pick is saved. |
 | `lib.assets.card.action.ask` | "Tanya asisten" in the Asset card menu | Points the assistant at this Asset: adds it as a chip and focuses the composer. |
@@ -549,6 +554,29 @@ The startup and crash ids (`sys.splash.*`, `sys.crash.*`, `sys.fatal.retry`) are
 | `lib.assets.importing` | "Mengimpor 2/5…" | Asset Panel header line while a batch of files is prepared: assets seen ingesting since none were; disappears when the batch is done (FR-186). |
 | `scr.project.open.opening` | "Membuka proyek…" | On the chosen row of the Open dialog until the project is loaded; the dialog closes afterwards (FR-186). |
 | `scr.generate.voice.progress.status` (same under `.music`, `.thumbnail`, `.captions`, `.hashtags`) | "Membuat suara… 45 %" | Generator status line above the bar: "Memulai…" during the request, "Menunggu giliran…" while queued, then what it makes and the percent (FR-186). |
+
+## Additions for the automatic-first Editor (FR-260 … FR-269, ADR-036 … ADR-038, 2026-10-29)
+
+| ID | Visible element | Notes |
+|---|---|---|
+| `hdr.menu.file.close` | File ▸ "Tutup proyek" | FR-260: closes the open project (unsaved prompt first) and leaves an empty project open. |
+| `stage.recent` | "Terakhir dibuka:" row in the empty project | FR-260: up to three recent projects (the untouched blank project is never listed); hidden when there are none. |
+| `stage.recent.item` | one recent project chip | Opens it (unsaved prompt first); `data-project` = its id. |
+| `stage.recent.all` | "Semua…" | Opens File ▸ Open (`scr.project.open`). |
+| `sys.launch.notice` | notice bar inside the empty project | FR-260: `data-kind` `crash-loop` ("Proyek terakhir gagal dibuka") or `abnormal` ("Sesi terakhir tidak tertutup normal"). |
+| `sys.launch.notice.safe` | "Buka dalam mode aman" | Crash loop: opens that project in safe mode (FR-202). |
+| `sys.launch.notice.open` | "Buka lagi" | Abnormal end: opens that project normally. |
+| `sys.launch.notice.dismiss` | "Tutup" | Hides the notice. |
+| `stage.player.state.empty.write` | "Tulis ide" (primary) | FR-263: focuses the Editor composer (Editor tab). `stage.player.state.empty.import` is now "Impor footage". |
+| `sys.tooltip` | the tooltip (`role=tooltip`, id `em-tooltip`) | FR-264: one delegated layer; hover after 350 ms, keyboard focus at once; clamped inside the window. |
+| `agent.chat.start` | empty-thread starter | FR-265: hint row + example prompts. |
+| `agent.chat.start.hint` | "Tulis ide atau tempel prompt lengkap — Expertmotion membuat videonya otomatis" | First-run hint; remembered as dismissed (`nudgesDismissed` `chat:start-hint`). |
+| `agent.chat.start.hint.dismiss` | × | Hides the hint for good. |
+| `agent.chat.examples` | example prompt group | `role=group`. |
+| `agent.chat.example` | one example chip (`data-key`) | Fills the Editor composer with the prompt (never sends); the footage chip shows only with an imported video. |
+| `scr.generate.voice.recommended` | "Disarankan" badge | FR-268: the one recommended voice (default choice). |
+| `scr.generate.voice.azure` | Azure AI Speech key | FR-269: `.key`, `.region`, `.save`, `.remove`; hint + region only. |
+| `scr.generate.voice.google` | Google Cloud TTS key | FR-269: `.key`, `.save`, `.remove`; hint only. |
 
 ## Assumptions where the mockup does not define behaviour
 

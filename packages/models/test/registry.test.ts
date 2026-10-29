@@ -15,7 +15,7 @@ describe('registry ↔ LOCAL_AI_MODELS.md', () => {
   const docIds = [...regSection.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1]!);
 
   it('lists every model id of §2.1–2.4 and nothing else', () => {
-    expect(docIds.length).toBe(14);
+    expect(docIds.length).toBe(15);                                         // + supertonic-3-int8 (FR-267, 2026-10-29)
     expect([...MODEL_KEYS].sort()).toEqual([...docIds].sort());
   });
 
@@ -101,7 +101,8 @@ describe('registry helpers', () => {
   it('tier defaults (QA-LM-007: T0 whisper-small, FLUX not offered on T0)', () => {
     expect(defaultModelFor('stt', 'T0')).toBe('whisper-small');
     expect(defaultModelFor('tts', 'T2', { language: 'en' })).toBe('kokoro-82m-v1.0');
-    expect(defaultModelFor('tts', 'T2')).toBe('piper-id-news-medium');
+    expect(defaultModelFor('tts', 'T2')).toBe('supertonic-3-int8');          // ADR-036 (provisional): the more natural offline Indonesian voice
+    expect(modelsOfferedFor('tts', 'T0')).toEqual(['supertonic-3-int8', 'piper-id-news-medium']);
     expect(modelsOfferedFor('image', 'T0')).toEqual(['frame-composite', 'sd15-emaonly']);
     expect(isBelowMinTier('flux1-schnell-q4', 'T0')).toBe(true);
     expect(isBelowMinTier('ace-step-v1-3.5b', 'T1')).toBe(false);

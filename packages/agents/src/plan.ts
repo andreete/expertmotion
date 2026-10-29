@@ -1,7 +1,7 @@
 // Step 8 (AI_WORKFLOW §2): deterministic validation of any Edit Plan (compiled or model-authored) before Execute is enabled.
 import { applyOperations, conflictsWithLocked, diffModels, deriveTiming, hashModel, propertyKeysOf, validate, type ApplyContext, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT, type Tier } from '@expertmotion/composition-model';
 import { balancedObjects, issue, parseLooseJson, stripReasoning, type Issue } from '@expertmotion/shared';
-import { CaptionsStepArgs, EditPlan, ModelPlanReply, PLAN_STEP_TOOLS, TtsStepArgs, type EditPlanT } from './schemas.js';
+import { CaptionsStepArgs, EditPlan, ModelPlanReply, MusicStepArgs, PLAN_STEP_TOOLS, TtsStepArgs, type EditPlanT } from './schemas.js';
 import { normalizeModelReply } from './plan-normalize.js';
 import { scriptPages } from './script-captions.js';
 import { expandSceneCompose, qualityGatePlan } from './auto-motion-plan.js';
@@ -82,6 +82,13 @@ function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT;
     return { n: s.n, tool: 'composition.applyOps', args: {}, dependsOn: s.dependsOn, expectedDiff: s.expectedDiff || (id ? 'Teks layar dari naskah' : 'Captions from the script'),
       ops: [{ op: 'op:caption.setPages', target: { kind: 'project' as const }, args: { pages } }, ...(style ? [{ op: 'op:caption.setStyle', target: { kind: 'project' as const }, args: { presetId: style } }] : [])] };
   }).filter((s): s is EditPlanT['steps'][number] => s !== null);
+  // FR-266: music.generate needs no local model (CC0 library download, verified); the Service picks the best-fit track.
+  steps = steps.map((s, i) => {
+    if (s.tool !== 'music.generate') return s;
+    const r = MusicStepArgs.safeParse(stripRuntime(s.args));
+    if (!r.success) { const x = r.error.issues[0]!; issues.push(issue('EM-2102', `Step ${s.n} (music.generate): ${[...x.path].join('.') || 'args'}: ${x.message}. Expected args {prompt (mood / style words, e.g. "tenang, akustik"), durationMs?, volume? (0.02–1, default 0.2), trackId?}.`, 'block', `steps[${i}].args`)); return s; }
+    return { ...s, args: { ...r.data, durationMs: r.data.durationMs ?? Math.max(1000, videoMs), status: 'ready' } };
+  });
   return { plan: { ...plan, steps, risks }, issues };
 }
 
@@ -98,14 +105,15 @@ export function validatePlan(input: EditPlanT, ctx: PlanContext): PlanValidation
   if (plan.steps.length > MAX_STEPS) issues.push(issue('EM-2304', `The plan has ${plan.steps.length} steps; the limit is ${MAX_STEPS}.`, 'block', 'steps'));
   if (plan.steps.length === 0 && !plan.risks.some((r) => r.code === 'needs-input')) issues.push(issue('EM-4302', 'The plan is empty.', 'block', 'steps'));
   plan.steps.forEach((s, i) => {
-    if (!(PLAN_STEP_TOOLS as readonly string[]).includes(s.tool)) issues.push(issue('EM-2303', `Step ${s.n}: "${s.tool}" is not a plan tool; use composition.applyOps, scene.compose, tts.generate or captions.generate.`, 'block', `steps[${i}].tool`));
+    if (!(PLAN_STEP_TOOLS as readonly string[]).includes(s.tool)) issues.push(issue('EM-2303', `Step ${s.n}: "${s.tool}" is not a plan tool; use composition.applyOps, scene.compose, tts.generate, captions.generate or music.generate.`, 'block', `steps[${i}].tool`));
     else if (s.tool !== 'composition.applyOps' && s.ops.length) issues.push(issue('EM-2303', `Step ${s.n}: operations must go through composition.applyOps.`, 'block', `steps[${i}].tool`));
   });
   const touched = conflictsWithLocked(ops.flatMap(propertyKeysOf), ctx.lockedKeys);
   if (touched.length) issues.push(issue('EM-2302', `The plan changes picks you made yourself: ${touched.join(', ')}.`, 'block', 'steps'));
   let predicted: PlanValidation['predicted'];
   if (!issues.some((i) => i.severity === 'block') && ops.length) {
-    const r = applyOperations(ctx.model, ops, { assets: ctx.assets, tier: ctx.tier, newId: ctx.newId, ...(ctx.jobs ? { jobs: ctx.jobs } : {}) });
+    const createdBy = new Map<string, number>();                                // C2: which op made which new element
+    const r = applyOperations(ctx.model, ops, { assets: ctx.assets, tier: ctx.tier, newId: ctx.newId, ...(ctx.jobs ? { jobs: ctx.jobs } : {}), onNewId: (eid, i) => { createdBy.set(eid, i); } });
     if (!r.ok) issues.push(...r.issues.map((i) => ({ ...i, path: stepPath(plan, i.path) })));
     else {
       issues.push(...r.warnings);
@@ -114,7 +122,7 @@ export function validatePlan(input: EditPlanT, ctx: PlanContext): PlanValidation
       for (const i of after) if (!before.has(`${i.code}|${i.path}|${i.message}`)) issues.push(i);     // only problems the plan introduces
       predicted = { model: r.value.model, diff: r.value.diff };
       // ADR-034 quality gate: repairs what the plan made worse on screen (overlap, safe area, contrast, font) and lists the rest
-      const g = qualityGatePlan(plan, ctx.model, r.value.model, { assets: ctx.assets, tier: ctx.tier, newId: ctx.newId, ...(ctx.jobs ? { jobs: ctx.jobs } : {}), ...(ctx.language ? { language: ctx.language } : {}) });
+      const g = qualityGatePlan(plan, ctx.model, r.value.model, { assets: ctx.assets, tier: ctx.tier, newId: ctx.newId, ...(ctx.jobs ? { jobs: ctx.jobs } : {}), ...(ctx.language ? { language: ctx.language } : {}), lockedKeys: ctx.lockedKeys, createdBy });
       plan = g.plan;
       if (g.predicted) predicted = { model: g.predicted, diff: diffModels(ctx.model, g.predicted) };
     }

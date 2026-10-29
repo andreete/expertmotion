@@ -101,7 +101,7 @@ export function ModelPopover({ agent, onClose }: { agent: AgentKind; onClose: ()
           <div className="flex items-center gap-1">
             <input data-el="agent.chat.model.search" role="combobox" aria-expanded="true" aria-controls="em-model-list" aria-label={t('ui.agent.chat.model.search')} placeholder={t('ui.agent.chat.model.search')}
               value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={onKey} className={cx(inputCls, '!h-7 flex-1')} />
-            <button type="button" data-el="agent.chat.model.refresh" aria-label={t('ui.scr.providers.refresh')} title={t('ui.scr.providers.refresh')} disabled={Boolean(state.settings?.privateMode) || loading}
+            <button type="button" data-el="agent.chat.model.refresh" aria-label={t('ui.scr.providers.refresh')} title={state.settings?.privateMode ? t('err.EM-8202.title') : t('ui.scr.providers.refresh')} disabled={Boolean(state.settings?.privateMode) || loading}
               onClick={() => void refresh()} className="rounded-[6px] p-1 text-em-muted hover:text-em-text disabled:opacity-40"><RefreshCw size={14} className={loading ? 'em-spin' : undefined} /></button>
           </div>
           {valid.length > 1 && (
@@ -120,7 +120,7 @@ export function ModelPopover({ agent, onClose }: { agent: AgentKind; onClose: ()
             {(loading || saving) && <div data-el="agent.chat.model.loading" role="status" aria-live="polite" className="flex items-center gap-1.5 p-2 text-[12px] text-em-text-2"><RefreshCw size={12} className="em-spin" aria-hidden />{t(saving ? 'ui.scr.providers.busy.save' : 'ui.agent.chat.model.loading')}</div>}
             {rows.length === 0 && !loading && (
               <div data-el="agent.chat.model.empty" className="flex items-center gap-2 p-2 text-[12px] text-em-muted"><span className="flex-1">{t('ui.modelpicker.empty')}</span>
-                <button type="button" data-el="agent.chat.model.fetch" className="text-em-accent underline" disabled={Boolean(state.settings?.privateMode)} onClick={() => void refresh()}>{t('ui.modelpicker.fetch')}</button></div>
+                <button type="button" data-el="agent.chat.model.fetch" className="text-em-accent underline disabled:opacity-40" disabled={Boolean(state.settings?.privateMode)} title={state.settings?.privateMode ? t('err.EM-8202.title') : undefined} onClick={() => void refresh()}>{t('ui.modelpicker.fetch')}</button></div>
             )}
             {rows.length > 0 && !shown.length && <div data-el="agent.chat.model.nomatch" className="p-2 text-[12px] text-em-muted">{t('ui.modelpicker.nomatch')}</div>}
             {MODEL_SECTIONS.map((sec) => {

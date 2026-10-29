@@ -84,6 +84,8 @@ export type PlanStatus = 'draft' | 'valid' | 'invalid' | 'stale' | 'executing' |
 export interface PlanDto {
   id: Id; projectId: Id; baseVersion: string; origin: 'compile' | 'editor-agent'; goal: string; steps: PlanStep[]; touchesLockedKeys: string[]; risks: Risk[];
   notes?: string; status: PlanStatus; validation: Array<{ path: string; message: string; code: string }>; usage?: Usage; stale?: boolean; headHash?: string;
+  /** R-071: the picks this plan was made from and the agent run that made it (review U1 re-plans the same picks; U2 cancels only this run's plan). */
+  intentIds?: Id[]; agentRunId?: Id | null;
   /** Error code of a failed execution or interrupted run (Editor-side; filled from plan.invalid / ExecutionResult). */
   errorCode?: string;
   /** FR-086: summary of the ExecutionResult once executed (R-071 PlanDto `result`). */
@@ -219,11 +221,13 @@ export interface GeneratorJobDto {
 
 /** R-215 (FR-246): one narrator voice. `availability` says why it cannot run yet (model-missing → install; no-connection → Providers / ElevenLabs key; private-mode). */
 export interface VoiceDto {
-  id: string; provider: 'local' | 'openai' | 'gemini' | 'elevenlabs'; name: string; gender: 'female' | 'male' | 'neutral'; traits: { id: string[]; en: string[] }; languages: string[];
+  id: string; provider: 'local' | 'openai' | 'gemini' | 'elevenlabs' | 'azure' | 'google'; name: string; gender: 'female' | 'male' | 'neutral'; traits: { id: string[]; en: string[] }; languages: string[];
   modelKey?: string; pitch?: number; model?: string; voice?: string; cloud: boolean; supports: { speed: boolean; pitch: boolean; style: boolean }; usdPer1kChars?: number;
   note?: { id: string; en: string }; availability: 'ready' | 'model-missing' | 'private-mode' | 'no-connection'; installed: boolean;
+  /** FR-268: naturalness judgement 1–10 (the Service sorts by it) and the one voice recommended by default. FR-267: speaker index. */
+  naturalness?: number; recommended?: true; speakerId?: number;
 }
-export interface VoiceListDto { items: VoiceDto[]; privateMode: boolean; elevenLabsKey: string | null }
+export interface VoiceListDto { items: VoiceDto[]; privateMode: boolean; elevenLabsKey: string | null; /** FR-269 */ azureKey?: string | null; azureRegion?: string | null; googleCloudKey?: string | null }
 /** R-219 (FR-247): one CC0 library track. */
 export interface MusicTrackDto {
   id: string; title: string; artist: string; mood: string; genre: string; bpm: number; durationS: number; bytes: number; credit: string; status: 'not-downloaded' | 'downloading' | 'ready' | 'failed';

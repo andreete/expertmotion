@@ -4,10 +4,16 @@
 import { parseWav } from './engines/sherpa.js';
 
 export interface EnergyFrame { fromMs: number; rms: number }
+/** Loudest frame. A loop, never `Math.max(...frames)`: one frame per 10 ms overflows the argument stack past ~20 min. */
+export function peakRms(frames: readonly EnergyFrame[]): number {
+  let p = 0; for (const f of frames) if (f.rms > p) p = f.rms; return p;
+}
 /** RMS per `frameMs` window (mono mix), in [0, 1]. */
 export function energyFrames(wav: Uint8Array, frameMs = 10): EnergyFrame[] | null {
   let w; try { w = parseWav(wav); } catch { return null; }
   if (w.audioFormat !== 1 || w.bitsPerSample !== 16 || w.sampleRate <= 0) return null;
+  // provider data: a zero / short blockAlign would loop forever (total = Infinity) or read past the buffer
+  if (!Number.isInteger(w.channels) || w.channels < 1 || !Number.isInteger(w.blockAlign) || w.blockAlign < w.channels * 2) return null;
   const view = new DataView(w.data.buffer, w.data.byteOffset, w.data.byteLength);
   const per = Math.max(1, Math.round((w.sampleRate * frameMs) / 1000));
   const total = Math.floor(w.data.byteLength / w.blockAlign);
@@ -25,7 +31,7 @@ export function energyFrames(wav: Uint8Array, frameMs = 10): EnergyFrame[] | nul
 /** First and last voiced millisecond (threshold relative to the loudest frame), or null for silence / unsupported audio. */
 export function speechWindow(wav: Uint8Array, o: { frameMs?: number; rel?: number } = {}): { fromMs: number; toMs: number } | null {
   const frameMs = o.frameMs ?? 10; const fr = energyFrames(wav, frameMs); if (!fr?.length) return null;
-  const peak = Math.max(...fr.map((x) => x.rms)); if (peak <= 0) return null;
+  const peak = peakRms(fr); if (peak <= 0) return null;
   const th = peak * (o.rel ?? 0.06);
   const a = fr.findIndex((x) => x.rms >= th); let b = fr.length - 1; while (b >= 0 && fr[b]!.rms < th) b--;
   if (a < 0 || b < a) return null;
@@ -42,7 +48,7 @@ export function refineWordTimes<T extends { fromMs: number; toMs: number }>(word
   if (!frames?.length || words.length === 0) return words.map((w) => ({ ...w }));
   const frameMs = o.frameMs ?? (frames.length > 1 ? frames[1]!.fromMs - frames[0]!.fromMs : 10);
   const search = o.searchMs ?? 250;
-  const peak = Math.max(...frames.map((f) => f.rms)); const th = peak * (o.rel ?? 0.06);
+  const peak = peakRms(frames); const th = peak * (o.rel ?? 0.06);
   const at = (ms: number) => Math.max(0, Math.min(frames.length - 1, Math.round(ms / frameMs)));
   const out = words.map((w) => ({ ...w }));
   // first word: its first voiced frame near the recognised start

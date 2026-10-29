@@ -1,0 +1,18 @@
+{
+  "title": "Kopi dari lereng Sindoro",
+  "language": "id",
+  "captions": true,
+  "music": { "mood": "calm", "prompt": "akustik hangat" },
+  "scenes": [
+    { "role": "hook", "headline": "Kopi dari lereng Sindoro", "sub": "Cerita satu petani", "durationMs": 2600 },
+    { "role": "footage", "footage": { "assetId": "A1", "fromMs": 3500, "toMs": 19000, "focus": "center" },
+      "headline": "Dipetik merah, satu per satu", "keywords": ["merah"],
+      "lowerThird": { "name": "Rina", "title": "Petani kopi, Temanggung", "at": { "say": "nama saya" } } },
+    { "role": "footage-split", "footage": { "assetId": "A2", "fromMs": 0, "toMs": 8000 },
+      "kicker": "Proses pascapanen", "headline": "Dijemur tiga minggu", "bullets": ["Petik merah", "Fermentasi 36 jam", "Jemur 21 hari"] },
+    { "role": "footage", "footage": { "assetId": "A1", "fromMs": 24000, "toMs": 40000, "focus": "left" },
+      "stats": [{ "value": "1.200", "unit": "kg per musim", "label": "panen kebun Rina" }], "source": "Sumber: wawancara Rina, Oktober 2026" },
+    { "role": "footage-pip", "footage": { "assetId": "A2", "fromMs": 8000, "toMs": 12000 }, "headline": "Dari kebun ke cangkir", "sub": "Tanpa perantara" },
+    { "role": "cta", "headline": "Dukung kopi lokal", "button": "Follow" }
+  ]
+}

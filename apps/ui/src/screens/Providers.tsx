@@ -49,14 +49,18 @@ const AGENTS: AgentKind[] = ['brainstorm', 'editor'];
 const FALLBACK_KINDS: ProviderKindInfo[] = PROVIDERS.map((p) => ({ provider: p, enabled: p !== 'custom', priority: p === 'openrouter' ? 'P0' : p === 'custom' ? 'P2' : 'P1', termsUrl: null, keyPattern: null, keyExample: null }));
 type Budget = Awaited<ReturnType<ReturnType<typeof useStore>['runtime']['api']['getBudget']>>;
 const codeOf = (e: unknown) => (e instanceof EmError ? e.code : 'EM-9001');
+/** The provider's own reason of a refused key (Service details.reason, e.g. "invalid x-api-key"), '' when it gave none. */
+const reasonOf = (e: unknown): string => { const r = e instanceof EmError ? (e.details as { reason?: unknown } | undefined)?.reason : undefined; return typeof r === 'string' ? r.trim().slice(0, 300) : ''; };
 
 /**
  * QA 2026-10-26 #3: a new key the provider has not activated yet is refused (EM-4002). Shows "New keys can take 1–2 minutes",
  * retries automatically after ~20 s (at most 3 times, with a countdown) and offers "Try again" at once.
  */
-export function KeyRetryNote({ attempt, onRetry, el = 'scr.providers.keyhint' }: { attempt: number; onRetry: (auto: boolean) => void; el?: string }) {
+export function KeyRetryNote({ attempt, onRetry, el = 'scr.providers.keyhint', reason, provider, onReplace }: { attempt: number; onRetry: (auto: boolean) => void; el?: string;
+  /** QA P1 2026-10-29: the provider's own reason ("invalid x-api-key"), the provider's display name, and "Ganti key". */ reason?: string; provider?: string; onReplace?: () => void }) {
   const { t } = useStore();
   const delay = keyRetryDelay(attempt, 'EM-4002', true);
+  const why = (reason ?? '').trim();
   const [left, setLeft] = useState<number | null>(null);
   useEffect(() => {
     if (delay === null) { setLeft(null); return; }
@@ -67,8 +71,15 @@ export function KeyRetryNote({ attempt, onRetry, el = 'scr.providers.keyhint' }:
     return () => { clearInterval(tick); clearTimeout(fire); };
   }, [attempt]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div data-el={el} role="status" className="flex items-center gap-2 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
-      <span className="flex-1">{t('ui.agent.error.keyhint')}{left !== null ? ` ${t('ui.agent.error.keyhint.retry', { s: left })}` : ''}</span>
+    <div data-el={el} role="status" data-code="EM-4002" className="flex items-start gap-2 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
+      <span className="flex flex-1 flex-col">
+        <span className="font-semibold">{t('ui.agent.error.keyinvalid')}</span>
+        <span data-el="scr.providers.keyreason" className="text-em-text-2">{why ? t('ui.agent.error.keyreason', { provider: provider ?? 'Provider', reason: why }) : t('err.EM-4002.body', { provider: provider ?? 'Provider' })}</span>
+        {delay !== null
+          ? <span className="text-em-warn">{why ? t('ui.agent.error.keyhint') : ''}{left !== null ? ` ${t('ui.agent.error.keyhint.retry', { s: left })}` : ''}</span>
+          : <span data-el="scr.providers.keywrong" className="text-em-text-2">{t('ui.agent.error.keywrong')}</span>}
+      </span>
+      {delay === null && onReplace && <Button el="scr.providers.replacekey" size={28} variant="primary" onClick={onReplace}>{t('ui.agent.error.replacekey')}</Button>}
       <Button size={28} onClick={() => onRetry(false)}>{t('ui.sys.toast.tryagain')}</Button>
     </div>
   );
@@ -169,7 +180,7 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   // QA 2026-10-26 #3: EM-4002 right after adding a key → the stored connection is validated again (no second connection).
-  const [keyFail, setKeyFail] = useState<{ attempt: number; connectionId: string | null } | null>(null);
+  const [keyFail, setKeyFail] = useState<{ attempt: number; connectionId: string | null; reason?: string } | null>(null);
   const finish = (ok: boolean) => { setBusy(false); setResult(ok ? 'ok' : 'fail'); if (ok) { setKey(''); setKeyFail(null); } onConnected?.(ok); };
   const validate = async () => {
     setBusy(true); setResult(null);
@@ -180,18 +191,24 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
     let failed: EmError | null = null;
     const ok = await actions.addConnection(provider, normalizeKey(key), t(`ui.scr.providers.provider.${provider}`), { onError: (e) => { failed = e; } });
     const f = failed as EmError | null;
-    if (!ok && f?.code === 'EM-4002') setKeyFail({ attempt: 0, connectionId: String((f.details as { connectionId?: unknown } | undefined)?.connectionId ?? '') || null });
+    if (!ok && f?.code === 'EM-4002') setKeyFail({ attempt: 0, connectionId: String((f.details as { connectionId?: unknown } | undefined)?.connectionId ?? '') || null, reason: reasonOf(f) });
     finish(ok);
   };
   const retryKey = async (auto: boolean) => {
     const cur = keyFail; if (!cur) return;
     if (!cur.connectionId) { await validate(); return; }
     setBusy(true);
-    let ok = false;
-    try { ok = (await runtime.api.validateConnection(cur.connectionId)).status === 'valid'; } catch { ok = false; }
+    let ok = false; let why = cur.reason;
+    try { ok = (await runtime.api.validateConnection(cur.connectionId)).status === 'valid'; } catch (e) { ok = false; why = reasonOf(e) || why; }
     await actions.loadProviders();
     if (ok) finish(true);
-    else { setBusy(false); setKeyFail({ ...cur, attempt: auto ? cur.attempt + 1 : cur.attempt }); }
+    else { setBusy(false); setKeyFail({ ...cur, attempt: auto ? cur.attempt + 1 : cur.attempt, ...(why ? { reason: why } : {}) }); }
+  };
+  /** "Ganti key": the refused connection is removed, the field is cleared and focused for the right key. */
+  const replaceKey = () => {
+    const stale = keyFail?.connectionId; setKeyFail(null); setKey(''); setResult(null);
+    if (stale) void runtime.api.deleteConnection(stale).then(() => actions.loadProviders()).catch(() => undefined);
+    document.getElementById('em-key')?.focus();
   };
   return (
     <div data-el="scr.providers.add" className="flex flex-col gap-1 rounded-[8px] border border-em-line p-3">
@@ -203,7 +220,7 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
         {result === 'ok' && <span className="flex items-center gap-1 text-em-success"><Check size={14} />{t('ui.scr.providers.valid')}</span>}
       </div>
       <BusyLine busy={busy ? 'validate' : null} retry={busy && keyFail ? { n: keyFail.attempt + 1, of: KEY_RETRY_MAX } : null} />
-      {!busy && keyFail && <KeyRetryNote attempt={keyFail.attempt} onRetry={(auto) => void retryKey(auto)} />}
+      {!busy && keyFail && <KeyRetryNote attempt={keyFail.attempt} onRetry={(auto) => void retryKey(auto)} {...(keyFail.reason !== undefined ? { reason: keyFail.reason } : {})} provider={t(`ui.scr.providers.provider.${provider}`)} onReplace={replaceKey} />}
     </div>
   );
 }
@@ -440,7 +457,8 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [tested, setTested] = useState<ProbeResultDto[] | null>(null);
   const [keyAttempt, setKeyAttempt] = useState<number | null>(null);
-  const reset = () => { setRows(null); setTested(null); setModelsCode(null); setKeyAttempt(null); };
+  const [keyReason, setKeyReason] = useState('');
+  const reset = () => { setRows(null); setTested(null); setModelsCode(null); setKeyAttempt(null); setKeyReason(''); };
   /** A dry run always uses a just-pasted key: EM-4002 gets the "new keys need a minute" retry (QA 2026-10-26 #3). */
   const validate = async (retry?: { auto: boolean }) => {
     const attempt = keyAttempt;
@@ -451,7 +469,7 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
       setAssign({ brainstorm: defaultModel(r.models, 'brainstorm'), editor: defaultModel(r.models, 'editor') });
     } catch (e) {
       const c = codeOf(e); setError(c);
-      if (c === 'EM-4002') { setKeyAttempt(retry ? (retry.auto ? (attempt ?? 0) + 1 : attempt ?? 0) : 0); if (!retry) document.getElementById('em-key')?.focus(); }
+      if (c === 'EM-4002') { setKeyReason(reasonOf(e)); setKeyAttempt(retry ? (retry.auto ? (attempt ?? 0) + 1 : attempt ?? 0) : 0); if (!retry) document.getElementById('em-key')?.focus(); }
       else setKeyAttempt(null);
     }
     setBusy(null);
@@ -499,9 +517,10 @@ function AddConnectionForm({ onDone }: { onDone: () => void }) {
           {tested && <TestResults items={tested} />}
         </>
       ) : <p data-el="scr.providers.locked" className="text-[12px] text-em-muted">{t('ui.scr.providers.locked')}</p>}
-      {error && <ErrorBox code={error} vars={{ provider: t(`ui.scr.providers.provider.${provider}`), action: t('ui.scr.providers.validate') }} />}
+      {error && !(error === 'EM-4002' && keyAttempt !== null) && <ErrorBox code={error} vars={{ provider: t(`ui.scr.providers.provider.${provider}`), action: t('ui.scr.providers.validate') }} />}
       <BusyLine busy={busy} retry={busy === 'validate' && keyAttempt !== null ? { n: keyAttempt + 1, of: KEY_RETRY_MAX } : null} />
-      {!busy && error === 'EM-4002' && keyAttempt !== null && <KeyRetryNote attempt={keyAttempt} onRetry={(auto) => void validate({ auto })} />}
+      {!busy && error === 'EM-4002' && keyAttempt !== null && <KeyRetryNote attempt={keyAttempt} onRetry={(auto) => void validate({ auto })} reason={keyReason} provider={t(`ui.scr.providers.provider.${provider}`)}
+        onReplace={() => { setSecret(''); reset(); setError(null); document.getElementById('em-key')?.focus(); }} />}
       <div className="flex items-center gap-2">
         <Button el="scr.providers.test" loading={busy === 'test'} disabledReason={!validated ? t('ui.scr.providers.locked') : !assign.brainstorm && !assign.editor ? t('err.EM-4007.title', { agent: t('ui.scr.providers.agents') }) : null} onClick={() => void test()}>{t('ui.scr.providers.test')}</Button>
         <span className="flex-1" />

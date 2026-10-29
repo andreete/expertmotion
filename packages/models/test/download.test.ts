@@ -331,3 +331,28 @@ describe('installModel / verify / remove', () => {
     expect(await readInstallState(d, tmp.dir)).toEqual({ key: d.key, manifest: null, partialBytes: 1234 });
   });
 });
+
+describe('R9: a retry does not re-hash the whole .part', () => {
+  it('hashes an existing .part once per call, then keeps the running hash across retries', async () => {
+    const data = body(60_000);
+    await mkdir(dirname(paths().partPath), { recursive: true });
+    await writeFile(paths().partPath, data.subarray(0, 7_000));
+    const srv = fakeServer({ files: { [URL1]: { body: data } }, breakAfter: { url: URL1, bytes: 10_000, times: 3 } });
+    const hashed: number[] = [];
+    const r = await downloadFile({ name: 'model.bin', url: URL1, bytes: data.length, bytesExact: true, sha256: sha(data) }, paths(), opts(srv.fetch, { onPartHash: (b) => hashed.push(b) }));
+    expect(r.sha256).toBe(sha(data));
+    expect(srv.calls.length).toBe(4);
+    expect(hashed).toEqual([7_000]);
+    expect(sha(await readFile(paths().destPath))).toBe(sha(data));
+  });
+  it('re-hashes from disk when the .part size no longer matches the running hash', async () => {
+    const data = body(40_000);
+    const srv = fakeServer({ files: { [URL1]: { body: data } }, breakAfter: { url: URL1, bytes: 10_000, times: 1 } });
+    const hashed: number[] = [];
+    // between the attempts something truncates the part: the running hash no longer describes the file
+    const sleep = async (): Promise<void> => { const b = await readFile(paths().partPath); await writeFile(paths().partPath, b.subarray(0, 5_000)); };
+    const r = await downloadFile({ name: 'model.bin', url: URL1, bytes: data.length, bytesExact: true, sha256: sha(data) }, paths(), opts(srv.fetch, { sleep, onPartHash: (b) => hashed.push(b) }));
+    expect(r.sha256).toBe(sha(data));
+    expect(hashed).toEqual([5_000]);
+  });
+});

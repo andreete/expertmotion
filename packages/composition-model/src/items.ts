@@ -124,20 +124,60 @@ export function removalSteps(model: CompositionModelT, items: readonly ItemRef[]
 // ───────────────────────────── Duplicate ─────────────────────────────
 /** Kinds Duplicate supports (existing add ops can rebuild them); audio, captions, transitions, effects and the background cannot be copied faithfully. */
 export const DUPLICABLE_KINDS: ReadonlySet<ItemKind> = new Set(['clip', 'text', 'image', 'shape']);
-const textCopy = (x: CompositionModelT['tracks']['text'][number], atMs: number): OperationT => {
-  const style = Object.fromEntries(Object.entries(x.style).filter(([, v]) => v !== undefined));
-  return { op: 'op:text.add', args: { text: x.text, variant: x.variantId, atMs, durationMs: x.timing.durationMs, position: { x: x.position.x, y: x.position.y }, ...(Object.keys(style).length ? { styleOverrides: style } : {}) } };
+type TextT = CompositionModelT['tracks']['text'][number];
+type ImageT = Extract<CompositionModelT['tracks']['overlay'][number], { kind: 'image' }>;
+type ShapeT = Extract<CompositionModelT['tracks']['overlay'][number], { kind: 'shape' }>;
+type MotionT = TextT['motion'];
+type Args = Record<string, unknown>;
+const clampInt = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
+/** A stored motion as the add ops' `motion` arg (every field; null = preset:motion.none so no default entrance is added). */
+const motionArg = (mo: MotionT): Args => ({ motion: mo
+  ? { presetId: mo.presetId, durationMs: clampInt(mo.durationMs, 100, 10_000), delayMs: clampInt(mo.delayMs ?? 0, 0, 60_000), ...(mo.easingId !== undefined ? { easingId: mo.easingId } : {}), exit: mo.exit !== false, params: structuredClone(mo.params ?? {}) }
+  : { presetId: 'preset:motion.none' } });
+const defined = (o: object): Args => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+const opt = (k: string, v: unknown): Args => (v === undefined ? {} : { [k]: structuredClone(v) });
+const sizeArg = (w: number) => Math.max(10, Math.min(4000, Math.round(w)));
+/**
+ * C1 (review 2026-10-29): Duplicate / Copy copy EVERY field of the source element. One translator per field of the element type
+ * (`Record<keyof …>`: a field added to the schema later does not compile until it is mapped here); only `id`, `timing` and
+ * `layer` are new (fresh id, the copy's time, the lane rule). test/items.test.ts checks duplicate(x) equals x except those.
+ */
+type Fields<T> = { [K in Exclude<keyof T, 'id' | 'timing' | 'layer'>]-?: (v: T[K], x: T) => Args };
+const TEXT_FIELDS: Fields<TextT> = {
+  variantId: (v) => ({ variant: v }), text: (v) => ({ text: v }), position: (v) => ({ position: { x: v.x, y: v.y } }),
+  maxWidth: (v) => opt('maxWidth', v), valign: (v) => (v === 'top' ? { valign: 'top' } : {}),
+  style: (v) => { const st = defined(v); return Object.keys(st).length ? { styleOverrides: structuredClone(st) } : {}; },
+  effect: (v) => (v ? { effect: { presetId: v.presetId, params: structuredClone(v.params ?? {}) } } : {}),
+  motion: (v) => motionArg(v),
 };
+const IMAGE_FIELDS: Fields<ImageT> = {
+  kind: () => ({}), assetId: (v) => ({ assetId: v }), position: (v) => ({ position: { x: v.x, y: v.y } }),
+  size: (v) => ({ size: sizeArg(v.w) }),                       // the height follows the image aspect (op:overlay.addImage)
+  objectFit: (v) => ({ objectFit: v }), opacity: (v) => ({ opacity: v }), scale: (v) => opt('scale', v), rotation: (v) => opt('rotation', v),
+  motion: (v) => motionArg(v),
+  effects: () => ({}),                                         // no op adds effects to an image: always [] (op:overlay.addImage)
+};
+const SHAPE_FIELDS: Fields<ShapeT> = {
+  kind: () => ({}), presetId: (v) => ({ presetId: v }), position: (v) => ({ position: { x: v.x, y: v.y } }),
+  size: (v) => ({ size: sizeArg(v.w), height: Math.max(1, Math.min(4000, Math.round(v.h))) }),
+  fill: (v) => ({ fill: v }), stroke: (v) => opt('stroke', v), strokeWidth: (v) => opt('strokeWidth', v), opacity: (v) => opt('opacity', v),
+  scale: (v) => opt('scale', v), rotation: (v) => opt('rotation', v), params: (v) => ({ params: structuredClone(v ?? {}) }), motion: (v) => motionArg(v),
+};
+function argsOf<T extends object>(x: T, fields: Fields<T>): Args {
+  const out: Args = {};
+  for (const k of Object.keys(fields) as Array<keyof Fields<T>>) Object.assign(out, (fields[k] as (v: unknown, x: T) => Args)((x as Record<PropertyKey, unknown>)[k as PropertyKey], x));
+  return out;
+}
+const textCopy = (x: TextT, atMs: number): OperationT => ({ op: 'op:text.add', args: { ...argsOf(x, TEXT_FIELDS), atMs, durationMs: x.timing.durationMs } });
 const overlayCopy = (o: CompositionModelT['tracks']['overlay'][number], atMs: number): OperationT => o.kind === 'image'
-  ? { op: 'op:overlay.addImage', args: { assetId: o.assetId, atMs, durationMs: o.timing.durationMs, position: { x: o.position.x, y: o.position.y }, size: Math.max(10, Math.min(4000, Math.round(o.size.w))), objectFit: o.objectFit, opacity: o.opacity } }
-  : { op: 'op:shape.add', args: { presetId: o.presetId, atMs, durationMs: o.timing.durationMs, position: { x: o.position.x, y: o.position.y }, size: Math.max(10, Math.min(4000, Math.round(o.size.w))), fill: o.fill,
-    ...(o.stroke ? { stroke: o.stroke } : {}), ...(o.strokeWidth !== undefined ? { strokeWidth: o.strokeWidth } : {}), ...(o.motion ? { motionId: o.motion.presetId } : {}), params: o.params } };
+  ? { op: 'op:overlay.addImage', args: { ...argsOf(o, IMAGE_FIELDS), atMs, durationMs: o.timing.durationMs } }
+  : { op: 'op:shape.add', args: { ...argsOf(o, SHAPE_FIELDS), atMs, durationMs: o.timing.durationMs } };
 /**
  * The ops that duplicate `items` right after themselves (CapCut): a text / image / shape copy starts where the original ends (the
  * lane rule puts it on a free lane); a clip copy is inserted right after the clip with the same media, trim and length; a scene
  * clip copy (op:scene.add) brings copies of its own texts / images / shapes at the same offsets. Clips are processed from the
- * last to the first so every insert index and time is computed on the model it is applied to. Not copied (no add op takes them):
- * clip volume / fades / motion / effects / framing, item zoom / rotation, text effects.
+ * last to the first so every insert index and time is computed on the model it is applied to. Texts / images / shapes keep every
+ * field (TEXT_FIELDS / IMAGE_FIELDS / SHAPE_FIELDS). Not copied (no add op takes them): clip volume / fades / motion / effects / framing.
  */
 export function duplicationSteps(model: CompositionModelT, items: readonly ItemRef[]): ItemStep[] {
   const list = unique(model, items).filter((r) => DUPLICABLE_KINDS.has(r.kind));
@@ -183,7 +223,12 @@ export const stepFor = (steps: readonly ItemStep[], target: ElementRefT | undefi
  * captions, transitions, effects and the background are not copied.
  */
 export type ClipboardKind = 'clip' | 'scene' | 'text' | 'image' | 'shape' | 'audio';
-export interface ClipboardEntry { kind: ClipboardKind; offsetMs: number; durationMs: number; op: OperationT }
+/**
+ * `clip` (C8, review 2026-10-29): a text / image / shape that belongs to a copied scene clip (scene anchoring) names that clip by
+ * its ordinal among the clip entries and keeps its offset from that clip's start, so non-adjacent scenes pasted back to back keep
+ * their titles on them. Absent = placed by `offsetMs` from the first clip (or from the paste time).
+ */
+export interface ClipboardEntry { kind: ClipboardKind; offsetMs: number; durationMs: number; op: OperationT; clip?: { index: number; offsetMs: number } }
 /** The add operations a clipboard entry may carry (the Local Service refuses anything else; applyOperations validates the args). */
 export const PASTE_OPS: Readonly<Record<ClipboardKind, string>> = Object.freeze({ clip: 'op:clip.insert', scene: 'op:scene.add', text: 'op:text.add', image: 'op:overlay.addImage', shape: 'op:shape.add', audio: 'op:audio.addLayer' });
 export const CLIPBOARD_MAX_ENTRIES = 50;
@@ -201,13 +246,15 @@ export function copySnapshot(model: CompositionModelT, items: readonly ItemRef[]
   let skipped = all.length - list.length;
   const timing = deriveTiming(model);
   for (const r of list.filter((x) => x.kind === 'clip')) for (const x of sceneItemsOf(model, r.id!)) if (!list.some((y) => sameRef(y, x))) list.push(x as ItemRef);
-  const raw: Array<Omit<ClipboardEntry, 'offsetMs'> & { fromMs: number; order: number }> = [];
+  const raw: Array<Omit<ClipboardEntry, 'offsetMs' | 'clip'> & { fromMs: number; order: number; anchor?: string }> = [];
+  const copiedClips = new Set(list.filter((r) => r.kind === 'clip').map((r) => r.id!));
+  const anchorOf = new Map(sceneAnchors(model).filter((a) => copiedClips.has(a.clipId)).map((a) => [`${'kind' in a.item ? a.item.kind : 'text'}:${a.item.id}`, a.clipId]));
   for (const r of list) {
     if (r.kind === 'clip') {
       const i = model.tracks.video.findIndex((c) => c.id === r.id); const c = model.tracks.video[i]!;
       const w = timing.elementWindows[c.id]!;
-      if (c.assetId !== undefined) raw.push({ kind: 'clip', fromMs: w.fromMs, order: i, durationMs: c.durationMs, op: { op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: c.assetId, trimBeforeMs: c.trimBeforeMs, durationMs: c.durationMs } } });
-      else raw.push({ kind: 'scene', fromMs: w.fromMs, order: i, durationMs: c.durationMs, op: { op: 'op:scene.add', target: { kind: 'sequence' }, args: { durationMs: Math.max(500, Math.min(120_000, c.durationMs)), ...(c.scene ? { background: c.scene.presetId, backgroundParams: c.scene.params } : {}) } } });
+      if (c.assetId !== undefined) raw.push({ kind: 'clip', anchor: c.id, fromMs: w.fromMs, order: i, durationMs: c.durationMs, op: { op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: c.assetId, trimBeforeMs: c.trimBeforeMs, durationMs: c.durationMs } } });
+      else raw.push({ kind: 'scene', anchor: c.id, fromMs: w.fromMs, order: i, durationMs: c.durationMs, op: { op: 'op:scene.add', target: { kind: 'sequence' }, args: { durationMs: Math.max(500, Math.min(120_000, c.durationMs)), ...(c.scene ? { background: c.scene.presetId, backgroundParams: c.scene.params } : {}) } } });
     } else if (r.kind === 'audio') {
       const a = model.tracks.audio.find((x) => x.id === r.id)!;
       if (a.role === 'bed') { skipped++; continue; }
@@ -216,23 +263,35 @@ export function copySnapshot(model: CompositionModelT, items: readonly ItemRef[]
     } else {
       const x = r.kind === 'text' ? model.tracks.text.find((y) => y.id === r.id) : model.tracks.overlay.find((y) => y.id === r.id && y.kind === r.kind);
       if (!x) continue;
-      raw.push({ kind: r.kind as 'text' | 'image' | 'shape', fromMs: x.timing.atMs, order: 1e6, durationMs: x.timing.durationMs, op: 'kind' in x ? overlayCopy(x, 0) : textCopy(x, 0) });
+      const anchor = anchorOf.get(`${r.kind}:${r.id}`);
+      raw.push({ kind: r.kind as 'text' | 'image' | 'shape', fromMs: x.timing.atMs, order: 1e6, durationMs: x.timing.durationMs, op: 'kind' in x ? overlayCopy(x, 0) : textCopy(x, 0), ...(anchor ? { anchor } : {}) });
     }
   }
   raw.sort((p, q) => p.fromMs - q.fromMs || p.order - q.order);
   const t0 = raw.length ? raw[0]!.fromMs : 0;
-  return { entries: raw.slice(0, CLIPBOARD_MAX_ENTRIES).map(({ fromMs, order: _o, ...e }) => ({ ...e, offsetMs: Math.max(0, Math.round(fromMs - t0)) })), skipped };
+  const kept = raw.slice(0, CLIPBOARD_MAX_ENTRIES);
+  const clipEntries = kept.filter((e) => e.kind === 'clip' || e.kind === 'scene');
+  const clipStart = new Map(clipEntries.map((e, k) => [e.anchor!, { index: k, fromMs: e.fromMs }]));
+  return { entries: kept.map(({ fromMs, order: _o, anchor, ...e }) => {
+    const own = e.kind !== 'clip' && e.kind !== 'scene' && anchor ? clipStart.get(anchor) : undefined;
+    return { ...e, offsetMs: Math.max(0, Math.round(fromMs - t0)), ...(own ? { clip: { index: own.index, offsetMs: Math.max(0, Math.round(fromMs - own.fromMs)) } } : {}) };
+  }), skipped };
 }
 
-/** Where pasted clips go: the cut at or after `atMs` (inside a clip → after it), and the time the first pasted clip starts. */
+/**
+ * Where pasted clips go: the cut at or after `atMs` (inside a clip → after it), and the time the first pasted clip starts. A clip
+ * inserted at index k starts where clip k started (the transition on the cut before k stays in front of it, C8 review 2026-10-29),
+ * or at the end of the video when k is past the last clip.
+ */
 export function pasteSlot(model: CompositionModelT, atMs: number): { index: number; startMs: number } {
-  const v = model.tracks.video; const w = deriveTiming(model).elementWindows;
+  const v = model.tracks.video; const timing = deriveTiming(model); const w = timing.elementWindows;
+  const startOf = (k: number) => (k < v.length ? w[v[k]!.id]!.fromMs : v.length ? timing.durationMs : 0);
   for (let i = 0; i < v.length; i++) {
     const cw = w[v[i]!.id]!;
     if (atMs <= cw.fromMs) return { index: i, startMs: cw.fromMs };
-    if (atMs < cw.toMs) return { index: i + 1, startMs: cw.toMs };
+    if (atMs < cw.toMs) return { index: i + 1, startMs: startOf(i + 1) };
   }
-  return { index: v.length, startMs: v.length ? deriveTiming(model).durationMs : 0 };
+  return { index: v.length, startMs: startOf(v.length) };
 }
 
 /**
@@ -247,6 +306,9 @@ export function pasteSteps(model: CompositionModelT, entries: readonly Clipboard
   const slot = pasteSlot(model, Math.max(0, Math.round(atMs)));
   const base = clips.length ? slot.startMs - clips[0]!.offsetMs : Math.max(0, Math.round(atMs));
   const steps: ItemStep[] = []; let n = 0;
+  // Pasted clips go back to back (no transition between them): clip k starts at the slot + the lengths of the clips before it.
+  const starts: number[] = []; let at = slot.startMs;
+  for (const e of clips) { starts.push(at); at += Math.max(0, Math.round(Number(e.op.args['durationMs'] ?? e.durationMs) || 0)); }
   clips.forEach((e, k) => {
     const args: Record<string, unknown> = { ...e.op.args, atIndex: slot.index + k };
     steps.push({ target: { kind: 'project', index: n++ }, op: { op: e.op.op, target: { kind: 'sequence' }, args } });
@@ -254,7 +316,8 @@ export function pasteSteps(model: CompositionModelT, entries: readonly Clipboard
   for (const e of ok) {
     if (e.kind === 'clip' || e.kind === 'scene') continue;
     const { target: _t, intentId: _i, ...rest } = e.op;
-    steps.push({ target: { kind: 'project', index: n++ }, op: { ...rest, args: { ...e.op.args, atMs: Math.max(0, Math.round(base + Math.max(0, e.offsetMs))) } } });
+    const own = e.clip && Number.isInteger(e.clip.index) && starts[e.clip.index] !== undefined ? starts[e.clip.index]! + Math.max(0, e.clip.offsetMs) : undefined;
+    steps.push({ target: { kind: 'project', index: n++ }, op: { ...rest, args: { ...e.op.args, atMs: Math.max(0, Math.round(own ?? base + Math.max(0, e.offsetMs))) } } });
   }
   return steps;
 }

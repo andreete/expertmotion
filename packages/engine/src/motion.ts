@@ -3,10 +3,10 @@
 // cubic-bezier easing, separate exit length / style and subtle deterministic idle loops (float / pulse / sway / spin via
 // @remotion/noise and sine; never Math.random), so preview = render frame by frame.
 import type React from 'react';
-import { Easing, interpolate, spring } from 'remotion';
+import { interpolate, spring } from 'remotion';
 import { noise2D } from '@remotion/noise';
 import type { MotionT } from '@expertmotion/composition-model';
-import { easingFn, springDamping } from './easing.js';
+import { easingFn, safeBezier, springDamping } from './easing.js';
 
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 export interface MotionFrame {
@@ -24,7 +24,7 @@ export function motionProgress(m: Pick<MotionT, 'durationMs' | 'delayMs' | 'easi
   const enterFrames = Math.max(1, Math.round((m.durationMs / 1000) * fps));
   const delay = Math.round((m.delayMs / 1000) * fps);
   const bz = m.params['bezier'];
-  if (Array.isArray(bz) && bz.length === 4) return interpolate(frame, [delay, delay + enterFrames], [0, 1], { ...clamp, easing: Easing.bezier(Number(bz[0]), Number(bz[1]), Number(bz[2]), Number(bz[3])) });
+  if (Array.isArray(bz) && bz.length === 4) return interpolate(frame, [delay, delay + enterFrames], [0, 1], { ...clamp, easing: safeBezier(bz) });
   const easingId = m.easingId ?? defaultEasingId;
   const damping = springDamping(easingId);
   return damping === null

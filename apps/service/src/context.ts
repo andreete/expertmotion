@@ -55,12 +55,15 @@ export interface Hooks {
     /** FR-216: the web sources / picture candidates the Editor's research found. */ onSources?: (s: { sources: Array<{ url: string; title?: string }>; images: unknown[] }) => void }): Promise<EditPlanT & { planId: string; runId?: string }>;
   /** generators module (S2, ADR-030): the local models behind plan generator steps (voice-over, transcription) and whether installed. */
   planToolModels?(language: 'id' | 'en'): Promise<{ tts: ToolModel | null; stt: ToolModel | null }>;
+  /** generators module (S2, FR-262): transcribe footage (video assets with sound, no transcript yet) before an Editor run so the
+   *  plan can trim to what is said; resolves with the asset ids read (skips silently without an installed transcription model). */
+  readFootage?(projectId: string, assetIds: string[], opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<string[]>;
   /** generators module (S2, ADR-030): start the generator steps of an executed plan (voice-over, then captions timed over it);
    *  returns at once with each step's start state; the jobs insert their results as later Composition Versions. */
   runPlanSteps?(projectId: string, planId: string, steps: Array<{ n: number; tool: string; args: Record<string, unknown>; dependsOn: number[] }>): Array<{ n: number; tool: string; status: 'started' | 'skipped' | 'failed'; jobId?: string; code?: string }>;
   /** generators module (S2, FR-251 / ADR-035): several voice clips (one per sentence) in one request; resolves with each clip's
    *  asset id, measured duration, timeline position and timed cues (from the script); rejects with the EM code (nothing placed). */
-  voiceBatch?(projectId: string, input: import('./s2/generators-service.js').VoiceBatchInput): Promise<import('./s2/generators-service.js').VoiceBatchResult>;
+  voiceBatch?(projectId: string, input: import('./s2/generators-service.js').VoiceBatchInput, opts?: { signal?: AbortSignal }): Promise<import('./s2/generators-service.js').VoiceBatchResult>;
   /** generators module (S2, FR-246): the narrator voices for a language with availability (agent context: pick by description). */
   voiceCatalog?(language: 'id' | 'en'): Promise<Array<{ id: string; name: string; provider: string; gender: string; traits: string[]; cloud: boolean; availability: string; usdPer1kChars: number | null }>>;
   /** generators module (S2, FR-249): the timed transcript (cues, words; clip time) of a generated voice Asset, or null. */

@@ -16,10 +16,12 @@ import { getOutput, outputAbsPath, outputRoots } from '../s2/render-repo.js';
 const notFound = (res: Response, code = 'EM-9003', message = 'Not found.') => { res.status(404).json({ error: { code, message } }); };
 const bad = (res: Response) => { res.status(400).json({ error: { code: 'EM-9002', message: 'Invalid request.' } }); };
 
-/** Streams `file` honouring a single `Range: bytes=` (206/416); HEAD sends headers only. */
-export function sendFile(req: Request, res: Response, file: string, extra: Record<string, string> = {}): void {
+/** Streams `file` honouring a single `Range: bytes=` (206/416); HEAD sends headers only. The promise settles when the
+ *  response has finished or closed, and `res.locals.emStreaming` tells `route()` not to end the response itself: before the
+ *  first chunk `headersSent` is still false, and route() used to answer 204 while the stream was starting (QA P1 2026-10-29). */
+export function sendFile(req: Request, res: Response, file: string, extra: Record<string, string> = {}): Promise<void> {
   let size: number;
-  try { size = fs.statSync(file).size; } catch { notFound(res, 'EM-1301', 'The media file is missing.'); return; }
+  try { size = fs.statSync(file).size; } catch { notFound(res, 'EM-1301', 'The media file is missing.'); return Promise.resolve(); }
   res.setHeader('Content-Type', contentTypeFor(file));
   res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
@@ -34,17 +36,21 @@ export function sendFile(req: Request, res: Response, file: string, extra: Recor
     if (m && (m[1] !== '' || m[2] !== '')) {
       if (m[1] === '') start = Math.max(0, size - Number(m[2]));
       else { start = Number(m[1]); if (m[2] !== '') end = Math.min(Number(m[2]), size - 1); }
-      if (start >= size || start > end || (m[1] === '' && Number(m[2]) === 0)) { res.setHeader('Content-Range', `bytes */${size}`); res.status(416).end(); return; }
+      if (start >= size || start > end || (m[1] === '' && Number(m[2]) === 0)) { res.setHeader('Content-Range', `bytes */${size}`); res.status(416).end(); return Promise.resolve(); }
       status = 206; res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
     }
   }
   res.status(status);
   res.setHeader('Content-Length', String(size === 0 ? 0 : end - start + 1));
-  if (req.method === 'HEAD' || size === 0) { res.end(); return; }
-  const stream = fs.createReadStream(file, { start, end });
-  stream.on('error', () => res.destroy());
-  res.on('close', () => stream.destroy());
-  stream.pipe(res);
+  if (req.method === 'HEAD' || size === 0) { res.end(); return Promise.resolve(); }
+  res.locals['emStreaming'] = true;
+  return new Promise<void>((resolve) => {
+    const stream = fs.createReadStream(file, { start, end });
+    stream.on('error', () => { res.destroy(); resolve(); });
+    res.on('close', () => { stream.destroy(); resolve(); });
+    res.on('finish', () => resolve());
+    stream.pipe(res);
+  });
 }
 
 function serveAsset(ctx: ServiceContext, req: Request, res: Response): void {
@@ -62,7 +68,7 @@ function serveAsset(ctx: ServiceContext, req: Request, res: Response): void {
   if (!fs.existsSync(candidate)) return notFound(res, 'EM-1301', 'The media file is missing.');
   const file = realInside(path.join(ctx.paths.media, row.project_id), candidate);
   if (!file) return notFound(res);
-  sendFile(req, res, file, variant === 'filmstrip' ? { 'X-Filmstrip-Frames': '8' } : {});
+  void sendFile(req, res, file, variant === 'filmstrip' ? { 'X-Filmstrip-Frames': '8' } : {});
 }
 
 function serveOutput(ctx: ServiceContext, req: Request, res: Response): void {
@@ -78,7 +84,7 @@ function serveOutput(ctx: ServiceContext, req: Request, res: Response): void {
   if (!fs.existsSync(candidate)) return notFound(res, 'EM-1301', 'The output file is missing.');
   const file = outputRoots(ctx).map((r) => realInside(r, candidate)).find((f) => f !== null);
   if (!file) return notFound(res);
-  sendFile(req, res, file);
+  void sendFile(req, res, file);
 }
 
 export const mediaModule: ServiceModule = {

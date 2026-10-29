@@ -45,8 +45,9 @@ export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceMod
         return { tts: enabled.includes('voice') ? await svc.planToolModel('tts', language) : null, stt: enabled.includes('captions') ? await svc.planToolModel('stt', language) : null };
       };
       ctx.hooks.runPlanSteps = (projectId, planId, steps) => svc.runPlanSteps(projectId, planId, steps);
+      ctx.hooks.readFootage = (projectId, assetIds, o) => svc.readFootage(projectId, assetIds, o);
       // FR-251 / FR-246 / FR-249 (ADR-035): voice clips, the voice list and transcripts for the agent runtime (auto motion, plans).
-      ctx.hooks.voiceBatch = (projectId, input) => svc.voiceBatch(projectId, input);
+      ctx.hooks.voiceBatch = (projectId, input, opts) => svc.voiceBatch(projectId, input, opts);
       ctx.hooks.voiceCatalog = async (language) => (await voicesServiceOf(ctx).list(language)).map((v) => ({ id: v.id, name: v.name, provider: v.provider, gender: v.gender,
         traits: [...v.traits.id, ...v.traits.en], cloud: v.cloud, availability: v.availability, usdPer1kChars: v.usdPer1kChars ?? null }));
       ctx.hooks.voiceTranscript = (assetId) => svc.transcriptOf(assetId);
@@ -69,7 +70,8 @@ export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceMod
       // FR-246 (R-215 … R-218): narrator voices, previews, the ElevenLabs key
       route(router, 'get', '/voices', { query: z.object({ language: z.enum(['id', 'en']).default('id'), refresh: z.enum(['1']).optional() }) }, async ({ query }) => {
         const vs = voicesServiceOf(ctx);
-        return { items: await vs.list(query.language, { refresh: query.refresh === '1' }), privateMode: ctx.settings.get().privateMode, elevenLabsKey: vs.elevenLabsKeyHint() };
+        return { items: await vs.list(query.language, { refresh: query.refresh === '1' }), privateMode: ctx.settings.get().privateMode, elevenLabsKey: vs.elevenLabsKeyHint(),
+          ...(() => { const k = vs.voiceKeys(); return { azureKey: k.azure.hint, azureRegion: k.azure.region ?? null, googleCloudKey: k['google-cloud'].hint }; })() };   // FR-269
       });
       route(router, 'get', '/voices/:voiceId/preview', { params: z.object({ voiceId: z.string().min(3).max(200) }), query: z.object({ language: z.enum(['id', 'en']).default('id') }) }, async ({ params, query, req, res }) => {
         const vs = voicesServiceOf(ctx);
@@ -79,14 +81,20 @@ export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceMod
           if (v.id !== params.voiceId) throw em('EM-9003', 'Not found.');
           await svc.previewVoice(v, query.language, file, PREVIEW_TEXT[query.language]);
         }
-        sendFile(req, res, file, { 'Cache-Control': 'private, max-age=86400' });
+        await sendFile(req, res, file, { 'Cache-Control': 'private, max-age=86400' });
       });
       route(router, 'put', '/voice-keys/elevenlabs', { body: z.object({ key: z.string().min(10).max(400) }).strict() }, ({ body }) => voicesServiceOf(ctx).setElevenLabsKey(body.key));
       route(router, 'delete', '/voice-keys/elevenlabs', {}, () => { voicesServiceOf(ctx).removeElevenLabsKey(); return undefined; });
+      // FR-269 (R-217b / R-217c): Azure AI Speech key + region, Google Cloud Text-to-Speech key; GET lists the hints
+      route(router, 'get', '/voice-keys', {}, () => voicesServiceOf(ctx).voiceKeys());
+      route(router, 'put', '/voice-keys/azure', { body: z.object({ key: z.string().min(10).max(400), region: z.string().min(3).max(40) }).strict() }, ({ body }) => voicesServiceOf(ctx).setAzureKey(body.key, body.region));
+      route(router, 'delete', '/voice-keys/azure', {}, () => { voicesServiceOf(ctx).removeVoiceKey('azure'); return undefined; });
+      route(router, 'put', '/voice-keys/google-cloud', { body: z.object({ key: z.string().min(10).max(400) }).strict() }, ({ body }) => voicesServiceOf(ctx).setGoogleCloudKey(body.key));
+      route(router, 'delete', '/voice-keys/google-cloud', {}, () => { voicesServiceOf(ctx).removeVoiceKey('google-cloud'); return undefined; });
       // FR-249 (R-139): the timed transcript of a voice Asset (JSON, or SubRip with ?format=srt; ?offsetMs= shifts the SRT)
       route(router, 'get', '/projects/:id/assets/:assetId/transcript', { params: z.object({ id: Id, assetId: Id }), query: z.object({ format: z.enum(['json', 'srt']).default('json'), offsetMs: z.coerce.number().int().min(0).max(86_400_000).optional() }) }, ({ params, query, res }) => {
         requireProject(ctx, params.id);
-        const t = svc.transcriptOf(params.assetId);
+        const t = svc.transcriptOf(params.assetId, params.id);
         if (!t) throw em('EM-9003', 'Not found.');
         if (query.format === 'srt') { res.setHeader('Content-Type', 'application/x-subrip; charset=utf-8'); res.setHeader('Content-Disposition', 'attachment; filename="voice.srt"'); res.status(200).send(transcriptToSrt(t.cues, query.offsetMs ?? 0)); return undefined; }
         return t;
@@ -98,7 +106,7 @@ export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceMod
         void lib.download(params.trackId).catch(() => undefined);                 // progress and the result arrive as service.notice {kind: 'music-library'}
         return lib.dto(lib.require(params.trackId));
       });
-      route(router, 'get', '/music-library/:trackId/audio', { params: z.object({ trackId: z.string().max(80) }) }, async ({ params, req, res }) => { sendFile(req, res, await musicLibraryOf(ctx).readyFile(params.trackId)); });
+      route(router, 'get', '/music-library/:trackId/audio', { params: z.object({ trackId: z.string().max(80) }) }, async ({ params, req, res }) => { await sendFile(req, res, await musicLibraryOf(ctx).readyFile(params.trackId)); });
       route(router, 'post', '/projects/:id/music-library/:trackId/insert', { params: z.object({ id: Id, trackId: z.string().max(80) }) }, async ({ params }) => {
         requireProject(ctx, params.id);
         const { assetId } = await svc.importLibraryTrack(params.id, params.trackId);

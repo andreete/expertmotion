@@ -224,7 +224,7 @@ export class IngestService {
         const cues = parseSubtitles(text, { fileName: row.name });
         const pages = cuesToPages(cues);
         ctx.db.prepare("UPDATE assets SET status = 'ready', error_code = NULL, playable_path = original_path, probe_json = ?, duration_ms = ?, updated_at = ? WHERE id = ?")
-          .run(JSON.stringify({ subtitle: { cues: cues.length, pages } }), cues.length ? Math.max(...cues.map((c) => c.endMs)) : 0, ctx.now(), assetId);
+          .run(JSON.stringify({ subtitle: { cues: cues.length, pages } }), cues.reduce((m, c) => (c.endMs > m ? c.endMs : m), 0), ctx.now(), assetId);
       } catch (e) { return fail('EM-1009', true, errorMessage(e)); }
       const done = getAsset(ctx, assetId)!;
       emit(ctx, 'ingest.done', { projectId, asset: toAssetDto(done, 1) });

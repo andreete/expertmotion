@@ -4,7 +4,8 @@
 //                   custom (OpenRouter-compatible) base URL — https, a hostname, never an IP literal or localhost
 //   model-download  the model hosts of the signed registry (LOCAL_AI_MODELS §3): exactly the Operator model CDN host when the
 //                   build has one (services/model-cdn.ts, SEC-071), the built-in Hugging Face/GitHub list otherwise
-//   tts             cloud voices of the Creator's own keys (FR-246): api.openai.com, generativelanguage.googleapis.com, api.elevenlabs.io
+//   tts             cloud voices of the Creator's own keys (FR-246, FR-269): api.openai.com, generativelanguage.googleapis.com, api.elevenlabs.io,
+//                   <region>.tts.speech.microsoft.com, texttospeech.googleapis.com
 //                   — no redirects, 40 MB body cap, 120 s total (SEC-135)
 //   licence         none in the MVP (activation is verified offline, LICENSE_OPERATIONS)
 //   update          none in the Service (the Desktop Shell's electron-updater owns update checks, SEC-090)
@@ -17,6 +18,10 @@
 // followed by the platform (`redirect: 'manual'`): provider calls follow at most 3 hops here, re-checking every hop against the
 // same list; model downloads follow hops in packages/models (download.ts), each hop again through this module.
 // SEC-084: provider bodies are capped while streaming (4 MB, model lists 8 MB, one stream line ≤ 64 KB) and aborted with EM-4103.
+import https from 'node:https';
+import type { LookupAddress, LookupOneOptions } from 'node:dns';
+import { Readable } from 'node:stream';
+import zlib from 'node:zlib';
 import { EmError } from '@expertmotion/shared';
 import { modelCdnHost } from './model-cdn.js';
 
@@ -24,7 +29,8 @@ export const PROVIDER_HOSTS = ['openrouter.ai', 'api.openai.com', 'api.anthropic
 export const MODEL_HOSTS = ['huggingface.co', 'cdn-lfs.huggingface.co', 'cas-bridge.xethub.hf.co', 'hf.co', 'github.com', 'objects.githubusercontent.com'] as const;   // hf.co: Hugging Face's regional download CDN (<x>.cdn.hf.co)
 export const LICENCE_HOSTS = [] as const;
 /** SEC-135 (FR-246): cloud text-to-speech hosts. Audio answers are larger than chat answers, so they get their own cap. */
-export const TTS_HOSTS = ['api.openai.com', 'generativelanguage.googleapis.com', 'api.elevenlabs.io'] as const;
+// FR-269: + Azure AI Speech (<region>.tts.speech.microsoft.com, matched as a subdomain) and Google Cloud Text-to-Speech.
+export const TTS_HOSTS = ['api.openai.com', 'generativelanguage.googleapis.com', 'api.elevenlabs.io', 'tts.speech.microsoft.com', 'texttospeech.googleapis.com'] as const;
 export const TTS_MAX_BODY_BYTES = 40 * 1024 * 1024;
 export const TTS_TOTAL_TIMEOUT_MS = 120_000;
 export const UPDATE_HOSTS = [] as const;
@@ -75,13 +81,62 @@ const hostOk = (host: string, list: readonly string[]): boolean => list.some((h)
 
 /** SEC-140: an address no research fetch may reach (private, loopback, link-local, CGNAT, multicast, unspecified, ULA, mapped). */
 export function isPrivateAddress(ip: string): boolean {
-  const a = ip.toLowerCase().replace(/^\[|\]$/g, '');
-  const v4 = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(a);
+  const a = ip.toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+  // IPv4, IPv4-mapped (::ffff:a.b.c.d), IPv4-compatible (::a.b.c.d) and NAT64 (64:ff9b::a.b.c.d) all judge the embedded IPv4
+  const v4 = /^(?:::ffff:|::|64:ff9b::)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(a);
   if (v4) {
     const [x, y] = [Number(v4[1]), Number(v4[2])];
     return x === 0 || x === 10 || x === 127 || (x === 100 && y >= 64 && y <= 127) || (x === 169 && y === 254) || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168) || (x === 192 && y === 0) || (x === 198 && (y === 18 || y === 19)) || x >= 224;
   }
-  return a === '::' || a === '::1' || a.startsWith('fe8') || a.startsWith('fe9') || a.startsWith('fea') || a.startsWith('feb') || a.startsWith('fc') || a.startsWith('fd') || a.startsWith('ff') || a.startsWith('::ffff:');
+  if (!a.includes(':')) return true;   // not an IP address at all: never connect to it
+  // hex forms of the embedded IPv4 (::7f00:1, ::ffff:7f00:1, 64:ff9b::7f00:1) are refused outright, as are ULA, link-local,
+  // deprecated site-local (fec0::/10), multicast, loopback and unspecified
+  return a === '::' || a === '::1' || /^(?:::(?:ffff:)?|64:ff9b::)[0-9a-f]{1,4}:[0-9a-f]{1,4}$/.test(a) || a.startsWith('64:ff9b:') || /^fe[89a-f]/.test(a) || a.startsWith('fc') || a.startsWith('fd') || a.startsWith('ff') || a.startsWith('::ffff:');
+}
+type LookupCb = (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void;
+/**
+ * R3 (DNS rebinding): a `lookup` for the socket itself. It resolves through `resolve` and refuses the connection unless every
+ * address is public, so the address that is checked is the address that is connected to (no second, unchecked resolution).
+ */
+export function guardedLookup(resolve: (host: string) => Promise<string[]>, allow: (host: string) => boolean = () => false) {
+  return (hostname: string, options: LookupOneOptions & { all?: boolean } | ((...a: unknown[]) => void), cb?: LookupCb): void => {
+    const done = (typeof options === 'function' ? options : cb) as LookupCb; const o = typeof options === 'function' ? {} : options;
+    resolve(hostname).then((addrs) => {
+      if (!addrs.length) { done(Object.assign(new Error(`${hostname} could not be found`), { code: 'ENOTFOUND' }), ''); return; }
+      if (!allow(hostname) && addrs.some(isPrivateAddress)) { done(Object.assign(new Error('the host points into a private network'), { code: 'EM_PRIVATE_ADDRESS' }), ''); return; }
+      const list = addrs.map((address) => ({ address, family: address.includes(':') ? 6 : 4 }));
+      const pick = o.family === 4 || o.family === 6 ? list.filter((x) => x.family === o.family) : list;
+      if (!pick.length) { done(Object.assign(new Error(`${hostname} has no IPv${String(o.family)} address`), { code: 'ENOTFOUND' }), ''); return; }
+      if (o.all) done(null, pick); else done(null, pick[0]!.address, pick[0]!.family);
+    }, (e: unknown) => done(Object.assign(new Error(e instanceof Error ? e.message : String(e)), { code: 'ENOTFOUND' }), ''));
+  };
+}
+/**
+ * R3: the research transport. A GET over node:https whose socket resolves through `guardedLookup` (Node's global fetch has no
+ * per-request lookup without an extra dependency). Redirects are returned, not followed; gzip / deflate / br bodies are decoded
+ * (the caller's byte cap applies to the decoded body).
+ */
+export function pinnedHttpsFetch(lookup: ReturnType<typeof guardedLookup>): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const headers: Record<string, string> = { 'Accept-Encoding': 'gzip, deflate, br', ...((init?.headers as Record<string, string> | undefined) ?? {}) };
+    return await new Promise<Response>((resolve, reject) => {
+      const req = https.request(href, { method: 'GET', headers, lookup: lookup as never, ...(init?.signal ? { signal: init.signal } : {}) }, (res) => {
+        const h = new Headers();
+        for (const [k, v] of Object.entries(res.headers)) if (v !== undefined) for (const x of Array.isArray(v) ? v : [v]) h.append(k, x);
+        const enc = (res.headers['content-encoding'] ?? '').toLowerCase().trim();
+        const dec = enc === 'gzip' || enc === 'x-gzip' ? zlib.createGunzip() : enc === 'deflate' ? zlib.createInflate() : enc === 'br' ? zlib.createBrotliDecompress() : null;
+        let body: Readable = res;
+        if (dec) { h.delete('content-encoding'); h.delete('content-length'); res.on('error', (e) => dec.destroy(e)); body = res.pipe(dec); }
+        const status = res.statusCode ?? 502;
+        const empty = status === 204 || status === 304 || status < 200;
+        if (empty) res.resume();
+        resolve(Object.defineProperty(new Response(empty ? null : (Readable.toWeb(body) as ReadableStream<Uint8Array>), { status: empty && status < 200 ? 502 : status, statusText: res.statusMessage ?? '', headers: h }), 'url', { value: href }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }) as typeof fetch;
 }
 /** SEC-140: why a research URL is refused (scheme, credentials, host form), or null. DNS is checked separately. */
 export function researchUrlProblem(raw: string): string | null {
@@ -132,6 +187,8 @@ export function createEgress(opts: {
 }): Egress {
   const impl = opts.impl ?? globalThis.fetch;
   const lookup = opts.lookup ?? (async (host: string) => { const dns = await import('node:dns'); return (await dns.promises.lookup(host, { all: true, verbatim: true })).map((x) => x.address); });
+  // R3: research connects through the checked lookup (an injected impl — tests, the dev stub — keeps its own transport)
+  const researchImpl = opts.impl ?? pinnedHttpsFetch(guardedLookup(lookup, (h) => (opts.extraHosts?.() ?? []).includes(h)));
   const listFor = (purpose: EgressPurpose): readonly string[] => {
     const extra = opts.extraHosts?.() ?? [];
     switch (purpose) {
@@ -176,7 +233,11 @@ export function createEgress(opts: {
     for (let hop = 0; ; hop++) {
       const u = check(purpose, url);
       if (purpose === 'research') await checkDns(u);
-      res = await impl(u.href, { method: 'GET', headers: { 'User-Agent': 'Expertmotion/1.0 (+local video editor; research)', ...headers }, redirect: 'manual', signal });
+      try { res = await researchImpl(u.href, { method: 'GET', headers: { 'User-Agent': 'Expertmotion/1.0 (+local video editor; research)', ...headers }, redirect: 'manual', signal }); }
+      catch (e) {
+        if ((e as { code?: unknown })?.code === 'EM_PRIVATE_ADDRESS' || (e as { cause?: { code?: unknown } })?.cause?.code === 'EM_PRIVATE_ADDRESS') throw new EmError('EM-8203', 'This address cannot be read (it points into a private network).', { details: { purpose, host: u.hostname } });
+        throw e;
+      }
       if (![301, 302, 303, 307, 308].includes(res.status)) break;
       const loc = res.headers.get('location');
       if (!loc || hop + 1 > RESEARCH_MAX_REDIRECTS) throw new EmError('EM-4407', 'The page redirected too often.', { details: { status: res.status } });

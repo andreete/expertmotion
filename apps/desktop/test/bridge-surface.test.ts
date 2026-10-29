@@ -5,7 +5,7 @@ import { BRIDGE_KEYS, isAllowedExternal, isPlayableOutput } from '../src/lib/con
 // object from the same closed set; we assert the set here without importing electron.
 describe('preload bridge surface (SEC-031)', () => {
   it('exposes exactly the documented keys', () => {
-    expect([...BRIDGE_KEYS].sort()).toEqual(['copyText', 'getBootstrap', 'getPathsForFiles', 'onServiceState', 'openExternal', 'openFolder', 'pickFiles', 'pickFolder', 'pickSavePath', 'readClipboardText',
+    expect([...BRIDGE_KEYS].sort()).toEqual(['copyText', 'getBootstrap', 'getPathsForFiles', 'onServiceState', 'openExternal', 'openSource', 'openFolder', 'pickFiles', 'pickFolder', 'pickSavePath', 'readClipboardText',
       'onUpdateState', 'getUpdateState', 'updateAction', 'openPath', 'logError', 'retryStartup'].sort());
   });
 

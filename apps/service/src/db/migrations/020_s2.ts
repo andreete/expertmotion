@@ -47,4 +47,21 @@ CREATE TABLE IF NOT EXISTS voice_transcripts (
 CREATE INDEX IF NOT EXISTS idx_voice_transcripts_project ON voice_transcripts(project_id);
 `,
   },
+  {
+    version: 23,
+    name: 's2_voice_keys_azure_google',
+    // FR-269: voice-only keys for Azure AI Speech ("<region>|<key>") and Google Cloud Text-to-Speech besides ElevenLabs (the CHECK
+    // list grows, so the table is rebuilt; rows are kept).
+    sql: `
+CREATE TABLE voice_keys_new (
+  provider     TEXT PRIMARY KEY CHECK(provider IN ('elevenlabs','azure','google-cloud')),
+  secret_enc   BLOB NOT NULL,
+  secret_hint  TEXT NOT NULL,
+  created_at   TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+INSERT INTO voice_keys_new (provider, secret_enc, secret_hint, created_at, updated_at) SELECT provider, secret_enc, secret_hint, created_at, updated_at FROM voice_keys;
+DROP TABLE voice_keys;
+ALTER TABLE voice_keys_new RENAME TO voice_keys;
+`,
+  },
 ];

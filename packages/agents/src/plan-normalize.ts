@@ -35,6 +35,7 @@ const TOOL_ALIASES: Record<string, string> = {
   'composition.applyops': 'composition.applyOps', applyops: 'composition.applyOps', apply_ops: 'composition.applyOps', 'composition.apply': 'composition.applyOps', 'composition_applyops': 'composition.applyOps', composition: 'composition.applyOps',
   'tts.generate': 'tts.generate', tts: 'tts.generate', 'voice.generate': 'tts.generate', 'voiceover.generate': 'tts.generate', 'generate.voice': 'tts.generate', 'tts_generate': 'tts.generate',
   'scene.compose': 'scene.compose', 'scenes.compose': 'scene.compose', compose: 'scene.compose', 'scene_compose': 'scene.compose', 'video.compose': 'scene.compose', 'scene.composer': 'scene.compose',
+  'music.generate': 'music.generate', music: 'music.generate', 'music.add': 'music.generate', 'generate.music': 'music.generate', 'music_generate': 'music.generate', 'audio.music': 'music.generate', 'music.library': 'music.generate',
   'captions.generate': 'captions.generate', captions: 'captions.generate', 'caption.generate': 'captions.generate', 'generate.captions': 'captions.generate', 'captions_generate': 'captions.generate',
 };
 
@@ -246,6 +247,7 @@ function normalizeOp(raw: unknown, m: CompositionModelT, fixes: string[], n: str
 /** Step tool args (live QA 2026-10-26: captions.generate {stylePreset}): near-miss names renamed, unknown keys dropped. */
 const STEP_ARGS: Record<string, { keys: string[]; alias: Record<string, string[]> }> = {
   'tts.generate': { keys: ['text', 'atMs', 'voiceId', 'language', 'speed'], alias: { text: ['script', 'content', 'narration', 'voiceover', 'voiceOver'], voiceId: ['voice'], atMs: ['startMs', 'start'], language: ['lang'], speed: ['rate'] } },
+  'music.generate': { keys: ['prompt', 'durationMs', 'volume', 'trackId'], alias: { prompt: ['mood', 'style', 'description', 'genre', 'query'], durationMs: ['duration', 'lengthMs'], trackId: ['track', 'id'] } },
   'captions.generate': { keys: ['source', 'text', 'atMs', 'durationMs', 'presetId', 'language'], alias: { presetId: ['stylePreset', 'style', 'styleId', 'captionStyle', 'preset', 'stylePresetId'], text: ['script', 'content', 'captionText'], atMs: ['startMs', 'start'], durationMs: ['duration'], language: ['lang'] } },
 };
 function normalizeStepArgs(tool: string, raw: Obj, fixes: string[], n: string): Obj {

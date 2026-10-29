@@ -46,10 +46,14 @@ export function destructiveItems(plan: PlanDto, ctx: { head?: { model?: Composit
  */
 export function previewRows(plan: PlanDto, model: CompositionModelT | null | undefined, lang: 'en' | 'id', ctx: { assets: readonly AssetDto[] } = { assets: [] }): PreviewRow[] {
   const rows: PreviewRow[] = [];
-  let sceneAt = model ? model.tracks.video.reduce((n, c) => n + (c.durationMs ?? 0), 0) : 0;
+  // Review U8: scene start times follow the Sequence the plan leaves behind: every clip in order, minus each transition's overlap
+  // (a cut's transition makes the next clip start that much earlier), exactly as deriveTiming does after Execute.
+  const seq: Array<{ d: number; row?: PreviewRow }> = (model?.tracks.video ?? []).map((c) => ({ d: c.durationMs ?? 0 }));
+  const trans = new Map((model?.transitions ?? []).map((x) => [x.cutIndex, x.durationMs] as const));
   let sceneN = model ? model.tracks.video.length : 0;
   for (const s of plan.steps) {
     if (s.tool === 'tts.generate') { rows.push({ kind: 'voice', step: s.n, title: 'Suara narasi', detail: q(s.args?.['text'], 90), ...(typeof s.args?.['atMs'] === 'number' ? { startMs: s.args['atMs'] as number } : {}) }); continue; }
+    if (s.tool === 'music.generate') { rows.push({ kind: 'audio', step: s.n, title: 'Musik latar (CC0)', detail: [q(s.args?.['prompt'], 40), 'diredam saat ada suara'].filter(Boolean).join(' · ') }); continue; }   // FR-266
     if (s.tool === 'captions.generate') { rows.push({ kind: 'captions', step: s.n, title: 'Caption dari naskah', detail: s.args?.['source'] === 'voice' ? 'disinkronkan dengan suara' : s.args?.['source'] === 'sequence' ? 'dari audio video' : 'dari naskah' }); continue; }
     for (const op of s.ops as Op[]) {
       const a = op.args ?? {};
@@ -57,14 +61,22 @@ export function previewRows(plan: PlanDto, model: CompositionModelT | null | und
         case 'op:scene.add': {
           const d = typeof a['durationMs'] === 'number' ? a['durationMs'] : 3000; sceneN += 1;
           const bits = [q(a['title'], 50) && `“${q(a['title'], 50)}”`, q(a['text'], 60), a['background'] ? `latar ${presetName(a['background'], lang)}` : '', a['transition'] ? `transisi ${presetName(a['transition'], lang)}` : '', a['motionId'] ? `gerak ${presetName(a['motionId'], lang)}` : ''].filter(Boolean);
-          rows.push({ kind: 'scene', step: s.n, title: `Adegan ${sceneN}`, detail: bits.join(' · '), startMs: sceneAt, durationMs: d }); sceneAt += d; break;
+          const row: PreviewRow = { kind: 'scene', step: s.n, title: `Adegan ${sceneN}`, detail: bits.join(' · '), startMs: 0, durationMs: d };
+          rows.push(row); seq.push({ d, row });
+          if (a['transition'] && seq.length > 1) trans.set(seq.length - 2, typeof a['transitionMs'] === 'number' ? a['transitionMs'] : 500);
+          break;
         }
         case 'op:text.add': rows.push({ kind: 'text', step: s.n, title: `Teks “${q(a['text'], 50)}”`, ...(a['variant'] ? { detail: presetName(a['variant'], lang) } : {}), ...(typeof a['atMs'] === 'number' ? { startMs: a['atMs'] } : {}), ...(typeof a['durationMs'] === 'number' ? { durationMs: a['durationMs'] } : {}) }); break;
         case 'op:shape.add': rows.push({ kind: 'shape', step: s.n, title: `Bentuk ${presetName(a['presetId'], lang)}`, ...(typeof a['atMs'] === 'number' ? { startMs: a['atMs'] } : {}), ...(typeof a['durationMs'] === 'number' ? { durationMs: a['durationMs'] } : {}) }); break;
-        case 'op:transition.set': rows.push({ kind: 'transition', step: s.n, title: `Transisi ${presetName(a['presetId'], lang)}`, detail: op.target?.kind === 'cut' && typeof op.target.index === 'number' ? `potongan ${op.target.index + 1}` : 'semua potongan' }); break;
+        case 'op:transition.set': if (op.target?.kind === 'cut' && typeof op.target.index === 'number' && typeof a['durationMs'] === 'number') trans.set(op.target.index, a['durationMs']);
+          rows.push({ kind: 'transition', step: s.n, title: `Transisi ${presetName(a['presetId'], lang)}`, detail: op.target?.kind === 'cut' && typeof op.target.index === 'number' ? `potongan ${op.target.index + 1}` : 'semua potongan' }); break;
         case 'op:background.set': case 'op:scene.setBackground': rows.push({ kind: 'background', step: s.n, title: `Latar ${presetName(a['presetId'], lang)}` }); break;
         case 'op:audio.addBed': rows.push({ kind: 'audio', step: s.n, title: `Musik latar ${ctx.assets.find((x) => x.id === a['assetId'])?.name ?? ''}`.trim(), detail: [typeof a['volume'] === 'number' ? `volume ${Math.round((a['volume'] as number) * 100)}%` : '', a['fadeOutMs'] ? `fade out ${sec(a['fadeOutMs'] as number)}` : '', a['loop'] ? 'diulang' : ''].filter(Boolean).join(' · ') }); break;
-        case 'op:clip.insert': rows.push({ kind: 'clip', step: s.n, title: `Klip ${ctx.assets.find((x) => x.id === a['assetId'])?.name ?? ''}`.trim(), ...(typeof a['durationMs'] === 'number' ? { durationMs: a['durationMs'] } : {}) }); break;
+        case 'op:clip.insert': if (a['atIndex'] === undefined && typeof a['durationMs'] === 'number') seq.push({ d: a['durationMs'] });
+          // FR-261: a footage clip shows which part of the file plays and how loud its own sound is
+          rows.push({ kind: 'clip', step: s.n, title: `Klip ${ctx.assets.find((x) => x.id === a['assetId'])?.name ?? ''}`.trim(), ...(typeof a['durationMs'] === 'number' ? { durationMs: a['durationMs'] } : {}),
+            ...(typeof a['trimBeforeMs'] === 'number' || typeof a['volume'] === 'number' ? { detail: [typeof a['trimBeforeMs'] === 'number' && typeof a['durationMs'] === 'number' ? `potongan ${sec(a['trimBeforeMs'] as number)}–${sec((a['trimBeforeMs'] as number) + (a['durationMs'] as number))}` : '',
+              typeof a['volume'] === 'number' && a['volume'] < 1 ? `suara ${Math.round((a['volume'] as number) * 100)}%` : '', a['transform'] ? 'jendela / setengah layar' : ''].filter(Boolean).join(' · ') } : {}) }); break;
         case 'op:caption.replaceText': rows.push({ kind: 'caption-fix', step: s.n, title: `Caption: “${q(a['find'], 40)}” → “${q(a['replace'], 40)}”`, ...(typeof a['atMs'] === 'number' ? { startMs: a['atMs'] } : {}) }); break;
         case 'op:caption.editPage': rows.push({ kind: 'caption-fix', step: s.n, title: `Caption diganti: “${q(a['text'], 60)}”`, ...(typeof a['atMs'] === 'number' ? { startMs: a['atMs'] } : {}) }); break;
         case 'op:caption.setPages': rows.push({ kind: 'captions', step: s.n, title: `Caption (${Array.isArray(a['pages']) ? (a['pages'] as unknown[]).length : 0} halaman)` }); break;
@@ -75,6 +87,8 @@ export function previewRows(plan: PlanDto, model: CompositionModelT | null | und
       }
     }
   }
+  let at = 0;
+  seq.forEach((c, i) => { if (c.row) c.row.startMs = at; at += c.d; if (i < seq.length - 1) at -= trans.get(i) ?? 0; });
   return rows;
 }
 /** Total duration after the plan (appended scenes), when the plan builds scenes; null otherwise. */

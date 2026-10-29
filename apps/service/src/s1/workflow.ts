@@ -18,6 +18,9 @@ import { getAssignment } from '../modules/providers.js';
 import { cachedModels } from '../s3/usage-store.js';
 import { discussionFor } from '../s3/shared-context.js';
 
+/** FR-262: an Editor message about making a video from the Creator's own footage / clips / recordings. */
+export const FOOTAGE_REQUEST_RE = /(footage|rekaman|klip (saya|ini|ku)|video (saya|ini|ku|yang (saya )?(upload|impor|unggah))|dari (video|klip|rekaman)|b-?roll|from (this|my|these) (footage|video|clips?)|my (footage|clips?|recordings?))/i;
+
 /** FR-080 / FR-072: what an Editor Chat message adds to the Rewrite envelope and the provider request. */
 export interface AgentPlanExtras { selection?: ElementRefT[] | undefined; playheadMs?: number | undefined; images?: ChatImage[] | undefined; attachments?: string[] | undefined; onDelta?: ((d: string) => void) | undefined;
   chat?: { messageId: string; target?: ElementRefT | undefined } | undefined;
@@ -59,6 +62,10 @@ export class Workflow {
   /** FR-084: Executes accepted but not yet inside their transaction (a Cancel may still abort them), and the ones cancelled. */
   private readonly pendingExec = new Set<string>();
   private readonly cancelledExec = new Set<string>();
+  /** Review A1: plans in the voice-first phase of Execute (voices are generated before the commit); Cancel aborts the voice batch. */
+  private readonly voiceExec = new Map<string, AbortController>();
+  /** Review A2: projects with a voice-first Execute in its voice phase (a second Execute waits: EM-2309, it would only go stale). */
+  private readonly voicing = new Set<string>();
   constructor(private readonly ctx: ServiceContext, private readonly store: CompositionStore, private readonly checkpoints: Checkpoints) {
     store.onCommit((pid, head) => this.markStale(pid, (r) => r.baseVersion !== head.hash));
   }
@@ -134,7 +141,7 @@ export class Workflow {
       ...(b.elementEdit ? { elementEdit: Object.fromEntries(Object.entries(b.elementEdit).filter(([, v]) => v !== undefined)) as unknown as NonNullable<DesignPick['elementEdit']> } : {}),
       ...(b.splitEdit ? { splitEdit: { atMs: b.splitEdit.atMs, items: b.splitEdit.items.map((x) => ({ kind: x.kind, id: x.id })) } } : {}),
       ...(b.itemsEdit ? { itemsEdit: { action: b.itemsEdit.action, items: b.itemsEdit.items.map((x) => ({ kind: x.kind, ...(x.id !== undefined ? { id: x.id } : {}), ...(x.index !== undefined ? { index: x.index } : {}) })),
-        ...(b.itemsEdit.paste ? { paste: { atMs: b.itemsEdit.paste.atMs, entries: b.itemsEdit.paste.entries.map((e) => ({ kind: e.kind, offsetMs: e.offsetMs, durationMs: e.durationMs, op: { op: e.op.op, ...(e.op.target ? { target: e.op.target } : {}), args: e.op.args } })) } } : {}) } } : {}),
+        ...(b.itemsEdit.paste ? { paste: { atMs: b.itemsEdit.paste.atMs, entries: b.itemsEdit.paste.entries.map((e) => ({ kind: e.kind, offsetMs: e.offsetMs, durationMs: e.durationMs, op: { op: e.op.op, ...(e.op.target ? { target: e.op.target } : {}), args: e.op.args }, ...(e.clip ? { clip: e.clip } : {}) })) } } : {}) } } : {}),
       ...(b.transformEdit ? { transformEdit: Object.fromEntries(Object.entries(b.transformEdit).filter(([, v]) => v !== undefined)) as unknown as NonNullable<DesignPick['transformEdit']> } : {}),
       ...(b.clipEdit ? { clipEdit: { clipId: b.clipEdit.clipId, ...(b.clipEdit.toIndex !== undefined ? { toIndex: b.clipEdit.toIndex } : {}), ...(b.clipEdit.trimBeforeMs !== undefined ? { trimBeforeMs: b.clipEdit.trimBeforeMs } : {}), ...(b.clipEdit.durationMs !== undefined ? { durationMs: b.clipEdit.durationMs } : {}) } } : {}),
     };
@@ -421,7 +428,17 @@ export class Workflow {
 
     const done = (async () => {
       const queue = this.loadQueue(projectId);
-      const assets = this.store.facts(projectId), tier = this.ctx.hooks.tier(), lockedKeys = lockedKeysFromQueue(queue);
+      let assets = this.store.facts(projectId);
+      const tier = this.ctx.hooks.tier(), lockedKeys = lockedKeysFromQueue(queue);
+      // FR-262: "buat video dari footage ini": transcribe the footage first (video assets with sound and no transcript yet), so the
+      // plan trims to what is said; bounded (≤ 8 clips, ≤ 10 min of footage, 150 s), skipped without a transcription model.
+      const unread = assets.filter((a) => a.kind === 'video' && a.status === 'ready' && a.hasAudio === true && !a.transcript);
+      if (message && unread.length && FOOTAGE_REQUEST_RE.test(message) && this.ctx.hooks.readFootage && unread.reduce((n, a) => n + (a.durationMs ?? 0), 0) <= 600_000) {
+        const say = extras.onProgress ?? (external ? undefined : (p: RunProgress) => this.ctx.bus.emit('agent.run.progress', { at: this.ctx.now(), projectId, runId, agent: 'editor', ...p }));
+        say?.({ phase: 'tool', tool: 'footage.read' });
+        try { const read = await this.ctx.hooks.readFootage(projectId, unread.slice(0, 8).map((a) => a.id), { signal: ac.signal }); if (read.length) assets = this.store.facts(projectId); }
+        catch (e) { this.ctx.log.info({ projectId, code: e instanceof EmError ? e.code : 'EM-7101' }, 'footage read failed'); }
+      }
       const notes = (this.ctx.db.prepare("SELECT json_extract(plan_json, '$.notes') AS n FROM edit_plans WHERE project_id = ? AND id != ? AND json_extract(plan_json, '$.notes') IS NOT NULL ORDER BY updated_at DESC LIMIT 1").get(projectId, planId) as { n: string } | undefined)?.n;
       const env = buildRewriteEnvelope({ model: head.model, baseVersion: head.hash, assets, intents, lockedKeys, tier, ...(message ? { creatorMessage: message } : {}), ...(notes ? { creatorNotes: notes } : {}),
         ...(extras.selection?.length ? { selection: extras.selection } : {}), ...(extras.playheadMs !== undefined ? { playheadMs: extras.playheadMs } : {}), ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
@@ -430,7 +447,8 @@ export class Workflow {
       // ADR-030: generator plan steps (voice-over, captions) and whether their local models are installed.
       let toolModels: { tts: ToolModel | null; stt: ToolModel | null } | undefined;
       try { toolModels = await this.ctx.hooks.planToolModels?.(head.model.settings.language); } catch { toolModels = undefined; }
-      if (toolModels) env.capabilities.stepTools = { 'tts.generate': { available: !!toolModels.tts?.installed, ...(toolModels.tts ? { model: toolModels.tts.label } : {}) }, 'captions.generate': { script: true, sequence: !!toolModels.stt?.installed } };
+      if (toolModels) env.capabilities.stepTools = { 'tts.generate': { available: !!toolModels.tts?.installed, ...(toolModels.tts ? { model: toolModels.tts.label } : {}) }, 'captions.generate': { script: true, sequence: !!toolModels.stt?.installed },
+        'music.generate': { available: !this.ctx.settings.get().privateMode, tracks: 28 } };   // FR-266: CC0 library (Private Mode blocks the download)
       const t0 = Date.now();
       let usage: ChatUsage[] = [];
       // FR-084: plan deltas stream as agent.run.delta (the S3 chat passes its own emitter for its run; queue-started runs use one here).
@@ -550,7 +568,7 @@ export class Workflow {
       if (prior) return { ...(JSON.parse(prior.result_json) as ExecutionResultT), notice: 'EM-2308' };
     }
     if (row.status === 'executed' && row.result_json) return { ...(JSON.parse(row.result_json) as ExecutionResultT), notice: 'EM-2308' };
-    if (row.status === 'executing' || row.status === 'draft' || this.executing.has(row.project_id)) throw new EmError('EM-2309', 'Another change is being applied. Wait for it to finish, then try again.', { details: { projectId: row.project_id, activePlanId: planId } });
+    if (row.status === 'executing' || row.status === 'draft' || this.executing.has(row.project_id) || this.voicing.has(row.project_id)) throw new EmError('EM-2309', 'Another change is being applied. Wait for it to finish, then try again.', { details: { projectId: row.project_id, activePlanId: planId } });
     const plan = JSON.parse(row.plan_json) as EditPlanT;
     if (row.status === 'stale') throw stale(this.store.head(row.project_id).hash, plan.baseVersion);
     if (row.status === 'cancelled' || row.status === 'invalid') throw new EmError('EM-2303', 'This plan cannot be executed.', { details: { planId, status: row.status } });
@@ -573,10 +591,16 @@ export class Workflow {
     const vf = voiceFirstOf(plan);
     if (vf && this.ctx.hooks.voiceBatch) {
       const t0 = performance.now(); const head = this.store.head(row.project_id);
+      // Review A2: a plan whose base already moved is never voiced (paid) first: stale now, re-planned by the Editor.
+      if (plan.baseVersion !== head.hash) { this.updatePlan(planId, plan, 'stale'); this.emitPlanInvalid(row.project_id, plan, 'stale', 'EM-2301'); throw stale(head.hash, plan.baseVersion); }
+      const ac = new AbortController(); this.voiceExec.set(planId, ac); this.voicing.add(row.project_id);
       try {
-        const next = await this.prepareVoiceFirst(row.project_id, planId, plan, vf);
+        const next = await this.prepareVoiceFirst(row.project_id, planId, plan, vf, ac.signal);
+        if (ac.signal.aborted) throw new EmError('EM-4303', 'cancelled');
         this.updatePlan(planId, next, 'valid');
       } catch (e) {
+        // Review A1: Cancel during the voice phase: cancel() already marked the plan cancelled; the batch's clips were removed (A3).
+        if (ac.signal.aborted) throw new EmError('EM-4303', 'The change was cancelled before it was applied. Nothing changed.', { status: 409, details: { planId } });
         const em = e instanceof EmError ? e : new EmError('EM-7101', 'The voice-over could not be generated.', { cause: e });
         this.ctx.log.warn({ projectId: row.project_id, planId, code: em.code }, 'voice-first execute stopped: voice-over failed');
         const result: ExecutionResultT = { planId, ok: false, fromVersion: head.hash, appliedOps: 0, diff: [], error: { code: /^EM-\d{4}$/.test(em.code) ? em.code : 'EM-7101', message: `${em.message} Nothing was changed: the scene timing needs the real voice clips.` }, durationMs: Math.round(performance.now() - t0) };
@@ -584,7 +608,7 @@ export class Workflow {
         this.emitPlanInvalid(row.project_id, { ...plan, validation: [{ path: '', message: result.error!.message, code: result.error!.code }] }, 'failed', result.error!.code as EmCode);
         this.planProgress(row.project_id, planId, 'failed', {});
         return result;
-      }
+      } finally { this.voiceExec.delete(planId); this.voicing.delete(row.project_id); }
     }
     return this.executeRow(this.planRow(planId), { checkpoint: true, ...(o.idempotencyKey ? { idempotencyKey: o.idempotencyKey } : {}) }).result;
   }
@@ -595,7 +619,7 @@ export class Workflow {
   }
 
   /** FR-224: generates the plan's voice clips (one batch job), fills their asset ids / measured durations into the VideoSpec and composes again. */
-  private async prepareVoiceFirst(projectId: string, planId: string, plan: EditPlanT, vf: NonNullable<ReturnType<typeof voiceFirstOf>>): Promise<EditPlanT> {
+  private async prepareVoiceFirst(projectId: string, planId: string, plan: EditPlanT, vf: NonNullable<ReturnType<typeof voiceFirstOf>>, signal?: AbortSignal): Promise<EditPlanT> {
     const spec = vf.spec;
     const clips = (spec.voice?.clips ?? []).filter((c) => !c.assetId);
     const language = spec.language ?? this.store.head(projectId).model.settings.language;
@@ -603,7 +627,7 @@ export class Workflow {
     const tts = plan.steps.find((s) => s.tool === 'tts.generate' && typeof s.args['voiceId'] === 'string');
     const voiceId = spec.voice?.voiceId ?? (tts?.args['voiceId'] as string | undefined) ?? (language === 'en' ? 'natural, warm, clear voice' : 'suara natural, hangat, jelas');
     const r = await this.ctx.hooks.voiceBatch!(projectId, { clips: clips.map((c) => ({ id: c.id, text: c.text })), voiceId, language, ...(spec.voice?.speed ? { speed: spec.voice.speed } : {}),
-      ...(spec.maxDurationMs ? { maxTotalMs: spec.maxDurationMs } : {}), ...(spec.voice?.gapMs !== undefined ? { gapMs: spec.voice.gapMs } : {}), ...(spec.voice?.tailMs !== undefined ? { sceneGapMs: spec.voice.tailMs } : {}), insert: false });
+      ...(spec.maxDurationMs ? { maxTotalMs: spec.maxDurationMs } : {}), ...(spec.voice?.gapMs !== undefined ? { gapMs: spec.voice.gapMs } : {}), ...(spec.voice?.tailMs !== undefined ? { sceneGapMs: spec.voice.tailMs } : {}), insert: false }, signal ? { signal } : {});
     const got = new Map(r.clips.map((c) => [c.id, c] as const));
     const missing = clips.filter((c) => !got.get(c.id)?.assetId);
     if (missing.length) throw new EmError('EM-7101', `The voice clips ${missing.map((c) => c.id).join(', ')} were not generated.`);
@@ -696,6 +720,15 @@ export class Workflow {
     const row = this.planRow(planId);
     if (row.status === 'executing' && this.pendingExec.has(planId)) {
       this.pendingExec.delete(planId); this.cancelledExec.add(planId);
+      const p = JSON.parse(row.plan_json) as EditPlanT;
+      this.withdrawChatIntents(row.project_id, planId);
+      this.updatePlan(planId, p, 'cancelled');
+      this.emitPlanInvalid(row.project_id, p, 'cancelled', 'EM-4303');
+      return this.planDtoFor(planId);
+    }
+    const voicing = this.voiceExec.get(planId);
+    if (row.status === 'executing' && voicing) {                       // review A1: still generating the voices; nothing is committed yet
+      voicing.abort();
       const p = JSON.parse(row.plan_json) as EditPlanT;
       this.withdrawChatIntents(row.project_id, planId);
       this.updatePlan(planId, p, 'cancelled');

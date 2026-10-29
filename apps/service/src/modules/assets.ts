@@ -13,7 +13,7 @@ import type { ServiceContext } from '../context.js';
 import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
 import { ULID, decodeCursor, em, encodeCursor, isInside, parseOrThrow, requireProject } from '../s2/common.js';
-import { clearBadges, getAsset, listAssets, requireAsset, setBadge, toAssetDto, toFacts, type AssetRow } from '../s2/assets-repo.js';
+import { clearBadges, getAsset, listAssets, requireAsset, setBadge, toAssetDto, toFacts, withTranscripts, type AssetRow } from '../s2/assets-repo.js';
 import { assetDir, hashFile, ingestOf, inspectSource, sourceKeyOf, MAX_ASSETS_PER_PROJECT } from '../s2/ingest.js';
 import { SIZE_LIMIT, kindFromExt, sniffMatches, readHead } from '../s2/probe.js';
 import { checkProjectMedia, isMissing, purgeExpiredFailed, purgeRemoved, restoreReferenced, versionsReference } from '../s2/media-check.js';
@@ -71,7 +71,7 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
   return {
     name: 'assets',
     start(ctx) {
-      ctx.hooks.assetFacts = (projectId) => listAssets(ctx, projectId, { includeDeleted: true }).map(toFacts);   // FR-052: removed assets stay valid for Undo
+      ctx.hooks.assetFacts = (projectId) => withTranscripts(ctx, projectId, listAssets(ctx, projectId, { includeDeleted: true }).map(toFacts));   // FR-052: removed assets stay valid for Undo; FR-261 transcripts
       ctx.hooks.mediaCheck = (projectId) => checkProjectMedia(ctx, projectId);
       ctx.hooks.reingest = (projectId, assetIds) => { for (const id of assetIds) if (getAsset(ctx, id, projectId)) ingestOf(ctx).requeue(id, { keepStatus: true }); };
       // FR-052: when a new head uses removed assets again (Undo of a Remove), they come back into the Asset Panel.

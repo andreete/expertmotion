@@ -30,6 +30,8 @@ const TextStyle = z.object({
 /** ADR-034: a motion given with the add op (absent = the automatic default for the element; presetId preset:motion.none = static). */
 const MotionArg = z.object({ presetId: PresetId, durationMs: z.number().int().min(100).max(10_000).optional(), delayMs: z.number().int().min(0).max(60_000).optional(),
   easingId: PresetId.optional(), exit: z.boolean().optional(), params: Params.optional() }).strict();
+/** ADR-028 overlay zoom / rotation given with an add op (Duplicate / Paste copy them; absent = 1 / 0). */
+const OverlayScaleArg = z.number().min(0.05).max(20), RotationArg = z.number().min(-360).max(360);
 const EffectArg = z.object({ presetId: PresetId, params: Params.optional() }).strict();
 
 export type PropertyClass = 'scalar' | 'list' | 'exclusive-group';
@@ -38,7 +40,12 @@ const def = (args: z.ZodRawShape, targets: readonly TargetKind[] | null, propert
   ({ args: z.object(args).strict(), targets, propertyClass, destructive });
 
 export const OPERATIONS = {
-  'op:clip.insert': def({ assetId: z.string(), atIndex: z.number().int().min(0).optional(), trimBeforeMs: ms.optional(), durationMs: dur.optional() }, ['sequence'], 'list'),
+  // FR-261 (footage + auto motion): the clip's sound, fit / crop and frame position can be given at insert (the composer cannot
+  // target a clip id it has not created yet); absent = the defaults before (volume 1, cover, no crop, identity transform).
+  'op:clip.insert': def({ assetId: z.string(), atIndex: z.number().int().min(0).optional(), trimBeforeMs: ms.optional(), durationMs: dur.optional(),
+    volume: z.number().min(0).max(1).optional(), muted: z.boolean().optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional(), objectFit: z.enum(['cover', 'contain']).optional(),
+    crop: z.object({ left: z.number().min(0).max(0.9), right: z.number().min(0).max(0.9), top: z.number().min(0).max(0.9), bottom: z.number().min(0).max(0.9) }).strict().optional(),
+    transform: z.object({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.1).max(10).optional(), rotation: z.number().min(-360).max(360).optional() }).strict().optional() }, ['sequence'], 'list'),
   'op:clip.remove': def({}, ['clip'], null, true),
   'op:clip.move': def({ toIndex: z.number().int().min(0) }, ['clip'], null),
   'op:clip.setTrim': def({ trimBeforeMs: ms, durationMs: dur }, ['clip'], 'scalar'),
@@ -85,10 +92,10 @@ export const OPERATIONS = {
   'op:effect.remove': def({ presetId: PresetId }, ['clip'], null),
   'op:effect.setParams': def({ presetId: PresetId, params: Params }, ['clip'], 'scalar'),
   'op:shape.add': def({ presetId: PresetId, atMs: ms, durationMs: dur, position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), fill: Hex.optional(), stroke: Hex.optional(), strokeWidth: z.number().min(0).max(100).optional(), motionId: PresetId.optional(), params: Params.optional(), layer: lane.optional(),
-    height: z.number().min(1).max(4000).optional(), opacity: z.number().min(0).max(1).optional(), motion: MotionArg.optional() }, null, 'list'),   // ADR-034: height (u) = a w × h box; motion object
+    height: z.number().min(1).max(4000).optional(), opacity: z.number().min(0).max(1).optional(), motion: MotionArg.optional(), scale: OverlayScaleArg.optional(), rotation: RotationArg.optional() }, null, 'list'),   // ADR-034: height (u) = a w × h box; motion object; scale / rotation as op:element.setTransform (Duplicate / Paste keep them)
   'op:shape.remove': def({}, ['shape'], null, true),
   // ADR-020 addition (Stage 3): image overlays (FR-029 "Insert Image", logo/product photo). size = width in u; height follows the image aspect.
-  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional(), layer: lane.optional(), motion: MotionArg.optional() }, null, 'list'),
+  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional(), layer: lane.optional(), motion: MotionArg.optional(), scale: OverlayScaleArg.optional(), rotation: RotationArg.optional() }, null, 'list'),
   'op:overlay.remove': def({}, ['image'], null, true),
   // FR-028 addition (Stage 3): opacity of an overlay image or a Shape on the overlay Track.
   'op:overlay.setOpacity': def({ opacity: z.number().min(0).max(1) }, ['image', 'shape'], 'scalar'),
@@ -103,7 +110,7 @@ export const OPERATIONS = {
   // ADR-028 (FR-180 canvas transform): picture position / zoom / rotation. x, y = centre offset as a fraction of the frame width /
   // height; scale 1 = the objectFit result (clip, 0.1…10) or the stored size (image / shape, 0.05…20); rotation in degrees.
   'op:element.setTransform': def({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }, ['clip', 'image', 'shape', 'text'], 'scalar'),   // ADR-034: a text takes x / y only (quality-gate re-flow)
-  'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),
+  'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), duckingParams: Params.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),   // FR-266: duckingParams (e.g. volume / duckTo of preset:audio.duck-voice)
   'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, null, 'list'),
   'op:audio.setDucking': def({ presetId: PresetId, params: Params.optional() }, ['audio'], 'exclusive-group'),
   'op:audio.setFades': def({ fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['audio'], 'scalar'),

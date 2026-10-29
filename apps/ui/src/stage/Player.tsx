@@ -2,7 +2,7 @@
 // media URLs from the preview media grant (ported Preview: fit-to-box sizing, safe-area overlay, draft/full, indicators).
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { Player as RemotionPlayer, type PlayerRef } from '@remotion/player';
-import { ChevronLeft, ChevronRight, Maximize, Menu, Minimize, Pause, Play, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize, Menu, MessageSquare, Minimize, Pause, Play, RefreshCw, Sparkles, Upload } from 'lucide-react';
 import { ExpertmotionTimeline, calculateMetadata, safeAreaFor, type AssetUrls, type EngineInputProps } from '@expertmotion/engine';
 import { applyOperations, deriveTiming, type CompositionModelT, type OperationT } from '@expertmotion/composition-model';
 import { compileDefaults, getPreset } from '@expertmotion/catalogue';
@@ -13,6 +13,7 @@ import { formatTimecode } from '../i18n/index.js';
 import { playerBus } from './playerBus.js';
 import { CanvasHandles, type CanvasGesture } from './CanvasHandles.js';
 import { ItemMenu, type ItemMenuAnchor } from './ItemMenu.js';
+import { RecentStrip } from '../screens/StartScreen.js';
 import { canvasItemOf, transformEditOf, withLiveTransform, type Xf } from './canvas-transform.js';
 import { playerPrefsFor, playerPrefsPatch, type PlayerPrefs } from '../prefs.js';
 import type { AppState } from '../state/reducer.js';
@@ -268,10 +269,17 @@ export function StagePlayer() {
             {slow && <Button el="stage.player.state.loading.retry" size={28} onClick={retryLoad}>{t('ui.sys.toast.tryagain')}</Button>}
           </div>
         ) : empty ? (
-          <div data-el="stage.player.state.empty" role="status" className="flex max-w-[360px] flex-col items-center gap-2 p-4 text-center">
-            <span className="text-[14px] font-semibold">{t('ui.stage.player.empty.title')}</span>
-            <span className="text-em-muted">{t('ui.stage.player.empty.body')}</span>
-            <Button el="stage.player.state.empty.import" size={28} onClick={() => window.dispatchEvent(new CustomEvent('em:import', { detail: {} }))}>{t('ui.hdr.menu.file.import')}</Button>
+          // FR-263: the empty project pushes the automatic path first (write the idea → the Editor makes the video), footage second
+          <div data-el="stage.player.state.empty" role="status" className="flex max-w-[420px] flex-col items-center gap-2 p-4 text-center">
+            <Sparkles size={22} className="text-em-accent" aria-hidden />
+            <span className="text-[14px] font-semibold">{t('ui.stage.player.empty.auto.title')}</span>
+            <span className="text-em-muted">{t('ui.stage.player.empty.auto.body')}</span>
+            <span className="flex flex-wrap justify-center gap-2">
+              <Button el="stage.player.state.empty.write" size={28} variant="primary" icon={<MessageSquare size={14} />} tip={t('ui.stage.player.empty.write.tip')}
+                onClick={() => window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent: 'editor' } }))}>{t('ui.stage.player.empty.write')}</Button>
+              <Button el="stage.player.state.empty.import" size={28} icon={<Upload size={14} />} tip={t('ui.stage.player.empty.import.tip')} onClick={() => window.dispatchEvent(new CustomEvent('em:import', { detail: {} }))}>{t('ui.stage.player.empty.import')}</Button>
+            </span>
+            <RecentStrip />
           </div>
         ) : (
           <div className="relative" style={{ width: w, height: h }}>

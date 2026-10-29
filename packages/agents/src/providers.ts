@@ -67,6 +67,8 @@ export function estimateCost(model: string, inputTokens: number, outputTokens: n
   return p ? { costUsd: (inputTokens * p.input + outputTokens * p.output) / 1e6, approximate: true } : { costUsd: null, approximate: true };
 }
 
+/** A 400 whose reason is about the key itself (Gemini: "API key not valid", "API key expired"). */
+const KEY_INVALID_400 = /api[ _-]?key (is )?(not valid|invalid|expired)|invalid api[ _-]?key|api key not found/i;
 /** Maps provider/transport failures to EM codes (AI_WORKFLOW §12, ERROR_CATALOGUE EM-4xxx). */
 export function mapProviderError(e: unknown): EmError {
   if (e instanceof EmError) return e;
@@ -79,12 +81,14 @@ export function mapProviderError(e: unknown): EmError {
   if (body) { try { const j = JSON.parse(body) as { error?: { message?: unknown; type?: unknown } | string; message?: unknown }; reason = String((typeof j.error === 'object' ? j.error?.message ?? j.error?.type : j.error) ?? j.message ?? ''); } catch { reason = body; } }
   reason = reason.replace(/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/g, '$1…').replace(/(AIza[A-Za-z0-9_-]{4})[A-Za-z0-9_-]+/g, '$1…').slice(0, 300);
   const status = typeof err?.statusCode === 'number' ? err.statusCode : undefined;
+  // QA P1 2026-10-29: Gemini answers a wrong / expired key with 400 INVALID_ARGUMENT "API key not valid" (API_KEY_INVALID).
+  if (status === 400 && (KEY_INVALID_400.test(reason) || /API_KEY_INVALID/.test(body))) return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
   switch (err?.statusCode) {
     case 401: return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
     case 403:
       // QA 2026-10-28: a 403 is often not about the key (Anthropic permission_error: a feature or model not enabled for the account,
       // e.g. web search off in the Console). Only a reason that names the key / authentication is "key not accepted".
-      if (!reason || /api[ _-]?key|x-api-key|authenticat|credential|unauthori[sz]ed|invalid key|key (is )?(invalid|disabled|revoked)/i.test(reason)) return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
+      if (!reason || /api[ _-]?key|x-api-key|authenticat|credential|unauthori[sz]ed|unregistered callers|invalid key|key (is )?(invalid|disabled|revoked)/i.test(reason)) return new EmError('EM-4002', 'The AI provider rejected the key.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });
       return new EmError('EM-4105', `The AI provider refused the request: ${reason}`, { cause: e, details: { status, reason } });
     case 402: return new EmError('EM-4201', 'The provider account has no credit left.', { cause: e, details: { status } });
     case 404: return new EmError('EM-4004', 'This model is not available from the provider.', { cause: e, details: { status, ...(reason ? { reason } : {}) } });

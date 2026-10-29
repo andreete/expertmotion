@@ -90,17 +90,25 @@ export function spokenFormId(token: string): string[] {
 }
 
 // ───────────────────────────── DP alignment ─────────────────────────────
+let levRow = new Int32Array(64);
+/** Levenshtein distance with one reused scratch row (it runs once per alignment cell: no allocation per call). */
 function lev(a: string, b: string): number {
   if (a === b) return 0;
   const m = a.length, n = b.length;
   if (!m) return n; if (!n) return m;
-  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  if (levRow.length < n + 1) levRow = new Int32Array(n + 1);
+  const row = levRow;
+  for (let j = 0; j <= n; j++) row[j] = j;
   for (let i = 1; i <= m; i++) {
-    const cur = [i];
-    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
-    prev = cur;
+    let diag = row[0]!; row[0] = i;
+    const ca = a.charCodeAt(i - 1);
+    for (let j = 1; j <= n; j++) {
+      const up = row[j]!;
+      const v = Math.min(up + 1, row[j - 1]! + 1, diag + (ca === b.charCodeAt(j - 1) ? 0 : 1));
+      diag = up; row[j] = v;
+    }
   }
-  return prev[n]!;
+  return row[n]!;
 }
 /** 1 = identical, 0 = nothing in common (normalised Levenshtein on the comparison forms). */
 export const wordSimilarity = (a: string, b: string): number => { const x = normWord(a), y = normWord(b); if (!x && !y) return 1; return 1 - lev(x, y) / Math.max(x.length, y.length, 1); };
@@ -108,32 +116,52 @@ export const wordSimilarity = (a: string, b: string): number => { const x = norm
 /**
  * Needleman–Wunsch alignment of two word lists (monotonic). Returns for every `a[i]` the index of its partner in `b` or -1.
  * Substitution costs 1 − similarity; a pair counts as matched only above `minSim` (0.5: "bersih" ~ "besi" 0.67 matches, so a
- * misheard word still lends its TIME; the text stays the script's). Gaps cost `gap`. O(n·m) with n, m ≤ a few thousand.
+ * misheard word still lends its TIME; the text stays the script's). Gaps cost `gap`. O(n·m) up to ALIGN_FULL_CELLS, then O(n·band).
  */
-export function alignWords(a: readonly string[], b: readonly string[], o: { gap?: number; minSim?: number } = {}): number[] {
+/** Above this many cells the alignment runs in a band around the diagonal (R7: a 20 000-character script must not block for seconds). */
+export const ALIGN_FULL_CELLS = 4_000_000;
+export const ALIGN_BAND = 200;
+export const ALIGN_MAX_CELLS = 8_000_000;
+export function alignWords(a: readonly string[], b: readonly string[], o: { gap?: number; minSim?: number; band?: number } = {}): number[] {
   const gap = o.gap ?? 0.7; const minSim = o.minSim ?? 0.5;
   const n = a.length, m = b.length;
-  const W = m + 1;
-  const cost = new Float64Array((n + 1) * W); const move = new Uint8Array((n + 1) * W);   // 1 diag, 2 up (a gap), 3 left (b gap)
-  for (let i = 1; i <= n; i++) { cost[i * W] = i * gap; move[i * W] = 2; }
-  for (let j = 1; j <= m; j++) { cost[j] = j * gap; move[j] = 3; }
+  const out = new Array<number>(n).fill(-1);
+  if (n === 0 || m === 0) return out;
+  // Row i covers columns lo[i]..hi[i]: everything when small, else a Sakoe–Chiba band of ±B around the scaled diagonal (the
+  // band is at least the slope wide, so consecutive rows always overlap and the end cell stays reachable).
+  const full = (n + 1) * (m + 1) <= ALIGN_FULL_CELLS && o.band === undefined;
+  // ±(ALIGN_BAND + |m − n|) holds every path made of pure insertions / deletions; capped at ALIGN_MAX_CELLS (never below the slope)
+  const B = full ? m : Math.max(Math.min(o.band ?? ALIGN_BAND + Math.abs(m - n), Math.floor(ALIGN_MAX_CELLS / (2 * (n + 1)))), Math.ceil(m / n) + 1, Math.ceil(n / m) + 1);
+  const lo = new Int32Array(n + 1), hi = new Int32Array(n + 1), off = new Float64Array(n + 2);
+  for (let i = 0; i <= n; i++) {
+    const c = (i * m) / n;
+    lo[i] = full ? 0 : Math.max(0, Math.floor(c) - B); hi[i] = full ? m : Math.min(m, Math.ceil(c) + B);
+    off[i + 1] = off[i]! + (hi[i]! - lo[i]! + 1);
+  }
+  const move = new Uint8Array(off[n + 1]!);   // 1 diag, 2 up (a gap), 3 left (b gap); 0 = outside the band
+  let prev = new Float64Array(m + 1).fill(Infinity), cur = new Float64Array(m + 1).fill(Infinity);
+  for (let j = lo[0]!; j <= hi[0]!; j++) { prev[j] = j * gap; if (j > 0) move[off[0]! + j - lo[0]!] = 3; }
   const na = a.map((x) => normWord(x)); const nb = b.map((x) => normWord(x));
   for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      const x = na[i - 1]!, y = nb[j - 1]!;
-      const sim = x === y ? 1 : 1 - lev(x, y) / Math.max(x.length, y.length, 1);
-      const d = cost[(i - 1) * W + j - 1]! + (1 - sim) * 1.2;
-      const u = cost[(i - 1) * W + j]! + gap; const l = cost[i * W + j - 1]! + gap;
-      if (d <= u && d <= l) { cost[i * W + j] = d; move[i * W + j] = 1; } else if (u <= l) { cost[i * W + j] = u; move[i * W + j] = 2; } else { cost[i * W + j] = l; move[i * W + j] = 3; }
+    if (i >= 2) cur.fill(Infinity, lo[i - 2]!, hi[i - 2]! + 1);   // this buffer still holds row i-2; outside the band must read as Infinity
+    const base = off[i]! - lo[i]!; const x = na[i - 1]!;
+    for (let j = lo[i]!; j <= hi[i]!; j++) {
+      if (j === 0) { cur[0] = i * gap; move[base] = 2; continue; }
+      const y = nb[j - 1]!;
+      const d = prev[j - 1]! === Infinity ? Infinity : prev[j - 1]! + (1 - (x === y ? 1 : 1 - lev(x, y) / Math.max(x.length, y.length, 1))) * 1.2;
+      const u = prev[j]! + gap; const l = cur[j - 1]! + gap;
+      if (d <= u && d <= l) { cur[j] = d; move[base + j] = 1; } else if (u <= l) { cur[j] = u; move[base + j] = 2; } else { cur[j] = l; move[base + j] = 3; }
     }
+    const t = prev; prev = cur; cur = t;
   }
-  const out = new Array<number>(n).fill(-1);
+  const mv = (i: number, j: number): number => (j < lo[i]! || j > hi[i]! ? 0 : move[off[i]! + j - lo[i]!]!);
   let i = n, j = m;
   while (i > 0 || j > 0) {
-    const mv = move[i * W + j];
-    if (i > 0 && j > 0 && mv === 1) { const sim = wordSimilarity(a[i - 1]!, b[j - 1]!); if (sim >= minSim) out[i - 1] = j - 1; i--; j--; }
-    else if (i > 0 && (mv === 2 || j === 0)) i--;
-    else j--;
+    const k = mv(i, j);
+    if (i > 0 && j > 0 && k === 1) { const sim = wordSimilarity(a[i - 1]!, b[j - 1]!); if (sim >= minSim) out[i - 1] = j - 1; i--; j--; }
+    else if (i > 0 && (k === 2 || j === 0)) i--;
+    else if (j > 0 && (k === 3 || i === 0)) j--;
+    else { i--; j--; }   // unreachable for a connected band; never loops
   }
   return out;
 }
@@ -282,7 +310,10 @@ export function cuesToCaptionPages(cues: readonly TranscriptCue[], atMs: number,
     const s = Math.round(atMs + Math.max(0, c.fromMs - trim)); const e = Math.min(until, Math.round(atMs + c.toMs - trim));
     if (e <= s) continue;
     out.push({ text: c.words.map((w) => ` ${w.text}`).join(''), startMs: s, durationMs: Math.max(1, e - s),
-      tokens: c.words.map((w) => ({ text: ` ${w.text}`, fromMs: Math.max(s, Math.round(atMs + w.fromMs - trim)), toMs: Math.min(e, Math.max(s, Math.round(atMs + w.toMs - trim))) })) });
+      tokens: c.words.map((w) => {   // R6: clamped to [s, e] on both ends, so words cut off by `untilMs` never get fromMs > toMs
+        const fromMs = Math.min(e, Math.max(s, Math.round(atMs + w.fromMs - trim)));
+        return { text: ` ${w.text}`, fromMs, toMs: Math.max(fromMs, Math.min(e, Math.round(atMs + w.toMs - trim))) };
+      }) });
   }
   return out;
 }

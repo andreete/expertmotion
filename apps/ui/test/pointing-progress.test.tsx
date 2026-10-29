@@ -203,12 +203,13 @@ describe('Progress and failures (QA #5, #3)', () => {
   it('EM-4002 on a new key: hint, automatic retry countdown, Try again and Open AI providers', { timeout: 30_000 }, async () => {
     const { bus } = await boot();
     chatComposer('brainstorm');                                                   // ADR-033: the Diskusi failure shows in the Diskusi tab
-    await act(async () => { bus.emit('agent.run.failed', { runId: 'r7', agent: 'brainstorm', code: 'EM-4002', retryable: false, message: 'anthropic did not accept this key.', details: { recentKey: true, providerStatus: 401 } }); });
+    await act(async () => { bus.emit('agent.run.failed', { runId: 'r7', agent: 'brainstorm', code: 'EM-4002', retryable: false, message: 'anthropic did not accept this key.', details: { recentKey: true, providerStatus: 401, reason: 'invalid x-api-key' } }); });
     await until(() => el('agent.chat.error.keyhint'), 'key hint');
     expect(el('agent.chat.error.keyhint')!.textContent).toMatch(/New keys can take 1–2 minutes to become active\. Trying again in 20 s\./);
     const bubble = document.querySelector<HTMLElement>('[data-el="agent.chat.message"][data-code="EM-4002"]')!;
     expect([...bubble.querySelectorAll('[data-action]')].map((b) => b.getAttribute('data-action'))).toEqual(['retry', 'providers']);
-    expect(bubble.textContent).toContain('anthropic did not accept this key.');
+    expect(bubble.textContent).toContain('Key not valid');                     // QA P1 2026-10-29: the provider's reason, not only the hint
+    expect(bubble.textContent).toContain('“invalid x-api-key”');
     await act(async () => { fireEvent.click(bubble.querySelector('[data-action="providers"]')!); });
     await until(() => el('scr.providers'), 'providers screen');
   });

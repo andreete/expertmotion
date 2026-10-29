@@ -310,6 +310,16 @@ Frame rate and duration are **not** here (ADR-010); a link row "Frame rate 30 fp
 | `scr.diagnostics` | Sheet 640 | tabs Logs / Versions / Hardware; "Copy diagnostics bundle" / "Salin bundel diagnostik" (zip path shown); note "Secrets are redacted" / "Rahasia disamarkan" | — | PRD-015, PRD-021 |
 | `scr.about` | Modal 420 | wordmark, version, licence state, "Third-party notices" / "Pemberitahuan pihak ketiga" (incl. GPL source offer for the TTS engine), "Known limitations" / "Keterbatasan yang diketahui", "Update checks paused (Private Mode)" when applicable | — | PRD §7.5 |
 
+## 8a. Automatic-first Editor (Operator 2026-10-29; FR-260 … FR-269)
+
+The product is an AUTOMATIC video maker first; manual tools are second. These rules apply on top of §6 / §7:
+
+- **Launch** (FR-260, ADR-037): the window opens on an empty project ("Tanpa judul"), never on the Start screen or the last project. The empty Player (`stage.player.state.empty`) reads "Mulai dari ide — videonya dibuat otomatis" / "Tulis ide atau tempel prompt lengkap di chat Editor. Punya footage? Impor dulu, lalu minta “buat video dari footage ini”." with **Tulis ide** (primary; focuses the Editor composer) and **Impor footage**, then the small row "Terakhir dibuka: [project] [project] [project] Semua…" (`stage.recent`). File ▸ Tutup proyek closes into an empty project. A crash-loop / abnormal-end notice (`sys.launch.notice`) is a single bar under the header (danger / warn left border) with one action and Tutup — never a modal.
+- **Chat starter** (FR-265): an empty thread shows the first-run hint row (accent tint, lightbulb, × to hide for good) and up to four example chips (rounded pills, one line each, truncated with the full text in the tooltip): "Video 30 detik: 3 tips hemat listrik", "Video dari footage saya, dengan teks dan grafik" (only with an imported video), "Video data (isi angkamu)", "Tambahkan musik latar yang tenang". A chip fills the Editor composer and switches to the Editor tab; it never sends.
+- **Tooltips** (FR-264): every icon-only button and key control shows a tooltip — `--em-panel-2` background, 1 px line, 12 px text, max 280 px wide, 6 px below the control (above when there is no room), clamped 8 px inside the window, never covering its control; hover after 350 ms, keyboard focus at once, Escape hides it. Copy is a verb phrase in the UI language ("Buka chat Editor: jelaskan videonya, Expertmotion yang menyusun"); disabled controls show their reason instead.
+- **Voices** (FR-268 / FR-269): the picker lists the most natural voices that can run now first and marks one "Disarankan" (accent badge), which is preselected; Azure AI Speech and Google Cloud TTS keys sit under ElevenLabs as collapsed rows (key, region for Azure, Save, Remove, a one-line cost note).
+- **No clutter**: nothing here adds a panel; at 1280×720 the starter, the empty state and the recent row fit without overlap (the chips wrap; the recent row wraps under the buttons).
+
 ## 9. Empty, loading and error patterns
 
 | Pattern | Anatomy | Rules (UXRD §6) |
