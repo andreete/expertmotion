@@ -16,12 +16,13 @@ import { ULID, decodeCursor, em, encodeCursor, isInside, parseOrThrow, requirePr
 import { clearBadges, getAsset, listAssets, requireAsset, setBadge, toAssetDto, toFacts, withTranscripts, type AssetRow } from '../s2/assets-repo.js';
 import { assetDir, hashFile, ingestOf, inspectSource, sourceKeyOf, MAX_ASSETS_PER_PROJECT } from '../s2/ingest.js';
 import { SIZE_LIMIT, kindFromExt, sniffMatches, readHead } from '../s2/probe.js';
+import { win32DenyRoots, win32ImportDecision, type ImportOrigin } from '../s2/import-paths-win32.js';
 import { checkProjectMedia, isMissing, purgeExpiredFailed, purgeRemoved, restoreReferenced, versionsReference } from '../s2/media-check.js';
 
 const Id = z.string().regex(ULID, 'expected an id');
 const P = z.object({ id: Id });
 const PA = z.object({ id: Id, assetId: Id });
-const PathsBody = z.object({ paths: z.array(z.string().min(1).max(4096)).min(1), copy: z.boolean().default(true) }).strict();
+const PathsBody = z.object({ paths: z.array(z.string().min(1).max(4096)).min(1), copy: z.boolean().default(true), origin: z.enum(['picker', 'drop']).optional() }).strict();
 const MAX_PATHS = 50;
 
 export interface AssetsOptions {
@@ -40,8 +41,22 @@ export function removableMediaRoots(platform: NodeJS.Platform = process.platform
 function safeUser(): string { try { return os.userInfo().username; } catch { return ''; } }
 const defaultRoots = (): string[] => [os.homedir(), ...removableMediaRoots(), ...(process.env['EM_IMPORT_ROOTS'] ?? '').split(path.delimiter).filter(Boolean)];
 
-/** Canonical path inside an allowed root, else EM-1007 (403). UNC/device paths refused; traversal neutralised by realpath. */
-export function canonicalImportPath(p: string, roots: readonly string[]): string {
+export interface ImportPathOptions {
+  /** Where the Editor got the path (Shell picker or drag-and-drop); UNC paths only from the picker (win32). */
+  origin?: ImportOrigin | null;
+  platform?: NodeJS.Platform;
+  /** win32: always-allowed folders (bundled sample media) and refused folders (system, install dir, data dir). */
+  win32?: { allow: readonly string[]; deny: readonly string[]; realpath?: (p: string) => string };
+}
+/** Canonical path inside an allowed root, else EM-1007 (403). UNC/device paths refused; traversal neutralised by realpath.
+ *  win32 (QA P1 2026-10-29): any local drive the Creator chose, minus system / app folders (`win32ImportDecision`). */
+export function canonicalImportPath(p: string, roots: readonly string[], o: ImportPathOptions = {}): string {
+  if ((o.platform ?? process.platform) === 'win32' && o.win32) {
+    const d = win32ImportDecision(p, o.origin ?? null, { allow: o.win32.allow, deny: o.win32.deny, realpath: o.win32.realpath ?? ((x) => fs.realpathSync.native(x)) });
+    if (d.ok) return d.path;
+    if (d.code === 'EM-1010') throw new EmError('EM-1010', 'The file was removed before the import finished.', { status: 422 });
+    throw new EmError('EM-1007', 'Files from this location cannot be imported.', { details: { reason: d.reason } });
+  }
   if (/^\\\\/.test(p) || /^\/\/[^/]/.test(p)) throw new EmError('EM-1007', 'Files from this location cannot be imported.');
   let real: string;
   try { real = fs.realpathSync(path.resolve(p)); } catch { throw new EmError('EM-1010', 'The file was removed before the import finished.', { status: 422 }); }
@@ -51,6 +66,9 @@ export function canonicalImportPath(p: string, roots: readonly string[]): string
 }
 
 const isShell = (req: Request) => req.headers['x-expertmotion-caller'] === 'shell';
+/** win32 import policy of this Service: the sample folder allowed; Windows, Program Files, ProgramData, the install and data dirs refused. */
+export const win32ImportPolicy = (ctx: ServiceContext): NonNullable<ImportPathOptions['win32']> => ({
+  allow: [ctx.resources.sampleDir], deny: win32DenyRoots(process.env, [path.dirname(process.execPath), ctx.cfg.dataDir]) });
 const dto = (ctx: ServiceContext, r: AssetRow, probe = false) => toAssetDto(r, ingestOf(ctx).progressOf(r.id), probe, isMissing(ctx, r));
 
 /** Clips/layers of the head model that reference an asset (R-033). */
@@ -98,7 +116,7 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
           const raw = (req.body ?? {}) as { paths?: unknown };
           if (Array.isArray(raw.paths) && raw.paths.length > MAX_PATHS) throw em('EM-1010', 'You can import up to 50 files at a time.', { details: { count: raw.paths.length, limit: MAX_PATHS } });
           const body = parseOrThrow(PathsBody, req.body, 'body');
-          const files = body.paths.map((p) => canonicalImportPath(p, [...roots(), ctx.resources.sampleDir]));   // sampleDir: bundled CC0 sample media (R-025)   // one path outside the roots refuses the whole request
+          const files = body.paths.map((p) => canonicalImportPath(p, [...roots(), ctx.resources.sampleDir], { origin: body.origin ?? 'drop', win32: win32ImportPolicy(ctx) }));   // sampleDir: bundled CC0 sample media (R-025)   // one path outside the roots refuses the whole request
           const items: AssetRow[] = []; const notices: Array<{ code: string; name: string; index: number; assetId?: string; details?: unknown }> = []; const errors: EmError[] = [];
           const seen = new Map<string, string>();                      // sourceKey → asset id within this request
           for (const [index, file] of files.entries()) {
@@ -227,7 +245,7 @@ export function createAssetsModule(opts: AssetsOptions = {}): ServiceModule {
       route(router, 'post', '/projects/:id/assets/:assetId/relocate', { params: PA, body: z.object({ path: z.string().min(1).max(4096), reingest: z.boolean().default(false) }) }, async ({ params, body, req }) => {
         if (!isShell(req)) throw em('EM-8005', 'Request refused.');
         const row = requireAsset(ctx, params.id, params.assetId);
-        const file = canonicalImportPath(body.path, roots());
+        const file = canonicalImportPath(body.path, roots(), { origin: 'picker', win32: win32ImportPolicy(ctx) });   // Relocate = the Shell picker
         const sha = await hashFile(file);
         if (sha !== row.sha256) {
           if (!body.reingest) throw em('EM-1302', `"${row.name}" has changed on disk since it was imported.`, { status: 422 });

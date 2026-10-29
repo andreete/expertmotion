@@ -199,8 +199,9 @@ export class ApiClient {
   createCheckpoint(id: Id): Promise<CheckpointDto> { return this.post(`/projects/${id}/checkpoints`, { reason: 'manual' }); }       // R-023
   restoreCheckpoint(id: Id, checkpointId: Id): Promise<{ version: VersionDto }> { return this.post(`/projects/${id}/checkpoints/${checkpointId}/restore`); } // R-024
   // ── 6.4 assets ──
-  importAssetPaths(id: Id, paths: string[], copy = true): Promise<{ items: AssetDto[]; notices: Array<{ code: string; assetId?: Id }> }> {   // R-030 (Shell)
-    return this.post(`/projects/${id}/assets`, { paths, copy }, { 'X-Expertmotion-Caller': 'shell' });
+  /** `origin`: Shell file picker or drag-and-drop (QA P1 2026-10-29: Windows network paths only from the picker). */
+  importAssetPaths(id: Id, paths: string[], copy = true, origin?: 'picker' | 'drop'): Promise<{ items: AssetDto[]; notices: Array<{ code: string; assetId?: Id }> }> {   // R-030 (Shell)
+    return this.post(`/projects/${id}/assets`, { paths, copy, ...(origin ? { origin } : {}) }, { 'X-Expertmotion-Caller': 'shell' });
   }
   /**
    * R-030 browser upload (development builds only; the packaged Editor imports by path through the Shell, importAssetPaths). The

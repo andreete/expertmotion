@@ -161,7 +161,7 @@ export class RenderService {
     const eng = await engineStatus(ctx);   // FR-140: Headless Shell, compositor FFmpeg, bundle hash
     checks.push({ check: 'engine', ok: eng.ok, ...(eng.code ? { code: eng.code, details: { missing: eng.missing, mismatched: eng.mismatched.slice(0, 20) } } : {}) });
 
-    const estimate = estimateOf(profile, dims, frames, timing.durationMs, ctx.hooks.tier(), input.performanceProfile);
+    const estimate = estimateOf(profile, dims, frames, timing.durationMs, ctx.hooks.tier(), input.performanceProfile, measuredRenderRate(ctx));
     const folder = this.folderFor(input);
     // FR-137: the folder must be on the allow-list and writable (nearest existing parent when it does not exist yet)
     const custom = input.folder !== undefined || Boolean(ctx.settings.get().outputFolder);
@@ -283,13 +283,16 @@ export class RenderService {
         ctx.log.info({ jobId, freeMb: Math.round(mem / MB), needMb: Math.round(need / MB), waitMs }, 'render waiting for free memory');
         // Sent now and again after each poll that is still short (≤ every 10 s): the POST /renders answer, which carries no
         // notice, can reach the Editor after the first one (found in the packaged e2e run, Entry 29).
-        const waiting = () => emit(ctx, 'render.queued', { projectId: input.projectId, jobId, job: { ...toJobDto(getJob(ctx, jobId)!), notices: ['EM-3107'] } });
+        // QA UX round 1: every notice carries how long it has waited and the free / needed memory, so the dialog is never static.
+        const waitStart = Date.now();
+        const waiting = () => emit(ctx, 'render.queued', { projectId: input.projectId, jobId, job: { ...toJobDto(getJob(ctx, jobId)!), notices: ['EM-3107'],
+          memoryWait: { waitedMs: Date.now() - waitStart, freeMb: Math.round(mem / MB), needMb: Math.round(need / MB), maxWaitMs: waitMs } } });
         waiting();
-        const until = Date.now() + waitMs; let lastSent = Date.now(); let polls = 0;
+        const until = Date.now() + waitMs;
         while (Date.now() < until && !ctl.reason && mem < need) {
           await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(1, until - Date.now()))));
-          mem = freeMem(); polls++;
-          if (mem < need && (polls === 1 || Date.now() - lastSent >= 10_000)) { waiting(); lastSent = Date.now(); }
+          mem = freeMem();
+          if (mem < need) waiting();
         }
         if (ctl.reason) { this.cancels.delete(jobId); this.finish(getJob(ctx, jobId)!, 'cancelled', null); return; }
         if (mem < MEM_FLOOR) {
@@ -360,7 +363,9 @@ export class RenderService {
             ...(f === 'mp4' || f === 'webm' ? { crf: prep.profile.crf ?? 18 } : {}), ...(f === 'gif' ? { crf: 12, muted: true } : {}),
             ...(f === 'mp4' ? { audioBitrate: '192k' } : {}), offthreadVideoCacheSizeInBytes: lowMem ? LOW_MEM_CACHE : pol.cache, disallowParallelEncoding: lowMem || !pol.parallelEncoding,
             ...(tier === 'T2' && input.performanceProfile !== 'standard' ? { hardwareAcceleration: 'if-possible' } : {}),
-            onProgress: (p: { progress: number; renderedFrames?: number; stitchStage?: string }) => report(p.progress * (f === 'gif' ? 0.9 : 0.97), p.renderedFrames ?? null, p.stitchStage === 'muxing' ? 'encoding' : 'rendering') });
+            // QA UX round 1: once every frame is rendered the rest is encoding / muxing ("Frame 330/330" sat there from 68 to 94 %)
+            onProgress: (p: { progress: number; renderedFrames?: number; stitchStage?: string }) => report(p.progress * (f === 'gif' ? 0.9 : 0.97), p.renderedFrames ?? null,
+              p.stitchStage === 'muxing' || (p.renderedFrames !== undefined && p.renderedFrames >= prep.frames) ? 'encoding' : 'rendering') });
           if (f === 'gif') {
             report(0.92, prep.frames, 'encoding', true);
             const gifCancel = new AbortController(); const prevCancel = ctl.cancel;
@@ -474,7 +479,19 @@ async function validateOutput(ctx: ServiceContext, file: string, prep: Prepared,
   return mismatch ? { validated: false, mismatch } : { validated: true };
 }
 
-function estimateOf(p: OutputProfileT, dims: { width: number; height: number }, frames: number, durationMs: number, tier: 'T0' | 'T1' | 'T2', perf: PerfProfile): Prepared['estimate'] {
+/**
+ * QA UX round 1 (estimate "≈0:18" vs 160 s real): wall-clock ms per frame-megapixel of the last finished video renders on this
+ * machine, from queue to done — so the time spent waiting for free memory, starting the engine and encoding is in it. Median of
+ * up to 5 jobs; null before the first finished render (then the tier table below is used).
+ */
+export function measuredRenderRate(ctx: ServiceContext): number | null {
+  const rows = ctx.db.prepare(`SELECT j.created_at c, j.finished_at f, j.rendered_frames n, o.width w, o.height h FROM render_jobs j JOIN outputs o ON o.id = j.output_id
+    WHERE j.status = 'done' AND o.kind IN ('video', 'gif') AND j.finished_at IS NOT NULL AND j.rendered_frames > 0 AND o.width > 0 AND o.height > 0 ORDER BY j.finished_at DESC LIMIT 5`).all() as Array<{ c: string; f: string; n: number; w: number; h: number }>;
+  const rates = rows.map((r) => (Date.parse(r.f) - Date.parse(r.c)) / (r.n * (r.w * r.h) / 1e6)).filter((x) => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
+  return rates.length ? rates[Math.floor(rates.length / 2)]! : null;
+}
+
+function estimateOf(p: OutputProfileT, dims: { width: number; height: number }, frames: number, durationMs: number, tier: 'T0' | 'T1' | 'T2', perf: PerfProfile, msPerFrameMp: number | null = null): Prepared['estimate'] {
   const px = dims.width * dims.height; const durS = durationMs / 1000;
   const baseMs = (tier === 'T0' ? 100 : tier === 'T1' ? 70 : 40) * (px / (1920 * 1080)) / (perf === 'standard' ? 1 : perf === 'accelerated' ? 1.6 : 2.5);
   const effFrames = p.format === 'png' ? 1 : p.format === 'gif' ? Math.ceil(frames / Math.max(1, Math.round(p.fps / 15))) : frames;
@@ -482,6 +499,7 @@ function estimateOf(p: OutputProfileT, dims: { width: number; height: number }, 
     : p.format === 'webm' ? px * p.fps * 0.17 / 8 * durS
       : p.format === 'gif' ? px * Math.min(p.fps, 15) * durS * 0.05
         : p.format === 'png' ? px * 1.5 : 48_000 * 4 * durS;
+  if (msPerFrameMp !== null && p.format !== 'png') return { seconds: Math.max(1, Math.round((effFrames * (px / 1e6) * msPerFrameMp) / 1000)), bytes: Math.round(bytes), confidence: 'medium' };
   return { seconds: Math.max(1, Math.round((effFrames * baseMs) / 1000 + 3)), bytes: Math.round(bytes), confidence: 'low' };
 }
 

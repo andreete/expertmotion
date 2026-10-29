@@ -20,6 +20,7 @@ export EM_RELEASE_PRIVATE_KEY_PEM="$(cat "$EM_RELEASE_PRIVATE_KEY_PEM_FILE")"
 # Test build: placeholders (licence/manifest keys, TO_PIN, publisher) are listed but allowed; never ship this output.
 node scripts/release-check.mjs --allow-placeholders
 npm run build -w @expertmotion/ui                       # Editor (dist/ui is staged as-is)
+npm run build:bundle -w @expertmotion/engine            # Engine bundle from the current source, so Export matches the preview
 npm run build:release -w @expertmotion/service         # prompts → dist/assets.enc (half A in service, half B for main)
 npm run build:main -w @expertmotion/desktop             # embeds the integrity public key and prompt key half B
 node scripts/prepare-engines.mjs --platform=win32 --arch=x64   # → resources/engines-win32-x64 (whisper.cpp, sherpa-onnx, sd.cpp; pinned, cached)
@@ -31,3 +32,6 @@ cd apps/desktop
 npx electron-builder --win zip --x64 --config electron-builder.config.cjs --publish never \
   -c.npmRebuild=false -c.win.signExecutable=false -c.compression=normal \
   '-c.artifactName=Expertmotion-${version}-win-${arch}-portable.${ext}'
+# Packaging guard: every module main/preload require must be in app.asar (a missing one = "Cannot find module" on launch).
+VERSION="$(node -p "require('./package.json').version")"
+node ../../scripts/check-asar-deps.mjs "../../release/$VERSION/win-unpacked/resources/app.asar"

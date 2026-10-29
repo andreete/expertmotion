@@ -63,7 +63,7 @@ export interface Hooks {
   runPlanSteps?(projectId: string, planId: string, steps: Array<{ n: number; tool: string; args: Record<string, unknown>; dependsOn: number[] }>): Array<{ n: number; tool: string; status: 'started' | 'skipped' | 'failed'; jobId?: string; code?: string }>;
   /** generators module (S2, FR-251 / ADR-035): several voice clips (one per sentence) in one request; resolves with each clip's
    *  asset id, measured duration, timeline position and timed cues (from the script); rejects with the EM code (nothing placed). */
-  voiceBatch?(projectId: string, input: import('./s2/generators-service.js').VoiceBatchInput, opts?: { signal?: AbortSignal }): Promise<import('./s2/generators-service.js').VoiceBatchResult>;
+  voiceBatch?(projectId: string, input: import('./s2/generators-service.js').VoiceBatchInput, opts?: { signal?: AbortSignal; onClip?: (done: number, total: number) => void }): Promise<import('./s2/generators-service.js').VoiceBatchResult>;
   /** generators module (S2, FR-246): the narrator voices for a language with availability (agent context: pick by description). */
   voiceCatalog?(language: 'id' | 'en'): Promise<Array<{ id: string; name: string; provider: string; gender: string; traits: string[]; cloud: boolean; availability: string; usdPer1kChars: number | null }>>;
   /** generators module (S2, FR-249): the timed transcript (cues, words; clip time) of a generated voice Asset, or null. */

@@ -26,7 +26,7 @@ export interface Actions {
   openProject(id: string): Promise<void>;
   /** R-025: create (or reuse) the tour's sample project and open it; resolves with its id, or null on error. */
   openSampleProject(language: Lang): Promise<string | null>;
-  createProject(input: ProjectCreateInput): Promise<void>;
+  createProject(input: ProjectCreateInput): Promise<string | null>;
   /** QA #5 / FR-009: File ▸ New Project (Ctrl+N): a Project with the default settings, opened at once; resolves with its id. */
   newProject(): Promise<string | null>;
   /** FR-260: the empty project a launch / Close lands in — the untouched blank project of the last launch, else a new one (quiet). */
@@ -56,7 +56,7 @@ export interface Actions {
   updateProjectSettings(patch: Partial<ProjectSettingsT>): Promise<void>;
   upload(files: readonly File[]): Promise<AssetDto[]>;
   /** FR-014 / FR-041: packaged path import (picker or drag-and-drop): the cards appear at once (ingesting / failed) and follow ingest. */
-  importPaths(paths: string[]): Promise<AssetDto[]>;
+  importPaths(paths: string[], origin?: 'picker' | 'drop'): Promise<AssetDto[]>;
   setBadge(assetId: string, badge: number | null): Promise<void>;
   /** FR-049: without `opts`, Clips go after the selected Clip (else at the end); FR-029 `asOverlay` + `atMs` places images on the overlay. */
   insert(assetIds: string[], opts?: { asOverlay?: boolean; atMs?: number; atIndex?: number }): Promise<void>;
@@ -123,6 +123,9 @@ export function useStore(): Store {
   return s;
 }
 
+/** The store when rendered inside StoreProvider, else null (shared components such as Modal used in isolated tests). */
+export function useStoreOptional(): Store | null { return useContext(StoreContext); }
+
 export const errCode = (e: unknown): string => (e instanceof EmError ? e.code : 'EM-9001');
 /** FR-053: import-level errors go to the Asset Panel banner (`lib.assets.error`), per-file errors stay on the card. */
 export const IMPORT_LEVEL = new Set(['EM-6401', 'EM-6005', 'EM-1401', 'EM-1010']);
@@ -162,7 +165,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   const actions = useMemo<Actions>(() => {
     const announce = (text: string) => dispatch({ type: 'announce', text });
     const toast: Actions['toast'] = (kind, textKey, vars, opts = {}) => {
-      dispatch({ type: 'toast', toast: { kind, textKey, ...(vars ? { vars } : {}), ...(opts.code ? { code: opts.code } : {}), ...(opts.action ? { action: opts.action } : {}), sticky: opts.sticky ?? (kind === 'danger' || kind === 'warn') } });
+      dispatch({ type: 'toast', toast: { kind, textKey, ...(vars ? { vars } : {}), ...(opts.code ? { code: opts.code } : {}), ...(opts.action ? { action: opts.action } : {}), sticky: opts.sticky ?? (kind === 'danger' && opts.action !== undefined) } });   // QA UX round 1: non-blocking warn / error toasts auto-dismiss
       // FR-154: every toast is announced through the shared hidden live region sys.live (the toast itself is not a live region)
       const L = stateRef.current.settings?.uiLanguage ?? 'en';
       announce(`${translate(L, textKey, vars)}${opts.code ? ` · ${opts.code}` : ''}`);
@@ -248,7 +251,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         }
         if (res.appliedVersion) {
           await refreshHead();
-          toast('success', 'ui.sys.toast.applieddirect', { label }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } });
+          toast('success', 'ui.sys.toast.changed', { label }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } });
           announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.sys.live.applied', { version: res.appliedVersion.hash.slice(0, 6) }));
         } else if (res.intent.needsInterpretation && res.intent.status !== 'rejected') {
           announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.sys.live.queuedforagent', { label }));   // FR-026: queued for the Editor Agent
@@ -334,7 +337,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     const self: Actions = {
       openProject, openSampleProject, refreshHead, reloadState, error, toast, announce, undo, redo, setScreen,
       async createProject(input) {
-        try { const p = await api.createProject(input); await openProject(p.id); } catch (e) { error(e); }
+        try { const p = await api.createProject(input); await openProject(p.id); return p.id; } catch (e) { error(e); return null; }
       },
       async newProject() { return createBlank(false); },
       async openBlankProject() {
@@ -345,7 +348,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
             const p = await api.getProject(s.projectId);
             const [b, e] = await Promise.all([api.getConversation(p.id, 'brainstorm').catch(() => null), api.getConversation(p.id, 'editor').catch(() => null)]);
             const msgs = (b?.messages.items.length ?? 0) + (e?.messages.items.length ?? 0);
-            if (isUntouched(p, s) && msgs === 0 && !isBlocked(loadGuard(), p.id)) { await openProject(p.id); if (pid() === p.id) return p.id; }
+            if (isUntouched(p, s) && msgs === 0 && !isBlocked(loadGuard(), p.id)) { await openProject(p.id); return p.id; }   // (stateRef updates on the next render)
             else if (isUntouched(p, s) && msgs === 0) { clearScratch(); await api.deleteProject(p.id, { permanent: true }).catch(() => undefined); }
             else clearScratch();                                                 // edited (e.g. in another window): an ordinary project now
           } catch { clearScratch(); }                                            // deleted meanwhile
@@ -381,7 +384,8 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         await createIntent({ source: 'ui', category: PRESET_CATEGORY_TO_INTENT[p.category] ?? 'effect', presetId, params: opts.params ?? {}, target: opts.target ?? { kind: 'selection' }, plan: 'auto' }, p.label[stateRef.current.settings?.uiLanguage ?? 'en']);
       },
       // FR-020…FR-028: each Text Panel value is one deterministic field pick (Compile path, no provider call).
-      async textPick(params) { for (const [field, value] of Object.entries(params)) await createIntent({ source: 'ui', category: 'text', field, value, target: { kind: 'selection' }, plan: 'auto' }, field); },
+      // QA UX round 1: the toast names what changed in plain words ("Changed: Text"), never the raw field id ("content").
+      async textPick(params) { for (const [field, value] of Object.entries(params)) await createIntent({ source: 'ui', category: 'text', field, value, target: { kind: 'selection' }, plan: 'auto' }, translate(stateRef.current.settings?.uiLanguage ?? 'en', `ui.agent.param.${field}`)); },
       async addText(text, variantId) {
         const before = new Set((stateRef.current.head?.model?.tracks.text ?? []).map((x) => x.id));
         const res = await createIntent({ source: 'ui', category: 'text', presetId: variantId, text, target: { kind: 'playhead' }, plan: 'auto' }, text);
@@ -445,10 +449,10 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           return res.items;
         } catch (e) { if (IMPORT_LEVEL.has(errCode(e))) importError(errCode(e)); else error(e); return []; }
       },
-      async importPaths(paths) {
+      async importPaths(paths, origin) {
         const id = pid(); if (!id || !paths.length) return [];
         try {
-          const res = await api.importAssetPaths(id, paths);
+          const res = await api.importAssetPaths(id, paths, true, origin);
           dispatch({ type: 'assetsUpsert', assets: res.items });              // the cards appear now; ingest.* events move them through the stages
           importNotices(res.notices, res.items);
           const n = res.items.filter((a) => a.status === 'ingesting').length;
@@ -735,7 +739,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           if (!replaced) { await self.setProfile(prev); return; }
           try { const r = await api.restoreIntent(id, replaced); dispatch({ type: 'queue', queue: r.queue }); apply(prev); } catch (e) { error(e); }
         };
-        toast('success', 'ui.sys.toast.applieddirect', { label: translate(L, `ui.agent.output.profile.${p}`) }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undoProfile(); } } });
+        toast('success', 'ui.sys.toast.changed', { label: translate(L, `ui.agent.output.profile.${p}`) }, { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undoProfile(); } } });
       },
       // FR-095: the Project defaults (Settings ▸ default ratio / resolution), profile Standard, Auto off — one Composition Version.
       async resetOutput() {
@@ -756,12 +760,14 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           dispatch({ type: 'performanceProfile', profile: 'standard' }); setPrefs({ draft: true });
           await refreshHead();
           const L = stateRef.current.settings?.uiLanguage ?? 'en';
-          toast('success', 'ui.sys.toast.applieddirect', { label: translate(L, 'ui.agent.output.reset') }, res.appliedVersion ? { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } } : {});
+          toast('success', 'ui.sys.toast.changed', { label: translate(L, 'ui.agent.output.reset') }, res.appliedVersion ? { action: { labelKey: 'ui.sys.toast.undo', run: () => { void undo(); } } } : {});
         } catch (e) { if (e instanceof EmError && e.code === 'EM-2301') await refreshHead(); error(e); }
       },
       async startRender(input) {
         const id = pid(); if (!id) return null;
-        try { const job = await api.createRender({ ...input, projectId: id }); dispatch({ type: 'renders', renders: [job, ...stateRef.current.renders.filter((j) => j.id !== job.id)] }); return job.id; } catch (e) { error(e); return null; }
+        // QA UX round 1: the 202 answer can arrive after the job's first SSE events (render.queued with EM-3107 + memoryWait, progress);
+        // those are newer, so they are kept (the answer used to wipe the "waiting for free memory" line: "Starting…" for 127 s).
+        try { const job = await api.createRender({ ...input, projectId: id }); const seen = stateRef.current.renders.find((j) => j.id === job.id); dispatch({ type: 'renders', renders: [seen && (job.status === 'queued' || job.status === 'rendering') ? seen : job, ...stateRef.current.renders.filter((j) => j.id !== job.id)] }); return job.id; } catch (e) { error(e); return null; }
       },
       async cancelRender(jobId) { try { const j = await api.cancelRender(jobId); dispatch({ type: 'renders', renders: stateRef.current.renders.map((x) => (x.id === j.id ? j : x)) }); } catch (e) { error(e); } },
       // Entry 28: one save fires several settings.changed {providers|assignments} events plus explicit reloads. Calls are coalesced:
@@ -796,7 +802,9 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           dispatch({ type: 'capabilities', connectionId: c.id, rows: models.items });
           await self.loadProviders();
           return c.status === 'valid';
-        } catch (e) { if (e instanceof EmError) opts.onError?.(e); error(e); await self.loadProviders(); return false; }
+        // QA UX round 1 (P1-6): a caller with onError shows the failure inline in its own form (the onboarding / Providers screen);
+        // only callers without one get the toast.
+        } catch (e) { if (e instanceof EmError && opts.onError) opts.onError(e); else error(e); await self.loadProviders(); return false; }
       },
       async loadModels() { try { dispatch({ type: 'models', models: (await api.listModels()).items }); } catch (e) { error(e); } },
       stopStreaming: (agent) => dispatch({ type: 'streamingStop', agent }),
@@ -934,9 +942,9 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
     void (async () => {
       if (runtime.service?.current().status === 'failed') return;   // sys.fatal is shown instead
       try {
-        const [health, settings, licence, hardware] = await Promise.all([
-          runtime.api.health(), runtime.api.getSettings(), runtime.api.getLicense(), runtime.api.hardwareProfile().catch(() => null),
-        ]);
+        const [health, settings, licence] = await Promise.all([runtime.api.health(), runtime.api.getSettings(), runtime.api.getLicense()]);
+        // QA UX round 1: the hardware profile only after the licence verified (before, the Service answers 403 EM-5010: console noise)
+        const hardware = licence.status === 'licensed' ? await runtime.api.hardwareProfile().catch(() => null) : null;
         if (cancelled) return;
         dispatch({ type: 'globals', health, settings, licence, hardware });
         // No Trial Mode: without a verified key the Service answers EM-5010 everywhere else, so stop here and show only the

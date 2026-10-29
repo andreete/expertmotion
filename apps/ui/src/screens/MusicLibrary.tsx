@@ -64,7 +64,9 @@ export function MusicLibraryPanel({ onInserted }: { onInserted?: () => void }) {
               <button type="button" data-el="scr.generate.music.library.play" aria-label={t('ui.scr.generate.music.library.play', { title: x.title })} title={x.status !== 'ready' ? t('ui.scr.generate.music.library.play.needsdownload') : undefined} disabled={x.status !== 'ready'} onClick={() => void play(x)} className="text-em-text-2 disabled:opacity-40">
                 {playing === x.id ? <Pause size={14} /> : <Play size={14} />}
               </button>
-              <span className="min-w-0 flex-1 truncate text-[13px]">{x.title} <span className="text-[11px] text-em-muted">· {x.artist} · {t(`ui.scr.generate.music.mood.${x.mood}`)} · {x.genre} · {mmss(x.durationS)}</span></span>
+              {/* QA: title on its own line, the facts below and wrapping (one truncated line cut them at 1280) */}
+              <span className="flex min-w-0 flex-1 flex-col"><span className="truncate text-[13px]" title={x.title}>{x.title}</span>
+                <span data-el="scr.generate.music.library.meta" className="text-[11px] text-em-muted">{x.artist} · {t(`ui.scr.generate.music.mood.${x.mood}`)} · {x.genre} · {mmss(x.durationS)}</span></span>
               {x.status !== 'ready' && x.status !== 'downloading' && <Button el="scr.generate.music.library.download" size={28} icon={<Download size={12} />} disabledReason={priv ? t('err.EM-8202.title') : null} onClick={() => void download(x)}>{t('ui.scr.generate.music.library.download', { mb: (x.bytes / 1e6).toFixed(1) })}</Button>}
               {x.status === 'ready' && <Button el="scr.generate.music.library.insert" size={28} variant="primary" loading={busy === x.id} onClick={() => void insert(x)}>{t('ui.scr.generate.music.library.use')}</Button>}
             </div>

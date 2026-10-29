@@ -31,6 +31,7 @@ import { layoutOf, type PanelSizes } from './prefs.js';
 import { Splash } from './startup/Splash.js';
 import { rememberLang, startupLang } from './startup/progress.js';
 import { SectionBoundary } from './startup/ErrorBoundary.js';
+import { toastActionFor, toastBodyOf } from './state/toast-actions.js';
 import { TooltipLayer } from './components/Tooltip.js';
 import { LaunchNotice, SafeModeBanner, SafeModePlaceholder, StartScreen } from './screens/StartScreen.js';
 import { revealInSafeMode, setSafeMode, useSafeMode } from './startup/session-guard.js';
@@ -151,7 +152,7 @@ export function App() {
             </>
           )}
         </main>
-        <SectionBoundary section="toasts" className={TOASTS_FAILED_CLS}><Toasts /></SectionBoundary>
+        <SectionBoundary section="toasts" className={TOASTS_FAILED_CLS}><Toasts right={agentCollapsed ? 64 : cols.agent + 24} /></SectionBoundary>
         <LiveRegion />
         <TooltipLayer />
         <Screens />
@@ -201,9 +202,13 @@ function Banners() {
   );
 }
 
-/** FR-154: info/success auto-dismiss after 6 s (the "Saved" tick after 1.5 s); warn and error stay until dismissed. */
+/** FR-154 (amended QA UX round 1): info/success auto-dismiss after 6 s (the "Saved" tick after 1.5 s); a warn / error that does not
+ *  block anything after 12 s; only a sticky toast (one that carries the way out, e.g. Install, Open recovery) stays until dismissed. */
 export const toastDismissMs = (toast: { kind: string; textKey: string; sticky: boolean }): number | null =>
-  toast.sticky || toast.kind === 'warn' || toast.kind === 'danger' ? null : toast.textKey === 'ui.sys.toast.saved' ? 1500 : 6000;
+  toast.sticky ? null : toast.textKey === 'ui.sys.toast.saved' ? 1500 : toast.kind === 'warn' || toast.kind === 'danger' ? 12_000 : 6000;
+/** One top layer (QA UX round 1, P1-6): toasts sit above modals (60), the onboarding screen (65) and the tour (70); only the splash
+ *  (90) and sys.fatal (100) are higher. Toasts under a screen overlay were invisible. */
+export const TOAST_LAYER = 80;
 
 /** sys.update (FR-152, FR-162): background download (Download stays as a manual start while it waits), EM-8105 Restart now / Later,
  *  deferred while a render runs, paused by Private Mode, EM-8104 / EM-8102 with Try again. */
@@ -271,8 +276,9 @@ function useUpdateBridge() {
   }, [dispatch]);
 }
 
-function Toasts() {
-  const { state, dispatch, t } = useStore();
+/** `right`: px kept free at the right edge — in the Editor the Agent column, so a toast never covers the Plan Card or the composer. */
+function Toasts({ right = 16 }: { right?: number }) {
+  const { state, dispatch, t, lang, actions } = useStore();
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const schedule = useCallback((id: string, ms: number) => {
     if (timers.current.has(id)) return;
@@ -286,24 +292,30 @@ function Toasts() {
   const pause = (id: string) => { const h = timers.current.get(id); if (h) { clearTimeout(h); timers.current.delete(id); } };
   const tone = { info: 'border-em-info', success: 'border-em-success', warn: 'border-em-warn', danger: 'border-em-danger' } as const;
   return (
-    <div className="pointer-events-none fixed bottom-[260px] right-4 z-40 flex w-[340px] flex-col gap-2">
-      {[...state.toasts].reverse().map((toast) => (
+    <div data-el="sys.toasts" className="pointer-events-none fixed bottom-[260px] flex w-[340px] flex-col gap-2" style={{ right, zIndex: TOAST_LAYER }}>
+      {[...state.toasts].reverse().map((toast) => { const body = toastBodyOf(toast, lang); const fallback = toast.action ? null : toast.code ? toastActionFor(toast.code, lang) : null; return (
         <div key={toast.id} data-el="sys.toast" data-kind={toast.kind} onMouseEnter={() => pause(toast.id)} onMouseLeave={() => { if (toastDismissMs(toast) !== null) schedule(toast.id, 3000); }}
           className={cx('pointer-events-auto flex items-start gap-2 rounded-[8px] border-l-2 bg-em-panel px-3 py-2', tone[toast.kind])} style={{ boxShadow: 'var(--sh-2)' }}>
           <div className="flex-1">
             <div>{t(toast.textKey, toast.vars)}{toast.count > 1 && <span className="t-mono ml-1 text-em-muted">×{toast.count}</span>}</div>
+            {body && <div data-el="sys.toast.body" className="text-[12px] text-em-text-2">{body}</div>}
             {toast.code && <div className="t-mono text-[11px] text-em-muted select-all">{toast.code}</div>}
           </div>
           {toast.action && <button type="button" data-el="sys.toast.action" className="font-semibold text-em-accent" onClick={() => { toast.action!.run(); dispatch({ type: 'dismissToast', id: toast.id }); }}>{t(toast.action.labelKey)}</button>}
+          {fallback && fallback.label && <button type="button" data-el="sys.toast.action" data-step={fallback.step.kind} className="font-semibold text-em-accent" onClick={() => {
+            const st = fallback.step;
+            if (st.kind === 'screen') actions.setScreen(st.screen); else if (st.kind === 'privateOff') void actions.setPrivateMode(false); else if (st.kind === 'reload') window.location.reload();
+            dispatch({ type: 'dismissToast', id: toast.id });
+          }}>{fallback.label}</button>}
           <button type="button" aria-label={t('ui.common.dismiss')} onClick={() => dispatch({ type: 'dismissToast', id: toast.id })} className="text-em-muted"><X size={14} /></button>
         </div>
-      ))}
+      ); })}
     </div>
   );
 }
 
 /** Review U11: where the toast stack's error card shows when Toasts itself fails (it was `hidden`, so every later toast vanished silently). */
-export const TOASTS_FAILED_CLS = 'fixed bottom-3 right-3 z-[70] flex';
+export const TOASTS_FAILED_CLS = 'fixed bottom-3 right-3 z-[80] flex';
 /** sys.live: visually hidden polite region; at most one announcement per 2 s, coalesced (ACCESSIBILITY_AND_I18N.md §2). */
 function LiveRegion() {
   const { state } = useStore();

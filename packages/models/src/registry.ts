@@ -134,8 +134,8 @@ const MODEL_LIST: ModelDef[] = [
     return { key: 'supertonic-3-int8', label: 'Supertonic 3 (int8)', engine: 'sherpa-onnx', task: 'tts', version: REGISTRY_VERSION, availability: 'download', files, bytes: sum(files),
       licence: { name: 'OpenRAIL-M (weights) + MIT (code)', url: 'https://huggingface.co/Supertone/supertonic-3/blob/main/LICENSE', redistribution: 'yes',
         useRestrictions: 'OpenRAIL-M Attachment A: no impersonation / deepfakes of people without consent, no unlawful, discriminatory or harmful use; the restrictions pass on to every user' },
-      commercialUse: 'conditional', languages: ['id', 'en'], minTier: 'T0', recommendedFor: ['T0', 'T1', 'T2'], ramBytes: 700 * MB, flag: 'model:supertonic', priority: 'P1',
-      notes: ['ADR-036 provisional: Operator to confirm the OpenRAIL-M terms', '10 speakers (sid 0–4 female, 5–9 male: inferred)', 'ramBytes / speed measured on the shared server (LOCAL_AI_MODELS §2.2b)'] } satisfies ModelDef;
+      commercialUse: 'conditional', languages: ['id', 'en'], minTier: 'T0', recommendedFor: ['T0', 'T1', 'T2'], ramBytes: 400 * MB, flag: 'model:supertonic', priority: 'P1',
+      notes: ['ADR-036 provisional: Operator to confirm the OpenRAIL-M terms', '10 speakers (sid 0–4 female, 5–9 male: inferred)', 'measured here: 272 MB peak RSS, RTF 0.37–0.45 on 2 vCPUs, 44.1 kHz (process.md Entry 34)'] } satisfies ModelDef;
   })(),
   { key: 'espeak-ng-data', label: 'espeak-ng phonemiser data', engine: 'sherpa-onnx', task: 'tts', version: REGISTRY_VERSION, availability: 'bundled', files: [], bytes: 15 * MB,
     licence: { spdx: 'GPL-3.0-or-later', name: 'GPL-3.0-or-later (espeak-ng)', url: 'https://github.com/espeak-ng/espeak-ng', redistribution: 'yes' }, commercialUse: 'yes',

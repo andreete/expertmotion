@@ -16,7 +16,7 @@ const until = async (fn: () => unknown, what: string, timeout = 8000) => waitFor
 const bars = (kind: string) => [...document.querySelectorAll<HTMLElement>(`[data-el="stage.timeline.element"][data-kind="${kind}"]`)];
 const toasts = () => els('sys.toast').map((x) => x.textContent ?? '').join(' | ');
 /** Player time `mm:ss.ff` → ms (frames at 30 fps in the sample). */
-const timeMs = () => { const m = /(\d+):(\d+)\.(\d+)/.exec(el('stage.player.controls.time')!.textContent ?? '')!; return (Number(m[1]) * 60 + Number(m[2])) * 1000 + Math.round((Number(m[3]) * 1000) / 30); };
+const timeMs = () => { const m = /(\d+):(\d+)\.(\d+)/.exec(el('stage.player.controls.time')!.textContent ?? '')!; return (Number(m[1]) * 60 + Number(m[2])) * 1000 + Number(m[3]) * 100; };   // mm:ss.d (tenths, QA UX round 1)
 /** The Player registers its controller on playerBus once the composition is mounted. */
 const ready = async () => { await renderEditor('sample'); await until(() => bars('clip').length === 3 && playerBus.get() && playerBus.get()!.durationMs() > 1000, 'player ready'); };
 /** jsdom's PointerEvent drops the MouseEvent fields (clientX, button), so pointer events are dispatched as MouseEvents of that type. */
@@ -57,7 +57,7 @@ describe('FR-253 playhead from anywhere', () => {
     // Alt+click on a bar: seek to the click point, selection unchanged (none)
     await act(async () => { fireEvent.click(bars('clip')[2]!, { altKey: true, clientX: 200 }); });
     expect(el('stage.timeline.inspector')).toBeNull();
-    expect(Math.abs(timeMs() - headMs())).toBeLessThan(40);
+    expect(Math.abs(timeMs() - headMs())).toBeLessThan(100);                             // the display shows tenths
     // a plain click selects it
     fireEvent.click(bars('clip')[1]!);
     await until(() => el('stage.timeline.inspector'), 'selected by click');

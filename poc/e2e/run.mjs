@@ -79,6 +79,17 @@ try {
   check('editor rendered', await waitFor(`!!document.querySelector('[data-el="hdr.menu.design"]') && !document.querySelector('[data-el^="scr.onboarding"]')`));
   // Dismiss onboarding/tour if shown
   await page.evaluate(`(() => { for (const el of document.querySelectorAll('[data-el$=".skip"], [data-el$=".close"], [data-el="tour.skip"]')) el.click(); return true; })()`).catch(() => {});
+  // FR-260 (2026-10-29): a launch opens an EMPTY project; the created project is opened from "Terakhir dibuka" (or File ▸ Recent)
+  check('launch opens an empty project', await waitFor(`/Untitled|Tanpa judul/.test(document.querySelector('[data-el="hdr.title"]')?.textContent ?? '')`));
+  const viaRecent = await waitFor(`!!document.querySelector('[data-el="stage.recent.item"][data-project="${pid}"]')`, 8000);
+  if (viaRecent) await page.evaluate(`document.querySelector('[data-el="stage.recent.item"][data-project="${pid}"]').click()`);
+  else {
+    await page.evaluate(`document.querySelector('[data-el="hdr.menu.file"]')?.click()`);
+    await page.evaluate(`document.querySelector('[data-el="hdr.menu.file.recent"]')?.click()`);
+    await waitFor(`!!document.querySelector('[data-el="hdr.menu.file.recent.item"]')`);
+    await page.evaluate(`[...document.querySelectorAll('[data-el="hdr.menu.file.recent.item"]')].find((n) => n.textContent.includes('E2E Review HP'))?.click()`);
+  }
+  check('project opened from Terakhir dibuka / File ▸ Recent', true, { via: viaRecent ? 'stage.recent' : 'File ▸ Recent' });
   check('project opened in the Editor', await waitFor(`document.body.innerText.includes('E2E Review HP')`));
   check('timeline shows 2 clips', await waitFor(`document.querySelectorAll('[data-el="stage.timeline.element"][data-kind="clip"]').length === 2`), { n: await page.evaluate(`document.querySelectorAll('[data-el="stage.timeline.element"][data-kind="clip"]').length`) });
   fs.writeFileSync(path.join(out, '1-editor.png'), await page.screenshot({ x: 0, y: 0, width: 1600, height: 900 }));

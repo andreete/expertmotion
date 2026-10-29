@@ -23,7 +23,7 @@ import { attributionText, creatorUrls, researchHandlers, resolveImage, type Imag
 import { RESEARCH_IMAGE_MAX_BYTES } from '../services/egress.js';
 import { ingestOf, inspectSource } from '../s2/ingest.js';
 import os from 'node:os';
-import { canonicalImportPath, removableMediaRoots } from './assets.js';
+import { canonicalImportPath, removableMediaRoots, win32ImportPolicy } from './assets.js';
 import { DOC_MAX_BYTES, docKindOf, extractDocumentText } from '../s3/doc-extract.js';
 import { recentEditsFor } from '../s3/shared-context.js';
 import { keyIsRecent } from '../s3/keys.js';
@@ -108,9 +108,13 @@ function failRun(ctx: ServiceContext, run: RunRow, convId: string, e: unknown) {
   if (!finishRun(ctx, run.id, 'failed', em.code)) return;
   if (run.agent === 'editor') updateHandoff(ctx, run.project_id, run.id, 'failed');   // review A4: the Diskusi card never stays at "planning"
   const details = failureDetails(ctx, run, em);
+  // an Editor run's refusal arrives as the plan's validation text `…: "<provider reason>".` (workflow keeps no details there)
+  const quoted = em.code === 'EM-4002' && typeof details['reason'] !== 'string' ? /: "([^"]{1,300})"\.?$/.exec(em.message)?.[1] : undefined;
+  if (quoted) details['reason'] = quoted;
   logAgentRun(ctx, run, { status: 'failed', code: em.code, details });
   // QA P1 2026-10-29: the provider's reason first; the activation hint only for a recent key and only next to that reason
-  const hint = em.code === 'EM-4002' && typeof details['reason'] === 'string' && details['reason'] ? ` ("${details['reason']}")${details['recentKey'] ? ' New keys can take 1–2 minutes to become active.' : ''}` : '';
+  const reason = em.code === 'EM-4002' && typeof details['reason'] === 'string' ? details['reason'] : '';
+  const hint = reason ? `${em.message.includes(`"${reason}"`) ? '' : ` ("${reason}")`}${details['recentKey'] ? ' New keys can take 1–2 minutes to become active.' : ''}` : '';
   insertMessage(ctx, convId, 'system', [{ type: 'text', text: `${em.code}: ${em.message}${hint}` }], run.id);
   emit(ctx, 'agent.run.failed', { projectId: run.project_id, runId: run.id, agent: run.agent, code: em.code, message: `${em.message}${hint}`, details,
     retryable: ['EM-4101', 'EM-4102', 'EM-4103', 'EM-4003', 'EM-4301', 'EM-4105'].includes(em.code) || (em.code === 'EM-4002' && details['recentKey'] === true) });
@@ -591,7 +595,7 @@ export const agentsModule: ServiceModule = {
         const raw = (req.body ?? {}) as { paths?: unknown };
         const p0 = Array.isArray(raw.paths) && raw.paths.length === 1 && typeof raw.paths[0] === 'string' ? raw.paths[0] : null;
         if (!p0) throw new EmError('EM-9002', 'Invalid request: send exactly one file path.', { status: 400, path: 'body.paths' });
-        const file = canonicalImportPath(p0, [os.homedir(), ...removableMediaRoots(), ...(process.env['EM_IMPORT_ROOTS'] ?? '').split(path.delimiter).filter(Boolean)]);
+        const file = canonicalImportPath(p0, [os.homedir(), ...removableMediaRoots(), ...(process.env['EM_IMPORT_ROOTS'] ?? '').split(path.delimiter).filter(Boolean)], { origin: 'drop', win32: win32ImportPolicy(ctx) });
         name = path.basename(p0.replace(/\\/g, '/'));
         const st = await fs.promises.stat(file);
         if (st.size > DOC_MAX_BYTES) throw new EmError('EM-1002', `This file is ${(st.size / 1048576).toFixed(1)} MB; the limit is 20 MB.`, { status: 422, details: { fileName: name, bytes: st.size, limitBytes: DOC_MAX_BYTES } });

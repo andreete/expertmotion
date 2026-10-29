@@ -3,6 +3,7 @@
 // a fully specified Design Pick (R-060 `params`), so it is still the Compile path. Focus is trapped; Esc closes.
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { floatingLayer } from '../components/Layer.js';
 import { X } from 'lucide-react';
 import { listPresets, presetParamsJsonSchema, validateParams, type PresetDef } from '@expertmotion/catalogue';
 import { useStore } from '../state/store.js';
@@ -78,7 +79,7 @@ export function PresetParams({ preset, anchor, onClose, disabledReason }: { pres
 
   return createPortal(
     <div ref={ref} data-el="lib.catalogue.params" role="dialog" aria-modal="true" aria-label={title} onKeyDown={onKey}
-      className="fixed z-30 flex max-h-[80vh] w-[300px] flex-col rounded-[8px] border border-em-line bg-em-panel text-em-text" style={{ ...pos, boxShadow: 'var(--sh-2)' }}>
+      className="pointer-events-auto fixed flex max-h-[80vh] w-[300px] flex-col rounded-[8px] border border-em-line bg-em-panel text-em-text" style={{ ...pos, boxShadow: 'var(--sh-2)' }}>
       <div className="flex items-center gap-2 border-b border-em-line px-3 py-2">
         <span className="flex-1 font-semibold">{title}</span>
         <IconButton label={t('ui.common.close')} icon={<X size={14} />} size={28} onClick={onClose} />
@@ -123,6 +124,6 @@ export function PresetParams({ preset, anchor, onClose, disabledReason }: { pres
         <Button el="lib.catalogue.params.apply" size={28} variant="primary" disabledReason={disabledReason} onClick={apply}>{t('ui.lib.params.apply')}</Button>
       </div>
     </div>,
-    document.body,
+    floatingLayer(),                                         // QA P1 2026-10-29: the one floating layer above banners and dividers
   );
 }

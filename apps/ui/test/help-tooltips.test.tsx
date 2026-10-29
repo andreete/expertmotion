@@ -27,15 +27,17 @@ describe('tooltips (FR-264)', () => {
     await waitFor(() => expect(el('sys.tooltip')).not.toBeNull());
     expect(el('sys.tooltip')!.getAttribute('role')).toBe('tooltip');
     expect(el('sys.tooltip')!.textContent).toBe(btn.getAttribute('aria-label'));
-    expect(btn.hasAttribute('title')).toBe(false);                       // parked while the custom tooltip shows (no double tooltip)
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(el('sys.tooltip')).toBeNull());
-    expect(btn.getAttribute('title')).toBe(btn.getAttribute('aria-label'));
   });
-  it('hover shows it after the delay; leaving hides it', async () => {
-    await renderEditor('sample');
+  it('hover shows it after the delay for a control without a native title (one with a title keeps the browser tooltip); leaving hides it', async () => {
+    await renderEditor('empty');
+    await waitFor(() => expect(el('agent.chat.start.hint.dismiss')).not.toBeNull());
     vi.useFakeTimers();
-    const btn = el('stage.player.menu')!;
+    fireEvent.pointerOver(el('stage.player.menu')!, { pointerType: 'mouse' });
+    act(() => { vi.advanceTimersByTime(TIP_DELAY_MS + 10); });
+    expect(el('sys.tooltip')).toBeNull();
+    const btn = el('agent.chat.start.hint.dismiss')!;
     fireEvent.pointerOver(btn, { pointerType: 'mouse' });
     expect(el('sys.tooltip')).toBeNull();
     act(() => { vi.advanceTimersByTime(TIP_DELAY_MS + 10); });

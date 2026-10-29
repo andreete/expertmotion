@@ -61,3 +61,16 @@ export function chatRatioFor(size: number, height: number): number {
 export function timelineMax(stageHeight: number): number {
   return stageHeight > 0 ? Math.max(LAYOUT.timeline.min, Math.floor(stageHeight * 0.5)) : 640;
 }
+
+/**
+ * Design catalogue tiles (QA UX round 1): `grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2` inside the Library's 12 px padding;
+ * the label keeps `pl-2` + `pr-8` (the ⓘ button: 24 px at right 4 px) and wraps to two lines. Mirrors CSS grid auto-fill so the
+ * label width can be checked per window size without a browser.
+ */
+export const CATALOGUE_TILE = { min: 100, gap: 8, panelPadding: 12, labelPadL: 8, labelPadR: 32, infoButton: 24, infoRight: 4 } as const;
+export function catalogueGeometry(libWidth: number): { cols: number; tile: number; label: number; infoClear: boolean } {
+  const inner = libWidth - 2 * CATALOGUE_TILE.panelPadding;
+  const cols = Math.max(1, Math.floor((inner + CATALOGUE_TILE.gap) / (CATALOGUE_TILE.min + CATALOGUE_TILE.gap)));
+  const tile = (inner - (cols - 1) * CATALOGUE_TILE.gap) / cols;
+  return { cols, tile, label: tile - CATALOGUE_TILE.labelPadL - CATALOGUE_TILE.labelPadR, infoClear: CATALOGUE_TILE.infoButton + CATALOGUE_TILE.infoRight <= CATALOGUE_TILE.labelPadR };
+}

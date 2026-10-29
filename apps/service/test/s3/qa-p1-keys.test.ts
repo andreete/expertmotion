@@ -21,7 +21,7 @@ const fetchOf = (r: () => Response) => (async () => r()) as unknown as typeof fe
 describe('QA P1: an invalid key is named as invalid, with the provider reason', () => {
   it('every provider\'s invalid-key answer is EM-4002 with the provider reason (Gemini 400 included)', async () => {
     await expect(validateKey('anthropic', 'k', fetchOf(INVALID.anthropic))).rejects.toMatchObject({ code: 'EM-4002', details: { status: 401, reason: 'invalid x-api-key' } });
-    await expect(validateKey('openai', 'k', fetchOf(INVALID.openai))).rejects.toMatchObject({ code: 'EM-4002', details: { status: 401, reason: expect.stringMatching(/^Incorrect API key provided: sk-proj-ab…/) } });
+    await expect(validateKey('openai', 'k', fetchOf(INVALID.openai))).rejects.toMatchObject({ code: 'EM-4002', details: { status: 401, reason: expect.stringMatching(/^Incorrect API key provided: sk-proj-a…/) } });
     await expect(validateKey('google', 'k', fetchOf(INVALID.google))).rejects.toMatchObject({ code: 'EM-4002', details: { status: 400, reason: 'API key not valid. Please pass a valid API key.' } });
     await expect(validateKey('google', 'k', fetchOf(() => json(400, { error: { code: 400, message: 'API key expired. Please renew the API key.', status: 'INVALID_ARGUMENT' } })))).rejects.toMatchObject({ code: 'EM-4002' });
     await expect(validateKey('openrouter', 'k', fetchOf(INVALID.openrouter))).rejects.toMatchObject({ code: 'EM-4002', details: { status: 401, reason: 'User not found.' } });

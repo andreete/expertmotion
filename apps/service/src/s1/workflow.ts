@@ -481,7 +481,10 @@ export class Workflow {
         } else {
           const code = r.error.code;
           const status: EditPlanT['status'] = code === 'EM-2301' ? 'stale' : code === 'EM-4301' ? 'invalid' : 'failed';
-          const plan: EditPlanT = { ...JSON.parse(current.plan_json) as EditPlanT, validation: [{ path: '', message: r.error.message, code }], ...(agg ? { usage: agg } : {}) };
+          // QA P1 2026-10-29: a refused key keeps the provider's own reason ("invalid x-api-key") for the chat failure card
+          const why = code === 'EM-4002' ? (r.error.details as { reason?: unknown } | undefined)?.reason : undefined;
+          const message = typeof why === 'string' && why ? `${r.error.message.replace(/\.$/, '')}: "${why}".` : r.error.message;
+          const plan: EditPlanT = { ...JSON.parse(current.plan_json) as EditPlanT, validation: [{ path: '', message, code }], ...(agg ? { usage: agg } : {}) };
           this.updatePlan(planId, plan, status);
           if (!external) {
             this.finishRun(runId, 'failed', code);
@@ -627,7 +630,8 @@ export class Workflow {
     const tts = plan.steps.find((s) => s.tool === 'tts.generate' && typeof s.args['voiceId'] === 'string');
     const voiceId = spec.voice?.voiceId ?? (tts?.args['voiceId'] as string | undefined) ?? (language === 'en' ? 'natural, warm, clear voice' : 'suara natural, hangat, jelas');
     const r = await this.ctx.hooks.voiceBatch!(projectId, { clips: clips.map((c) => ({ id: c.id, text: c.text })), voiceId, language, ...(spec.voice?.speed ? { speed: spec.voice.speed } : {}),
-      ...(spec.maxDurationMs ? { maxTotalMs: spec.maxDurationMs } : {}), ...(spec.voice?.gapMs !== undefined ? { gapMs: spec.voice.gapMs } : {}), ...(spec.voice?.tailMs !== undefined ? { sceneGapMs: spec.voice.tailMs } : {}), insert: false }, signal ? { signal } : {});
+      ...(spec.maxDurationMs ? { maxTotalMs: spec.maxDurationMs } : {}), ...(spec.voice?.gapMs !== undefined ? { gapMs: spec.voice.gapMs } : {}), ...(spec.voice?.tailMs !== undefined ? { sceneGapMs: spec.voice.tailMs } : {}), insert: false },
+      { ...(signal ? { signal } : {}), onClip: (done, total) => this.planProgress(projectId, planId, 'voice', { done, total }) });   // QA UX round 1: n of N clips
     const got = new Map(r.clips.map((c) => [c.id, c] as const));
     const missing = clips.filter((c) => !got.get(c.id)?.assetId);
     if (missing.length) throw new EmError('EM-7101', `The voice clips ${missing.map((c) => c.id).join(', ')} were not generated.`);

@@ -68,7 +68,7 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
     if (runtime.mode === 'live' && shell?.pickFiles && state.project) {
       const exts = (acc ?? ACCEPT).split(',').map((x) => x.trim().replace(/^\./, '')).filter(Boolean);
       const paths = await shell.pickFiles({ filters: [{ name: t('ui.lib.assets.title'), extensions: exts }], multiple: !ins });
-      if (paths.length) remember(await actions.importPaths(paths), ins);      // cards appear now, then follow ingest (FR-014)
+      if (paths.length) remember(await actions.importPaths(paths, 'picker'), ins);      // cards appear now, then follow ingest (FR-014)
       return;
     }
     nextInsert.current = ins;
@@ -95,7 +95,7 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
     // Packaged app: dropped files are imported by path (trusted-caller route); the raw upload exists only in development.
     const shell = window.expertmotion;
     const paths = runtime.mode === 'live' && shell?.getPathsForFiles ? shell.getPathsForFiles(files) : [];
-    if (paths.length && state.project) { void actions.importPaths(paths); return; }                     // FR-041: same immediate cards as the picker
+    if (paths.length && state.project) { void actions.importPaths(paths, 'drop'); return; }                     // FR-041: same immediate cards as the picker
     void actions.upload(files);
   };
   const badgedCount = () => assets.filter((x) => x.sequenceBadge !== null).length;
@@ -243,7 +243,7 @@ function AssetCard({ asset: a, badge, previewing, selected, inTimeline, onToggle
     a.status === 'failed' ? t(`err.${a.errorCode ?? 'EM-1001'}.title`) : '', missing ? t('ui.lib.assets.missing') : ''].filter(Boolean).join(', ');
   return (
     <li data-el="lib.assets.card" data-asset-id={a.id} data-missing={missing || undefined} data-status={a.status} tabIndex={-1} role="group" aria-label={name} title={meta || a.name} draggable={a.sequenceBadge !== null || selectable(a)}
-      onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={(e) => { e.preventDefault(); onDragOverCard(); }} onDrop={(e) => { e.stopPropagation(); e.preventDefault(); onDropOn(); }}
+      onDragStart={onDragStart} onDragEnd={onDragEnd} onDragOver={(e) => { e.preventDefault(); onDragOverCard(); }} onDrop={(e) => { if (e.dataTransfer?.files?.length) return; /* QA P1-8: files from the desktop bubble to the panel = import */ e.stopPropagation(); e.preventDefault(); onDropOn(); }}
       className={cx('relative flex flex-col overflow-hidden rounded-[8px] border bg-em-panel', selected ? 'border-em-accent' : a.status === 'failed' || missing ? 'border-em-danger' : 'border-em-line')}>
       <div className="relative aspect-video w-full bg-em-panel-2">
         {thumb ? <img src={thumb} alt={a.name} className="h-full w-full object-cover" /> : playable ? <video src={playable} muted preload="metadata" aria-hidden className="h-full w-full object-cover" />
@@ -254,11 +254,12 @@ function AssetCard({ asset: a, badge, previewing, selected, inTimeline, onToggle
         </button>
         <input type="checkbox" data-el="lib.assets.card.select" checked={selected} onChange={() => undefined} onClick={(e) => onToggle(e)} aria-label={t('a11y.lib.assets.select', { name: a.name })} disabled={!selectable(a)} className="absolute right-1 top-1 h-4 w-4 accent-[var(--em-accent)]" />
         {inTimeline && <span className="absolute bottom-1 left-1"><Badge tone="accent-2">{t('ui.lib.assets.intimeline')}</Badge></span>}
+        {a.durationMs ? <span data-el="lib.assets.card.duration" className="t-mono absolute bottom-1 right-1 rounded-[4px] bg-black/60 px-1 text-[10px] text-em-text">{formatDuration(a.durationMs)}</span> : null}
       </div>
       <div className="flex items-center gap-1 px-1.5 py-1">
         <span className="text-em-muted">{KIND_ICON[a.kind]}</span>
-        <span data-el="lib.assets.card.meta" title={meta || a.name} className="min-w-0 flex-1 truncate text-[12px]">{a.name}</span>
-        {a.durationMs ? <span className="t-mono text-[10px] text-em-muted">{formatDuration(a.durationMs)}</span> : null}
+        {/* QA UX round 1 (1280: the name was cut to "k"): two lines for the name, the length moved onto the thumbnail */}
+        <span data-el="lib.assets.card.meta" title={meta || a.name} className="line-clamp-2 min-w-0 flex-1 break-all text-[12px] leading-4">{a.name}</span>
         <span className="relative">
           <IconButton label={t('ui.lib.assets.card.menu')} icon={<MoreHorizontal size={14} />} size={28} data-popover-trigger="" onClick={() => setMenu((m) => !m)} />
           {menu && (

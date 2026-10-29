@@ -1,7 +1,9 @@
 // UI kit (UI_UX_SPECIFICATION.md §3 CMP-01 … CMP-20). Every interactive element takes an `el` prop rendered as `data-el`.
 import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { FloatingPortal, useAnchoredStyle } from './Layer.js';
 import { Loader, X } from 'lucide-react';
 import { useT } from '../i18n/index.js';
+import { ScreenErrors } from './ScreenErrors.js';
 
 const cx = (...c: Array<string | false | null | undefined>) => c.filter(Boolean).join(' ');
 export { cx };
@@ -162,7 +164,7 @@ export function Modal({ el, title, children, footer, onClose, width = 560, block
           <h2 id={titleId} className="flex-1 text-[16px] font-semibold leading-[22px]">{title}</h2>
           {!blocking && <IconButton label={t('ui.common.close')} icon={<X size={16} />} onClick={onClose} size={28} data-close="" />}
         </div>
-        <div className="flex-1 overflow-auto px-4 py-3">{children}</div>
+        <div className="flex-1 overflow-auto px-4 py-3"><ScreenErrors />{children}</div>
         {footer && <div className="flex items-center justify-end gap-2 border-t border-em-line px-4 py-3">{footer}</div>}
       </div>
     </div>
@@ -172,6 +174,9 @@ export function Modal({ el, title, children, footer, onClose, width = 560, block
 /** Anchored popover / menu container; Esc and outside click close; focus returns to the trigger. */
 export function Popover({ el, onClose, children, align = 'left', width, role = 'dialog', label }: { el?: string; onClose: () => void; children: ReactNode; align?: 'left' | 'right'; width?: number; role?: 'dialog' | 'menu'; label?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  // QA P1 2026-10-29: rendered into the one floating layer (components/Layer.tsx), anchored to the element that held it
+  const ph = useRef<HTMLSpanElement>(null);
+  const style = useAnchoredStyle(() => ph.current?.parentElement?.getBoundingClientRect() ?? null, ref, align, width);
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     ref.current?.querySelector<HTMLElement>('button, input, [tabindex="0"]')?.focus();
@@ -179,8 +184,8 @@ export function Popover({ el, onClose, children, align = 'left', width, role = '
     document.addEventListener('mousedown', onDown);
     return () => { document.removeEventListener('mousedown', onDown); opener?.focus?.(); };
   }, [onClose]);
-  return (
-    <div ref={ref} data-el={el} role={role} aria-label={label}
+  return (<><span ref={ph} aria-hidden="true" hidden /><FloatingPortal>
+    <div ref={ref} data-el={el} role={role} aria-label={label} data-floating="popover"
       onKeyDown={(e) => {
         if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
         if (role === 'menu' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
@@ -190,11 +195,11 @@ export function Popover({ el, onClose, children, align = 'left', width, role = '
           items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
         }
       }}
-      className={cx('absolute top-full z-30 mt-1 rounded-[8px] border border-em-line bg-em-panel p-1 text-em-text', align === 'right' ? 'right-0' : 'left-0')}
-      style={{ boxShadow: 'var(--sh-2)', width }}>
+      className="pointer-events-auto rounded-[8px] border border-em-line bg-em-panel p-1 text-em-text"
+      style={{ boxShadow: 'var(--sh-2)', width, ...style }}>
       {children}
     </div>
-  );
+  </FloatingPortal></>);
 }
 
 export function MenuItem({ el, onClick, children, shortcut, disabledReason, badge }: { el: string; onClick: () => void; children: ReactNode; shortcut?: string; disabledReason?: string | null; badge?: ReactNode }) {

@@ -79,8 +79,15 @@ export const BUNDLED_NOTICES: ReadonlyArray<{ name: string; licence: string; gpl
   { name: 'Electron, React, Express, SQLite3 Multiple Ciphers', licence: 'MIT' },
 ];
 
+/** QA UX round 1: the renderer's own platform, so About does not say "Windows account" on Linux / macOS. */
+export function clientPlatform(): 'win32' | 'linux' | 'darwin' {
+  const p = typeof navigator === 'undefined' ? '' : `${(navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ?? ''} ${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`;
+  return /mac/i.test(p) ? 'darwin' : /linux|x11|ubuntu/i.test(p) && !/android/i.test(p) ? 'linux' : 'win32';
+}
+
 export function AboutScreen({ onClose }: { onClose: () => void }) {
   const { state, t } = useStore();
+  const os = clientPlatform();
   const lic = licenceView(state.licence);
   return (
     <Modal el="scr.about" width={520} title={t('ui.scr.about.title')} onClose={onClose}>
@@ -100,8 +107,8 @@ export function AboutScreen({ onClose }: { onClose: () => void }) {
         </details>
         <p data-el="scr.about.gpl" className="rounded-[6px] border border-em-line p-2 text-[12px] text-em-text-2">{t('ui.scr.about.gpl')}</p>
         {/* FR-176 / ADR-006: the honest boundary statement (SECURITY.md §1) — never "unreadable" or "cannot be reverse-engineered" */}
-        <p data-el="scr.about.security" className="rounded-[6px] border border-em-line p-2 text-[12px] text-em-text-2">{t('ui.scr.about.security')}</p>
-        <details><summary className="cursor-pointer">{t('ui.scr.about.limitations')}</summary><p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.about.limitations.body')}</p></details>
+        <p data-el="scr.about.security" className="rounded-[6px] border border-em-line p-2 text-[12px] text-em-text-2">{t(os === 'linux' ? 'ui.scr.about.security.linux' : os === 'darwin' ? 'ui.scr.about.security.mac' : 'ui.scr.about.security')}</p>
+        <details><summary className="cursor-pointer">{t('ui.scr.about.limitations')}</summary><p className="mt-1 text-[12px] text-em-muted">{t('ui.scr.about.limitations.body.now')}</p></details>
         {state.settings?.privateMode && <p className="text-em-private">{t('ui.scr.about.updatespaused')}</p>}
       </div>
     </Modal>
@@ -123,6 +130,12 @@ export function HelpScreen({ onClose, topic }: { onClose: () => void; topic?: (t
         <Button variant="ghost" onClick={() => actions.setScreen({ kind: 'diagnostics' })}>{t('ui.hdr.menu.help.diagnostics')}</Button>
       </>}>
       <p className="mb-3 text-em-text-2">{t('ui.scr.help.offline')}</p>
+      {/* QA UX round 1: the AI chat is the main way to work, so Help starts there */}
+      <div data-el="scr.help.ai" className="mb-3 flex flex-col gap-2 rounded-[8px] border border-em-accent/60 bg-em-accent/10 p-3">
+        <span className="font-semibold">{t('ui.scr.help.ai.title')}</span>
+        <p className="text-[13px] text-em-text-2">{t('ui.scr.help.ai.body')}</p>
+        <div><Button el="scr.help.ai.open" variant="primary" size={28} onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent: 'editor' } })); }}>{t('ui.scr.help.ai.open')}</Button></div>
+      </div>
       <div data-el="scr.help.sections" className="flex flex-col gap-2">
         {HELP_SECTIONS.map((k) => (
           <details key={k} data-help-section={k} open={k === open} className="rounded-[6px] border border-em-line px-2 py-1">

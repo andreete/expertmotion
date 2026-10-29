@@ -110,7 +110,9 @@ export function StagePlayer() {
   const [isFull, setIsFull] = useState(false);
   const [size, setSize] = useState({ w: 640, h: 360 });
   const [playing, setPlaying] = useState(false);
-  const [ms, setMs] = useState(0);
+  // QA UX round 1: the time display starts at the settled playhead — it read 00:00 after a remount while the Timeline playhead
+  // stayed at the end (and `ended` below settles all three at the last frame).
+  const [ms, setMs] = useState(state.playheadMs);
   const [menu, setMenu] = useState(false);
   const [remountKey, setRemountKey] = useState(0);
   const [slow, setSlow] = useState(false);
@@ -182,13 +184,16 @@ export function StagePlayer() {
     const onPause = () => { setPlaying(false); actions.seek((p.getCurrentFrame() / fps) * 1000); };
     const onSeek = (e: { detail: { frame: number } }) => { const v = (e.detail.frame / fps) * 1000; setMs(v); playerBus.emit(v); if (!p.isPlaying()) actions.seek(v); };
     const onWaiting = () => setBuffering(true), onResume = () => setBuffering(false);   // FR-061: media still loading
+    // QA UX round 1: playback reaching the end settles the playhead there (time display, Timeline and store agree)
+    const onEnded = () => { setPlaying(false); const v = (p.getCurrentFrame() / fps) * 1000; setMs(v); playerBus.emit(v); actions.seek(v); };
+    p.addEventListener('ended', onEnded);
     p.addEventListener('waiting', onWaiting);
     p.addEventListener('resume', onResume);
     p.addEventListener('frameupdate', onFrame);
     p.addEventListener('play', onPlay);
     p.addEventListener('pause', onPause);
     p.addEventListener('seeked', onSeek);
-    return () => { p.removeEventListener('waiting', onWaiting); p.removeEventListener('resume', onResume); p.removeEventListener('frameupdate', onFrame); p.removeEventListener('play', onPlay); p.removeEventListener('pause', onPause); p.removeEventListener('seeked', onSeek); };
+    return () => { p.removeEventListener('ended', onEnded); p.removeEventListener('waiting', onWaiting); p.removeEventListener('resume', onResume); p.removeEventListener('frameupdate', onFrame); p.removeEventListener('play', onPlay); p.removeEventListener('pause', onPause); p.removeEventListener('seeked', onSeek); };
   }, [fps, actions, meta?.durationInFrames, remountKey, empty, !inputProps]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

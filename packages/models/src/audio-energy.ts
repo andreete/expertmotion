@@ -70,3 +70,19 @@ export function refineWordTimes<T extends { fromMs: number; toMs: number }>(word
   }
   return out;
 }
+
+/** QA P1 2026-10-29 (caption paging): the pauses inside the speech — runs of frames below the voice threshold lasting at least
+ *  `minMs` (default 120 ms), in clip time. Leading / trailing silence is not a pause. */
+export function silences(frames: readonly EnergyFrame[] | null, o: { minMs?: number; rel?: number; frameMs?: number } = {}): Array<{ fromMs: number; toMs: number }> {
+  if (!frames?.length) return [];
+  const frameMs = o.frameMs ?? (frames.length > 1 ? frames[1]!.fromMs - frames[0]!.fromMs : 10);
+  const th = peakRms(frames) * (o.rel ?? 0.06); const min = o.minMs ?? 120;
+  if (th <= 0) return [];
+  const out: Array<{ fromMs: number; toMs: number }> = []; let start = -1; let voiced = false;
+  for (let k = 0; k < frames.length; k++) {
+    const quiet = frames[k]!.rms < th;
+    if (quiet && voiced && start < 0) start = k;
+    if (!quiet) { if (start >= 0 && (k - start) * frameMs >= min) out.push({ fromMs: frames[start]!.fromMs, toMs: frames[k]!.fromMs }); start = -1; voiced = true; }
+  }
+  return out;
+}

@@ -11,6 +11,10 @@ afterEach(() => cleanup());
 
 /** Ids that cannot appear in a browser/mock session, with the reason (reported, not silently skipped). */
 const NOT_IN_MOCK: Record<string, string> = {
+  // QA UX round 1: only while a screen is open and an error arrives / with more than one layer (qa-ux-round1.test.tsx)
+  'sys.screen.error': 'an error while a screen is open (qa-ux-round1.test.tsx)', 'sys.screen.error.action': 'an error while a screen is open (qa-ux-round1.test.tsx)',
+  'stage.timeline.compact': 'more than one layer (qa-ux-round1.test.tsx)',
+  'agent.chat.composer.count': 'from 6 000 characters (qa-ux-round1.test.tsx)', 'scr.models.row.offline': 'a download without internet', 'scr.models.row.offline.retry': 'a download without internet',
   // ADR-033 (Entry 33): replaced by the tabs and "Kirim ke Editor"; states covered in assistant-chat / chat-qa-2026-10-28 tests
   'agent.chat.apply': 'replaced by agent.chat.sendtoeditor (ADR-033)', 'agent.chat.mode': 'replaced by agent.chat.tabs (ADR-033)', 'agent.chat.mode.brainstorm': 'replaced by agent.chat.tab.brainstorm', 'agent.chat.mode.editor': 'replaced by agent.chat.tab.editor',
   'agent.brainstorm.handoff.card': 'after Kirim ke Editor (assistant-chat.test.tsx)', 'agent.brainstorm.handoff.open': 'after Kirim ke Editor', 'agent.editor.message.origin': 'an Editor request from a draft', 'agent.editor.askdiscussion': 'an Editor question',

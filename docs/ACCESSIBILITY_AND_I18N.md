@@ -124,7 +124,7 @@ Rules for keys: lower-case, dots only, no indexes in keys (use ICU arguments), s
 | Money | $0.004 · ≈ $0.004 · n/a | $0,004 · ≈ $0,004 · n/a | always USD (provider currency); "≈" prefix rule in UXRD UX-020 |
 | Tokens | 1 240 / 200 000 | 1.240 / 200.000 | EN uses thin space grouping in `t-mono` for readability |
 | Duration (short) | 0:42 · 1:05:00 | 0:42 · 1:05:00 | m:ss or h:mm:ss |
-| Timecode | 00:12.08 (mm:ss.ff) | 00:12.08 | frames two digits; fps from Project Settings |
+| Timecode | 00:12.3 (mm:ss.d) | 00:12.3 | tenths of a second (QA UX round 1: two-digit frames "00:03.09" read like decimals); frame-exact values in ms in the Inspector |
 | ETA | ≈ 1 min 30 s · ≈ 1 min left | ≈ 1 mnt 30 d · ≈ 1 mnt lagi | rounded to 10 s; "Estimating…" / "Memperkirakan…" before data |
 | Dates | 24 Oct 2026, 14:32 | 24 Okt 2026, 14.32 | `Intl.DateTimeFormat` medium; 24-hour in id-ID |
 | Pixels | 1080×1920 | 1080×1920 | "×" (U+00D7), width first |

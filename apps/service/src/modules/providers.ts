@@ -318,7 +318,24 @@ export function createProvidersModule(opts: ProvidersOptions = {}): ServiceModul
         if (body.validateNow) {
           if (ctx.egress.isPrivate()) notices.push('EM-8202');
           else {
-            await validateConn(ctx, id);       // EM-4002 → 422, connection stays stored as invalid
+            // EM-4002 → 422, connection stays stored as invalid (the form retries / replaces the key on it). QA 2026-10-29 (P1-6):
+            // any other failure (provider 5xx / 529 busy / 429, unreachable) removes the row again, so failed tries never pile
+            // up as orphan "unvalidated" connections (and one of them never stays the default).
+            try { await validateConn(ctx, id); } catch (e) {
+              if (!(e instanceof EmError && e.code === 'EM-4002')) {
+                ctx.db.transaction(() => {
+                  const wasDefault = defaultConnection(ctx) === id;
+                  ctx.db.prepare('DELETE FROM provider_connections WHERE id = ?').run(id);
+                  if (wasDefault) {
+                    const next = ctx.db.prepare("SELECT id FROM provider_connections WHERE status = 'valid' ORDER BY created_at DESC LIMIT 1").get() as { id: string } | undefined;
+                    setDefault(ctx, next?.id ?? null);
+                  }
+                })();
+                audit(ctx, 'provider.removed', { connectionId: id, reason: 'validation-failed', code: e instanceof EmError ? e.code : 'EM-4003' });
+                changed(ctx, 'providers');
+              }
+              throw e;
+            }
             // Awaited: the response already carries a filled Capability Table, so the model pickers are never empty after Add.
             await refreshModels(ctx, id).catch((e: unknown) => ctx.log.warn({ connectionId: id, code: (e as EmError).code ?? 'EM-4006' }, 'model refresh after add failed'));
           }

@@ -29,7 +29,8 @@ export function isScratchId(id: string | null | undefined): boolean { return !!i
 
 /** True while the project is exactly as it was created (cheap check on the project row; messages are checked by the caller). */
 export function isUntouched(p: Pick<ProjectDto, 'id' | 'headHash' | 'name' | 'assetCount' | 'durationMs'>, s: ScratchRecord | null = loadScratch()): boolean {
-  return !!s && p.id === s.projectId && (p.headHash ?? null) === s.headHash && p.name === s.name && p.assetCount === 0 && p.durationMs === 0;
+  // durationMs is not compared: an empty project may report a default length (the head hash says whether anything changed)
+  return !!s && p.id === s.projectId && (p.headHash ?? null) === s.headHash && p.name === s.name && p.assetCount === 0;
 }
 /** Recent / Open lists without the untouched blank project (it is not something the Creator made). */
 export function withoutScratch<T extends Pick<ProjectDto, 'id'> & Partial<Pick<ProjectDto, 'headHash' | 'name' | 'assetCount' | 'durationMs'>>>(items: readonly T[]): T[] {

@@ -6,6 +6,7 @@ import { useEffect, useRef } from 'react';
 import { useStore, type Store } from '../state/store.js';
 import type { Screen } from '../state/reducer.js';
 import { Button, Modal } from '../components/ui.js';
+import { translate } from '../i18n/index.js';
 
 /** FR-174: run `next` at once, or after Save / Don't save when the open Project has unsaved UI state. */
 export function guardUnsaved(store: Pick<Store, 'state' | 'actions'>, next: () => void, opts: { closing?: boolean } = {}): void {
@@ -88,14 +89,19 @@ export function LifecycleEffects() {
       if (seen === r.startedAt) return;
       try { sessionStorage.setItem(key, r.startedAt); } catch { /* storage blocked */ }
       const n = r.renders.length + r.agentRuns.length + r.ingests.length + r.plans.length;
-      const restarted = seen !== null;                                  // a different Service run than the one this window saw first
-      if (!r.unclean && n === 0 && !restarted) return;
       const s = ref.current.state;
+      const checkpoint = !!s.project && r.checkpoints.offered.includes(s.project.id);
+      // QA UX round 1: only when it matters — something was stopped, or this project has a newer automatic copy. A restart (or a
+      // killed session) that stopped nothing says nothing (was "Service restarted · EM-8003" after every killed session).
+      if (n === 0 && !checkpoint) return;
       const action = r.renders.length ? { labelKey: 'ui.sys.toast.recovered.renders', run: () => ref.current.actions.setScreen({ kind: 'export' }) }
-        : s.project && r.checkpoints.offered.includes(s.project.id) ? { labelKey: 'ui.sys.toast.recovered.checkpoint', run: () => ref.current.actions.setScreen({ kind: 'project.recover' }) }
+        : checkpoint ? { labelKey: 'ui.sys.toast.recovered.checkpoint', run: () => ref.current.actions.setScreen({ kind: 'project.recover' }) }
           : undefined;
-      actions.toast(n ? 'warn' : 'info', n ? 'ui.sys.toast.recovered' : 'err.EM-8003.title',
-        { renders: r.renders.length, runs: r.agentRuns.length, imports: r.ingests.length, plans: r.plans.length }, { code: 'EM-8003', ...(action ? { action } : {}), sticky: n > 0 });
+      const L = s.settings?.uiLanguage ?? 'en';
+      const parts = ([['renders', r.renders.length], ['runs', r.agentRuns.length], ['imports', r.ingests.length], ['plans', r.plans.length]] as const)
+        .filter(([, c]) => c > 0).map(([k, c]) => translate(L, `ui.sys.toast.recovered.part.${k}`, { n: c }));
+      if (n === 0) actions.toast('info', 'ui.sys.toast.recovered.copy', undefined, action ? { action } : {});
+      else actions.toast('warn', 'ui.sys.toast.recovered.plain', { list: parts.join(', ') }, { ...(action ? { action } : {}), sticky: action !== undefined });
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [open, runtime, actions]);

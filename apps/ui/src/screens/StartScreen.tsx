@@ -11,7 +11,7 @@ import { Button, Empty, Spinner, cx } from '../components/ui.js';
 import { AppMark } from '../components/AppMark.js';
 import { formatDate, formatDuration, type Lang } from '../i18n/index.js';
 import { ProjectThumb } from './ProjectDialogs.js';
-import { lastBootDecision, setSafeMode, type StartNotice } from '../startup/session-guard.js';
+import { lastBootDecision, launchNotice, setSafeMode, type StartNotice } from '../startup/session-guard.js';
 import { withoutScratch } from '../startup/scratch.js';
 import { guardUnsaved } from './Lifecycle.js';
 
@@ -120,7 +120,10 @@ export function SafeModePlaceholder({ part, onShow }: { part: 'chat' | 'preview'
  */
 export function LaunchNotice() {
   const { actions, runtime, t, state } = useStore();
-  const [notice, setNotice] = useState<StartNotice>(() => lastBootDecision()?.notice ?? null);
+  // read on every render: this bar mounts with the Editor, before the boot decided (the store re-renders after boot)
+  const [dismissed, setDismissed] = useState(false);
+  const notice: StartNotice = dismissed ? null : launchNotice();
+  const setNotice = (n: null) => { if (n === null) setDismissed(true); };
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -128,7 +131,7 @@ export function LaunchNotice() {
     let alive = true;
     void runtime.api.getProject(notice.projectId).then((p) => { if (alive) setName(p.name); }).catch(() => { if (alive) setNotice(null); });   // gone: nothing to offer
     return () => { alive = false; };
-  }, [notice, runtime]);
+  }, [notice?.projectId, runtime]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!notice || state.project?.id === notice.projectId) return null;
   const loop = notice.kind === 'crash-loop';
   const open = (safe: boolean) => {
@@ -158,7 +161,12 @@ export function RecentStrip() {
   const [items, setItems] = useState<ProjectDto[]>([]);
   useEffect(() => {
     let alive = true;
-    void runtime.api.recentProjects().then((r) => { if (alive) setItems(withoutScratch(r.items).filter((p) => p.id !== state.project?.id).slice(0, 3)); }).catch(() => undefined);
+    // recently opened first; a data folder whose projects were never opened here falls back to the latest changed ones
+    void runtime.api.recentProjects().then(async (r) => {
+      let list = withoutScratch(r.items).filter((p) => p.id !== state.project?.id);
+      if (!list.length) list = withoutScratch((await runtime.api.listProjects({ limit: 10 })).items).filter((p) => p.id !== state.project?.id);
+      if (alive) setItems(list.slice(0, 3));
+    }).catch(() => undefined);
     return () => { alive = false; };
   }, [runtime, state.project?.id]);
   if (!items.length) return null;

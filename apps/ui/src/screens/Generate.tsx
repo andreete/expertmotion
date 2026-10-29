@@ -173,7 +173,8 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
         {running && job && <Button variant="ghost" onClick={() => void runtime.api.cancelGeneratorJob(job.id).then(setJob).catch(actions.error)}>{t('ui.common.cancel')}</Button>}
         <Button el={`${p}.run`} variant="primary" loading={running || starting} disabledReason={runReason} onClick={() => void run()}>{t('ui.scr.generate.run')}</Button>
       </>}>
-      <p className="mb-3 text-em-muted">{t(`ui.lib.generator.${kind}.subtitle`)}</p>
+      {/* QA UX round 1: music is the free CC0 library (works on every PC); "Needs a GPU with 4 GB" was shown to everyone */}
+      <p className="mb-3 text-em-muted">{t(kind === 'music' ? 'ui.lib.generator.music.library.subtitle' : `ui.lib.generator.${kind}.subtitle`)}</p>
       {notEnabled && <div className="mb-3"><ErrorBox code="EM-9004" vars={{ feature: t(`ui.lib.generator.${kind}.title`) }} /></div>}
 
       {kind === 'voice' && (

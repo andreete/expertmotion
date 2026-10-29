@@ -100,6 +100,9 @@ export function mapProviderError(e: unknown): EmError {
       const retryAfterMs = retryAfterMsOf(err.responseHeaders, body);
       return new EmError('EM-4102', 'The AI provider is rate limiting requests.', { cause: e, details: { status, ...(reason ? { reason } : {}), ...(retryAfterMs !== null ? { retryAfterMs } : {}) } });
     }
+    case 529:
+      // QA 2026-10-29 (P1-6): Anthropic's 529 overloaded_error is "the provider is busy", not a provider fault (was EM-4103).
+      return new EmError('EM-4102', 'The AI provider is overloaded right now.', { cause: e, details: { status, overloaded: true, ...(reason ? { reason } : {}) } });
     default: break;
   }
   if (typeof err?.statusCode === 'number' && err.statusCode >= 500) return new EmError('EM-4103', 'The AI provider had an error.', { cause: e });

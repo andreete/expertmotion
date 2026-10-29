@@ -12,6 +12,7 @@ import { splitPlayheadMs, splitTargets } from './split.js';
 import { copyableRefs, duplicableRefs, itemRefs, runCopy, runCut, runDelete, runDuplicate, runPaste } from './items.js';
 import { timelineClipboard } from './clipboard.js';
 import { playerBus } from './playerBus.js';
+import { FloatingPortal } from '../components/Layer.js';
 import { cx } from '../components/ui.js';
 
 export interface ItemMenuAnchor { x: number; y: number; refs: ElementRefT[]; source: 'timeline' | 'canvas'; returnFocus?: HTMLElement | null }
@@ -95,9 +96,9 @@ export function ItemMenu({ anchor, onClose }: { anchor: ItemMenuAnchor; onClose:
       {off[a] && <span className="sr-only">{off[a]}</span>}
     </button>
   );
-  return (
+  return (<FloatingPortal>
     <div ref={ref} data-el="stage.itemmenu" data-source={anchor.source} role="menu" aria-label={t('ui.stage.itemmenu.title', { count: anchor.refs.length })} onKeyDown={onKey}
-      className="fixed z-50 flex min-w-[200px] flex-col rounded-[8px] border border-em-line-strong bg-em-panel p-1 shadow-lg" style={{ left: anchor.x, top: anchor.y }}>
+      className="pointer-events-auto fixed flex min-w-[200px] flex-col rounded-[8px] border border-em-line-strong bg-em-panel p-1 shadow-lg" style={{ left: anchor.x, top: anchor.y }}>
       {entry('copy', <Copy size={14} />, t('ui.stage.itemmenu.copy'), `${MOD}C`)}
       {entry('cut', <ScissorsLineDashed size={14} />, t('ui.stage.itemmenu.cut'), `${MOD}X`)}
       {entry('paste', <ClipboardPaste size={14} />, t('ui.stage.itemmenu.paste'), `${MOD}V`)}
@@ -107,7 +108,7 @@ export function ItemMenu({ anchor, onClose }: { anchor: ItemMenuAnchor; onClose:
       {entry('duplicate', <CopyPlus size={14} />, t('ui.stage.itemmenu.duplicate'))}
       {entry('ask', <Bot size={14} />, t('ui.stage.itemmenu.ask'))}
     </div>
-  );
+  </FloatingPortal>);
 }
 /** Shift+F10 or the ContextMenu key (keyboard path to the item menu). */
 export const isMenuKey = (e: { key: string; shiftKey: boolean }): boolean => e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10');

@@ -26,6 +26,7 @@ export EM_RELEASE_PRIVATE_KEY_PEM="$(cat "$EM_RELEASE_PRIVATE_KEY_PEM_FILE")"
 node scripts/release-check.mjs --allow-placeholders
 if [ -z "${EM_SKIP_APP_BUILD:-}" ]; then                 # EM_SKIP_APP_BUILD=1 reuses apps/ui/dist, apps/service/dist and apps/desktop/dist/main.cjs
   npm run build -w @expertmotion/ui
+  npm run build:bundle -w @expertmotion/engine
   npm run build:release -w @expertmotion/service
   npm run build:main -w @expertmotion/desktop
 fi

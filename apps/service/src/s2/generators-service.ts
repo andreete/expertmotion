@@ -2,6 +2,7 @@
 // music (ACE-Step or the CC0 loop library), thumbnail (frame + title via renderStill, or stable-diffusion.cpp), hashtags/social caption
 // (connected LLM, ADR-009). One job at a time (JobRunner concurrency 1); every engine step runs under the Service-wide heavy lock.
 // Generated media files are registered as Assets through the ingest pipeline; Insert goes through hooks.applyOps.
+import { settledCaptureMs } from './thumbnail-frame.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,7 +12,7 @@ import { applyOperations, deriveTiming, type CompositionModelT, type GeneratedRe
 import { compileDefaults } from '@expertmotion/catalogue';
 import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
 import { SUPERTONIC_FILES, CancelledError, JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, preparePiperVoice, removeJobDir, synthesize, transcribe, transcribeToPages,
-  displayNameOf, buildTranscript, cuesToCaptionPages, energyFrames, parseWav, refineWordTimes, speechWindow, transcriptToSrt, wavDurationMs,
+  displayNameOf, buildTranscript, cuesToCaptionPages, energyFrames, parseWav, refineWordTimes, silences, speechWindow, transcriptToSrt, wavDurationMs,
   MUSIC_LIBRARY, MUSIC_LIBRARY_LICENCE, type JobContext, type JobEvent, type ModelDef, type RecognisedToken, type Transcript } from '@expertmotion/models';
 import { voicesServiceOf, type VoiceDto } from './voices-service.js';
 import { musicLibraryOf } from './music-library-service.js';
@@ -293,6 +294,8 @@ export class GeneratorsService {
     return d;
   }
 
+  /** QA UX round 1: per-clip progress of a running voice batch (voiceBatch `onClip`), by job id. */
+  private readonly clipHooks = new Map<string, (done: number, total: number) => void>();
   private onEvent(e: JobEvent): void {
     const ctx = this.ctx; const j = e.job; const now = ctx.now();
     if (e.type === 'running') ctx.db.prepare("UPDATE generator_jobs SET status = 'running', started_at = ? WHERE id = ?").run(now, j.id);
@@ -374,7 +377,8 @@ export class GeneratorsService {
               ...(typeof st.args['volume'] === 'number' ? { volume: st.args['volume'] } : {}), ...(typeof st.args['trackId'] === 'string' ? { trackId: st.args['trackId'] } : {}) });
             notice(st.n, st.tool, 'started', { jobId: job['id'] });
           } else if (st.tool === 'captions.generate' && st.args['source'] === 'sequence') {
-            const job = await this.create(projectId, 'captions', { source: 'sequence', language: lang(st.args), insert: true, ...(typeof st.args['presetId'] === 'string' ? { presetId: st.args['presetId'] } : {}) });
+            const job = await this.create(projectId, 'captions', { source: 'sequence', language: lang(st.args), insert: true, ...(typeof st.args['presetId'] === 'string' ? { presetId: st.args['presetId'] } : {}),
+              ...(typeof st.args['modelKey'] === 'string' ? { modelKey: st.args['modelKey'] } : {}) });   // the installed model the plan checked (prepareToolSteps)
             notice(st.n, st.tool, 'started', { jobId: job['id'] });
           } else if (st.tool === 'captions.generate') {
             const dep = st.dependsOn.map((n) => voices.get(n)).find(Boolean) ?? [...voices.values()][0];
@@ -626,7 +630,8 @@ export class GeneratorsService {
     let transcript: ReturnType<typeof buildTranscript>;
     try {
       const frames = energyFrames(buf);
-      transcript = buildTranscript({ ...base, speech: speechWindow(buf) ?? { fromMs: 0, toMs: durationMs }, refine: (w) => refineWordTimes(w, frames) });
+      // QA P1 2026-10-29: caption pages break at the real pauses of this clip (silences of the energy envelope) and snap to them
+      transcript = buildTranscript({ ...base, speech: speechWindow(buf) ?? { fromMs: 0, toMs: durationMs }, refine: (w) => refineWordTimes(w, frames), cues: { pauses: silences(frames) } });
     } catch (e) {
       ctx.log.warn({ jobId: j.jobId, err: (e instanceof Error ? e.message : String(e)).slice(0, 300) }, 'voice energy timing failed; timing without the energy envelope');
       try { transcript = buildTranscript({ ...base, speech: { fromMs: 0, toMs: durationMs } }); } catch (e2) {
@@ -716,13 +721,14 @@ export class GeneratorsService {
           const key = [projectId, voice.id, speed, language, style ?? '', c.text, c.written ?? ''].join('\u0000');
           const hit = reuse ? this.voiceReuse.get(key) : undefined;
           const hitTranscript = hit && getAsset(this.ctx, hit.assetId, projectId)?.status === 'ready' ? this.transcriptOf(hit.assetId) : null;
-          if (hit && hitTranscript) { out.push({ id: c.id, assetId: hit.assetId, durationMs: hit.durationMs, transcript: hitTranscript, usd: 0 }); continue; }
+          if (hit && hitTranscript) { out.push({ id: c.id, assetId: hit.assetId, durationMs: hit.durationMs, transcript: hitTranscript, usd: 0 }); this.clipHooks.get(j.jobId)?.(out.length, clips.length); continue; }
           if (hit) this.voiceReuse.delete(key);
           const r = await this.voiceClip(j, projectId, voice, { name: pass ? `${c.id}-${pass + 1}` : c.id, text: c.text, ...(c.written ? { written: c.written } : {}) },
             { language, speed, ...(style ? { style } : {}), part: (f) => j.progress(Math.min(0.94, (pass ? 0.5 : 0) + ((i + f) / clips.length) * (pass ? 0.45 : (maxTotal ? 0.5 : 0.9))), `clip ${c.id}`) });
           fresh[pass]!.push(r.assetId);
           if (reuse) { this.voiceReuse.delete(key); this.voiceReuse.set(key, { assetId: r.assetId, durationMs: r.durationMs }); while (this.voiceReuse.size > VOICE_REUSE_MAX) this.voiceReuse.delete(this.voiceReuse.keys().next().value!); }
           out.push({ id: c.id, ...r });
+          this.clipHooks.get(j.jobId)?.(out.length, clips.length);           // QA UX round 1: "n of 9 clips ready" on the Plan Card
         }
         return out;
       };
@@ -782,12 +788,13 @@ export class GeneratorsService {
   }
   /** FR-251 for the agent runtime: runs a batch and resolves with the clips once done; rejects with the job's EM code (nothing placed).
    *  Review A1: `signal` (Cancel on the Plan Card) cancels the batch job; the clips it already made are removed (A3). */
-  async voiceBatch(projectId: string, body: VoiceBatchInput, opts: { signal?: AbortSignal } = {}): Promise<VoiceBatchResult> {
+  async voiceBatch(projectId: string, body: VoiceBatchInput, opts: { signal?: AbortSignal; onClip?: (done: number, total: number) => void } = {}): Promise<VoiceBatchResult> {
     if (opts.signal?.aborted) throw em('EM-4303', 'The change was cancelled before it was applied. Nothing changed.', { status: 409 });
     const job = await this.create(projectId, 'voice', { ...body, clips: body.clips, language: body.language ?? 'id', insert: body.insert ?? false });
     const onAbort = () => { this.cancel(String(job['id'])); };
     opts.signal?.addEventListener('abort', onAbort, { once: true });
-    const row = await this.waitJob(String(job['id'])).finally(() => opts.signal?.removeEventListener('abort', onAbort));
+    if (opts.onClip) this.clipHooks.set(String(job['id']), (d, n) => { try { opts.onClip!(d, n); } catch { /* progress only */ } });
+    const row = await this.waitJob(String(job['id'])).finally(() => { opts.signal?.removeEventListener('abort', onAbort); this.clipHooks.delete(String(job['id'])); });
     if (opts.signal?.aborted) throw em('EM-4303', 'The change was cancelled before it was applied. Nothing changed.', { status: 409, details: { jobId: job['id'] } });
     if (!row || row.status !== 'done') throw em((row?.error_code ?? 'EM-7101') as 'EM-7101', 'The voice clips could not be generated.', { details: { jobId: job['id'], status: row?.status ?? 'missing' } });
     return { jobId: row.id, ...(JSON.parse(row.result_json ?? '{}') as Omit<VoiceBatchResult, 'jobId'>) };
@@ -898,9 +905,9 @@ export class GeneratorsService {
         if (asked) await lib.download(asked.id);
         const src = await lib.readyFile(track.id);
         const wav = path.join(ctx.paths.tmp, 'jobs', j.jobId, 'out.wav');
-        const fadeOut = Math.max(0, durationMs / 1000 - 1.5).toFixed(3);
+        // looped to the length; no ffmpeg filter (the slim FFmpeg has no afade): the bed op's fadeInMs / fadeOutMs fade it in the Engine
         await this.engineStep(j, 'loops', 'generate', () => runTool({ exe: ctx.resources.ffmpeg, args: ['-v', 'error', '-nostdin', '-y', '-stream_loop', '-1', '-i', src,
-          '-t', (durationMs / 1000).toFixed(3), '-af', `afade=t=out:st=${fadeOut}:d=1.5`, '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', wav], cwd: path.dirname(wav), timeoutMs: 120_000, signal: j.signal }));
+          '-t', (durationMs / 1000).toFixed(3), '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', wav], cwd: path.dirname(wav), timeoutMs: 120_000, signal: j.signal }));
         j.progress(0.9, 'ingest');
         const assetId = await this.register(projectId, wav, `music-${track.id}.wav`);
         return { assetId, result: { assetId, durationMs, source: 'loop-library', instrumental: true, cc0: true, trackId: track.id, title: track.title, artist: track.artist, credit: track.credit, licence: MUSIC_LIBRARY_LICENCE.url }, ops: [musicBedOp(assetId, typeof b['volume'] === 'number' && b['volume'] >= 0.02 && b['volume'] <= 1 ? { volume: b['volume'] } : {})] };
@@ -963,7 +970,7 @@ export class GeneratorsService {
         const candidates: Array<{ assetId: string; frameMs: number }> = [];
         for (const [i, at] of times.entries()) {
           const out = path.join(ctx.paths.tmp, 'jobs', j.jobId, `still-${i + 1}.png`);
-          await this.engineStep(j, 'none', 'still', (c) => this.engines.frame({ model, projectId, frameMs: at, outPath: out, assetIds }, { ...c, onProgress: (f) => c.onProgress((i + f) / times.length), ctx, jobId: j.jobId }));
+          await this.engineStep(j, 'none', 'still', (c) => this.engines.frame({ model, projectId, frameMs: settledCaptureMs(model, at), outPath: out, assetIds }, { ...c, onProgress: (f) => c.onProgress((i + f) / times.length), ctx, jobId: j.jobId }));
           candidates.push({ assetId: await this.register(projectId, out, `thumbnail-${short(j.jobId)}-${i + 1}.png`), frameMs: at });
         }
         j.progress(0.9, 'ingest');

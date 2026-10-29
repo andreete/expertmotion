@@ -260,7 +260,7 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     case 'agent.run.failed': return { ...state, doneRuns: [ev.data.runId, ...state.doneRuns].slice(0, 20), streaming: { ...state.streaming, [ev.data.agent]: null }, agentError: { ...state.agentError, [ev.data.agent]: ev.data.code },
       agentErrorDetail: { ...state.agentErrorDetail, [ev.data.agent]: ev.data.message || ev.data.details ? { ...(ev.data.message ? { message: ev.data.message } : {}), ...(ev.data.details ? { details: ev.data.details } : {}) } : null } };
     case 'model.progress': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, bytesDone: ev.data.bytesDone, bytesTotal: ev.data.bytesTotal, status: ev.data.status, pausedReason: ev.data.pausedReason ?? null,
-      retry: ev.data.retry ? { ...ev.data.retry, at: Date.now() } : null, failReason: null } : m)) };   // FR-245: "Mencoba lagi…" while a retry waits
+      retry: ev.data.retry ? { ...ev.data.retry, at: Date.now() } : null, failReason: null, noNetwork: ev.data.noNetwork === true } : m)) };   // FR-245: "Mencoba lagi…" while a retry waits
     case 'model.installed': return { ...state, models: state.models.map((m) => (m.key === ev.data.model.key ? ev.data.model : m)) };
     case 'model.failed': return { ...state, models: state.models.map((m) => (m.key === ev.data.key ? { ...m, status: ev.data.code === 'EM-7006' ? 'not-installed' : 'failed', errorCode: ev.data.code, retry: null, failReason: ev.data.reason ?? null } : m)) };   // EM-7006 = paused (FR-161)
     case 'hardware.tick': return { ...state, tick: ev.data };

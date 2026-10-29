@@ -71,9 +71,9 @@ export function KeyRetryNote({ attempt, onRetry, el = 'scr.providers.keyhint', r
     return () => { clearInterval(tick); clearTimeout(fire); };
   }, [attempt]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div data-el={el} role="status" data-code="EM-4002" className="flex items-start gap-2 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
+    <div data-el={el} role={attempt === 0 ? 'alert' : 'status'} data-code="EM-4002" className="flex items-start gap-2 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
       <span className="flex flex-1 flex-col">
-        <span className="font-semibold">{t('ui.agent.error.keyinvalid')}</span>
+        <span className="flex items-center gap-2"><span className="flex-1 font-semibold">{t('ui.agent.error.keyinvalid')}</span><span className="t-mono text-[10px] text-em-muted">EM-4002</span></span>
         <span data-el="scr.providers.keyreason" className="text-em-text-2">{why ? t('ui.agent.error.keyreason', { provider: provider ?? 'Provider', reason: why }) : t('err.EM-4002.body', { provider: provider ?? 'Provider' })}</span>
         {delay !== null
           ? <span className="text-em-warn">{why ? t('ui.agent.error.keyhint') : ''}{left !== null ? ` ${t('ui.agent.error.keyhint.retry', { s: left })}` : ''}</span>
@@ -181,9 +181,12 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
   const [result, setResult] = useState<string | null>(null);
   // QA 2026-10-26 #3: EM-4002 right after adding a key → the stored connection is validated again (no second connection).
   const [keyFail, setKeyFail] = useState<{ attempt: number; connectionId: string | null; reason?: string } | null>(null);
-  const finish = (ok: boolean) => { setBusy(false); setResult(ok ? 'ok' : 'fail'); if (ok) { setKey(''); setKeyFail(null); } onConnected?.(ok); };
+  // QA UX round 1 (P1-6): any other failure (provider busy / down, no internet, budget…) is shown here, in the form, with Try again
+  // (it was a toast under the onboarding overlay, so the Creator saw nothing). The Service removes such a connection again.
+  const [otherFail, setOtherFail] = useState<{ code: string } | null>(null);
+  const finish = (ok: boolean) => { setBusy(false); setResult(ok ? 'ok' : 'fail'); if (ok) { setKey(''); setKeyFail(null); setOtherFail(null); } onConnected?.(ok); };
   const validate = async () => {
-    setBusy(true); setResult(null);
+    setBusy(true); setResult(null); setOtherFail(null);
     // FR-215: a connection this form stored with a refused key (wrong provider or a mistyped key) is removed before the next try,
     // so it cannot stay behind as the default connection with an empty model list.
     const stale = keyFail?.connectionId; setKeyFail(null);
@@ -192,6 +195,7 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
     const ok = await actions.addConnection(provider, normalizeKey(key), t(`ui.scr.providers.provider.${provider}`), { onError: (e) => { failed = e; } });
     const f = failed as EmError | null;
     if (!ok && f?.code === 'EM-4002') setKeyFail({ attempt: 0, connectionId: String((f.details as { connectionId?: unknown } | undefined)?.connectionId ?? '') || null, reason: reasonOf(f) });
+    else if (!ok && f) setOtherFail({ code: f.code });
     finish(ok);
   };
   const retryKey = async (auto: boolean) => {
@@ -220,6 +224,16 @@ export function ConnectForm({ onConnected }: { onConnected?: (ok: boolean) => vo
         {result === 'ok' && <span className="flex items-center gap-1 text-em-success"><Check size={14} />{t('ui.scr.providers.valid')}</span>}
       </div>
       <BusyLine busy={busy ? 'validate' : null} retry={busy && keyFail ? { n: keyFail.attempt + 1, of: KEY_RETRY_MAX } : null} />
+      {!busy && otherFail && !keyFail && (
+        <div data-el="scr.providers.add.error" data-code={otherFail.code} role="alert" className="flex items-start gap-2 rounded-[6px] border-l-2 border-em-warn bg-em-panel-2 px-2 py-1 text-[12px]">
+          <span className="flex flex-1 flex-col">
+            <span className="font-semibold">{t(`err.${otherFail.code}.title`)}</span>
+            <span className="text-em-text-2">{t(`err.${otherFail.code}.body`, { provider: t(`ui.scr.providers.provider.${provider}`) })}</span>
+            <span className="t-mono text-[11px] text-em-muted">{otherFail.code}</span>
+          </span>
+          <Button el="scr.providers.add.retry" size={28} disabledReason={normalizeKey(key).length < 8 ? t('ui.scr.providers.key.short') : null} onClick={() => void validate()}>{t('ui.sys.toast.tryagain')}</Button>
+        </div>
+      )}
       {!busy && keyFail && <KeyRetryNote attempt={keyFail.attempt} onRetry={(auto) => void retryKey(auto)} {...(keyFail.reason !== undefined ? { reason: keyFail.reason } : {})} provider={t(`ui.scr.providers.provider.${provider}`)} onReplace={replaceKey} />}
     </div>
   );

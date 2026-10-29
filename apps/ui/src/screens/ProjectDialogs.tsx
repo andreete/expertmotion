@@ -52,12 +52,16 @@ export function NewProjectDialog({ onClose, saveAs }: { onClose: () => void; sav
   // FR-009: the New dialog defaults to 9:16 (or the Settings default ratio); Auto stays an explicit choice.
   const [ratio, setRatio] = useState<Ratio | 'auto'>(outputDefaults(state).ratio);
   const [resolution, setResolution] = useState<Resolution>(state.settings?.defaultResolution ?? '1080p');
+  // QA UX round 1: Custom ratio right here (same 1:3…3:1 bounds as scr.ratio.custom)
+  const [cw, setCw] = useState('2'); const [ch, setCh] = useState('3');
+  const cwn = Math.round(Number(cw)), chn = Math.round(Number(ch));
+  const customOk = cwn >= 1 && chn >= 1 && cwn / chn <= 3 && chn / cwn <= 3;
   const [policy, setPolicy] = useState<DurationPolicy>('fit-content');
   const [seconds, setSeconds] = useState('15');
   const defaultFolder = state.settings?.outputFolder ?? '';
   const [folder, setFolder] = useState(defaultFolder);
   const fixedMs = policy === 'fixed' ? fixedMsOf(seconds) : null;
-  const reason = !name.trim() ? t('ui.hdr.title.error') : policy === 'fixed' && fixedMs === null ? t('ui.scr.project.duration.range') : null;
+  const reason = !name.trim() ? t('ui.hdr.title.error') : policy === 'fixed' && fixedMs === null ? t('ui.scr.project.duration.range') : ratio === 'custom' && !saveAs && !customOk ? t('ui.scr.ratio.custom.clamp') : null;
   const create = async () => {
     if (reason) return;
     if (saveAs && state.project) {
@@ -65,11 +69,13 @@ export function NewProjectDialog({ onClose, saveAs }: { onClose: () => void; sav
       try { const p = await runtime.api.duplicateProject(state.project.id, name.trim()); await actions.openProject(p.id); onClose(); } catch (e) { actions.error(e); }
       return;
     }
-    await actions.createProject({
-      name: name.trim(), settings: { fps, resolution, ...(ratio === 'auto' ? { autoRatio: true, ratio: state.settings?.defaultRatio ?? '9:16' } : { ratio, autoRatio: false }) },
+    const created = await actions.createProject({
+      name: name.trim(), settings: { fps, resolution, ...(ratio === 'auto' ? { autoRatio: true, ratio: state.settings?.defaultRatio ?? '9:16' } : ratio === 'custom' ? { ratio: state.settings?.defaultRatio ?? '9:16', autoRatio: false } : { ratio, autoRatio: false }) },
       ...(policy === 'fixed' && fixedMs !== null ? { durationPolicy: 'fixed' as const, fixedDurationMs: fixedMs } : {}),
       ...(folder.trim() && folder.trim() !== defaultFolder ? { outputFolder: folder.trim() } : {}),
     });
+    // Custom: the same Output Settings pick as scr.ratio.custom, on the new project (project creation takes pixel sizes ≥ 240 only)
+    if (created && ratio === 'custom' && customOk) await actions.layoutPick({ ratio: 'custom', customRatio: { w: cwn, h: chn } });
     onClose();
   };
   return (
@@ -80,9 +86,16 @@ export function NewProjectDialog({ onClose, saveAs }: { onClose: () => void; sav
       {!saveAs && <>
         <Field label={t('ui.scr.project.fps')} htmlFor="em-new-fps"><select id="em-new-fps" data-el="scr.project.new.fps" className={inputCls} value={fps} onChange={(e) => setFps(Number(e.target.value) as Fps)}>{FPS_VALUES.map((f) => <option key={f} value={f}>{f} fps</option>)}</select></Field>
         <div className="grid grid-cols-2 gap-2">
-          <Field label={t('ui.scr.project.ratio')} htmlFor="em-new-ratio"><select id="em-new-ratio" data-el="scr.project.new.ratio" className={inputCls} value={ratio} onChange={(e) => setRatio(e.target.value as Ratio | 'auto')}><option value="auto">{t('ui.agent.output.ratio.auto')}</option>{RATIOS.filter((r) => r !== 'custom').map((r) => <option key={r} value={r}>{r}</option>)}</select></Field>
+          <Field label={t('ui.scr.project.ratio')} htmlFor="em-new-ratio"><select id="em-new-ratio" data-el="scr.project.new.ratio" className={inputCls} value={ratio} onChange={(e) => setRatio(e.target.value as Ratio | 'auto')}><option value="auto">{t('ui.agent.output.ratio.auto')}</option>{RATIOS.map((r) => <option key={r} value={r}>{r === 'custom' ? t('ui.agent.output.ratio.custom') : r}</option>)}</select></Field>
           <Field label={t('ui.scr.project.resolution')} htmlFor="em-new-res"><select id="em-new-res" data-el="scr.project.new.resolution" className={inputCls} value={resolution} onChange={(e) => setResolution(e.target.value as Resolution)}>{RESOLUTIONS.map((r) => <option key={r} value={r}>{r}</option>)}</select></Field>
         </div>
+        {ratio === 'custom' && (
+          <div data-el="scr.project.new.customratio" className="grid grid-cols-2 gap-2">
+            <Field label={t('ui.scr.ratio.custom.width')} htmlFor="em-new-cw"><input id="em-new-cw" data-el="scr.project.new.customratio.width" type="number" min={1} className={inputCls} value={cw} onChange={(e) => setCw(e.target.value)} /></Field>
+            <Field label={t('ui.scr.ratio.custom.height')} htmlFor="em-new-ch"><input id="em-new-ch" data-el="scr.project.new.customratio.height" type="number" min={1} className={inputCls} value={ch} onChange={(e) => setCh(e.target.value)} /></Field>
+            {!customOk && <p className="col-span-2 text-[12px] text-em-danger">{t('ui.scr.ratio.custom.clamp')}</p>}
+          </div>
+        )}
         <DurationFields prefix="em-new" el="scr.project.new" policy={policy} setPolicy={setPolicy} seconds={seconds} setSeconds={setSeconds} />
         <FolderField id="em-new-folder" el="scr.project.new.output.folder" value={folder} onChange={setFolder} placeholder={t('ui.scr.project.output.folder.default')} />
       </>}

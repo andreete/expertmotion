@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import { Button, cx } from '../components/ui.js';
+import { ScreenErrors } from '../components/ScreenErrors.js';
 import { AssignForm, ConnectForm } from './Providers.js';
 import type { OnboardingStep } from '../api/types.js';
 import { formatBytes, translate, type Lang } from '../i18n/index.js';
@@ -54,6 +55,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
     } catch (e) { actions.error(e); } finally { setChecking(false); }
   };
   const ramGb = Math.round((hw?.ramTotalMb ?? 0) / 1024);
+  const hwNotes = !!hw && (hw.ramTotalMb < 8192 || !hw.gpuModel || (tick?.diskFreeMb != null && tick.diskFreeMb < 10_240));
   return (
     <div data-el="scr.onboarding" role="dialog" aria-modal="true" aria-labelledby="onb-title" className="fixed inset-0 z-[65] overflow-auto bg-em-bg">
       <div className="mx-auto flex min-h-full w-full max-w-[720px] flex-col gap-4 px-6 py-10">
@@ -65,9 +67,11 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           {SKIPPABLE.includes(id) && <Button el="scr.onboarding.skip" variant="ghost" size={28} onClick={() => { skip(id as OnboardingStep); go(step + 1); }}>{o('onb.skip.step')}</Button>}
           {step >= 1 && id !== 'done' && <Button variant="ghost" size={28} onClick={() => finish(false, skip(...STEPS.slice(step, PROGRESS).filter((s): s is OnboardingStep => s !== 'welcome')))}>{o('onb.skip')}</Button>}
         </div>
+        <ScreenErrors />
         <section data-el={`scr.onboarding.${id}`} className="flex flex-col gap-3">
           <h1 id="onb-title" className={cx('font-bold', step === 0 ? 'text-[24px] leading-8' : 'text-[20px] leading-7')}>{o(`onb.${id}.title`)}</h1>
-          <p className="text-[14px] text-em-text-2">{o(`onb.${id}.body`)}</p>
+          {/* QA UX round 1: "Nothing to fix." was shown above the warnings themselves */}
+          <p className="text-[14px] text-em-text-2">{o(id === 'hardware' && hwNotes ? 'onb.hardware.body.notes' : `onb.${id}.body`)}</p>
           {id === 'welcome' && (
             <>
               <div className="flex items-center gap-3">
@@ -120,7 +124,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
           )}
           {id === 'done' && (
             <div className="flex flex-col gap-2">
-              {skipped.length > 0 && <p className="text-[12px] text-em-muted">{o('onb.done.skipped', { steps: skipped.map((s) => o(`onb.${s}.title`)).join(', ') })}</p>}
+              {skipped.length > 0 && <p className="text-[12px] text-em-muted">{o('onb.done.skipped', { steps: skipped.map((s) => o(`onb.step.${s}`)).join(', ') })}</p>}
               <div><Button el="scr.onboarding.done.open" variant="primary" size={36} onClick={() => finish(false)}>{o('onb.done.open')}</Button></div>
             </div>
           )}

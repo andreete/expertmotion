@@ -118,11 +118,12 @@ export function formatMoney(usd: number | null, approximate: boolean, lang: Lang
   return `${approximate ? '≈ ' : ''}$${v}`;
 }
 /** Timecode mm:ss.ff (frames two digits) — §6. */
+/** mm:ss.d — tenths of a second at the project frame grid (QA UX round 1: "00:03.09" in frames read like 3.09 s; FR-057). */
 export function formatTimecode(ms: number, fps: number): string {
-  const totalFrames = Math.max(0, Math.round((ms / 1000) * fps));
-  const f = totalFrames % fps;
-  const s = Math.floor(totalFrames / fps);
-  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}.${String(f).padStart(2, '0')}`;
+  const frameMs = Math.max(0, Math.round((ms / 1000) * fps)) * (1000 / fps);       // snap to the frame grid first
+  const tenths = Math.floor(Math.round(frameMs) / 100 + 1e-9);
+  const s = Math.floor(tenths / 10);
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}.${tenths % 10}`;
 }
 /** Short duration m:ss or h:mm:ss. */
 export function formatDuration(ms: number): string {

@@ -35,7 +35,11 @@ export interface ModelsOptions {
   now?: () => number;
 }
 type Status = 'not-installed' | 'downloading' | 'verifying' | 'paused' | 'installed' | 'failed';
-type Live = { status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render' | null; bytesDone: number; bytesTotal: number; ac: AbortController; paused?: boolean };
+type Live = { status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render' | null; bytesDone: number; bytesTotal: number; ac: AbortController; paused?: boolean;
+  /** QA P1-9: the last try could not reach the network at all (ENETUNREACH / ENOTFOUND / ECONNREFUSED …); cleared by the next byte. */ noNetwork?: boolean };
+/** QA P1-9: failures that mean "this computer has no route to the internet", not a flaky server. */
+export const NO_NETWORK_CODES = /^(ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN|EAI_FAIL|EAI_NONAME|ECONNREFUSED|ENETDOWN)$/;
+export const isNoNetwork = (r: { reason: string; netCode?: string | null }): boolean => (r.netCode ? NO_NETWORK_CODES.test(r.netCode) : r.reason === 'dns');
 const RANK = { T0: 0, T1: 1, T2: 2 } as const;
 /** Generator Cards that use a model, by task (FR-120 "used by"). */
 const GENERATOR_OF: Record<string, string> = { stt: 'captions', tts: 'voice', image: 'thumbnail', music: 'music', library: 'music' };
@@ -260,7 +264,7 @@ export class ModelsService {
       .map((b) => ({ label: b.label, licence: b.licence.name, spdx: b.licence.spdx ?? null, url: licenceTextUrl(b.licence) }));
     const flag = def.flag;
     const presets = flag ? ALL_PRESETS.filter((p) => (p.flags as readonly string[]).includes(flag)).map((p) => p.id) : [];
-    return { pausedReason: l?.pausedReason ?? null, recommended: def.recommendedFor.includes(this.ctx.hooks.tier()), priority: def.priority, languages: [...def.languages], notes: [...def.notes],
+    return { pausedReason: l?.pausedReason ?? null, ...(l?.noNetwork ? { noNetwork: true } : {}), recommended: def.recommendedFor.includes(this.ctx.hooks.tier()), priority: def.priority, languages: [...def.languages], notes: [...def.notes],
       commercialUse: def.commercialUse, licenceDetail: { spdx: def.licence.spdx ?? null, redistribution: def.licence.redistribution, useRestrictions: def.licence.useRestrictions ?? null },
       hashes: def.files.map((f) => ({ name: f.name, sha256: /^[0-9a-f]{64}$/.test(f.sha256) ? f.sha256 : null })),
       pathLabel: `models\\${def.engine}\\${def.key}\\`, usedBy: { generators: GENERATOR_OF[def.task] ? [GENERATOR_OF[def.task]!] : [], presets }, engineNotices,
@@ -305,7 +309,7 @@ export class ModelsService {
     const ctx = this.ctx; const tick = throttle(500); const pollMs = this.opts.pausePollMs ?? 2000;
     const fetchLike: FetchLike = (url, init) => ctx.egress.for('model-download')(url, init as RequestInit) as unknown as ReturnType<FetchLike>;   // SEC-080: model hosts only
     const cancelled = () => Object.assign(new Error('cancelled'), { name: 'CancelledError' });
-    const progress = () => emit(ctx, 'model.progress', { key: def.key, bytesDone: entry.bytesDone, bytesTotal: entry.bytesTotal, status: entry.status, ...(entry.pausedReason ? { pausedReason: entry.pausedReason } : {}) });
+    const progress = () => emit(ctx, 'model.progress', { key: def.key, bytesDone: entry.bytesDone, bytesTotal: entry.bytesTotal, status: entry.status, ...(entry.pausedReason ? { pausedReason: entry.pausedReason } : {}), ...(entry.noNetwork ? { noNetwork: true } : {}) });
     try {
       let manifest: Awaited<ReturnType<typeof installModel>> | null = null;
       while (!manifest) {
@@ -327,11 +331,14 @@ export class ModelsService {
             // FR-245: every automatic retry is visible (Model Manager "Mencoba lagi…") and logged with its real cause
             onRetry: (r) => {
               ctx.log.info({ model: def.key, file: r.file, attempt: r.attempt, reason: r.reason, httpStatus: r.httpStatus ?? null, netCode: r.netCode ?? null, delayMs: r.delayMs, bytesDone: r.bytesDone }, 'model download retrying');
-              emit(ctx, 'model.progress', { key: def.key, bytesDone: entry.bytesDone, bytesTotal: entry.bytesTotal, status: entry.status, retry: { attempt: r.attempt, reason: r.reason, delayMs: r.delayMs } });
+              entry.noNetwork = isNoNetwork(r);                                    // QA P1-9: said at the first failed try, not after minutes
+              emit(ctx, 'model.progress', { key: def.key, bytesDone: entry.bytesDone, bytesTotal: entry.bytesTotal, status: entry.status, retry: { attempt: r.attempt, reason: r.reason, delayMs: r.delayMs, ...(r.netCode ? { netCode: r.netCode } : {}) }, ...(entry.noNetwork ? { noNetwork: true } : {}) });
             },
             onProgress: (p) => {
+              const moved = p.bytesDone > entry.bytesDone;
               entry.bytesDone = p.bytesDone; entry.status = p.bytesDone >= p.bytesTotal ? 'verifying' : 'downloading';
-              if (tick(entry.status === 'verifying')) emit(ctx, 'model.progress', { key: def.key, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, status: entry.status });
+              const back = moved && entry.noNetwork; if (moved) entry.noNetwork = false;   // the network is back: the download resumed by itself
+              if (tick(entry.status === 'verifying' || !!back)) emit(ctx, 'model.progress', { key: def.key, bytesDone: p.bytesDone, bytesTotal: p.bytesTotal, status: entry.status, ...(entry.noNetwork ? { noNetwork: true } : {}) });
             },
           });
         } catch (e) {

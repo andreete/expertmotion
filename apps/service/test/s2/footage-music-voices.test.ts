@@ -73,7 +73,7 @@ describe.skipIf(!hasFfmpeg)('footage read, music plan step, more voices (2026-10
     const m = structuredClone(s.heads.get(pid)!.model);
     m.tracks.video.push({ id: 'C1', assetId: v, trimBeforeMs: 0, durationMs: 4000, playbackRate: 1, volume: 1, muted: false, fadeInMs: 0, fadeOutMs: 0, objectFit: 'cover', motion: null, effects: [] });
     s.version(pid, m);
-    generatorsServiceOf(s.ctx).runPlanSteps(pid, 'PLANCAP', [{ n: 2, tool: 'captions.generate', args: { source: 'sequence', presetId: 'preset:caption.karaoke', language: 'id' }, dependsOn: [1] }]);
+    generatorsServiceOf(s.ctx).runPlanSteps(pid, 'PLANCAP', [{ n: 2, tool: 'captions.generate', args: { source: 'sequence', presetId: 'preset:caption.karaoke', language: 'id', modelKey: 'whisper-small' }, dependsOn: [1] }]);
     const started = await s.waitEvent((e) => e.name === 'service.notice' && e.data['planId'] === 'PLANCAP' && e.data['status'] === 'started');
     expect((await final(String(started.data['jobId']))).status).toBe('done');
     const ops = s.applied.at(-1)!.ops;

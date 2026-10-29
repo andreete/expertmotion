@@ -261,18 +261,100 @@ export function timeWrittenWords(written: readonly string[], spoken: readonly Tr
 }
 
 // ───────────────────────────── cues ─────────────────────────────
-export interface CueOptions { maxWords?: number; maxChars?: number; /** a cue lasts until the next one when the gap is shorter (ms) */ closeGapMs?: number }
-/** Groups display words into cues (TikTok style: ≤ 5 words / 32 characters, break after a sentence end). */
-export function groupCues(written: readonly TranscriptWord[], spoken: readonly TranscriptWord[], o: CueOptions = {}): TranscriptCue[] {
-  const maxWords = o.maxWords ?? 5, maxChars = o.maxChars ?? 32, close = o.closeGapMs ?? 350;
-  const groups: TranscriptWord[][] = []; let cur: TranscriptWord[] = [];
-  for (const w of written) {
-    if (cur.length && (cur.length >= maxWords || [...cur.map((x) => x.text), w.text].join(' ').length > maxChars)) { groups.push(cur); cur = []; }
-    cur.push(w);
-    if (/[.!?…]["')\]]*$/.test(w.text)) { groups.push(cur); cur = []; }
+export interface CueOptions { maxWords?: number; maxChars?: number; /** a cue lasts until the next one when the gap is shorter (ms) */ closeGapMs?: number;
+  /** real pauses of the audio (clip time, `silences()` over the energy envelope): page breaks go there and snap to them */
+  pauses?: ReadonlyArray<{ fromMs: number; toMs: number }> }
+
+// QA P1 2026-10-29 (caption paging, nikel run): breaks were by word count only — on average 170 ms (max 710 ms) away from the
+// speech pauses, numbers split across pages ("empat puluh | lima miliar", "dua ribu | dua puluh enam") and orphan words
+// ("naik?") on their own page. Pages are now chosen by a small dynamic programme over the legal break positions.
+const NUM_WORDS = new Set(['nol', 'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan', 'sembilan', 'sepuluh', 'sebelas', 'seratus', 'seribu', 'sejuta',
+  'semiliar', 'setriliun', 'belas', 'puluh', 'ratus', 'ribu', 'juta', 'miliar', 'milyar', 'triliun', 'koma', 'setengah', 'seperempat']);
+const UNIT_WORDS = new Set(['persen', '%', 'ribu', 'juta', 'miliar', 'milyar', 'triliun', 'rupiah', 'dolar', 'dollar', 'usd', 'idr', 'ton', 'kg', 'kilogram', 'gram', 'km', 'kilometer',
+  'meter', 'liter', 'barel', 'jam', 'menit', 'detik', 'derajat', 'kali', 'lipat', 'poin', 'basis']);
+const CURRENCY_PREFIX = /^(rp\.?|us\$|\$|idr|usd|€|£)$/i;
+const bare = (w: string): string => w.toLowerCase().replace(/^["'(\[]+|["')\].,;:!?…]+$/g, '');
+const isNumber = (w: string): boolean => { const b = bare(w); return NUM_WORDS.has(b) || /^(rp|us\$|\$)?[\d][\d.,]*%?$/i.test(b) || /^ke-?\d/.test(b); };
+const endsClause = (w: string): boolean => /[.,;:!?…—–]["')\]]*$/.test(w);
+const endsSentence = (w: string): boolean => /[.!?…]["')\]]*$/.test(w);
+/** A page may not break between a and b: inside a number phrase, between a number and its unit, after a currency sign. */
+export function gluedNumber(a: string, b: string): boolean {
+  if (endsClause(a)) return false;
+  if (CURRENCY_PREFIX.test(bare(a)) && isNumber(b)) return true;
+  return isNumber(a) && (isNumber(b) || UNIT_WORDS.has(bare(b)));
+}
+const visibleLen = (w: string): number => bare(w).length;
+
+/** Page breaks (index of the last word of every page but the last) over display words with times. */
+export function pageBreaks(words: readonly TranscriptWord[], o: CueOptions = {}): number[] {
+  const n = words.length; if (n <= 1) return [];
+  const maxWords = o.maxWords ?? 5, maxChars = o.maxChars ?? 32;
+  const pauseAt = (i: number): number => {          // ms of silence between word i and i+1 (real pauses when given)
+    const a = words[i]!, b = words[i + 1]!;
+    if (o.pauses?.length) { const s = nearestPause(o.pauses, a, b); if (s) return s.toMs - s.fromMs; return 0; }
+    return Math.max(0, b.fromMs - a.toMs);
+  };
+  const breakCost = (i: number): number => {
+    if (gluedNumber(words[i]!.text, words[i + 1]!.text)) return Infinity;
+    const w = words[i]!.text; const p = Math.min(600, pauseAt(i));
+    return (endsSentence(w) ? 0 : endsClause(w) ? 15 : 60) - p / 8;
+  };
+  const pageCost = (a: number, b: number): number => {
+    let chars = -1; for (let k = a; k <= b; k++) chars += words[k]!.text.length + 1;
+    const cnt = b - a + 1;
+    let c = 10 + Math.max(0, maxChars - chars) * 0.4;
+    if (chars > maxChars && cnt > 1) c += 400 + (chars - maxChars) * 40;
+    if (cnt > maxWords) c += 300 * (cnt - maxWords);
+    if (cnt === 1 && n > 1 && visibleLen(words[a]!.text) <= 6) c += 250;                  // orphan: one short word alone
+    for (let k = a; k < b; k++) if (endsSentence(words[k]!.text)) c += 90;                // a sentence end inside the page
+    return c;
+  };
+  const bc = Array.from({ length: n - 1 }, (_, i) => breakCost(i));
+  const best = new Array<number>(n).fill(Infinity); const from = new Array<number>(n).fill(-1);
+  for (let j = 0; j < n; j++) {
+    const tail = j === n - 1 ? 0 : bc[j]!;
+    if (tail === Infinity) continue;
+    for (let a = j; a >= 0; a--) {
+      if (a > 0 && (bc[a - 1] === Infinity || best[a - 1] === Infinity)) continue;
+      const v = (a > 0 ? best[a - 1]! : 0) + pageCost(a, j) + tail;
+      if (v < best[j]!) { best[j] = v; from[j] = a; }
+      if (j - a > maxWords * 3) break;                                                   // far beyond any useful page
+    }
   }
-  if (cur.length) groups.push(cur);
-  const cues = groups.map((g, index): TranscriptCue => {
+  if (best[n - 1] === Infinity) return [];
+  const out: number[] = []; let j = n - 1;
+  while (j >= 0) { const a = from[j]!; if (a > 0) out.push(a - 1); j = a - 1; }
+  return out.reverse();
+}
+/** The longest pause between the middle of word a and the middle of word b (where a break between them may sit). */
+function nearestPause(pauses: ReadonlyArray<{ fromMs: number; toMs: number }>, a: TranscriptWord, b: TranscriptWord): { fromMs: number; toMs: number } | null {
+  const lo = (a.fromMs + a.toMs) / 2, hi = Math.max(lo, (b.fromMs + b.toMs) / 2);
+  let best: { fromMs: number; toMs: number } | null = null;
+  for (const p of pauses) {
+    const f = Math.max(lo, p.fromMs), t = Math.min(hi, p.toMs);
+    if (t > f && (!best || t - f > best.toMs - best.fromMs)) best = { fromMs: f, toMs: t };
+  }
+  return best;
+}
+
+/** Groups display words into cues (TikTok style: ≤ 5 words / 32 characters), breaking at pauses and sentence ends, never inside
+ *  a number phrase, without orphan words; with `pauses` the page edges snap to the real silence. */
+export function groupCues(written: readonly TranscriptWord[], spoken: readonly TranscriptWord[], o: CueOptions = {}): TranscriptCue[] {
+  const close = o.closeGapMs ?? 350;
+  const words = written.map((w) => ({ ...w }));
+  const breaks = pageBreaks(words, o);
+  if (o.pauses?.length) {
+    for (const i of breaks) {
+      const s = nearestPause(o.pauses, words[i]!, words[i + 1]!); if (!s) continue;
+      const a = words[i]!, b = words[i + 1]!;
+      a.toMs = Math.max(a.fromMs, Math.round(s.fromMs));
+      b.fromMs = Math.max(a.toMs, Math.round(s.toMs)); if (b.toMs < b.fromMs) b.toMs = b.fromMs;
+    }
+    for (let k = 1; k < words.length; k++) { if (words[k]!.fromMs < words[k - 1]!.toMs) words[k]!.fromMs = words[k - 1]!.toMs; if (words[k]!.toMs < words[k]!.fromMs) words[k]!.toMs = words[k]!.fromMs; }
+  }
+  const groups: TranscriptWord[][] = []; let at = 0;
+  for (const i of [...breaks, words.length - 1]) { groups.push(words.slice(at, i + 1)); at = i + 1; }
+  const cues = groups.filter((g) => g.length).map((g, index): TranscriptCue => {
     const fromMs = g[0]!.fromMs, toMs = Math.max(fromMs + 1, g.at(-1)!.toMs);
     const sp = spoken.filter((s) => s.fromMs < toMs && s.toMs > fromMs).map((s) => s.text);
     return { index, text: sp.join(' ') || g.map((x) => x.text).join(' '), written: g.map((x) => x.text).join(' '), fromMs, toMs, words: g };

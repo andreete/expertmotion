@@ -34,6 +34,7 @@ if [ "${EM_MAC_UNSIGNED:-}" = 1 ]; then export CSC_IDENTITY_AUTO_DISCOVERY=false
 # EM_RELEASE_CHECK_ARGS=--allow-placeholders for a test build (EM_PUBLISHER_NAME is the Windows certificate and is listed too).
 node scripts/release-check.mjs ${EM_RELEASE_CHECK_ARGS:-}
 npm run build -w @expertmotion/ui
+npm run build:bundle -w @expertmotion/engine
 npm run build:release -w @expertmotion/service
 npm run build:main -w @expertmotion/desktop
 for ARCH in "${ARCHES[@]}"; do

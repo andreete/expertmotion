@@ -141,7 +141,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `stage.player.controls` | (controls) | Controls bar; overlays the Player as a bar at the bottom while the frame is fullscreen (FR-059, `data-fullscreen` on `stage.player.frame`). |
 | `stage.player.controls.play` / `.pause` | (controls) | Toggle playback (Space). |
 | `stage.player.controls.scrubber` | (controls) | Playhead scrubber; frame-step with arrows. |
-| `stage.player.controls.time` / `.duration` | (controls) | Current time / total duration (mm:ss.ff). |
+| `stage.player.controls.time` / `.duration` | (controls) | Current time / total duration (mm:ss.d, tenths of a second). |
 | `stage.player.controls.ratio` / `.res` | (added) | Aspect Ratio and Resolution indicators. |
 | `stage.player.controls.fullscreen` | (added) | Fullscreen toggle. |
 | `stage.player.menu` | hamburger (≡) | Player menu: safe-area overlay, draft/full quality, loop, mute. |
@@ -246,6 +246,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | Element ID | Purpose |
 |---|---|
 | `sys.toast` | Transient notifications with optional action (`.action`). |
+| `sys.toasts` | The toast stack: one top layer above modals, the onboarding screen and the tour; kept left of the Agent column so it never covers the Plan Card or the composer. Error toasts show their body line `sys.toast.body` and the code's next action (QA UX round 1). |
 | `sys.offline` | Local Service unreachable banner with retry. |
 | `sys.render.progress` | Persistent render progress chip in the header area. |
 | `sys.update` | Update available / downloaded / restart prompt. |
@@ -586,6 +587,22 @@ The startup and crash ids (`sys.splash.*`, `sys.crash.*`, `sys.fatal.retry`) are
 4. "480p" in the mockup is treated as the draft preview quality, not an export preset (Master Project Prompt §13 lists 720p as the smallest export preset).
 5. The three timeline rows in the mockup become five Tracks (video, overlay, text, caption, audio); since 2026-10-26 (ADR-027) the Timeline View draws them as lanes: captions, one row per layer (front-most on top), the video Track, audio lanes.
 6. Since 2026-10-26 one assistant chat replaces the two chats and the Model Bar: the chat header shows the current mode's model (per agent) and its context usage.
+
+## Additions for the QA UX fixes (round 1, 2026-10-29)
+
+| Element ID | Mockup / label | Purpose |
+|---|---|---|
+| `sys.screen.error` / `sys.screen.error.action` | error card at the top of a dialog / the onboarding screen | P1-6: an error or warning raised while a screen is open is shown inside it (title, body, code, next action) and leaves the toast stack. |
+| `scr.providers.add.error` / `scr.providers.add.retry` | "Provider is busy" + "Try again" in the connect form | P1-6: a validation that failed for another reason than a refused key (busy, provider error, no internet); the Service removed the stored connection again. |
+| `scr.help.ai` / `scr.help.ai.open` | "The easiest way: ask the AI assistant" + "Write to the assistant" | Help starts with the AI chat; the button closes Help and focuses the Editor composer. |
+| `stage.timeline.compact` | "Compact" / "All layers" | Packs layers that never overlap in time into shared rows (default above 6 layers); `aria-pressed`; packed rows carry `data-layers`. |
+| `scr.export.ratio` / `scr.export.resolution` | ratio and resolution selects in the Export dialog | The same Output Settings pick as `agent.output.ratio.*` / `agent.output.resolution.*` (one undoable version). |
+| `scr.export.waiting.memory.detail` | "Waited 12 s · 610 MB free, 900 MB needed" | Under EM-3107 while the export waits for free memory (render.queued `memoryWait`). |
+| `scr.project.new.customratio` / `.width` / `.height` | Custom ratio fields in the New dialog | Width / height (1:3…3:1); applied to the new project as an Output Settings pick. |
+| `scr.models.row.offline` / `scr.models.row.offline.retry` | "No internet connection — the download continues by itself…" + "Try again" | P1-9: shown from the first failed try that had no route to the internet (`model.progress noNetwork`); the download keeps retrying and resumes on its own. |
+| `agent.chat.composer.count` | "6 120 / 8000" | Characters in the composer from 6 000 on; past 8 000 (the Service limit) it says so and Send is disabled (Send is also disabled for an empty / whitespace-only message). |
+| `scr.generate.music.library.meta` | artist · mood · genre · length | The track facts on their own wrapping line under the title. |
+| `lib.assets.card.duration` | "0:05" on the Asset card thumbnail | The length, moved off the name row so the name gets two lines (QA UX round 1, 1280 px). |
 
 ## Retired ids
 

@@ -745,7 +745,10 @@ class SceneLayout {
     }
     // 2. lower-third: name (+ role / place) on a dark panel with an accent bar
     const lt = s.lowerThird ?? (s.kicker && !s.headline ? { name: s.kicker, ...(s.sub ? { title: s.sub } : {}) } : undefined);
-    if (lt && room() && (mode === 'auto' || mode === 'lower-third' || mode === 'top')) {
+    // an anchored lower-third keeps its moment (it stacks with the title when both show); without an anchor it needs room after the title
+    const ltRoom = lt ? (lt.at ? this.at(lt.at, t) < sceneEnd - 1000 : room()) : false;
+    if (lt && !ltRoom) this.p.risks.push({ code: 'footage-dense', severity: 'info', message: this.p.id ? `Adegan ${this.p.i + 1}: footage terlalu pendek untuk lower-third; tidak ditampilkan.` : `Scene ${this.p.i + 1}: the footage is too short for the lower-third; it was left out.` });
+    if (lt && ltRoom && (mode === 'auto' || mode === 'lower-third' || mode === 'top')) {
       const pad = this.sz(26), bar = this.sz(10), gap = this.sz(6);
       const name = asObj(lt.name), title = lt.title ? asObj(lt.title) : null;
       const ns = name.sizePx !== undefined ? this.ex(name.sizePx) : this.sz(60), ts = title?.sizePx !== undefined ? this.ex(title.sizePx) : this.sz(42);

@@ -2,7 +2,7 @@
 // starting exactly at the captured frame (opacity 0 there) and lasted 1 s, so other candidates missed it entirely.
 // 1) always: the model handed to the still renderer has a static title over every candidate frame;
 // 2) opt-in (EM_RENDER_SMOKE=1 + resources/engine/bundle): a real renderStill, and the title's pixels are in the PNG.
-import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,28 @@ const realStill = process.env['EM_RENDER_SMOKE'] === '1' && hasFfmpeg && fs.exis
 let n = 0;
 const newId = () => `01ARZ3NDEKTSV4RRFFQ69H${String(++n).padStart(4, '0')}`;
 
+/** Minimal PNG decoder (8-bit RGB / RGBA, non-interlaced, as Remotion writes) → one luminance byte per pixel. */
+function pngGray(png: Buffer): Buffer {
+  let o = 8, w = 0, h = 0, ch = 4; const idat: Buffer[] = [];
+  while (o < png.length) {
+    const len = png.readUInt32BE(o); const type = png.toString('ascii', o + 4, o + 8); const d = png.subarray(o + 8, o + 8 + len);
+    if (type === 'IHDR') { w = d.readUInt32BE(0); h = d.readUInt32BE(4); if (d[8] !== 8 || d[12] !== 0) throw new Error('unsupported PNG'); ch = d[9] === 6 ? 4 : d[9] === 2 ? 3 : 0; if (!ch) throw new Error('unsupported colour type'); }
+    if (type === 'IDAT') idat.push(d);
+    o += 12 + len;
+  }
+  const raw = zlib.inflateSync(Buffer.concat(idat)); const stride = w * ch; const out = Buffer.alloc(w * h); let prev = Buffer.alloc(stride);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)]!; const line = Buffer.from(raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)));
+    for (let x = 0; x < stride; x++) {
+      const a = x >= ch ? line[x - ch]! : 0, b = prev[x]!, c = x >= ch ? prev[x - ch]! : 0;
+      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+      line[x] = (line[x]! + (f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : f === 4 ? (pa <= pb && pa <= pc ? a : pb <= pc ? b : c) : 0)) & 255;
+    }
+    for (let x = 0; x < w; x++) out[y * w + x] = Math.round(0.299 * line[x * ch]! + 0.587 * line[x * ch + 1]! + 0.114 * line[x * ch + 2]!);
+    prev = line;
+  }
+  return out;
+}
 type Job = { status: string; errorCode: string | null; result: Record<string, unknown> | null };
 const final = (s: S2Service, id: string) => new Promise<Job>((res) => {
   const t = setInterval(async () => { const j = await json<Job>(await s.api(`/generator-jobs/${id}`)); if (['done', 'failed', 'cancelled'].includes(j.status)) { clearInterval(t); res(j); } }, 30);
@@ -49,7 +71,7 @@ describe.skipIf(!hasFfmpeg)('QA P1: the cover title is in every thumbnail candid
     expect(r.status).toBe(202);
     const j = await final(s, (await json<{ id: string }>(r)).id);
     expect([j.status, j.errorCode]).toEqual(['done', null]);
-    expect(seen.map((x) => x.frameMs)).toEqual([0, 1500, 3000]);
+    expect(seen).toHaveLength(3);                                                         // capture times: settledCaptureMs (qa-p1-thumbnail-settle)
     for (const { model, frameMs } of seen) {
       const t = model.tracks.text.find((x) => x.text === 'Ekspor Nikel Naik');
       expect(t, `title at ${frameMs} ms`).toBeDefined();
@@ -75,9 +97,7 @@ describe.skipIf(!realStill)('QA P1: the cover title pixels are in a real still (
     const j = await final(s, (await json<{ id: string }>(r)).id);
     expect([j.status, j.errorCode]).toEqual(['done', null]);
     const a = s.ctx.db.prepare('SELECT original_path p FROM assets WHERE id = ?').get(String(j.result!['assetId'])) as { p: string };
-    const raw = path.join(s.ctx.paths.tmp, `${crypto.randomUUID()}.gray`);
-    ffmpeg(['-i', path.join(s.ctx.paths.media, a.p), '-vf', 'scale=320:-2', '-f', 'rawvideo', '-pix_fmt', 'gray', raw]);
-    return fs.readFileSync(raw);
+    return pngGray(fs.readFileSync(path.join(s.ctx.paths.media, a.p)));
   };
   it('frame 0 with "Title on the cover": many pixels differ from the same frame without a title', { timeout: 240_000 }, async () => {
     const plain = await still({});

@@ -18,7 +18,7 @@ const notYet = (p: string): never => { throw new EmError('EM-9004', `"${p} conne
 
 function httpError(status: number, body: string, headers?: Headers): Error {
   const ra = headers?.get('retry-after');
-  return Object.assign(new Error(`provider HTTP ${status}${body ? `: ${body.slice(0, 200)}` : ''}`), { statusCode: status, ...(ra ? { responseHeaders: { 'retry-after': ra } } : {}) });
+  return Object.assign(new Error(`provider HTTP ${status}${body ? `: ${body.slice(0, 1000)}` : ''}`), { statusCode: status, ...(ra ? { responseHeaders: { 'retry-after': ra } } : {}) });
 }
 
 function timeoutSignal(ms: number, outer?: AbortSignal): AbortSignal {

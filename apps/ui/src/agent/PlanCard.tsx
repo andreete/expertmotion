@@ -193,8 +193,8 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
       <div data-el="agent.editor.plancard.goal" className="text-[16px] font-semibold leading-[22px]">{plan.goal ? <ModelText inline text={plan.goal} /> : t('ui.agent.plan.goal.pending')}</div>
       {status !== 'draft' && <PlanPreview plan={plan} />}
       {plan.confirmRemoval && plan.confirmRemoval.length > 0 && (
-        <div data-el="agent.editor.plancard.confirmremoval" role="alertdialog" aria-label={t('ui.agent.plan.confirmremoval.title')} className="rounded-[6px] border border-em-danger bg-em-panel-2 p-2 text-[12px]">
-          <div className="mb-1 flex items-center gap-1.5 font-semibold text-em-danger"><Trash2 size={13} />{t('ui.agent.plan.confirmremoval.title', { n: plan.confirmRemoval.length })}<span className="t-mono ml-auto text-[10px] text-em-muted">EM-4310</span></div>
+        <div data-el="agent.editor.plancard.confirmremoval" role="alertdialog" aria-label={t('ui.agent.plan.confirmremoval.sentence', { n: plan.confirmRemoval.length })} className="rounded-[6px] border border-em-danger bg-em-panel-2 p-2 text-[12px]">
+          <div className="mb-1 flex items-center gap-1.5 font-semibold text-em-danger"><Trash2 size={13} />{/* QA: plain sentence, the code stays in data-code (was "…item(s): EM-4310 Adegan 1") */}<span data-code="EM-4310">{t('ui.agent.plan.confirmremoval.sentence', { n: plan.confirmRemoval.length })}</span></div>
           <ul className="mb-2 list-disc pl-4 text-em-text-2">{plan.confirmRemoval.slice(0, 10).map((x, i) => <li key={i}>{x.label}</li>)}</ul>
           <div className="flex gap-2">
             <Button el="agent.editor.plancard.confirmremoval.yes" variant="danger" size={28} onClick={() => void actions.execute(true)}>{t('ui.agent.plan.confirmremoval.yes')}</Button>
@@ -276,7 +276,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
       )}
       {status === 'executing' && (
         <div data-el="agent.editor.plancard.executing" data-phase={plan.execPhase?.phase ?? 'apply'} className="flex flex-col gap-1">
-          <span role="status" className="text-[12px] text-em-text-2">{plan.execPhase ? t(`ui.agent.plan.exec.${plan.execPhase.phase}`, { done: plan.execPhase.done ?? 0, total: plan.execPhase.total ?? 0, n: Math.max(1, planChanges(plan)), time: plan.execPhase.totalMs ? fmtTime(plan.execPhase.totalMs) : '' }) : t('ui.agent.plan.state.executing.changes', { n: Math.max(1, planChanges(plan)) })}</span>
+          <span role="status" className="text-[12px] text-em-text-2">{plan.execPhase ? t(`ui.agent.plan.exec.${plan.execPhase.phase}${plan.execPhase.phase === 'voice' && (plan.execPhase.done ?? 0) > 0 ? '.progress' : ''}`, { done: plan.execPhase.done ?? 0, total: plan.execPhase.total ?? 0, n: Math.max(1, planChanges(plan)), time: plan.execPhase.totalMs ? fmtTime(plan.execPhase.totalMs) : '' }) : t('ui.agent.plan.state.executing.changes', { n: Math.max(1, planChanges(plan)) })}</span>
           <div role="progressbar" aria-label={t('ui.agent.plan.state.executing.changes', { n: Math.max(1, planChanges(plan)) })} className="h-1 w-full overflow-hidden rounded-full bg-em-line"><div className="em-indeterminate h-full w-1/3 bg-em-accent" /></div>
         </div>)}
       {status !== 'executing' && voicePending(plan) > 0 && <div data-el="agent.editor.plancard.estimate" role="note" className="text-[11px] text-em-warn">{t('ui.agent.plan.preview.estimate', { n: voicePending(plan) })}</div>}

@@ -81,9 +81,9 @@ describe('Anthropic Messages streaming + tools (FR-210, FR-211)', () => {
     expect(r.toolCalls).toBeUndefined();
     expect(seen[0]!.body['tool_choice']).toEqual({ type: 'none' });
   });
-  it('an error event mid-stream maps to its EM code (overloaded → EM-4103, rate limit → EM-4102); a refusal is EM-4104', async () => {
+  it('an error event mid-stream maps to its EM code (overloaded → EM-4102 provider busy, QA UX round 1, rate limit → EM-4102); a refusal is EM-4104', async () => {
     const err = (type: string) => capture(() => sse([['message_start', { type: 'message_start', message: { usage: {} } }], ['error', { type: 'error', error: { type, message: 'Overloaded' } }]])).f;
-    await expect(chatProviderFor('anthropic', 'k', 'claude-sonnet-5-5', err('overloaded_error'), { retries: 0 }).stream!(base(), () => undefined)).rejects.toMatchObject({ code: 'EM-4103' });
+    await expect(chatProviderFor('anthropic', 'k', 'claude-sonnet-5-5', err('overloaded_error'), { retries: 0 }).stream!(base(), () => undefined)).rejects.toMatchObject({ code: 'EM-4102' });
     await expect(chatProviderFor('anthropic', 'k', 'claude-sonnet-5-5', err('rate_limit_error'), { retries: 0 }).stream!(base(), () => undefined)).rejects.toMatchObject({ code: 'EM-4102' });
     const refusal = capture(() => sse([['message_start', { type: 'message_start', message: { usage: {} } }], ['message_delta', { type: 'message_delta', delta: { stop_reason: 'refusal' }, usage: { output_tokens: 0 } }]])).f;
     await expect(chatProviderFor('anthropic', 'k', 'claude-sonnet-5-5', refusal).stream!(base(), () => undefined)).rejects.toMatchObject({ code: 'EM-4104' });

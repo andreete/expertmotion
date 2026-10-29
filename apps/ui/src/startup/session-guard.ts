@@ -100,9 +100,13 @@ export function bootDecision(input: { seed: string | null; lastProjectId: string
   const { decision, guard } = decideBoot(base, { reopen: read(session(), REOPEN_KEY), seed: input.seed, lastProjectId: input.lastProjectId, action: read(session(), BOOT_ACTION_KEY), now: input.now ?? Date.now() });
   saveGuard(guard);
   write(session(), BOOT_ACTION_KEY, null);
+  if (currentDecision === null) firstNotice = decision.notice;           // FR-260: the launch notice is the FIRST boot's (a re-boot sees the blank project)
   currentDecision = decision;
   return decision;
 }
+let firstNotice: StartNotice = null;
+/** FR-260: the notice of this window's launch (crash loop / abnormal end), shown inside the empty project. */
+export function launchNotice(): StartNotice { return firstNotice; }
 export function lastBootDecision(): BootDecision | null { return currentDecision; }
 
 /** A project is being opened: remember it until it survived CRASH_WINDOW_MS (then its crash count is cleared). */
@@ -153,7 +157,7 @@ export function requestBootAction(action: 'reload' | 'pick' | 'new'): void {
 /** Tests only. */
 export function resetGuardForTests(): void {
   if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
-  currentDecision = null;
+  currentDecision = null; firstNotice = null;
   write(local(), GUARD_KEY, null); write(session(), REOPEN_KEY, null); write(session(), BOOT_ACTION_KEY, null);
   setSafeMode(false); logsDir = null;
 }

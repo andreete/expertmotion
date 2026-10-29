@@ -242,7 +242,7 @@ describe('generators (R-130…R-133) with fake engines', () => {
     expect((await gen('thumbnail', { prompt: 'x', style: 'neon' })).status).toBe(400);
   });
   it('FR-102: a generated music bed uses the preset:audio.bed-soft Compile defaults incl. fades', () => {
-    expect(musicBedOp('A1')).toEqual({ op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId: 'A1', volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000 } });
+    expect(musicBedOp('A1')).toEqual({ op: 'op:audio.addBed', target: { kind: 'project' }, args: { assetId: 'A1', volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000, duckingPresetId: 'preset:audio.duck-voice', duckingParams: { volume: 0.2, duckTo: 0.07, rampMs: 400 } } });   // FR-266: always ducked under speech
   });
   it('FR-104: Sequence captions: pages move onto each Clip window; no audio on the Sequence is EM-7103', async () => {
     const pages = [{ text: 'a', startMs: 0, durationMs: 1000, tokens: [{ text: 'a', fromMs: 0, toMs: 1000 }] }, { text: 'b', startMs: 4000, durationMs: 1000, tokens: [] }];

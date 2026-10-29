@@ -5,9 +5,9 @@
 //     keyboard and wait ~1 s;
 //   • positioned below the control (above when there is no room), clamped inside the window, never covering the control;
 //   • hidden on Escape, pointer leave, blur, scroll, a click and when the control disappears.
-// While it shows, the element's `title` is parked in `data-tip-title` so the browser's own tooltip does not double it, and the
-// control gets `aria-describedby` when the tip says more than its accessible name. Text comes from the element (already
-// translated by the caller: `t(...)`), so the layer itself has no copy.
+// The layer never changes the control's attributes: on HOVER an element with a native `title` keeps the browser's own tooltip
+// (no double tooltip) and the layer shows only for `data-tip` / icon-only `aria-label` controls without one; on KEYBOARD focus
+// (where browsers show nothing) it shows for every control. Text comes from the element (already translated by the caller).
 import { useEffect, useRef, useState } from 'react';
 
 export const TIP_DELAY_MS = 350;
@@ -19,7 +19,8 @@ export function tipOf(el: Element): string | null {
   const tip = el.getAttribute('data-tip') ?? el.getAttribute('title') ?? el.getAttribute('data-tip-title');
   if (tip && tip.trim()) return tip.trim();
   const label = el.getAttribute('aria-label');
-  if (label && !(el.textContent ?? '').trim()) return label.trim();
+  const visible = (el.textContent ?? '').trim();
+  if (label && (!visible || (visible.length <= 2 && !/[\p{L}\p{N}]/u.test(visible)))) return label.trim();   // an icon, or a glyph such as ×
   return null;
 }
 export function tipTarget(from: EventTarget | null): HTMLElement | null {
@@ -44,22 +45,11 @@ export function TooltipLayer() {
   const cur = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    const restore = (el: HTMLElement | null) => {
-      if (!el) return;
-      const parked = el.getAttribute('data-tip-title');
-      if (parked !== null) { el.setAttribute('title', parked); el.removeAttribute('data-tip-title'); }
-      if (el.getAttribute('aria-describedby') === TOOLTIP_ID) el.removeAttribute('aria-describedby');
-    };
-    const hide = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } restore(cur.current); cur.current = null; setTip(null); setPos(null); };
+    const hide = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } if (!cur.current) return; cur.current = null; setTip(null); setPos(null); };
     const show = (el: HTMLElement) => {
       const text = tipOf(el);
       if (!text) return;
-      if (cur.current && cur.current !== el) restore(cur.current);
       cur.current = el;
-      const title = el.getAttribute('title');
-      if (title !== null) { el.setAttribute('data-tip-title', title); el.removeAttribute('title'); }
-      const name = el.getAttribute('aria-label') ?? (el.textContent ?? '').trim();
-      if (text !== name && !el.hasAttribute('aria-describedby')) el.setAttribute('aria-describedby', TOOLTIP_ID);
       setTip({ text, el });
     };
     const later = (el: HTMLElement) => { if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => { timer.current = null; show(el); }, TIP_DELAY_MS); };
@@ -67,7 +57,7 @@ export function TooltipLayer() {
       if (e.pointerType === 'touch') return;
       const el = tipTarget(e.target);
       if (el === cur.current) return;
-      if (!el) { hide(); return; }
+      if (!el || el.hasAttribute('title')) { hide(); return; }       // native title tooltip on hover
       hide(); later(el);
     };
     const out = (e: PointerEvent) => { const to = tipTarget(e.relatedTarget); if (to !== cur.current) hide(); };

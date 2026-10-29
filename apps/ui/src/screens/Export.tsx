@@ -7,6 +7,9 @@ import type { OutputProfile, PreflightCheckName, RenderEstimate } from '../api/t
 import { Button, ErrorBox, Field, Modal, Progress, Segmented, inputCls } from '../components/ui.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
 import { copyText } from '../api/client.js';
+import { RATIOS, RESOLUTIONS, type Ratio, type Resolution } from '@expertmotion/composition-model';
+
+const RES_LABEL: Record<Resolution, string> = { '720p': '720p', '1080p': '1080p', '2k': '2K', '2160p': '2160p (4K)' };
 
 type Format = 'mp4' | 'webm' | 'gif' | 'png';
 /** FR-138: WebM with alpha (VP9 + PNG frames) only when the Composition has no background or `preset:background.none`. */
@@ -61,6 +64,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const name = nameTouched ? fileName : (est?.defaultFileName ?? fileName);
   const body = { outputProfile: profile, performanceProfile: state.performanceProfile, ...(nameTouched && fileName.trim() ? { fileName: fileName.trim() } : {}), ...(folder ? { folder } : {}) };
   const priv = est?.privateMode ?? Boolean(state.settings?.privateMode);
+  const tierT0 = (state.hardware?.tier ?? 'T0') === 'T0';
 
   useEffect(() => {
     if (!state.project || jobId) return;
@@ -68,7 +72,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     setEst(null);
     runtime.api.estimateRender({ projectId: state.project.id, ...body }).then((e) => { if (alive) setEst(e); }).catch(actions.error);
     return () => { alive = false; };
-  }, [format, quality, folder, stillMs, recheck, state.performanceProfile, state.project?.id, state.head?.id, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [format, quality, folder, stillMs, recheck, state.performanceProfile, state.project?.id, state.head?.id, profile.ratio, profile.resolution, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
   const running = Boolean(job && (job.status === 'queued' || job.status === 'rendering'));
   useEffect(() => { if (!running) return; const h = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(h); }, [running]);
 
@@ -104,6 +108,21 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       {!job && (
         <div className="flex flex-col gap-3">
           <div data-el="scr.export.profile.summary" className="t-mono rounded-[6px] border border-em-line px-2 py-1.5">{summary}</div>
+          {/* QA UX round 1: the frame shape and size are chosen here too (they were only in the Output panel); a change is the same
+              Output Settings pick (one undoable version), and the estimate / preflight above refresh with it. */}
+          <div className="grid grid-cols-2 gap-2">
+            <Field label={t('ui.agent.output.ratio')} htmlFor="em-ex-ratio">
+              <select id="em-ex-ratio" data-el="scr.export.ratio" className={inputCls} value={profile.ratio}
+                onChange={(e) => { const r = e.target.value as Ratio; if (r === 'custom') actions.setScreen({ kind: 'ratio.custom' }); else void actions.layoutPick({ ratio: r }); }}>
+                {RATIOS.map((r) => <option key={r} value={r}>{r === 'custom' ? (profile.ratio === 'custom' && profile.customRatio ? `${t('ui.agent.output.ratio.custom')} ${profile.customRatio.w}:${profile.customRatio.h}` : t('ui.agent.output.ratio.custom')) : r}</option>)}
+              </select>
+            </Field>
+            <Field label={t('ui.agent.output.resolution')} htmlFor="em-ex-res" {...(tierT0 && (profile.resolution === '2k' || profile.resolution === '2160p') ? { hint: t('ui.agent.output.resolution.needsgpu') } : {})}>
+              <select id="em-ex-res" data-el="scr.export.resolution" className={inputCls} value={profile.resolution} onChange={(e) => void actions.layoutPick({ resolution: e.target.value as Resolution })}>
+                {RESOLUTIONS.map((r) => <option key={r} value={r} disabled={tierT0 && (r === '2k' || r === '2160p')}>{RES_LABEL[r]}</option>)}
+              </select>
+            </Field>
+          </div>
           <div data-el="scr.export.codec"><Segmented<Format> label={t('ui.scr.export.codec')} value={format} onChange={setFormat}
             options={[{ value: 'mp4', label: 'MP4 (H.264)', el: 'scr.export.codec.mp4' },
               { value: 'webm', label: t('ui.scr.export.codec.webm'), el: 'scr.export.codec.webm', disabledReason: alphaOk ? null : t('ui.scr.export.alpha.needsnone') },
@@ -176,10 +195,14 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       )}
       {job && running && (
         <div className="flex flex-col gap-2">
-          <Progress el="scr.export.progress" value={job.progress} label={t('ui.scr.export.progress', { frame: job.renderedFrames ?? 0, total: job.totalFrames ?? 0, percent: Math.round(job.progress * 100) })} />
+          {/* QA UX round 1: after the last frame the phase is named (encoding / checking), not "Frame 330/330" while the bar still moves */}
+          <Progress el="scr.export.progress" value={job.progress} label={job.stage === 'encoding' || job.stage === 'validating' || (job.totalFrames && (job.renderedFrames ?? 0) >= job.totalFrames && job.progress < 0.995)
+            ? `${t(job.stage === 'validating' ? 'ui.scr.export.stage.validating' : 'ui.scr.export.stage.encoding')} · ${Math.round(job.progress * 100)} %`
+            : t('ui.scr.export.progress', { frame: job.renderedFrames ?? 0, total: job.totalFrames ?? 0, percent: Math.round(job.progress * 100) })} />
           {/* FR-204: say what is happening — waiting for memory (EM-3107), another render first (EM-3208), engine start, encoding, checking. */}
           {job.status === 'queued' && job.notices?.includes('EM-3107') ? (
-            <div data-el="scr.export.waiting.memory" role="status" className="flex flex-col gap-0.5"><span className="font-semibold">{t('err.EM-3107.title')}</span><span className="text-[12px] text-em-text-2">{t('err.EM-3107.body')}</span></div>
+            <div data-el="scr.export.waiting.memory" role="status" className="flex flex-col gap-0.5"><span className="font-semibold">{t('err.EM-3107.title')}</span><span className="text-[12px] text-em-text-2">{t('err.EM-3107.body')}</span>
+              {job.memoryWait && <span data-el="scr.export.waiting.memory.detail" className="t-mono text-[12px] text-em-muted">{t('ui.scr.export.waiting.memory.detail', { s: Math.round(job.memoryWait.waitedMs / 1000), free: job.memoryWait.freeMb, need: job.memoryWait.needMb, left: Math.max(0, Math.round(((job.memoryWait.maxWaitMs ?? 0) - job.memoryWait.waitedMs) / 1000)) })}</span>}</div>
           ) : (
             <span data-el="scr.export.stage">{job.status === 'queued' ? (state.renders.some((j) => j.id !== job.id && j.status === 'rendering') ? t('err.EM-3208.title') : t('ui.scr.export.stage.preparing'))
               : job.stage === 'preparing' || (job.progress === 0 && !job.renderedFrames) ? t('ui.scr.export.stage.preparing')

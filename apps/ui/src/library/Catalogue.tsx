@@ -12,6 +12,7 @@ import type { CatalogueItemDto, EditIntent } from '../api/types.js';
 import type { ElementRefT } from '@expertmotion/composition-model';
 import { PresetSwatch } from './presetVisual.js';
 import { Button, Empty, cx } from '../components/ui.js';
+import { CATALOGUE_TILE } from '../layout.js';
 
 export const CATALOGUE_TABS: Category[] = ['transition', 'caption', 'background', 'motion', 'shape', 'easing', 'effect', 'audio'];
 /** FR-035: suggested queries come from the Design Catalogue registry (DESIGN_CATALOGUE §13). */
@@ -57,11 +58,14 @@ export function Catalogue({ query, tab, onTab, onSuggest, onClear }: { query: st
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const q = activeQuery(query);
 
+  // QA UX round 1: the Editor is mounted under the splash before the licence is known; asking then only earned a 403 (EM-5010) in the console.
+  const licensed = state.licence?.status === 'licensed';
   useEffect(() => {
+    if (!licensed) return;
     let alive = true;
     runtime.api.getCatalogue({ priority: 'p0,p1,p2' }).then((r) => { if (alive) setAvail(new Map(r.items.map((i) => [i.id, i]))); }).catch(() => undefined);
     return () => { alive = false; };
-  }, [runtime, state.hardware?.tier, state.models]);
+  }, [runtime, state.hardware?.tier, state.models, licensed]);
 
   const presets = useMemo<PresetDef[]>(() => {
     const base = q ? searchPresets(q, lang).filter((p) => (CATALOGUE_TABS as string[]).includes(p.category)) : listPresets({ category: tab });
@@ -112,7 +116,9 @@ export function Catalogue({ query, tab, onTab, onSuggest, onClear }: { query: st
           } />
         </div>
       ) : (
-        <div role="grid" aria-label={t('ui.lib.mode.design')} className="grid grid-cols-2 gap-2 [@media(min-width:1600px)]:grid-cols-3">
+        // QA UX round 1: columns follow the panel's own width (≥ CATALOGUE_TILE.min px each), not the window width — a 3-column grid in a
+        // 300 px Library at 1920 left one letter per label ("F…"); see catalogueGeometry in layout.ts.
+        <div role="grid" aria-label={t('ui.lib.mode.design')} data-tile-min={CATALOGUE_TILE.min} className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
           {presets.map((p) => (
             <CatalogueCard key={p.id} preset={p} item={avail.get(p.id)} selected={selectedIds.has(p.id)} />
           ))}
@@ -184,7 +190,8 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
           {upcoming && <span className="absolute bottom-1 left-1 rounded-[4px] bg-black/60 px-1 text-[10px]">{t('ui.lib.catalogue.comingsoon')}</span>}
           {hover && !reason && typeof preset.defaults['durationMs'] === 'number' && <span className="t-mono absolute bottom-1 left-1 rounded-[4px] bg-black/60 px-1">{String(preset.defaults['durationMs'])} ms</span>}
         </div>
-        <span data-el="lib.catalogue.card.label" className="truncate py-1 pl-2 pr-14 text-[13px] font-medium">{label}</span>
+        {/* two lines, and only the ⓘ button's width kept free (was one truncated line with 56 px reserved → "Pu…") */}
+        <span data-el="lib.catalogue.card.label" title={label} className="line-clamp-2 min-h-[40px] break-words py-1 pl-2 pr-8 text-[13px] font-medium leading-4">{label}</span>
       </button>
       {modelMissing && (
         // FR-037: the badge is its own control (deep link to the model in the Model Manager), outside the card button.

@@ -70,7 +70,8 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
       {usedBy.length > 0 && <div className="text-[11px] text-em-muted">{t('ui.scr.models.usedby', { list: usedBy.join(', ') })}</div>}
       <div className="flex flex-wrap items-center gap-2">
         <span data-el="scr.models.row.status" className="flex-1 text-[12px] text-em-muted">
-          {m.status === 'paused' && m.pausedReason === 'render' ? t('ui.scr.models.status.pausedrender', { percent: pct })
+          {busyStatus(m.status) && m.noNetwork ? <span data-el="scr.models.row.offline" role="status" className="text-em-warn">{t('ui.scr.models.status.offline', { percent: pct })}</span>
+            : m.status === 'paused' && m.pausedReason === 'render' ? t('ui.scr.models.status.pausedrender', { percent: pct })
             : busyStatus(m.status) && m.retry ? t('ui.scr.models.status.retrying', { reason: t(`ui.scr.models.reason.${m.retry.reason}`), seconds: Math.max(1, Math.round(m.retry.delayMs / 1000)), percent: pct })
             : m.status === 'failed' && partial ? t('ui.scr.models.status.failedat', { percent: pct })
             : partial ? t('ui.scr.models.status.partial', { percent: pct })
@@ -81,6 +82,7 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
         {(m.status === 'not-installed' || m.status === 'failed') && (
           <Button el="scr.models.row.install" size={28} variant="primary" disabledReason={priv ? t('err.EM-8202.title') : null} onClick={install}>{partial ? t('ui.scr.models.resume') : t('ui.scr.models.install')}</Button>
         )}
+        {busyStatus(m.status) && m.noNetwork && <Button el="scr.models.row.offline.retry" size={28} onClick={() => act(runtime.api.cancelModel(m.key).then(() => runtime.api.installModel(m.key)))}>{t('ui.sys.toast.tryagain')}</Button>}
         {(m.status === 'downloading' || m.status === 'verifying') && <Button el="scr.models.row.pause" size={28} variant="ghost" onClick={() => act(runtime.api.cancelModel(m.key))}>{t('ui.scr.models.pause')}</Button>}
         {(busyStatus(m.status) || partial) && <Button el="scr.models.row.cancel" size={28} variant="ghost" onClick={() => act(runtime.api.cancelModel(m.key, true))}>{t('ui.common.cancel')}</Button>}
       </div>

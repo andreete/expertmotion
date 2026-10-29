@@ -31,8 +31,9 @@ describe('pure rules', () => {
   it('FR-154: info auto-dismisses after 6 s, warn and error stay', () => {
     expect(toastDismissMs({ kind: 'info', textKey: 'x', sticky: false })).toBe(6000);
     expect(toastDismissMs({ kind: 'success', textKey: 'x', sticky: false })).toBe(6000);
-    expect(toastDismissMs({ kind: 'warn', textKey: 'x', sticky: false })).toBeNull();
-    expect(toastDismissMs({ kind: 'danger', textKey: 'x', sticky: false })).toBeNull();
+    expect(toastDismissMs({ kind: 'warn', textKey: 'x', sticky: false })).toBe(12_000);   // QA UX round 1: non-blocking warn auto-dismisses
+    expect(toastDismissMs({ kind: 'danger', textKey: 'x', sticky: false })).toBe(12_000);
+    expect(toastDismissMs({ kind: 'danger', textKey: 'x', sticky: true })).toBeNull();
     expect(toastDismissMs({ kind: 'info', textKey: 'x', sticky: true })).toBeNull();
     expect(toastDismissMs({ kind: 'success', textKey: 'ui.sys.toast.saved', sticky: false })).toBe(1500);
   });

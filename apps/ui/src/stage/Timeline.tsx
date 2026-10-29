@@ -22,7 +22,7 @@ import { formatTimecode, translate } from '../i18n/index.js';
 
 type Track = 'video' | 'overlay' | 'text' | 'caption' | 'audio';
 /** One Timeline row, top to bottom. `layer` rows hold texts/images/shapes of that layer; the extra empty lane above the top layer (and below the last audio lane) is where a drop opens a new lane. */
-export interface LaneRow { key: string; kind: 'caption' | 'layer' | 'video' | 'audio'; lane: number; isNew: boolean }
+export interface LaneRow { key: string; kind: 'caption' | 'layer' | 'video' | 'audio'; lane: number; isNew: boolean; /** compact view: the layers this row shows (top → bottom) */ layers?: number[] }
 interface Bar { id: string; ref: ElementRefT; kind: string; label: string; fromMs: number; toMs: number; track: Track; row: string; lane?: number; diffId: string; assetId?: string; generated?: boolean; /** ADR-030 scene clip: CSS background of its preset (no media) */ swatch?: string }
 type EditableKind = ElementEdit['kind'];
 const EDITABLE = new Set(['text', 'image', 'shape', 'audio']);
@@ -75,6 +75,40 @@ export function laneRows(model: CompositionModelT): LaneRow[] {
   ];
 }
 
+/**
+ * QA UX round 1 (36 layer rows after a composed video): the compact view packs consecutive layers into one row when none of
+ * their texts / images / shapes overlap in time — then their front/back order cannot be seen, so nothing visible is lost.
+ * Only the view changes: every element keeps its own `layer`; a vertical drag onto another packed row moves it to that
+ * row's top layer (the lane rule in applyOps still resolves a busy layer). `rowOf` maps an element's own row to its packed row.
+ */
+export function compactRows(model: CompositionModelT, rows: readonly LaneRow[]): { rows: LaneRow[]; rowOf: Map<string, string> } {
+  const spans = new Map<number, Array<[number, number]>>();
+  for (const e of [...model.tracks.overlay, ...model.tracks.text]) {
+    const list = spans.get(e.layer) ?? []; list.push([e.timing.atMs, e.timing.atMs + e.timing.durationMs]); spans.set(e.layer, list);
+  }
+  const overlaps = (a: Array<[number, number]>, b: Array<[number, number]>) => a.some(([f1, t1]) => b.some(([f2, t2]) => f1 < t2 && f2 < t1));
+  const out: LaneRow[] = []; const rowOf = new Map<string, string>();
+  let group: LaneRow[] = []; let used: Array<[number, number]> = [];
+  const flush = () => {
+    if (!group.length) return;
+    const layers = group.map((r) => r.lane);                          // top → bottom
+    const key = group.length === 1 ? group[0]!.key : `layers:${layers[0]}-${layers[layers.length - 1]}`;
+    for (const r of group) rowOf.set(r.key, key);
+    out.push({ key, kind: 'layer', lane: layers[0]!, isNew: false, layers });
+    group = []; used = [];
+  };
+  for (const r of rows) {
+    if (r.kind !== 'layer' || r.isNew) { flush(); out.push(r); rowOf.set(r.key, r.key); continue; }
+    const mine = spans.get(r.lane) ?? [];
+    if (group.length && overlaps(used, mine)) flush();
+    group.push(r); used = [...used, ...mine];
+  }
+  flush();
+  return { rows: out, rowOf };
+}
+/** The compact view is the default once a project has more than this many layers (the toggle shows every layer again). */
+export const COMPACT_AFTER_LAYERS = 6;
+
 const KIND_COLOUR: Record<string, string> = { clip: 'var(--em-accent)', image: 'var(--em-accent)', shape: 'var(--em-accent-2)', text: '#F4F5F7', caption: 'var(--em-info)', audio: '#8FB3FF', transition: 'var(--em-warn)', effect: 'var(--em-accent-2)', background: 'var(--em-muted)' };
 /** Thin strips inside the video lane: background on top (whole duration), effects under their clip. */
 const STRIP: Record<string, string> = { background: 'top-0 h-[5px] z-0', effect: 'top-[29px] h-[6px] z-10' };
@@ -123,6 +157,8 @@ export interface ElementDragOptions {
   /** Edges to snap to (other bars' starts/ends, 0, the end of the video). */
   edges: readonly number[];
   assetOf: (id: string) => { durationMs: number | null } | null;
+  /** the rows on screen (compact view: packed rows); default laneRows(model) */
+  rows?: readonly LaneRow[];
 }
 export interface ElementDragResult { edit: ElementEdit | null; fromMs: number; toMs: number; row: string; snapMs: number | null }
 /**
@@ -131,7 +167,7 @@ export interface ElementDragResult { edit: ElementEdit | null; fromMs: number; t
  * (audio left-edge trims move the source offset and stay inside the source unless looping). Times snap to the frame grid and,
  * unless `snap` is false, to the playhead and other edges within SNAP_PX. `edit` is null when nothing changes.
  */
-export function elementDragEdit(model: CompositionModelT, bar: Pick<Bar, 'id' | 'kind' | 'fromMs' | 'toMs' | 'row'>, mode: ClipDragMode, dxPx: number, rowDelta: number, o: ElementDragOptions): ElementDragResult | null {
+export function elementDragEdit(model: CompositionModelT, bar: Pick<Bar, 'id' | 'kind' | 'fromMs' | 'toMs' | 'row'> & { lane?: number }, mode: ClipDragMode, dxPx: number, rowDelta: number, o: ElementDragOptions): ElementDragResult | null {
   if (!isEditable(bar)) return null;
   const kind = bar.kind as EditableKind;
   const audio = kind === 'audio' ? model.tracks.audio.find((a) => a.id === bar.id) : undefined;
@@ -168,11 +204,11 @@ export function elementDragEdit(model: CompositionModelT, bar: Pick<Bar, 'id' | 
     from = Math.round(start); len = Math.round(from0 + len0 - start);
   }
   // Lanes (move only): rows of the same family, clamped to it.
-  const rows = laneRows(model).filter((r) => (kind === 'audio' ? r.kind === 'audio' : r.kind === 'layer'));
+  const rows = (o.rows ?? laneRows(model)).filter((r) => (kind === 'audio' ? r.kind === 'audio' : r.kind === 'layer'));
   const at = rows.findIndex((r) => r.key === bar.row);
   const target = mode === 'move' && at >= 0 ? rows[Math.max(0, Math.min(rows.length - 1, at + rowDelta))]! : rows[at];
-  const curLane = audio ? audio.lane : Number(bar.row.split(':')[1] ?? 0);
-  const lane = target?.lane ?? curLane;
+  const curLane = audio ? audio.lane : bar.lane ?? Number(bar.row.split(':')[1] ?? 0);
+  const lane = !target || target.key === bar.row ? curLane : target.lane;   // compact view: staying in the packed row keeps the layer
   const timeChanged = from !== from0 || len !== len0;
   let edit: ElementEdit | null = null;
   if (timeChanged) edit = { kind, id: bar.id, atMs: from, durationMs: Math.max(100, len), ...(audio && mode === 'start' ? { trimBeforeMs: Math.max(0, Math.round(tb0 + (from - from0))) } : {}), ...(lane !== curLane ? { layer: lane } : {}) };
@@ -209,7 +245,13 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
     return () => { live = false; };
   }, [projectId, state.assets.length, runtime]);
   const bars = useMemo(() => (model ? buildBars(model, assetName, lang, generated) : []), [model, state.assets, lang, generated]); // eslint-disable-line react-hooks/exhaustive-deps
-  const rows = useMemo(() => (model ? laneRows(model) : []), [model]);
+  const fullRows = useMemo(() => (model ? laneRows(model) : []), [model]);
+  const layerCount = fullRows.filter((r) => r.kind === 'layer' && !r.isNew).length;
+  const [compactPref, setCompactPref] = useState<boolean | null>(null);          // null = automatic (compact past COMPACT_AFTER_LAYERS)
+  const compact = compactPref ?? layerCount > COMPACT_AFTER_LAYERS;
+  const packed = useMemo(() => (model && compact ? compactRows(model, fullRows) : null), [model, compact, fullRows]);
+  const rows = packed?.rows ?? fullRows;
+  const barsOnScreen = useMemo(() => (packed ? bars.map((b) => ({ ...b, row: packed.rowOf.get(b.row) ?? b.row })) : bars), [bars, packed]);
   const durationMs = model ? deriveTiming(model).durationMs : 1000;
   const pxPerMs = (zoom ?? (width - 8) / (durationMs / 1000)) / 1000;
   const pxRef = useRef(pxPerMs);
@@ -242,8 +284,8 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
   const suppressClick = useRef(false);
   const refocus = useRef<{ id: string; sig: string } | null>(null);
   const edgesFor = (id: string) => [0, durationMs, ...bars.filter((x) => x.id !== id && x.kind !== 'effect' && x.kind !== 'background').flatMap((x) => [x.fromMs, x.toMs])];
-  const dragOpts = (id: string, alt: boolean): ElementDragOptions => ({ pxPerMs: pxRef.current, playheadMs: liveMs, snap: !alt, edges: edgesFor(id), assetOf: (a) => { const x = assetOf(a); return x ? { durationMs: x.durationMs ?? null } : null; } });
-  const laneName = (r: LaneRow) => r.kind === 'layer' ? (r.isNew ? t('ui.stage.timeline.lane.new') : t('ui.stage.timeline.lane.layer', { n: r.lane + 1 })) : r.kind === 'audio' ? (r.isNew ? t('ui.stage.timeline.lane.newaudio') : t('ui.stage.timeline.lane.audio', { n: r.lane + 1 })) : t(`ui.stage.timeline.track.${r.kind}`);
+  const dragOpts = (id: string, alt: boolean): ElementDragOptions => ({ pxPerMs: pxRef.current, playheadMs: liveMs, snap: !alt, edges: edgesFor(id), assetOf: (a) => { const x = assetOf(a); return x ? { durationMs: x.durationMs ?? null } : null; }, rows });
+  const laneName = (r: LaneRow) => r.kind === 'layer' && r.layers && r.layers.length > 1 ? t('ui.stage.timeline.lane.layers', { from: r.layers[r.layers.length - 1]! + 1, to: r.layers[0]! + 1 }) : r.kind === 'layer' ? (r.isNew ? t('ui.stage.timeline.lane.new') : t('ui.stage.timeline.lane.layer', { n: r.lane + 1 })) : r.kind === 'audio' ? (r.isNew ? t('ui.stage.timeline.lane.newaudio') : t('ui.stage.timeline.lane.audio', { n: r.lane + 1 })) : t(`ui.stage.timeline.track.${r.kind}`);
   const editLabel = (b: Bar, e: ElementEdit, mode: ClipDragMode) => {
     if (e.atMs === undefined) return e.move ? t(`ui.stage.timeline.drag.move.${e.move}`, { label: b.label }) : t('ui.stage.timeline.drag.layer', { label: b.label, n: (e.layer ?? 0) + 1 });
     if (mode !== 'move') return t('ui.stage.timeline.drag.trimmed', { label: b.label });
@@ -293,12 +335,12 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
   };
   useEffect(() => {                                                   // keep keyboard focus on the element once its edit landed (a lane change remounts it)
     const r = refocus.current; if (!r) return;
-    const b = bars.find((x) => x.id === r.id);
+    const b = barsOnScreen.find((x) => x.id === r.id);
     if (b && `${b.row}|${b.fromMs}|${b.toMs}` === r.sig) return;      // not applied yet
     refocus.current = null;
     const n = [...(lanes.current?.querySelectorAll<HTMLElement>('[data-el="stage.timeline.element"]') ?? [])].find((x) => x.getAttribute('data-element-id') === r.id);
     if (n && document.activeElement !== n) n.focus();
-  }, [bars]);
+  }, [barsOnScreen]);
   const select = (b: Bar, e: ReactMouseEvent) => {
     if (suppressClick.current) { suppressClick.current = false; return; }
     let next: ElementRefT[];
@@ -362,15 +404,18 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
     caption: model?.tracks.caption.styleId ? getPreset(model.tracks.caption.styleId)?.label[lang] ?? '' : '',
     video: model?.background ? getPreset(model.background.presetId)?.label[lang] ?? '' : '',
   };
-  const dragBar = drag ? bars.find((b) => b.id === drag.id) : undefined;
+  const dragBar = drag ? barsOnScreen.find((b) => b.id === drag.id) : undefined;
   const ghost = drag && dragBar && model && isEditable(dragBar) ? elementDragEdit(model, dragBar, drag.mode, drag.dx, Math.round(drag.dy / ROW_PX), dragOpts(dragBar.id, drag.alt)) : null;
-  const rowA11y = (r: LaneRow, count: number) => r.kind === 'layer' ? (r.isNew ? t('a11y.stage.timeline.lane.new') : t('a11y.stage.timeline.lane.layer', { n: r.lane + 1, count })) : r.kind === 'audio' ? (r.isNew ? t('a11y.stage.timeline.lane.newaudio') : t('a11y.stage.timeline.lane.audio', { n: r.lane + 1, count })) : t(`a11y.stage.timeline.track.${r.kind}`, { n: count });
+  const rowA11y = (r: LaneRow, count: number) => r.kind === 'layer' && r.layers && r.layers.length > 1 ? t('a11y.stage.timeline.lane.layers', { from: r.layers[r.layers.length - 1]! + 1, to: r.layers[0]! + 1, count }) : r.kind === 'layer' ? (r.isNew ? t('a11y.stage.timeline.lane.new') : t('a11y.stage.timeline.lane.layer', { n: r.lane + 1, count })) : r.kind === 'audio' ? (r.isNew ? t('a11y.stage.timeline.lane.newaudio') : t('a11y.stage.timeline.lane.audio', { n: r.lane + 1, count })) : t(`a11y.stage.timeline.track.${r.kind}`, { n: count });
   const rowEl = (r: LaneRow) => r.kind === 'caption' || r.kind === 'video' ? `stage.timeline.track.${r.kind}` : r.isNew ? 'stage.timeline.lane.new' : `stage.timeline.lane.${r.kind}`;
 
   return (
     <section data-el="stage.timeline" role="region" aria-label={t('a11y.stage.timeline')} className="flex min-h-[220px] shrink-0 flex-col rounded-[12px] border border-em-line bg-em-panel" style={{ height }}>
       <div className="flex h-8 items-center gap-2 border-b border-em-line px-2">
         <span className="t-label flex-1">{t('ui.stage.timeline.title')}</span>
+        {/* QA UX round 1: packed rows by default past COMPACT_AFTER_LAYERS layers; the toggle shows every layer */}
+        {layerCount > 1 && <button type="button" data-el="stage.timeline.compact" aria-pressed={compact} title={t(compact ? 'ui.stage.timeline.compact.off.tip' : 'ui.stage.timeline.compact.tip')}
+          onClick={() => setCompactPref(!compact)} className={cx('rounded-[4px] border px-1.5 text-[11px]', compact ? 'border-em-accent/60 text-em-accent' : 'border-em-line text-em-muted')}>{t(compact ? 'ui.stage.timeline.compact.on' : 'ui.stage.timeline.compact')}</button>}
         {/* ADR-028 / FR-179: split the selected item(s) — or the clip under the playhead — at the playhead (also S). */}
         <IconButton el="stage.timeline.split" label={t('ui.stage.timeline.split')} aria-keyshortcuts="S" icon={<Scissors size={14} />} size={28}
           disabledReason={hasClip || bars.length ? null : t('ui.stage.timeline.split.nothing')}
@@ -400,11 +445,11 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
               <span data-el="stage.timeline.head.handle" aria-hidden className="pointer-events-none absolute top-0 -ml-[5px] h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-[var(--em-accent)]" style={{ left: liveMs * pxPerMs }} />
             </div>
             {rows.map((r) => {
-              const own = bars.filter((b) => b.row === r.key);
+              const own = barsOnScreen.filter((b) => b.row === r.key);
               const count = own.filter((b) => b.kind !== 'transition' && b.kind !== 'effect' && b.kind !== 'background').length;
               const dropTarget = ghost && ghost.row === r.key && drag?.mode === 'move' && ghost.row !== dragBar?.row;
               return (
-                <div key={r.key} data-el={rowEl(r)} data-row={r.key} {...(r.kind === 'layer' ? { 'data-layer': r.lane } : r.kind === 'audio' ? { 'data-lane': r.lane } : {})} role="row" aria-label={rowA11y(r, count)}
+                <div key={r.key} data-el={rowEl(r)} data-row={r.key} {...(r.kind === 'layer' ? { 'data-layer': r.lane, ...(r.layers && r.layers.length > 1 ? { 'data-layers': r.layers.join(',') } : {}) } : r.kind === 'audio' ? { 'data-lane': r.lane } : {})} role="row" aria-label={rowA11y(r, count)}
                   className={cx('relative h-9 border-b border-em-line', r.isNew && 'border-dashed', dropTarget && 'shadow-[inset_0_0_0_2px_var(--em-accent)]')}
                   onPointerDown={onTrackDown} onContextMenu={onTrackMenu}>
                   {r.isNew && drag?.mode === 'move' && <span aria-hidden className="pointer-events-none absolute inset-0 flex items-center px-2 text-[10px] text-em-muted">{r.kind === 'audio' ? t('ui.stage.timeline.lane.newaudio.hint') : t('ui.stage.timeline.lane.new.hint')}</span>}

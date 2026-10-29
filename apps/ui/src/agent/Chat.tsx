@@ -397,6 +397,8 @@ export function ResearchToggle() {
   );
 }
 
+/** QA UX round 1: the Service accepts 8 000 characters per message (SendBody); the counter shows from 6 000. */
+export const COMPOSER_MAX = 8000, COMPOSER_COUNTER_FROM = 6000;
 /** FR-213: image types the composer attaches (the Service sends PNG / JPEG / WebP / GIF as image parts). */
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 /** FR-221 (QA 2026-10-28 #14): music / voice files become Library assets and chips; documents and scripts are read as text. */
@@ -507,7 +509,9 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
     window.addEventListener('em:focus-composer', focus);
     return () => window.removeEventListener('em:focus-composer', focus);
   }, [setMode]);
-  const send = () => { const v = value.trim(); if (!v || reason || busy || preparing) return; onSend(attachments, docs.map((d) => d.id)); setAttachments([]); setDocs([]); setAttachError(null); };
+  // QA: Send needs text (not only spaces) and at most the Service's 8 000 characters; a counter shows from 6 000 on.
+  const chars = [...value].length, tooLong = chars > COMPOSER_MAX, empty = !value.trim() && !attachments.length && !docs.length;
+  const send = () => { const v = value.trim(); if (!v || tooLong || reason || busy || preparing) return; onSend(attachments, docs.map((d) => d.id)); setAttachments([]); setDocs([]); setAttachError(null); };
   const images = state.assets.filter((a) => (a.kind === 'image' || a.kind === 'audio') && a.status === 'ready');
   return (
     <div className="shrink-0 border-t border-em-line p-2">
@@ -571,9 +575,10 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
             <input ref={file} data-el="agent.chat.attach.input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden aria-hidden tabIndex={-1} onChange={(e) => { void attachFile(e.target.files?.[0]); e.target.value = ''; }} />
           </span>
           <span className="flex-1" />
+          {chars > COMPOSER_COUNTER_FROM && <span data-el="agent.chat.composer.count" role="status" className={cx('t-mono text-[11px]', tooLong ? 'text-em-danger' : 'text-em-muted')}>{tooLong ? t('ui.agent.composer.toolong', { max: COMPOSER_MAX }) : `${chars} / ${COMPOSER_MAX}`}</span>}
           {busy
             ? <IconButton el="agent.chat.stop" label={t('ui.agent.composer.stop')} icon={<Square size={14} />} size={28} onClick={stop} />
-            : <IconButton el="agent.chat.send" label={t('ui.agent.composer.send')} icon={<SendHorizontal size={16} />} size={28} disabledReason={reason ?? (preparing ? t('ui.agent.composer.attach.preparing') : null)} onClick={send} />}
+            : <IconButton el="agent.chat.send" label={t('ui.agent.composer.send')} icon={<SendHorizontal size={16} />} size={28} disabledReason={reason ?? (preparing ? t('ui.agent.composer.attach.preparing') : empty ? t('ui.agent.composer.empty') : tooLong ? t('ui.agent.composer.toolong', { max: COMPOSER_MAX }) : null)} onClick={send} />}
         </div>
       </div>
       {reason && <span id={reasonId} className="sr-only">{reason}</span>}

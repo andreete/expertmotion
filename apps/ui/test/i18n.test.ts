@@ -54,8 +54,10 @@ describe('formatter', () => {
   it('falls back to English, then to the key itself', () => {
     expect(translate('id', 'no.such.key')).toBe('no.such.key');
   });
-  it('formats timecodes as mm:ss.ff', () => {
-    expect(formatTimecode(12_266, 30)).toBe('00:12.08');
-    expect(formatTimecode(62_000, 25)).toBe('01:02.00');
+  it('formats timecodes as mm:ss.d (tenths; QA UX round 1, FR-057)', () => {
+    expect(formatTimecode(12_266, 30)).toBe('00:12.2');
+    expect(formatTimecode(62_000, 25)).toBe('01:02.0');
+    expect(formatTimecode(3300, 30)).toBe('00:03.3');      // was "00:03.09" (frames), which read like 3.09 s
+    expect(formatTimecode(9500, 30)).toBe('00:09.5');
   });
 });

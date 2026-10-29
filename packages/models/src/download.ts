@@ -321,7 +321,10 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
         const done = await fileSize(paths.partPath);
         failsInRow = done > before ? 1 : failsInRow + 1;          // new bytes since the last failure → the count starts again
         // A refused secure connection (antivirus HTTPS scanning, a proxy, an ISP block page) does not heal by retrying quickly.
-        const limit = err.detail.reason === 'tls' ? Math.min(1, retries) : retries;
+        // QA P1-9: no route to the internet at all (cable out, Wi-Fi off) is waited out up to maxAttempts (~40 min at the 60 s cap),
+        // so the download resumes by itself when the network returns; the Service says "no internet" from the first failure.
+        const offline = typeof err.detail.netCode === 'string' && /^(ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN|ENETDOWN)$/.test(err.detail.netCode);
+        const limit = err.detail.reason === 'tls' ? Math.min(1, retries) : offline ? maxAttempts : retries;
         if (failsInRow > limit || attempts >= maxAttempts) {
           const { retryAfterMs: _ra, ...detail } = err.detail;
           throw emError('EM-7002', `Download of ${spec.name} failed (${err.detail.reason}${err.detail.httpStatus ? ` HTTP ${String(err.detail.httpStatus)}` : ''}${err.detail.netCode ? ` ${String(err.detail.netCode)}` : ''})`,

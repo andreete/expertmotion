@@ -209,12 +209,12 @@ describe('Onboarding (FR-004…FR-008)', () => {
 });
 
 describe('Restart recovery toast (FR-171, FR-172)', () => {
-  it('tells the Creator once when the Service run changed since this window last saw it', async () => {
+  it('notes a changed Service run once; says nothing when the restart stopped nothing (QA UX round 1, qa-ux-round1.test.tsx)', async () => {
     sessionStorage.clear();
     sessionStorage.setItem('expertmotion.recovery.seen', '2000-01-01T00:00:00.000Z');
     await renderEditor('sample', { keepStorage: true });
-    await until(() => [...document.querySelectorAll('[data-el="sys.toast"]')].some((n) => n.textContent?.includes('Service restarted')), 'EM-8003 toast');
-    expect(sessionStorage.getItem('expertmotion.recovery.seen')).not.toBe('2000-01-01T00:00:00.000Z');
+    await until(() => sessionStorage.getItem('expertmotion.recovery.seen') !== '2000-01-01T00:00:00.000Z', 'recovery seen');
+    expect([...document.querySelectorAll('[data-el="sys.toast"]')].some((n) => n.textContent?.includes('Service restarted'))).toBe(false);
   });
   it('stays quiet after a clean first start', async () => {
     await renderEditor('sample');

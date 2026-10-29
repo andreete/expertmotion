@@ -54,6 +54,8 @@ export interface RenderJobDto {
   failedFrame?: number | null;
   /** FR-204: the last `render.progress` stage (preparing / rendering / encoding / validating), for the progress line. */
   stage?: string;
+  /** QA UX round 1: while queued for free memory (EM-3107): how long it has waited and the free / needed memory (render.queued). */
+  memoryWait?: { waitedMs: number; freeMb: number; needMb: number; maxWaitMs?: number };
 }
 export interface OutputDto {
   id: Id; projectId: Id; renderJobId: Id; kind: 'video' | 'gif' | 'still' | 'audio'; fileName: string; bytes: number; width: number | null; height: number | null;
@@ -210,6 +212,8 @@ export interface ModelStateDto {
   pathLabel?: string; usedBy?: { generators: string[]; presets: string[] }; engineNotices?: Array<{ label: string; licence: string; spdx: string | null; url: string }>;
   /** FR-245 (Editor state only): the running retry and the reason of the last failure. */
   retry?: { attempt: number; reason: string; delayMs: number; at: number } | null; failReason?: string | null;
+  /** QA P1-9: the download cannot reach the internet right now (it keeps retrying and resumes by itself). */
+  noNetwork?: boolean;
 }
 /** R-140 `registry` (SEC-072): which model list is in use. */
 export interface ModelRegistrySource { source: 'built-in' | 'signed'; seq: number; code: string | null; reason: string | null }
@@ -321,7 +325,7 @@ export interface EventMap {
   /** FR-219: a stored message changed (a Brainstorm draft's hand-off state). */
   'agent.message.updated': { agent: AgentKind; message: MessageDto };
   'agent.run.failed': { runId: Id; agent: AgentKind; code: string; retryable: boolean; message?: string; details?: Record<string, unknown> };
-  'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render'; /** FR-245: an automatic retry is waiting */ retry?: { attempt: number; reason: string; delayMs: number } };
+  'model.progress': { key: string; bytesDone: number; bytesTotal: number; status: 'downloading' | 'verifying' | 'paused'; pausedReason?: 'render'; /** FR-245: an automatic retry is waiting */ retry?: { attempt: number; reason: string; delayMs: number; netCode?: string }; /** QA P1-9 */ noNetwork?: boolean };
   'model.installed': { model: ModelStateDto };
   'model.failed': { key: string; code: string; /** FR-245 */ reason?: string; httpStatus?: number; percent?: number; resumable?: boolean };
   'hardware.tick': HardwareTickDto;

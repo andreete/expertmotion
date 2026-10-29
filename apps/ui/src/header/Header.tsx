@@ -33,7 +33,8 @@ export function Header() {
   const p = state.project;
   // QA 2026-10-26 #2: a faceless video (scene clips, texts, shapes) exports too; only a project with nothing on it is blocked.
   const hm = state.head?.model;
-  const hasClip = (hm?.tracks.video.length ?? 0) + (hm?.tracks.text.length ?? 0) + (hm?.tracks.overlay.length ?? 0) > 0;
+  // QA UX round 1: a voice-over + captions video (no clip, text or overlay) is exportable too — the Service's preflight agrees (ADR-030).
+  const hasClip = (hm?.tracks.video.length ?? 0) + (hm?.tracks.text.length ?? 0) + (hm?.tracks.overlay.length ?? 0) + (hm?.tracks.audio.length ?? 0) + (hm?.tracks.caption.pages.length ?? 0) > 0;
   const exportReason = hasClip ? null : t('ui.hdr.export.disabled');
   const queue = renderQueue(state.renders);
   const rendering = queue.active ?? queue.queued[0];
@@ -85,11 +86,12 @@ export function Header() {
           </Popover>
         )}
       </div>
-      <div role="tablist" aria-label={t('a11y.hdr.menu.tabs')} className="flex">
+      {/* QA UX round 1: the Library mode tabs only switch the Library, which the Start screen (no project) does not show — hidden there */}
+      {p && <div role="tablist" aria-label={t('a11y.hdr.menu.tabs')} className="flex">
         {mode('home', 'hdr.menu.home', <Type size={16} aria-hidden />, 'ui.hdr.menu.home')}
         {mode('design', 'hdr.menu.design', <Sparkles size={16} aria-hidden />, 'ui.hdr.menu.design')}
         {mode('tools', 'hdr.menu.tools', <Wrench size={16} aria-hidden />, 'ui.hdr.menu.tools')}
-      </div>
+      </div>}
       <div className="relative">
         <button type="button" data-el="hdr.menu.help" data-popover-trigger="" aria-haspopup="menu" aria-expanded={menu === 'help'} onClick={() => setMenu(menu === 'help' ? null : 'help')}
           className="flex h-12 items-center gap-1 px-2.5 text-[13px] font-medium text-em-text-2 hover:text-em-text"><CircleHelp size={16} aria-hidden />{t('ui.hdr.menu.help')}</button>
@@ -162,7 +164,13 @@ function RecentList({ onPick }: { onPick: (id: string) => void }) {
   const { runtime, t, state } = useStore();
   const [items, setItems] = useState<Array<{ id: string; name: string }> | null>(null);
   // FR-260: the untouched blank project is not listed (it is not something the Creator made)
-  useEffect(() => { void runtime.api.recentProjects().then((r) => setItems(withoutScratch(r.items).map((x) => ({ id: x.id, name: x.name })))).catch(() => setItems([])); }, [runtime]);
+  useEffect(() => {
+    void runtime.api.recentProjects().then(async (r) => {
+      let list = withoutScratch(r.items);
+      if (!list.length) list = withoutScratch((await runtime.api.listProjects({ limit: 10 })).items);   // never opened here yet: latest changed
+      setItems(list.map((x) => ({ id: x.id, name: x.name })));
+    }).catch(() => setItems([]));
+  }, [runtime]);
   return (
     <div className="ml-3 border-l border-em-line pl-1">
       {items === null ? <div className="px-2 py-1 text-em-muted">{t('ui.common.loading')}</div>
