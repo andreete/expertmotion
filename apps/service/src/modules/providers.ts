@@ -194,6 +194,14 @@ function markRejected(ctx: ServiceContext, id: string) {
     if (r.changes) { ctx.log.warn({ connectionId: id }, 'provider rejected the key during an agent run; connection marked invalid'); changed(ctx, 'providers'); }
   } catch (err) { ctx.log.warn({ connectionId: id, err: String(err) }, 'could not mark the connection invalid'); }
 }
+/** Entry 35: a call the provider ANSWERED proves the key works: a connection marked invalid by an earlier 401 becomes valid again. */
+function markAccepted(ctx: ServiceContext, id: string) {
+  try {
+    const at = ctx.now();
+    const r = ctx.db.prepare("UPDATE provider_connections SET status = 'valid', validated_at = ?, updated_at = ? WHERE id = ? AND status = 'invalid'").run(at, at, id);
+    if (r.changes) { ctx.log.info({ connectionId: id }, 'provider accepted the key again; connection marked valid'); changed(ctx, 'providers'); }
+  } catch (err) { ctx.log.warn({ connectionId: id, err: String(err) }, 'could not mark the connection valid'); }
+}
 /** providerFor hook: a ChatProvider for the agent's Model Assignment. Keys are decrypted per call; Private Mode aborts in-flight calls. */
 function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
   if (ctx.egress.isPrivate()) throw new EmError('EM-4401', 'Private Mode blocks all internet use, so the agents are unavailable.');
@@ -225,6 +233,7 @@ function providerFor(ctx: ServiceContext, agent: AgentT): ChatProvider {
       const inner = chatProviderFor(conn.provider, keyOf(ctx, getConn(ctx, conn.id)), a.modelId, egressFetch(ctx), undefined, { nativeTools });
       const r = onDelta && inner.stream ? await inner.stream(full, onDelta) : await inner.complete(full);
       dumpAgentCall(meta, full, { result: r, ms: Date.now() - t0 });
+      markAccepted(ctx, conn.id);   // Entry 35: the key works again (one 401 earlier) → valid again, the dot / Web chip recover
       return r;
     } catch (e) {
       dumpAgentCall(meta, full, { error: e, ms: Date.now() - t0 });

@@ -238,7 +238,9 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
     }
     case 'agent.run.done': {
       const agent = ev.data.run.agent;
-      const msgs = state.messages[agent].some((m) => m.id === ev.data.message.id) ? state.messages[agent] : [...state.messages[agent], safeMessage(ev.data.message)];
+      // Entry 35: a re-plan run (stale plan → "Re-plan") ends without a chat message; that event once crashed the Editor (EM-8009).
+      const done = ev.data.message;
+      const msgs = !done || state.messages[agent].some((m) => m.id === done.id) ? state.messages[agent] : [...state.messages[agent], safeMessage(done)];
       return { ...state, doneRuns: [ev.data.run.id, ...state.doneRuns].slice(0, 20), messages: { ...state.messages, [agent]: msgs }, streaming: { ...state.streaming, [agent]: null }, contextUsage: { ...state.contextUsage, [agent]: ev.data.contextUsage ?? state.contextUsage[agent] }, lastUsage: { ...state.lastUsage, [agent]: ev.data.usage ?? state.lastUsage[agent] } };
     }
     case 'agent.run.progress': {

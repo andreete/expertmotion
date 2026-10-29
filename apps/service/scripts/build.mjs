@@ -74,7 +74,7 @@ if (licenceKeyHex) console.log('licence public key A1 injected from EM_LICENSE_P
 if (manifestKeyHex) console.log('manifest public key M1 injected from EM_MANIFEST_PUBLIC_KEY_M1_HEX');
 
 await build({
-  entryPoints: ['src/main.ts'], bundle: true, platform: 'node', target: 'node22', format: 'cjs', outfile: 'dist/service.cjs',
+  entryPoints: ['src/main.ts'], bundle: true, platform: 'node', target: 'node22', format: 'cjs', outfile: process.env.EM_SERVICE_OUTFILE || 'dist/service.cjs', // EM_SERVICE_OUTFILE: e2e TEST builds outside dist/
   external: ['better-sqlite3-multiple-ciphers', '@remotion/renderer', '@remotion/compositor-*', 'systeminformation', 'electron'],
   conditions: ['source'], sourcemap: false, minify: process.env.EM_MINIFY !== '0', legalComments: 'none',
   define: { 'import.meta.url': '__em_import_meta_url', EM_BUILD_DATE: JSON.stringify(process.env.EM_BUILD_DATE ?? new Date().toISOString().slice(0, 10)), __EM_PROMPT_HALF_A__: JSON.stringify(halfA), __EM_MODEL_CDN_URL__: JSON.stringify(modelCdnUrl), __EM_LICENSE_PUBLIC_KEY_A1_HEX__: JSON.stringify(licenceKeyHex), __EM_MANIFEST_PUBLIC_KEY_M1_HEX__: JSON.stringify(manifestKeyHex),

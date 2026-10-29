@@ -23,12 +23,25 @@ const VARIANT: Record<BtnVariant, string> = {
   danger: 'bg-em-danger text-white hover:brightness-110 font-semibold',
   'danger-ghost': 'bg-transparent text-em-danger hover:bg-em-panel-2',
 };
+/** Entry 36 (Windows UIA): the accessible name of a text label without its trailing "…" / "▸" — UI Automation read
+ *  "Import files…" as "Import files." and "All…" as "All.". Null when the children are not plain text. */
+export function plainLabel(children: ReactNode): string | null {
+  const parts = Array.isArray(children) ? children : [children];
+  if (!parts.every((x) => typeof x === 'string' || typeof x === 'number' || x == null || x === false)) return null;
+  const text = parts.filter((x) => x != null && x !== false).join('').trim();
+  const plain = text.replace(/[\s…▸.]+$/u, '').replace(/\.\.\.$/, '').trim();
+  return plain && plain !== text ? plain : null;
+}
+/** A translated label without its trailing "…" / "▸", for an explicit aria-label (Entry 36). */
+export const noEllipsis = (text: string): string => plainLabel(text) ?? text;
 export function Button({ el, variant = 'secondary', size = 32, icon, loading, disabledReason, disabled, className, children, onClick, title, tip, ...rest }: ButtonProps) {
   const isDisabled = Boolean(disabled || disabledReason);
   const descId = useId();
   return (
+    <>
     <button
       type="button" data-el={el} aria-disabled={isDisabled || undefined} aria-describedby={disabledReason ? descId : undefined}
+      aria-label={plainLabel(children) ?? undefined}
       title={disabledReason ?? title} data-tip={disabledReason ?? tip}
       className={cx('inline-flex items-center justify-center gap-1.5 rounded-[6px] px-3 whitespace-nowrap em-trans', VARIANT[variant], isDisabled && 'opacity-40 cursor-not-allowed', className)}
       style={{ height: size, minHeight: size }}
@@ -37,8 +50,11 @@ export function Button({ el, variant = 'secondary', size = 32, icon, loading, di
     >
       {loading ? <Loader size={16} className="em-spin" aria-hidden /> : icon}
       {children}
-      {disabledReason && <span id={descId} className="sr-only">{disabledReason}</span>}
     </button>
+    {/* Entry 36: the reason sits next to the button (aria-describedby), not inside it — inside, it became part of the
+        button's NAME ("ValidasiTempel kuncinya secara lengkap") */}
+    {disabledReason && <span id={descId} className="sr-only">{disabledReason}</span>}
+    </>
   );
 }
 
@@ -128,7 +144,9 @@ export function Modal({ el, title, children, footer, onClose, width = 560, block
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     const node = ref.current;
-    const first = node?.querySelector<HTMLElement>('input, textarea, select, button:not([data-close]), [tabindex="0"]');
+    // Entry 36 (Windows QA): a dialog may name its safe default with `data-autofocus` (Keep rendering, Save); otherwise the
+    // first field / control. Focus used to land on the red "Cancel render and close", so Enter cancelled the export.
+    const first = node?.querySelector<HTMLElement>('[data-autofocus]') ?? node?.querySelector<HTMLElement>('input, textarea, select, button:not([data-close]), [tabindex="0"]');
     (first ?? node)?.focus();
     return () => { opener?.focus?.(); };
   }, []);
@@ -205,6 +223,7 @@ export function Popover({ el, onClose, children, align = 'left', width, role = '
 export function MenuItem({ el, onClick, children, shortcut, disabledReason, badge }: { el: string; onClick: () => void; children: ReactNode; shortcut?: string; disabledReason?: string | null; badge?: ReactNode }) {
   return (
     <button type="button" role="menuitem" data-el={el} aria-disabled={disabledReason ? true : undefined} title={disabledReason ?? undefined}
+      aria-label={plainLabel(children) ?? undefined} aria-keyshortcuts={shortcut ? shortcut.replace(/Ctrl/g, 'Control') : undefined}
       onClick={() => { if (!disabledReason) onClick(); }}
       className={cx('flex w-full items-center gap-3 rounded-[6px] px-2.5 py-1.5 text-left hover:bg-em-panel-2', disabledReason && 'opacity-40 cursor-not-allowed')}>
       <span className="flex-1">{children}</span>{badge}

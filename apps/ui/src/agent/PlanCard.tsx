@@ -128,9 +128,9 @@ export function PlanSummary({ plan }: { plan: PlanDto }) {
   const { t } = useStore();
   const v = plan.result?.toVersion?.slice(0, 6);
   return (
-    <div data-el="agent.editor.plancard" data-plan-id={plan.id} data-status={plan.status} data-collapsed="true" className={cx('flex items-center gap-2 rounded-[8px] border px-2 py-1 text-[12px]', plan.status === 'executed' ? 'border-em-success/70 text-em-success' : 'border-em-line text-em-muted')}>
+    <div data-el="agent.editor.plancard" data-plan-id={plan.id} data-status={plan.status} data-collapsed="true" className={cx('flex w-full max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-[8px] border px-2 py-1 text-[12px]', plan.status === 'executed' ? 'border-em-success/70 text-em-success' : 'border-em-line text-em-muted')}>
       {plan.status === 'executed' ? <CheckCircle2 size={14} /> : <History size={14} />}
-      <span className="min-w-0 flex-1 truncate text-em-text"><ModelText inline text={plan.goal} /></span>
+      <span className="min-w-0 flex-1 basis-[60%] truncate text-em-text" title={plan.goal}><ModelText inline text={plan.goal} /></span>
       <span>{t(`ui.agent.plan.status.${plan.status}`)}{v ? ` · v${v}` : ''}</span>
       {plan.result && <span className="text-em-muted">· {diffSummary(plan.result, t)}</span>}
       <UndoPlan plan={plan} />
@@ -172,14 +172,14 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
   const lockedNotice = locked.dropped.length > 0 || locked.touching.size > 0;
   const otherValidation = plan.validation.filter((v) => !(v.code === 'EM-2302' && v.path.startsWith('droppedSteps[')));
   if (collapsed) {
-    return <div data-el="agent.editor.plancard" data-plan-id={plan.id} data-status="executed" data-collapsed="true" className="flex items-center gap-2 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} /><span className="min-w-0 flex-1 truncate"><ModelText inline text={plan.goal} /></span>
+    return <div data-el="agent.editor.plancard" data-plan-id={plan.id} data-status="executed" data-collapsed="true" className="flex w-full max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} /><span className="min-w-0 flex-1 basis-[60%] truncate" title={plan.goal}><ModelText inline text={plan.goal} /></span>
       <span className="shrink-0">{t('ui.agent.plan.status.executed')} · v{(plan.result?.toVersion ?? headHash ?? '').slice(0, 6)}</span>{plan.result && <span data-el="agent.editor.plancard.result" className="shrink-0 text-em-text-2">· {diffSummary(plan.result, t)}</span>}
       <ShowInTimeline plan={plan} /><UndoPlan plan={plan} /><button type="button" className="shrink-0 underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button>
       {toolNote && <span data-el="agent.editor.plancard.toolnote" className="shrink-0 text-em-text-2">· {toolNote}</span>}</div>;
   }
   return (
     <section data-el="agent.editor.plancard" data-plan-id={plan.id} data-status={status} role="region" aria-label={t('a11y.agent.editor.plancard', { goal: plan.goal, status: h.text, version: base })}
-      className={cx('flex flex-col gap-2 rounded-[8px] border bg-em-panel p-2.5', h.border)}>
+      className={cx('flex w-full min-w-0 max-w-full flex-col gap-2 rounded-[8px] border bg-em-panel p-2.5', h.border)}>
       <div className="flex items-center gap-1.5 text-[12px]">
         <span data-el={status === 'executing' ? 'agent.chat.progress' : undefined} data-phase={status === 'executing' ? 'executing' : undefined} role={status === 'executing' ? 'status' : undefined} className={cx('flex items-center gap-1 font-semibold', h.tone)}>{h.icon}{h.text}</span>
         <span className="text-em-muted">· {plan.origin === 'compile' ? t('ui.agent.plan.origin.compile') : t('ui.agent.plan.origin.agent')} ·</span>
@@ -219,9 +219,10 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
             return (
               <li key={s.n} data-el="agent.editor.plancard.step" data-locked={off ? 'true' : undefined} className={cx('flex items-start gap-1.5 text-[12px]', s.dependsOn.length > 0 && 'ml-4', off && 'text-em-muted line-through')}>
                 <span className="t-mono text-em-muted">{s.n}</span>
-                <span data-el="agent.editor.plancard.step.tool" className="t-mono shrink-0 rounded-[4px] border border-em-line px-1 text-[10px] text-em-muted">{s.tool}</span>
-                <span data-el="agent.editor.plancard.step.diff" className="flex-1"><ModelText inline text={s.expectedDiff} /></span>
-                <span data-el="agent.editor.plancard.step.ops" className="t-mono shrink-0 text-[10px] text-em-muted" title={[...new Set(s.ops.map((o) => (OP_LABEL[o.op] ? t(OP_LABEL[o.op]!) : o.op)))].join(', ') || undefined}>{t('ui.agent.plan.step.ops', { count: stepOps(s) })}</span>
+                {/* Entry 36: "composition.applyOps" is an internal tool name — not shown to the Creator (kept in the DOM for tests / support) */}
+                <span data-el="agent.editor.plancard.step.tool" className={cx('t-mono shrink-0 rounded-[4px] border border-em-line px-1 text-[10px] text-em-muted', s.tool === 'composition.applyOps' && 'hidden')}>{s.tool}</span>
+                <span data-el="agent.editor.plancard.step.diff" className="min-w-0 flex-1 break-words"><ModelText inline text={s.expectedDiff} /></span>
+                <span data-el="agent.editor.plancard.step.ops" className="t-mono shrink-0 whitespace-nowrap text-[10px] text-em-muted" title={[...new Set(s.ops.map((o) => (OP_LABEL[o.op] ? t(OP_LABEL[o.op]!) : o.op)))].join(', ') || undefined}>{t('ui.agent.plan.step.ops', { count: stepOps(s) })}</span>
               </li>
             );
           })}

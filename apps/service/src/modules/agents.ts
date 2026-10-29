@@ -44,7 +44,7 @@ type Block = { type: 'text'; text: string } | { type: 'tool_call'; name: string;
   /** FR-216: why research did not run for this answer (EM-4403 account disabled web search, …). */
   | { type: 'notice'; code: string; text: string }
   /** FR-219: on an Editor message: it came from this Brainstorm draft. */
-  | { type: 'origin'; from: 'brainstorm'; messageId: string; auto?: boolean }
+  | { type: 'origin'; from: 'brainstorm'; messageId: string; auto?: boolean; instruction?: string }
   /** FR-219: on a Brainstorm draft: it was handed to the Editor; the state follows that Editor run. */
   | { type: 'handoff'; draftTitle: string; editorMessageId?: string; editorRunId?: string; state: 'sent' | 'planning' | 'ready' | 'applied' | 'failed'; scenes?: number };
 interface MsgRow { id: string; conversation_id: string; role: 'user' | 'assistant' | 'system' | 'tool'; blocks_json: string; agent_run_id: string | null; created_at: string }
@@ -153,8 +153,10 @@ function historyOf(ctx: ServiceContext, convId: string): ChatMessage[] {
     try { return pid ? documentsContext(docsOf(ctx, pid, ids), i === lastUser ? DOC_CONTEXT_CHARS : 3000) : ''; } catch { return ''; }
   };
   return rows.flatMap((r, ri) => {
+    // Entry 35: a hand-off message shows a short line; the agent's history keeps the full request (origin.instruction)
+    const handoff = blocksOf(r.blocks_json).find((b): b is Extract<Block, { type: 'origin' }> => b.type === 'origin' && typeof b.instruction === 'string');
     // Tool-call markup an older build stored in an answer is not sent back (it taught the model to write more of it).
-    const text = blocksOf(r.blocks_json).flatMap((b) => (b.type === 'text' ? [r.role === 'assistant' ? stripToolMarkup(b.text) : b.text] : b.type === 'proposed_intents' ? [`(proposed ${b.intents.length} change(s); ${b.handoffState})`]
+    const text = blocksOf(r.blocks_json).flatMap((b) => (b.type === 'origin' && b.instruction ? [b.instruction] : b.type === 'text' && handoff ? [] : b.type === 'text' ? [r.role === 'assistant' ? stripToolMarkup(b.text) : b.text] : b.type === 'proposed_intents' ? [`(proposed ${b.intents.length} change(s); ${b.handoffState})`]
       : b.type === 'targets' ? [`(pointed at: ${b.items.map((t) => `@${t.label}`).join(', ')})`]
       : b.type === 'sources' && b.items.length ? [`(sources used: ${b.items.slice(0, 8).map((x) => `${x.title ? `${x.title} ` : ''}${x.url}`).join('; ')})`]
       : b.type === 'image_candidates' && b.items.length ? [`(offered ${b.items.length} openly licensed picture(s) to import: ${b.items.slice(0, 8).map((x) => `"${x.title}" (${x.license})`).join(', ')})`]
@@ -424,7 +426,7 @@ const ImageImportBody = z.object({ messageId: Id, source: z.enum(['openverse', '
 const HandoffBody = z.object({ messageId: Id, intentIds: z.array(Id).max(12).optional(), baseVersion: z.string().min(1).max(128) }).strict();
 
 /** FR-219: the Editor request for a Brainstorm draft: the answer, its proposed changes and the "do it, don't ask back" rule. */
-export function draftRequest(m: { blocks: Block[] }, language: 'id' | 'en'): { text: string; title: string; scenes: number } {
+export function draftRequest(m: { blocks: Block[] }, language: 'id' | 'en'): { text: string; display: string; title: string; scenes: number } {
   const reply = m.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n').trim();
   const props = m.blocks.flatMap((b) => (b.type === 'proposed_intents' ? b.intents : []));
   const lines = props.map((p, i) => `${i + 1}. ${p.instruction ?? `${p.category}${p.presetId ? ` ${p.presetId}` : ''}`}`);
@@ -434,7 +436,9 @@ export function draftRequest(m: { blocks: Block[] }, language: 'id' | 'en'): { t
   const body = [head, '', language === 'en' ? 'DRAFT:' : 'DRAF:', reply, ...(lines.length ? ['', language === 'en' ? 'PROPOSED CHANGES:' : 'USULAN PERUBAHAN:', ...lines] : [])].join('\n');
   const title = (reply.split('\n').find((l) => l.trim()) ?? (language === 'en' ? 'Draft' : 'Draf')).replace(/[#*_`>]/g, '').trim().slice(0, 80);
   const scenes = props.filter((p) => /adegan|scene/i.test(String(p.instruction ?? ''))).length || (reply.match(/^\s*(adegan|scene)\s*\d+/gim)?.length ?? 0);
-  return { text: body.length > 8000 ? `${body.slice(0, 7990)}…` : body, title, scenes };
+  // Entry 35 (UI QA): the Creator's bubble shows a short line; the instruction above goes to the Editor Agent (origin block)
+  const display = language === 'en' ? `Send the Discussion draft to the Editor: “${title}”` : `Kirim draf dari Diskusi ke Editor: “${title}”`;
+  return { text: body.length > 8000 ? `${body.slice(0, 7990)}…` : body, display, title, scenes };
 }
 /** FR-219: hands a Brainstorm answer to the Editor: an Editor message (origin block) + run, and a hand-off block on the draft. */
 export async function sendDraftToEditor(ctx: ServiceContext, projectId: string, messageId: string, baseVersion: string, auto = false) {
@@ -444,7 +448,7 @@ export async function sendDraftToEditor(ctx: ServiceContext, projectId: string, 
   if (!m) throw new EmError('EM-9003', 'This draft is no longer available.', { path: 'params.messageId' });
   const blocks = blocksOf(m.blocks_json);
   const d = draftRequest({ blocks }, project.language);
-  const started = await startChatMessage(ctx, project.id, 'editor', { text: d.text, attachments: [], documents: [], baseVersion, targets: [] }, { prefixBlocks: [{ type: 'origin', from: 'brainstorm', messageId, ...(auto ? { auto: true } : {}) }] });
+  const started = await startChatMessage(ctx, project.id, 'editor', { text: d.text, attachments: [], documents: [], baseVersion, targets: [] }, { displayText: d.display, prefixBlocks: [{ type: 'origin', from: 'brainstorm', messageId, ...(auto ? { auto: true } : {}), instruction: d.text }] });
   const next: Block[] = [...blocks.filter((b) => b.type !== 'handoff').map((b) => (b.type === 'proposed_intents' && b.handoffState === 'pending' ? { ...b, handoffState: 'sent' as const } : b)),
     { type: 'handoff', draftTitle: d.title, editorMessageId: started.message.id, editorRunId: started.runId, state: 'planning', ...(d.scenes ? { scenes: d.scenes } : {}) }];
   ctx.db.prepare('UPDATE messages SET blocks_json = ? WHERE id = ?').run(JSON.stringify(next), m.id);
@@ -473,7 +477,7 @@ export const MAKE_VIDEO_RE = /\b(buat(kan|in)?|bikin(kan|in)?|kerjakan|garap|eks
  * R-081 core (also used by the Brainstorm → Editor hand-off, FR-219): stores the Creator's message, starts the agent run and returns
  * at once; the answer arrives as agent.run.* events. `prefixBlocks`: extra blocks on the stored user message (the hand-off origin).
  */
-export async function startChatMessage(ctx: ServiceContext, projectId: string, agent: AgentT, body: z.infer<typeof SendBody>, opts: { prefixBlocks?: Block[]; docs?: DocPart[] } = {}) {
+export async function startChatMessage(ctx: ServiceContext, projectId: string, agent: AgentT, body: z.infer<typeof SendBody>, opts: { prefixBlocks?: Block[]; docs?: DocPart[]; /** Entry 35: the text the Creator sees (the agent still gets body.text) */ displayText?: string } = {}) {
   const project = requireProject(ctx, projectId);
   if (ctx.egress.isPrivate()) throw new EmError('EM-4401', 'Private Mode blocks all internet use, so the agents are unavailable.');
   if (activeRun(ctx, project.id, agent)) throw new EmError('EM-4305', 'Wait for the current answer to finish, or cancel it, before sending another message.', { status: 409 });
@@ -503,7 +507,7 @@ export async function startChatMessage(ctx: ServiceContext, projectId: string, a
   const run: RunRow = { id: runId, project_id: project.id, agent, connection_id: a?.connectionId ?? null, model_id: provider.model, status: 'running', error_code: null, started_at: now, finished_at: null, plan_id: null };
   const msg = ctx.db.transaction(() => {
     ctx.db.prepare("INSERT INTO agent_runs(id, project_id, agent, connection_id, model_id, status, started_at) VALUES (?,?,?,?,?,'running',?)").run(runId, project.id, agent, run.connection_id, run.model_id, now);
-    return insertMessage(ctx, convId, 'user', [{ type: 'text', text: body.text }, ...(opts.prefixBlocks ?? []), ...attachments, ...(body.targets.length ? [{ type: 'targets' as const, items: body.targets as PointedTarget[] }] : [])], runId);
+    return insertMessage(ctx, convId, 'user', [{ type: 'text', text: opts.displayText ?? body.text }, ...(opts.prefixBlocks ?? []), ...attachments, ...(body.targets.length ? [{ type: 'targets' as const, items: body.targets as PointedTarget[] }] : [])], runId);
   })();
   const controller = new AbortController();
   s3(ctx).runs.set(runId, { controller, projectId: project.id, agent });

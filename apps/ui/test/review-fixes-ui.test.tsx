@@ -59,12 +59,12 @@ const queue = (ids: Array<[string, string]>): IntentQueueDto => ({ projectId: 'x
 
 describe('U1 re-plan keeps the request', () => {
   it('replanRequest: the plan\'s queued picks + the Creator\'s message + agent mode; never an empty body', () => {
-    expect(replanRequest(plan({ intentIds: ['a', 'b'] }), queue([['a', 'queued'], ['b', 'executed']]))).toEqual({ intentIds: ['a'], message: 'buat judul pembuka yang kuat', mode: 'agent' });
-    expect(replanRequest(plan({ intentIds: ['a'] }), queue([]))).toEqual({ message: 'buat judul pembuka yang kuat', mode: 'agent' });     // chat intent withdrawn: the message
+    expect(replanRequest(plan({ intentIds: ['a', 'b'] }), queue([['a', 'queued'], ['b', 'executed']]))).toEqual({ intentIds: ['a'], message: 'buat judul pembuka yang kuat', mode: 'agent', replanOf: 'p-old' });
+    expect(replanRequest(plan({ intentIds: ['a'] }), queue([]))).toEqual({ message: 'buat judul pembuka yang kuat', mode: 'agent', replanOf: 'p-old' });   // Entry 35: + replanOf (the Service uses the Creator's own message)     // chat intent withdrawn: the message
     expect(replanRequest(plan({ origin: 'compile', goal: 'Apply 2 pick(s)', intentIds: ['a', 'b'] }), queue([['a', 'queued'], ['b', 'queued']]))).toEqual({ intentIds: ['a', 'b'] });
     // nothing of the request is left: the old ids are asked for (the Service says EM-9003), never the whole queue
     expect(replanRequest(plan({ origin: 'compile', goal: 'Apply 1 pick(s)', intentIds: ['gone'] }), queue([['other', 'queued']]))).toEqual({ intentIds: ['gone'] });
-    expect(replanRequest(plan({ goal: 'Plan the queued picks', intentIds: ['a'] }), null)).toEqual({ intentIds: ['a'], mode: 'agent' });
+    expect(replanRequest(plan({ goal: 'Plan the queued picks', intentIds: ['a'] }), null)).toEqual({ intentIds: ['a'], mode: 'agent', replanOf: 'p-old' });
   });
 
   it('Execute on a stale Editor-chat plan re-plans with its picks and message (was createPlan({baseVersion}) → EM-9002 / whole queue)', async () => {

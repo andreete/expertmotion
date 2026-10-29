@@ -9,9 +9,9 @@ import { useOpenSource } from '../components/ExternalLink.js';
 import type { AgentErrorDetail } from '../state/reducer.js';
 import { isRecentKey, keyRetryDelay } from '../state/key-retry.js';
 import { targetKey } from './targets.js';
-import { Button, IconButton, Popover, cx } from '../components/ui.js';
+import { Button, IconButton, Popover, cx, noEllipsis } from '../components/ui.js';
 import { qualityOf } from '../components/ModelPicker.js';
-import { formatMoney, formatTokens } from '../i18n/index.js';
+import { formatMoney, formatNumber, formatTokens } from '../i18n/index.js';
 import { useModelNames } from '../state/use-model-names.js';
 import { copyText } from '../api/client.js';
 import { ModelText, modelReplyText } from './ModelText.js';
@@ -63,12 +63,14 @@ export function useAgentAvailability(agent: AgentKind): { reason: string | null;
 /** Text of a message as shown (assistant text is model output: any JSON wrapper is unwrapped per block, QA #16). */
 export const messageText = (m: MessageDto): string => m.blocks.filter((b) => b.type === 'text').map((b) => (b.type === 'text' ? (m.role === 'assistant' ? modelReplyText(b.text) : b.text) : '')).filter((x) => m.role !== 'assistant' || x).join('\n');
 
-export function Bubble({ m, agent, children, onRetry, onApply, text: override, hideText }: {
+export function Bubble({ m, agent, children, onRetry, onApply, text: override, hideText, collapsible }: {
   m: MessageDto; agent: AgentKind; children?: ReactNode; onRetry?: (() => void) | undefined;
+  /** Entry 36: a long message the Creator did not type (the "Send to Editor" draft) starts folded to four lines. */ collapsible?: boolean | undefined;
   /** "Apply to video" (Kerjakan di video) on a Diskusi answer. */ onApply?: (() => void) | undefined;
   /** Shown instead of the stored text (an Editor question); `hideText` = the Plan Card carries the reply. */ text?: string | undefined; hideText?: boolean | undefined;
 }) {
   const { t, lang } = useStore();
+  const [open, setOpen] = useState(false);
   const text = override ?? messageText(m);
   const attachments = m.blocks.filter((b) => b.type === 'attachment');
   const time = new Date(m.createdAt);
@@ -82,11 +84,18 @@ export function Bubble({ m, agent, children, onRetry, onApply, text: override, h
   }
   const user = m.role === 'user';
   const shown = hideText ? '' : text;
+  const foldable = Boolean(collapsible && user && shown.split('\n').length + shown.length / 60 > 5);
   return (
     <div data-el="agent.chat.message" data-agent={agent} data-role={m.role} className={cx('group flex flex-col gap-1', user ? 'items-end' : 'items-start')}>
       <ModeTag agent={agent} user={user} />
       {shown && (user
-        ? <div className="max-w-[92%] whitespace-pre-wrap rounded-[8px] border-l-2 border-em-accent bg-em-panel-2 px-2.5 py-1.5">{shown}</div>
+        ? <div className="flex max-w-[92%] flex-col items-end gap-0.5">
+            <div data-el="agent.chat.message.text" data-folded={foldable && !open ? 'true' : undefined} className="rounded-[8px] border-l-2 border-em-accent bg-em-panel-2 px-2.5 py-1.5">
+              {/* the clamp sits inside the padding, or a sliver of line 5 shows in the bottom padding */}
+              <div className={cx('whitespace-pre-wrap', foldable && !open && 'line-clamp-4')}>{shown}</div>
+            </div>
+            {foldable && <button type="button" data-el="agent.chat.message.fold" aria-expanded={open} className="text-[11px] text-em-accent underline" onClick={() => setOpen((v) => !v)}>{t(open ? 'ui.agent.message.fold.less' : 'ui.agent.message.fold.more')}</button>}
+          </div>
         : <div className="max-w-[92%] rounded-[8px] bg-em-panel-2 px-2.5 py-1.5"><ModelText text={shown} raw /></div>)}
       {attachments.map((a, i) => a.type === 'attachment' && (
         <span key={i} data-el="agent.chat.message.attachment" data-sent={a.sent} data-kind={a.documentId ? 'document' : a.mime.split('/')[0]} className="flex max-w-[92%] flex-col items-end">
@@ -386,13 +395,17 @@ export function ChatTabs({ mode, setMode, unread }: { mode: AgentKind; setMode: 
 export function ResearchToggle() {
   const { t, state, actions } = useStore();
   const priv = Boolean(state.settings?.privateMode);
-  const on = !priv && state.settings?.webResearch !== false;
-  const tip = priv ? t('ui.agent.research.toggle.private') : on ? t('ui.agent.research.toggle.on.tip') : t('ui.agent.research.toggle.off.tip');
+  // Entry 36 (UI QA): with no working AI connection there is nobody to research — the chip said "Web on" anyway. It now
+  // reads "Web" (muted, aria-disabled) and its tooltip says what to do first; the setting itself is kept for later.
+  const noAi = !state.connections.some((c) => c.status === 'valid');
+  const blocked = priv || noAi;
+  const on = !blocked && state.settings?.webResearch !== false;
+  const tip = priv ? t('ui.agent.research.toggle.private') : noAi ? t('ui.agent.research.toggle.noai') : on ? t('ui.agent.research.toggle.on.tip') : t('ui.agent.research.toggle.off.tip');
   return (
-    <button type="button" data-el="agent.chat.research" role="switch" aria-checked={on} aria-label={t('ui.agent.research.toggle')} title={tip} disabled={priv}
-      onClick={() => { void actions.putSettings({ webResearch: !on }); }}
-      className={cx('flex shrink-0 items-center gap-0.5 rounded-[4px] border px-1 text-[10px]', on ? 'border-em-accent-2/60 text-em-accent-2' : 'border-em-line text-em-muted', priv && 'opacity-60')}>
-      <Globe size={11} aria-hidden />{on ? t('ui.agent.research.toggle.on') : t('ui.agent.research.toggle.off')}
+    <button type="button" data-el="agent.chat.research" role="switch" aria-checked={on} aria-label={t('ui.agent.research.toggle')} title={tip} aria-disabled={blocked || undefined}
+      onClick={() => { if (!blocked) void actions.putSettings({ webResearch: !on }); }}
+      className={cx('flex shrink-0 items-center gap-0.5 rounded-[4px] border px-1 text-[10px]', on ? 'border-em-accent-2/60 text-em-accent-2' : 'border-em-line text-em-muted', blocked && 'cursor-not-allowed opacity-60')}>
+      <Globe size={11} aria-hidden />{noAi && !priv ? t('ui.agent.research.toggle.idle') : on ? t('ui.agent.research.toggle.on') : t('ui.agent.research.toggle.off')}
     </button>
   );
 }
@@ -414,9 +427,17 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
   /** QA 2026-10-26 #6: the pointed assets / Timeline elements, sent as `targets` with the next message (removable chips). */
   targets?: ChatTarget[]; onRemoveTarget?: (t: ChatTarget) => void;
 }) {
-  const { state, t, runtime, dispatch } = useStore();
+  const { state, t, runtime, dispatch, actions } = useStore();
   const agent = mode;
-  const { reason } = useAgentAvailability(agent);
+  const { reason, code: reasonCode } = useAgentAvailability(agent);
+  // Entry 35: typing or Send in a composer that cannot send (no provider, Private Mode, no model) says why with its next action
+  // (EM-4001 / EM-4007 → Providers, EM-4401 → turn Private Mode off) instead of silently doing nothing. At most once per 4 s.
+  const blockedToastAt = useRef({ at: 0, agent });
+  const explainBlocked = () => {
+    if (!reason || !reasonCode || (blockedToastAt.current.agent === agent && Date.now() - blockedToastAt.current.at < 4000)) return;
+    blockedToastAt.current = { at: Date.now(), agent };
+    actions.toast('info', `err.${reasonCode}.title`, undefined, { code: reasonCode });
+  };
   const stop = useStopRun(agent);
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -554,6 +575,7 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
         <textarea ref={ref} data-el="agent.chat.composer" data-mode={mode} data-busy={busy ? 'true' : undefined} rows={1} value={value} placeholder={reason ?? (busy ? t('ui.agent.composer.working') : placeholder)} aria-label={t(`a11y.agent.${agent}.composer`)} aria-describedby={reason ? reasonId : undefined}
           readOnly={Boolean(reason)} onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
+            if (reason && ((e.key === 'Enter' && !e.shiftKey) || (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey))) explainBlocked();
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send(); }   /* Enter or Ctrl+Enter sends (FR-153) */
             else if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !value) { e.preventDefault(); setMode(mode === 'brainstorm' ? 'editor' : 'brainstorm'); }
             else if (e.key === 'Backspace' && !value && targets.length && onRemoveTarget) { e.preventDefault(); onRemoveTarget(targets[targets.length - 1]!); }
@@ -565,8 +587,8 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
             {attachOpen && (
               <Popover onClose={() => setAttachOpen(false)} width={220} label={t('ui.agent.composer.attach')}>
                 <button type="button" data-el="agent.chat.attach.file" className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickImage()}><ImagePlus size={14} />{t('ui.agent.composer.attach.file')}</button>
-                <button type="button" data-el="agent.chat.attach.audio" className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickFile('audio')}><Music size={14} />{t('ui.agent.composer.attach.audio.pick')}</button>
-                <button type="button" data-el="agent.chat.attach.document" className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickFile('document')}><FileText size={14} />{t('ui.agent.composer.attach.docs.pick')}</button>
+                <button type="button" data-el="agent.chat.attach.audio" aria-label={noEllipsis(t('ui.agent.composer.attach.audio.pick'))} className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickFile('audio')}><Music size={14} />{t('ui.agent.composer.attach.audio.pick')}</button>
+                <button type="button" data-el="agent.chat.attach.document" aria-label={noEllipsis(t('ui.agent.composer.attach.docs.pick'))} className="flex w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => void pickFile('document')}><FileText size={14} />{t('ui.agent.composer.attach.docs.pick')}</button>
                 <div className="my-1 border-t border-em-line" />
                 {images.length === 0 ? <div className="p-2 text-em-muted">{t('ui.agent.composer.attach.none')}</div>
                   : images.map((a) => <button key={a.id} type="button" data-el="agent.chat.attach.asset" className="block w-full truncate rounded-[6px] px-2 py-1 text-left hover:bg-em-panel" onClick={() => { setAttachments((x) => [...new Set([...x, a.id])].slice(0, 4)); setAttachOpen(false); }}>{a.name}</button>)}
@@ -654,9 +676,11 @@ export function ChatHeader({ mode, setMode, layout }: { mode: AgentKind; setMode
       </span>
       <ResearchToggle />
       {agent === 'editor' && cap && !cap.toolCalling && <span className="shrink-0 rounded-[4px] border border-em-line px-1 text-[10px] text-em-muted" title={t('ui.agent.footer.jsonmode')}>JSON</span>}
-      {a && <span data-el="agent.chat.usage" data-tone={tone} role="status" title={usageTip} aria-label={`${t('a11y.agent.footer.ctx', { used: formatTokens(used, lang), limit: limit ? formatTokens(limit, lang) : 'n/a' })}. ${t('ui.agent.footer.ctx.cost', { cost })}`}
+      {/* Entry 36: "0 / 1 000 000" before the first message squeezed the model name to "Claude S…" at 1280 wide; shown once used */}
+      {a && used > 0 && <span data-el="agent.chat.usage" data-tone={tone} role="status" title={usageTip} aria-label={`${t('a11y.agent.footer.ctx', { used: formatTokens(used, lang), limit: limit ? formatTokens(limit, lang) : 'n/a' })}. ${t('ui.agent.footer.ctx.cost', { cost })}`}
         className={cx('t-mono shrink-0 text-[11px]', tone === 'danger' ? 'text-em-danger' : tone === 'warn' ? 'text-em-warn' : 'text-em-muted')}>
-        {formatTokens(used, lang)}{limit ? ` / ${formatTokens(limit, lang)}` : ''}
+        {/* Entry 36: "1.794 / 1.000.000" left "Model: Cl…" at 1280 wide; the share of the context is enough here (full numbers in the tooltip) */}
+        {limit ? `${formatNumber(Math.min(100, (used / limit) * 100), lang, used / limit < 0.1 ? 1 : 0)} %` : formatTokens(used, lang)}
       </span>}
       <span title={help} aria-label={help} className="shrink-0 text-em-muted"><CircleHelp size={14} /></span>
       <IconButton el="agent.chat.maximize" size={28} aria-pressed={layout.maximized} label={layout.maximized ? t('ui.agent.chat.restore') : t('ui.agent.chat.maximize.one')}

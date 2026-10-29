@@ -93,6 +93,14 @@ describe('reducer', () => {
     expect(s.contextUsage.brainstorm).toEqual({ usedTokens: 10, contextLength: 100 });
   });
 
+  it('Entry 35: agent.run.done of a re-plan run (no message) ends the stream without crashing (was EM-8009)', () => {
+    let s = reducer(withProject(), { type: 'event', event: ev({ name: 'agent.run.delta', data: { projectId: 'P', runId: 'R2', agent: 'editor', delta: '{' } }) });
+    s = reducer(s, { type: 'event', event: ev({ name: 'agent.run.done', data: { projectId: 'P', run: { id: 'R2', projectId: 'P', agent: 'editor', status: 'done', modelId: 'm', connectionId: null, planId: 'PL', errorCode: null, usage: null, startedAt: '', finishedAt: '' }, usage: null, contextUsage: null, planId: 'PL' } }) });
+    expect(s.streaming.editor).toBeNull();
+    expect(s.messages.editor).toHaveLength(0);
+    expect(s.doneRuns).toContain('R2');
+  });
+
   it('ignores project-scoped events for another project and applies Private Mode changes', () => {
     const s0 = withProject();
     const s1 = reducer(s0, { type: 'event', event: ev({ name: 'intent.updated', data: { projectId: 'OTHER', queue: { projectId: 'OTHER', headHash: 'x', items: [], lockedKeys: [] }, changed: [], reason: 'created' } }) });

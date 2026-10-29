@@ -18,7 +18,7 @@ export type ChatBlockOut =
   | { type: 'notice'; code: string; text: string }
   /** FR-219 / ADR-033: a Brainstorm draft handed to the Editor (state follows the Editor run). */
   /** FR-219: this Editor message came from a Brainstorm draft ("Kirim ke Editor"). */
-  | { type: 'origin'; from: 'brainstorm'; messageId: string; auto?: boolean }
+  | { type: 'origin'; from: 'brainstorm'; messageId: string; auto?: boolean; /** Entry 35: the full hand-off request the Editor Agent reads (the Creator sees the short text block) */ instruction?: string }
   | { type: 'handoff'; draftTitle: string; editorMessageId?: string; editorRunId?: string; state: 'sent' | 'planning' | 'ready' | 'applied' | 'failed'; scenes?: number };
 
 const PRESET_RE = /^preset:[a-z]+\.[a-z0-9-]+$/;
@@ -72,7 +72,7 @@ export function normalizeMessageBlocks(raw: unknown): ChatBlockOut[] {
         break;
       }
       case 'notice': if (typeof b['code'] === 'string') out.push({ type: 'notice', code: b['code'], text: s(b['text']) }); break;
-      case 'origin': if (typeof b['messageId'] === 'string') out.push({ type: 'origin', from: 'brainstorm', messageId: b['messageId'], ...(b['auto'] === true ? { auto: true } : {}) }); break;
+      case 'origin': if (typeof b['messageId'] === 'string') out.push({ type: 'origin', from: 'brainstorm', messageId: b['messageId'], ...(b['auto'] === true ? { auto: true } : {}), ...(typeof b['instruction'] === 'string' && b['instruction'] ? { instruction: b['instruction'].slice(0, 8000) } : {}) }); break;
       case 'handoff': {
         const st = b['state'];
         out.push({ type: 'handoff', draftTitle: s(b['draftTitle']), ...(typeof b['editorMessageId'] === 'string' ? { editorMessageId: b['editorMessageId'] } : {}), ...(typeof b['editorRunId'] === 'string' ? { editorRunId: b['editorRunId'] } : {}),

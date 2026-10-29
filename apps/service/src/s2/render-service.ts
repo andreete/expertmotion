@@ -169,7 +169,9 @@ export class RenderService {
     let writable = allowed;
     if (allowed) { let d = folder; while (!fs.existsSync(d) && path.dirname(d) !== d) d = path.dirname(d); try { fs.accessSync(d, fs.constants.W_OK); } catch { writable = false; } }
     checks.push({ check: 'folder', ok: allowed && writable, ...(allowed ? writable ? {} : { code: 'EM-3206' } : { code: 'EM-8302' }), details: { folder: path.basename(folder) } });
-    const free = await freeBytes(fs.existsSync(folder) ? folder : ctx.paths.outputs);
+    // EM_TEST_DISK_FREE_MB: development-only fault injection (GOLDEN_SCENARIOS §1, the low-disk scenario), ignored in packaged builds.
+    const testDisk = ctx.cfg.dev ? Number(process.env['EM_TEST_DISK_FREE_MB'] ?? NaN) : NaN;
+    const free = Number.isFinite(testDisk) ? testDisk * 1048576 : await freeBytes(fs.existsSync(folder) ? folder : ctx.paths.outputs);
     const needDisk = 3 * (estimate.bytes ?? 0) + 500_000_000;
     checks.push({ check: 'disk', ok: free >= needDisk, ...(free >= needDisk ? {} : { code: 'EM-3102' }), details: { needBytes: needDisk, freeBytes: free } });
     // EM_TEST_FREE_MEM_MB: development-only fault injection (GOLDEN_SCENARIOS §1 EM_TEST_*), ignored in packaged builds.
@@ -383,6 +385,10 @@ export class RenderService {
           this.finish(getJob(ctx, jobId)!, 'failed', 'EM-3205', v.mismatch);
           return;
         }
+        // Entry 35: the Creator may have removed (or renamed) the output folder while the video rendered: make it again before the
+        // finished file moves there; a folder that cannot be made is EM-3206 (choose another folder), not "Rendering failed".
+        try { fs.mkdirSync(path.dirname(outFile), { recursive: true }); fs.accessSync(path.dirname(outFile), fs.constants.W_OK); }
+        catch { throw em('EM-3206', 'Expertmotion cannot save files in this folder.', { details: { folder: path.basename(path.dirname(outFile)) } }); }
         await moveFile(tmpOut, outFile);
         const outputId = ctx.newId();
         let thumbRel: string | null = null;
@@ -408,7 +414,7 @@ export class RenderService {
         else if (ctl.reason === 'stalled') this.finish(job, 'failed', 'EM-3207', 'stalled', {}, lastFrame);
         else {
           const msg = errorMessage(e);
-          const code = e instanceof EmError ? e.code : stage === 'compose' ? 'EM-3002' : /ENOSPC|EACCES|EPERM|write/i.test(msg) && stage !== 'render' ? 'EM-3204' : 'EM-3201';
+          const code = e instanceof EmError ? e.code : stage === 'compose' ? 'EM-3002' : /ENOSPC|EACCES|EPERM|ENOENT|ENOTDIR|EROFS|write/i.test(msg) && stage !== 'render' ? 'EM-3204' : 'EM-3201';
           ctx.log.error({ jobId, stage, err: msg.slice(0, 500) }, 'render failed');
           getEngineLog()?.error({ jobId, stage, code, err: msg.slice(0, 4000) }, 'render failed');
           this.finish(job, 'failed', code, stage, {}, stage === 'compose' ? null : failedFrameOf(e, lastFrame));

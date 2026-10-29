@@ -96,6 +96,9 @@ export const IntentClearQuery = z.object({ status: z.enum(['queued', 'superseded
 export const PlanCreateInput = z.object({
   intentIds: z.array(Id).max(200).default([]), message: z.string().max(4000).optional(), baseVersion: z.string().min(1).max(128),
   mode: z.enum(['auto', 'compile-only', 'agent']).default('auto'),
+  /** Entry 35: re-plan of this plan — the Editor Agent gets the Creator's ORIGINAL chat message of that plan's run (up to 8 000
+   *  characters), not the plan's one-line goal; `message` is the fallback when that message is gone. */
+  replanOf: Id.optional(),
 }).strict();
 export const PlanListQuery = PageQuery.extend({ status: statusList });
 export const ExecuteInput = z.object({ confirmDestructive: z.boolean().default(false) }).strict();

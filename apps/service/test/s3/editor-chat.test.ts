@@ -117,4 +117,21 @@ describe('Editor Chat → chat Edit Intent → Editor Agent (FR-080)', () => {
     await waitFor(() => chatStatus(message.id) === 'removed');
     expect((await body<{ status: string; errorCode: string }>(await s.api(`/agent-runs/${runId}`)))).toMatchObject({ status: 'cancelled', errorCode: 'EM-4303' });
   });
+
+  it('Entry 35: Re-plan (replanOf) sends the Creator\'s ORIGINAL long message, not the plan\'s one-line goal', async () => {
+    const prov = fakeProvider([planReply, planReply]); provider = prov;
+    const long = `Buat video "Ekspor Nikel Indonesia 2026". v1: "Ekspor nikel Indonesia naik tujuh belas persen." ${'Detail angka 25,96 miliar. '.repeat(200)}`;
+    expect(long.length).toBeGreaterThan(4000);
+    const r = await s.api(`/projects/${pid}/conversations/editor/messages`, { method: 'POST', json: { text: long, baseVersion: head() } });
+    const { runId } = await body<{ runId: string }>(r);
+    await waitFor(async () => (await body<{ status: string }>(await s.api(`/agent-runs/${runId}`))).status === 'done', 5000);
+    const planId = (s.ctx.db.prepare('SELECT id FROM edit_plans WHERE agent_run_id = ? ORDER BY created_at DESC LIMIT 1').get(runId) as { id: string }).id;
+    const rp = await s.api(`/projects/${pid}/plans`, { method: 'POST', json: { baseVersion: head(), message: 'Judul pembuka', mode: 'agent', replanOf: planId } });
+    expect(rp.status).toBe(202);
+    await waitFor(() => prov.calls.length >= 2, 5000);
+    expect(env(prov.calls[1]!)['creatorMessage']).toBe(long.trim());
+    // a plan without a chat message (or an unknown one): the given message is used
+    const rp2 = await s.api(`/projects/${pid}/plans`, { method: 'POST', json: { baseVersion: head(), message: 'Judul pembuka', mode: 'agent', replanOf: s.ctx.newId() } });
+    expect(rp2.status).toBe(202);
+  });
 });

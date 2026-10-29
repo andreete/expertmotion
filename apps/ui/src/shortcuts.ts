@@ -60,7 +60,10 @@ export function useShortcuts(collapse: { toggleLibrary: () => void; toggleAgent:
         if (l === 'z' && !e.shiftKey) { e.preventDefault(); void actions.undo(); }
         else if (l === 'y' || (l === 'z' && e.shiftKey)) { e.preventDefault(); void actions.redo(); }
         else if (l === 's' && e.shiftKey) { e.preventDefault(); if (state.project) actions.setScreen({ kind: 'project.new', saveAs: true }); }
-        else if (l === 'e') { e.preventDefault(); if (state.head?.model?.tracks.video.length) actions.setScreen({ kind: 'export' }); else actions.toast('info', 'ui.hdr.export.disabled'); }
+        else if (l === 'e') {   // Entry 35: same rule as the header Export button (a voice-over + captions video is exportable too)
+          e.preventDefault(); const tr = state.head?.model?.tracks;
+          if (tr && tr.video.length + tr.text.length + tr.overlay.length + tr.audio.length + tr.caption.pages.length > 0) actions.setScreen({ kind: 'export' }); else actions.toast('info', 'ui.hdr.export.disabled');
+        }
         else if (l === 'i') { e.preventDefault(); requestImport(); }
         else if (l === 'n') { e.preventDefault(); guardUnsaved({ state, actions }, () => { void actions.newProject(); }); }   // QA #5: New Project at once
         else if (l === 'o') { e.preventDefault(); actions.setScreen({ kind: 'project.open' }); }

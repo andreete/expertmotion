@@ -76,7 +76,10 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const running = Boolean(job && (job.status === 'queued' || job.status === 'rendering'));
   useEffect(() => { if (!running) return; const h = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(h); }, [running]);
 
-  const start = async () => { const id = await actions.startRender(body); if (id) setJobId(id); };
+  // Entry 36: Export / Cancel show a spinner until the Service answers (no click without feedback, no double start).
+  const [busy, setBusy] = useState<'start' | 'cancel' | null>(null);
+  const start = async () => { if (busy) return; setBusy('start'); try { const id = await actions.startRender(body); if (id) setJobId(id); } finally { setBusy(null); } };
+  const cancel = async (id: string) => { if (busy) return; setBusy('cancel'); try { await actions.cancelRender(id); } finally { setBusy(null); } };
   const outPath = async (): Promise<string | null> => { if (!output) return null; try { return (await runtime.api.revealOutput(output.id)).path; } catch (e) { actions.error(e); return null; } };
   const reveal = async () => { const p = await outPath(); if (p) await window.expertmotion?.openFolder?.(p); };
   const play = async () => { const p = await outPath(); if (p) await (window.expertmotion?.openPath ?? window.expertmotion?.openFolder)?.(p); };
@@ -102,8 +105,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     <Modal el="scr.export" title={t('ui.scr.export.title')} onClose={onClose}
       footer={!job ? <>
         <Button variant="ghost" onClick={onClose}>{t('ui.common.cancel')}</Button>
-        <Button el="scr.export.start" variant="primary" disabledReason={!est ? t('ui.common.loading') : est.ok ? null : t('ui.scr.export.blocked')} onClick={() => void start()}>{t('ui.scr.export.start')}</Button>
-      </> : running ? <Button el="scr.export.cancel" variant="danger-ghost" onClick={() => void actions.cancelRender(job.id)}>{t('ui.common.cancel')}</Button>
+        <Button el="scr.export.start" variant="primary" loading={busy === 'start'} disabledReason={!est ? t('ui.common.loading') : est.ok ? null : t('ui.scr.export.blocked')} onClick={() => void start()}>{t('ui.scr.export.start')}</Button>
+      </> : running ? <Button el="scr.export.cancel" variant="danger-ghost" loading={busy === 'cancel'} onClick={() => void cancel(job.id)}>{t('ui.common.cancel')}</Button>
         : <><Button el="scr.export.again" variant="ghost" onClick={() => { setJobId(null); setCopied(false); }}>{t('ui.scr.export.again')}</Button>{output && <Button el="scr.export.open.folder" variant="primary" onClick={() => void reveal()}>{t('ui.scr.export.openfolder')}</Button>}</>}>
       {!job && (
         <div className="flex flex-col gap-3">
@@ -145,7 +148,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             <Field label={t('ui.scr.export.filename')} htmlFor="em-ex-f" hint={`.${format}`}><input id="em-ex-f" data-el="scr.export.filename" className={inputCls} value={name} maxLength={80} onChange={(e) => { setNameTouched(true); setFileName(e.target.value); }} /></Field>
           </div>
           <Field label={t('ui.scr.export.folder')} htmlFor="em-ex-d" hint={folder ? undefined : t('ui.scr.export.folder.default')}>
-            <div className="flex gap-2"><input id="em-ex-d" data-el="scr.export.folder" className={inputCls} value={folder} onChange={(e) => setFolder(e.target.value)} />
+            <div className="flex gap-2"><input id="em-ex-d" data-el="scr.export.folder" className={inputCls} value={folder} placeholder={state.settings?.outputFolder || undefined} title={folder || state.settings?.outputFolder || undefined} onChange={(e) => setFolder(e.target.value)} />
               <Button onClick={pickFolder}>{t('ui.scr.project.open.browse')}</Button></div>
           </Field>
           <ul data-el="scr.export.preflight" aria-label={t('ui.scr.export.preflight')} className="flex flex-col gap-1">

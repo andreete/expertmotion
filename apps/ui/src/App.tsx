@@ -209,6 +209,16 @@ export const toastDismissMs = (toast: { kind: string; textKey: string; sticky: b
 /** One top layer (QA UX round 1, P1-6): toasts sit above modals (60), the onboarding screen (65) and the tour (70); only the splash
  *  (90) and sys.fatal (100) are higher. Toasts under a screen overlay were invisible. */
 export const TOAST_LAYER = 80;
+/** Toasts shown at once (the rest behind "+N more", UI_UX §10 CMP-11). */
+export const TOASTS_SHOWN = 2;
+const SEVERITY: Record<string, number> = { danger: 0, warn: 1 };
+/** The toasts to show, newest first; when some must wait behind "+N more", errors and warnings stay visible before receipts. */
+export function shownToasts<T extends { kind: string }>(toasts: readonly T[], n: number): T[] {
+  const newest = [...toasts].reverse();
+  if (newest.length <= n) return newest;
+  const keep = new Set([...newest].sort((a, b) => (SEVERITY[a.kind] ?? 2) - (SEVERITY[b.kind] ?? 2)).slice(0, n));
+  return newest.filter((x) => keep.has(x));
+}
 
 /** sys.update (FR-152, FR-162): background download (Download stays as a manual start while it waits), EM-8105 Restart now / Later,
  *  deferred while a render runs, paused by Private Mode, EM-8104 / EM-8102 with Try again. */
@@ -289,11 +299,23 @@ function Toasts({ right = 16 }: { right?: number }) {
   useEffect(() => {
     for (const toast of state.toasts) { const ms = toastDismissMs(toast); if (ms !== null) schedule(toast.id, ms); }
   }, [state.toasts, schedule]);
+  const [allToasts, setAllToasts] = useState(false);
+  useEffect(() => { if (state.toasts.length <= TOASTS_SHOWN) setAllToasts(false); }, [state.toasts.length]);
   const pause = (id: string) => { const h = timers.current.get(id); if (h) { clearTimeout(h); timers.current.delete(id); } };
   const tone = { info: 'border-em-info', success: 'border-em-success', warn: 'border-em-warn', danger: 'border-em-danger' } as const;
+  // Entry 36 (UI QA): bottom-right inside the Timeline View (UI_UX §7: never over the Player controls). `bottom-[260px]` put the
+  // stack over the Player's scrub bar and the start card's buttons at 1280×720. A full-window screen (onboarding, dialogs)
+  // has no Agent column to keep free, so the stack goes to the window corner there.
+  const edge = state.screen ? 16 : right;
   return (
-    <div data-el="sys.toasts" className="pointer-events-none fixed bottom-[260px] flex w-[340px] flex-col gap-2" style={{ right, zIndex: TOAST_LAYER }}>
-      {[...state.toasts].reverse().map((toast) => { const body = toastBodyOf(toast, lang); const fallback = toast.action ? null : toast.code ? toastActionFor(toast.code, lang) : null; return (
+    <div data-el="sys.toasts" className="pointer-events-none fixed bottom-6 flex w-[340px] max-w-[calc(100vw-32px)] flex-col gap-2" style={{ right: edge, zIndex: TOAST_LAYER }}>
+      {/* Entry 36: three tall toasts reached over the Player controls at 1920×1080; the newest two show, older ones behind "+N more" */}
+      {!allToasts && state.toasts.length > TOASTS_SHOWN && (
+        <button type="button" data-el="sys.toasts.more" className="pointer-events-auto self-end rounded-full border border-em-line bg-em-panel px-2 py-0.5 text-[11px] text-em-text-2" onClick={() => setAllToasts(true)}>
+          {t('ui.sys.toast.more', { count: state.toasts.length - TOASTS_SHOWN })}
+        </button>
+      )}
+      {shownToasts(state.toasts, allToasts ? state.toasts.length : TOASTS_SHOWN).map((toast) => { const body = toastBodyOf(toast, lang); const fallback = toast.action ? null : toast.code ? toastActionFor(toast.code, lang) : null; return (
         <div key={toast.id} data-el="sys.toast" data-kind={toast.kind} onMouseEnter={() => pause(toast.id)} onMouseLeave={() => { if (toastDismissMs(toast) !== null) schedule(toast.id, 3000); }}
           className={cx('pointer-events-auto flex items-start gap-2 rounded-[8px] border-l-2 bg-em-panel px-3 py-2', tone[toast.kind])} style={{ boxShadow: 'var(--sh-2)' }}>
           <div className="flex-1">

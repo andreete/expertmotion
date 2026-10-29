@@ -77,15 +77,23 @@ describe('QA 2026-10-28: research, separate chats with hand-off, documents, key 
     await finished(r.runId);
     const draft = (await thread('brainstorm')).at(-1)!;
     const res = await body<{ runId: string; message: Msg; brainstormMessage: Msg }>(await s.api(`/projects/${pid}/conversations/brainstorm/messages/${draft.id}/send-to-editor`, { method: 'POST', json: { baseVersion: head() } }));
-    expect(res.message.blocks.find((b) => b.type === 'origin')).toMatchObject({ from: 'brainstorm' });
-    expect(res.message.blocks[0]!.text).toMatch(/^Kerjakan draf dari Diskusi ini di video sekarang\. Ikuti persis/);
-    expect(res.message.blocks[0]!.text).toContain('Ekspor nikel naik');
+    // Entry 35 (UI QA): the Creator's bubble says what happened in one short line; the full instruction stays out of sight
+    // (origin block) and is what the Editor Agent reads.
+    expect(res.message.blocks[0]!.text).toMatch(/^Kirim draf dari Diskusi ke Editor: “Draf: Adegan 1/);
+    expect(res.message.blocks[0]!.text).not.toMatch(/Ikuti persis|Kerjakan draf/);
+    const origin = res.message.blocks.find((b) => b.type === 'origin') as { from: string; instruction?: string };
+    expect(origin).toMatchObject({ from: 'brainstorm' });
+    expect(origin.instruction).toMatch(/^Kerjakan draf dari Diskusi ini di video sekarang\. Ikuti persis/);
+    expect(origin.instruction).toContain('Ekspor nikel naik');
+    const stored = (await thread('editor')).find((m) => m.id === res.message.id)!;
+    expect(stored.blocks.find((b) => b.type === 'text')!.text).toMatch(/^Kirim draf dari Diskusi ke Editor/);
     expect(res.brainstormMessage.blocks.find((b) => b.type === 'handoff')).toMatchObject({ state: 'planning', editorRunId: res.runId });
     await finished(res.runId);
     const after = (await thread('brainstorm')).find((m) => m.id === draft.id)!;
     expect(after.blocks.find((b) => b.type === 'handoff')).toMatchObject({ state: 'ready' });
     expect(events.some((e) => e.name === 'agent.message.updated')).toBe(true);
     expect(editor.calls[0]!.messages[0]!.content).toContain('"discussion"');                       // the Editor also sees the discussion
+    expect(editor.calls[0]!.messages[0]!.content).toContain('Ikuti persis');                           // …and the full hand-off instruction
     const planId = events.filter((e) => e.name === 'agent.run.done' && (e.data['run'] as { id: string }).id === res.runId).map((e) => e.data['planId'] as string)[0]!;
     const ex = await body<{ ok: boolean }>(await s.api(`/plans/${planId}/execute`, { method: 'POST', json: {} }));
     expect(ex.ok).toBe(true);
@@ -156,7 +164,7 @@ describe('QA 2026-10-28: research, separate chats with hand-off, documents, key 
 describe('QA 2026-10-28 EM-4002: a key the provider rejects during an agent run (real providerFor)', () => {
   let s: TestService; let pid = '';
   const KEY = `sk-ant-api03-${'x'.repeat(40)}`;
-  let rejected = false;
+  let rejected = false; let accepted = false;
   beforeAll(async () => {
     const { createProvidersModule } = await import('../../src/modules/providers.js');
     const { fakeEgress, json } = await import('./s3-helpers.js');
@@ -164,6 +172,7 @@ describe('QA 2026-10-28 EM-4002: a key the provider rejects during an agent run 
     fakeEgress(s, [(c) => {
       if (!c.url.startsWith('https://api.anthropic.com/')) return undefined;
       if (c.url.includes('/v1/models')) return json(200, { data: [{ type: 'model', id: 'claude-sonnet-5-5', display_name: 'Claude Sonnet 5.5', max_input_tokens: 1_000_000, capabilities: { image_input: { supported: true } } }], has_more: false });
+      if (c.url.endsWith('/v1/messages') && accepted) return json(200, { id: 'msg_ok', type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: '{"reply":"Halo!"}' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } });
       if (c.url.endsWith('/v1/messages')) return rejected ? json(401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }) : json(403, { type: 'error', error: { type: 'permission_error', message: 'Web search is not enabled for this organization' } });
       return undefined;
     }]);
@@ -193,6 +202,15 @@ describe('QA 2026-10-28 EM-4002: a key the provider rejects during an agent run 
     expect((f2['details'] as { reason?: string }).reason).toBe('invalid x-api-key');
     expect((s.ctx.db.prepare('SELECT status FROM provider_connections WHERE id = ?').get(conn.id) as { status: string }).status).toBe('invalid');
     expect(events.some((e) => e.name === 'settings.changed' && e.data['scope'] === 'providers')).toBe(true);
+    // Entry 35 (UI QA): the key works again (a temporary 401, or the provider fixed it) → the next answered call marks it valid
+    // again, so the model dot / Web chip recover without re-entering the key.
+    accepted = true; const nChanged = events.filter((e) => e.name === 'settings.changed').length;
+    const r = await body<{ runId: string }>(await s.api(`/projects/${pid}/conversations/brainstorm/messages`, { method: 'POST', json: { text: 'halo lagi', baseVersion: head() } }));
+    await waitFor(() => events.some((e) => (e.name === 'agent.run.done' || e.name === 'agent.run.failed') && ((e.data['run'] as { id?: string } | undefined)?.id === r.runId || e.data['runId'] === r.runId)), 8000);
+    expect(events.some((e) => e.name === 'agent.run.done' && (e.data['run'] as { id?: string }).id === r.runId)).toBe(true);
+    expect((s.ctx.db.prepare('SELECT status FROM provider_connections WHERE id = ?').get(conn.id) as { status: string }).status).toBe('valid');
+    expect(events.filter((e) => e.name === 'settings.changed' && e.data['scope'] === 'providers').length).toBeGreaterThan(0);
+    expect(events.filter((e) => e.name === 'settings.changed').length).toBeGreaterThan(nChanged);
   });
 });
 

@@ -9,13 +9,24 @@ export const MIN_DURATION_MS = 1000, MAX_DURATION_MS = 1_800_000;
 /**
  * ADR-030: a project without video Clips ("faceless", scenes built from a background, texts, shapes and a voice-over) fits its
  * content too: its length is the end of the latest text, image, shape or audio layer with a length (open-ended / looping beds
- * and captions follow the video, they never extend it). With Clips, fit-content stays the Clip sequence (texts past it are cut).
+ * and captions follow the video, they never extend it). With Clips, fit-content is the Clip sequence, extended only by a
+ * voice-over (voiceEndMs); texts past it are cut.
  */
 export function contentEndWithoutClips(model: CompositionModelT): number {
   let end = 0;
   for (const t of model.tracks.text) end = Math.max(end, t.timing.atMs + t.timing.durationMs);
   for (const o of model.tracks.overlay) end = Math.max(end, o.timing.atMs + o.timing.durationMs);
   for (const a of model.tracks.audio) if (a.durationMs !== undefined && !a.loop) end = Math.max(end, a.atMs + a.durationMs);
+  return end;
+}
+
+/**
+ * A voice-over is never cut: with Clips, fit-content runs to the later of the Clip sequence and the end of the last voice
+ * layer (role voice, with a length, not looping). Past the last Clip the frame shows the project background.
+ */
+export function voiceEndMs(model: CompositionModelT): number {
+  let end = 0;
+  for (const a of model.tracks.audio) if (a.role === 'voice' && a.durationMs !== undefined && !a.loop) end = Math.max(end, a.atMs + a.durationMs);
   return end;
 }
 
@@ -38,7 +49,7 @@ export function deriveTiming(model: CompositionModelT): DerivedTiming {
     cursor += c.durationMs;
     if (i < v.length - 1) { cursor -= trans.get(i) ?? 0; cutStartMs.push(cursor); }
   });
-  const contentMs = v.length ? cursor : contentEndWithoutClips(model);
+  const contentMs = v.length ? Math.max(cursor, voiceEndMs(model)) : contentEndWithoutClips(model);
   let durationMs = model.durationPolicy === 'fixed' && model.fixedDurationMs ? model.fixedDurationMs : contentMs;
   if (durationMs < MIN_DURATION_MS) durationMs = MIN_DURATION_MS;
   const windows: DerivedTiming['elementWindows'] = {};
@@ -70,7 +81,7 @@ export function deriveFrameTiming(model: CompositionModelT): FrameTiming {
   const clipStartFrames: number[] = [];
   let cursor = 0;
   clipFrames.forEach((f, i) => { clipStartFrames.push(cursor); cursor += f - (i < clipFrames.length - 1 ? (transitionFrames[i] ?? 0) : 0); });
-  const content = clipFrames.length ? cursor : framesOf(contentEndWithoutClips(model), fps);
+  const content = clipFrames.length ? Math.max(cursor, framesOf(voiceEndMs(model), fps)) : framesOf(contentEndWithoutClips(model), fps);
   const durationInFrames = model.durationPolicy === 'fixed' && model.fixedDurationMs ? framesOf(model.fixedDurationMs, fps) : Math.max(framesOf(MIN_DURATION_MS, fps), content);
   return { fps, durationInFrames, clipFrames, transitionFrames, clipStartFrames };
 }

@@ -254,7 +254,7 @@ export class ApiClient {
   removeIntent(id: Id, intentId: Id): Promise<IntentQueueDto> { return this.del(`/projects/${id}/intents/${intentId}`); }   // R-063
   clearIntents(id: Id, status: 'queued' | 'superseded' = 'queued'): Promise<IntentQueueDto> { return this.del(`/projects/${id}/intents`, { status }); } // R-064
   // ── 6.8 plans ──
-  createPlan(id: Id, body: { intentIds?: Id[]; message?: string; baseVersion: string; mode?: 'auto' | 'compile-only' | 'agent' }): Promise<PlanDto | { plan: PlanDto; runId: Id }> {
+  createPlan(id: Id, body: { intentIds?: Id[]; message?: string; baseVersion: string; mode?: 'auto' | 'compile-only' | 'agent'; replanOf?: Id }): Promise<PlanDto | { plan: PlanDto; runId: Id }> {
     return this.post(`/projects/${id}/plans`, body);                                                                     // R-070
   }
   listPlans(id: Id, query: { status?: string; limit?: number } = {}): Promise<Page<PlanDto>> { return this.get(`/projects/${id}/plans`, query); } // R-071

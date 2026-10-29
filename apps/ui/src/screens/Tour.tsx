@@ -7,7 +7,7 @@ import { useStore } from '../state/store.js';
 import type { AppState, LibMode } from '../state/reducer.js';
 import { Button, ErrorBox, Spinner } from '../components/ui.js';
 import { translate } from '../i18n/index.js';
-import { chatModePatch } from '../prefs.js';
+import { chatModePatch, onboardingLangFor } from '../prefs.js';
 
 type Signal = (s: AppState) => string | number | null;
 export interface TourStep {
@@ -64,7 +64,7 @@ export function Tour() {
   const card = useRef<HTMLDivElement>(null);
   const base = useRef<string | number | null>(null);
   const stateRef = useRef(state); stateRef.current = state;
-  const lang = prefs.onboardingLang;
+  const lang = onboardingLangFor(prefs, state.settings?.uiLanguage);
   const o = (k: string, v?: Record<string, string | number>) => translate(lang, k, v);
   const n = phase.kind === 'step' ? phase.n : -1;
   const step = n >= 0 ? TOUR_STEPS[n] : undefined;

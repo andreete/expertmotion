@@ -346,7 +346,7 @@ The product is an AUTOMATIC video maker first; manual tools are second. These ru
 | Banner | CMP-19 under Header | while condition holds | 1 per kind | Private Mode, offline, update |
 | Live region (a11y) | visually hidden `aria-live="polite"` | — | — | "Plan ready: …", "Applied, version 13" |
 
-Rules: errors originating in a visible region are inline, not toasts; toasts never cover the Player controls (bottom-right, above the Timeline View's bottom edge); only one toast with the same `EM-` code is shown at a time (counter badge "×3"); `sys.offline` suppresses all other error toasts; no sound.
+Rules: errors originating in a visible region are inline, not toasts; toasts never cover the Player controls (bottom-right, above the Timeline View's bottom edge; at most two show at once — errors / warnings first — the rest behind "+N more" / "+N lainnya", Entry 36; over a full-window screen the stack moves to the window corner); only one toast with the same `EM-` code is shown at a time (counter badge "×3"); `sys.offline` suppresses all other error toasts; no sound.
 
 ## 11. Anatomy of the three signature components
 

@@ -50,7 +50,7 @@ export function LibraryPanel() {
           placeholder={t('ui.lib.search.placeholder.suggest', { q: SUGGESTIONS[rot]?.query ?? '' })} onChange={(e) => setQuery(e.target.value)}
           onFocus={() => setShowSuggest(true)} onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
           onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setQuery(''); (e.target as HTMLInputElement).blur(); } }}
-          className="h-9 w-full rounded-[6px] border border-em-line bg-em-panel-2 pl-8 pr-8 text-[13px] outline-none placeholder:text-em-muted focus:border-em-line-strong" />
+          className="h-9 w-full text-ellipsis rounded-[6px] border border-em-line bg-em-panel-2 pl-8 pr-8 text-[13px] outline-none placeholder:text-em-muted focus:border-em-line-strong" />
         {query && <span className="absolute right-4 top-3.5"><IconButton label={t('ui.common.clear')} icon={<X size={14} />} size={28} onClick={clear} /></span>}
         {tooShort && <p className="mt-1 text-[11px] text-em-muted">{t('ui.lib.search.minchars', { n: MIN_QUERY })}</p>}
         {showSuggest && !query && (
@@ -58,7 +58,9 @@ export function LibraryPanel() {
         )}
         <span className="sr-only" aria-live="polite">{activeQuery(debounced) ? t('a11y.lib.search.results') : ''}</span>
       </div>
-      <div ref={headerRef} tabIndex={-1} data-el="lib.mode.header" className="flex items-center gap-2 px-3 py-1 outline-none">
+      {/* Entry 36: programmatic focus target (screen readers hear the mode), not a control — the global focus ring drew an orange box
+          around "PREVIEW" on every launch */}
+      <div ref={headerRef} tabIndex={-1} data-el="lib.mode.header" className="flex items-center gap-2 px-3 py-1" style={{ outline: 'none' }}>
         <span className="t-label flex-1">{t(modeKey)}</span>
         {selLabel && <span className="rounded-full border border-em-accent/50 px-2 text-[11px] text-em-accent">{t('ui.lib.mode.appliesto', { target: selLabel })}</span>}
       </div>

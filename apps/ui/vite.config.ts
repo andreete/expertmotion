@@ -10,17 +10,17 @@ import { cspMetaPlugin } from './csp-meta.js';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const loops = fileURLToPath(new URL('../../resources/catalogue', import.meta.url));
 
-/** Dev only: serve prerendered catalogue loops (resources/catalogue/<category>/<name>.webm) at /catalogue/, the same path
+/** Dev only: serve prerendered catalogue loops (resources/catalogue/<category>/<name>.webm + .jpg poster) at /catalogue/, the same path
  *  scripts/stage-desktop.mjs copies them to inside the packaged Editor (dist/ui/catalogue). Missing loops → 404 → swatch. */
 const catalogueLoops = {
   name: 'expertmotion-catalogue-loops',
   configureServer(server: { middlewares: { use(fn: (req: { url?: string }, res: { setHeader(k: string, v: string): void; end(b?: unknown): void; statusCode: number }, next: () => void) => void): void } }) {
     server.middlewares.use((req, res, next) => {
-      const m = /^\/catalogue\/([a-z]+)\/([a-z0-9-]+)\.webm$/.exec((req.url ?? '').split('?')[0] ?? '');
+      const m = /^\/catalogue\/([a-z]+)\/([a-z0-9-]+)\.(webm|jpg)$/.exec((req.url ?? '').split('?')[0] ?? '');
       if (!m) return next();
-      const f = path.join(loops, m[1]!, `${m[2]!}.webm`);
+      const f = path.join(loops, m[1]!, `${m[2]!}.${m[3]!}`);   // .jpg = the loop's poster (build-loops.mjs, Entry 36)
       if (!fs.existsSync(f)) { res.statusCode = 404; return res.end(); }
-      res.setHeader('Content-Type', 'video/webm'); res.end(fs.readFileSync(f));
+      res.setHeader('Content-Type', m[3] === 'jpg' ? 'image/jpeg' : 'video/webm'); res.end(fs.readFileSync(f));
     });
   },
 };

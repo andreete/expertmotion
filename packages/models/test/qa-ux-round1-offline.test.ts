@@ -28,4 +28,15 @@ describe('offline downloads (QA P1-9)', () => {
     expect(retries.length).toBe(9);
     expect(retries[0]).toMatchObject({ netCode: 'ENETUNREACH' });
   });
+  it('Entry 35: offlineRetries (an interactive music download) ends with EM-7002 after a few tries instead of waiting 40 minutes', async () => {
+    const data = new Uint8Array(100).fill(3);
+    const fetch: DownloadOptions['fetch'] = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('getaddrinfo ENOTFOUND huggingface.co'), { code: 'ENOTFOUND' }) }); };
+    const retries: DownloadRetry[] = [];
+    const e = await downloadFile({ name: 'track.mp3', url: URL1, bytes: data.length, bytesExact: true, sha256: createHash('sha256').update(data).digest('hex'), modelKey: 'music:x' },
+      { partPath: join(tmp.dir, 'p', 'track.mp3.part'), destPath: join(tmp.dir, 'd', 'track.mp3') },
+      { fetch, freeBytes: async () => 100e9, sleep: async () => undefined, onRetry: (x) => retries.push(x), offlineRetries: 2 }).then(() => null, (x: unknown) => x as { code?: string; details?: Record<string, unknown> });
+    expect(e?.code).toBe('EM-7002');
+    expect(e?.details).toMatchObject({ netCode: 'ENOTFOUND' });
+    expect(retries.length).toBe(2);
+  });
 });

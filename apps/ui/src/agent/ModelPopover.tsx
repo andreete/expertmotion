@@ -9,7 +9,7 @@ import { RefreshCw, TriangleAlert } from 'lucide-react';
 import type { AgentKind, CapabilityRow } from '../api/types.js';
 import { useStore } from '../state/store.js';
 import { useModelNames } from '../state/use-model-names.js';
-import { Popover, cx, inputCls } from '../components/ui.js';
+import { Popover, cx, inputCls, noEllipsis } from '../components/ui.js';
 import { betterPick, isFreeModel, pickerRows, qualityOf, recommendedIds } from '../components/ModelPicker.js';
 
 export type ModelSection = 'recommended' | 'free' | 'paid';
@@ -156,7 +156,7 @@ export function ModelPopover({ agent, onClose }: { agent: AgentKind; onClose: ()
           </div>
         </div>
       )}
-      <button type="button" data-el="agent.chat.model.manage" className="mt-1 w-full px-2 py-1 text-left text-[11px] text-em-accent underline" onClick={() => { onClose(); actions.setScreen({ kind: 'providers' }); }}>{t('ui.agent.footer.model.manage')}</button>
+      <button type="button" data-el="agent.chat.model.manage" aria-label={noEllipsis(t('ui.agent.footer.model.manage'))} className="mt-1 w-full px-2 py-1 text-left text-[11px] text-em-accent underline" onClick={() => { onClose(); actions.setScreen({ kind: 'providers' }); }}>{t('ui.agent.footer.model.manage')}</button>
     </Popover>
   );
 }

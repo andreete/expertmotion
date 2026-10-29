@@ -24,7 +24,8 @@ const stripRuntime = (a: Record<string, unknown>) => Object.fromEntries(Object.e
  * ADR-030 generator steps, before the composition dry run: argument checks, model availability (a missing model makes the step
  * `needs-model` with a `model-missing` warn risk — the rest of the plan still runs), and captions from a script that need no model
  * become ordinary `op:caption.setPages` steps timed over the predicted video (or the window given). Captions that follow a voice-over
- * step stay a generator step: the Local Service times them over the voice once it exists.
+ * step stay a generator step: the Local Service times them over the voice once it exists — also when the voice model is still
+ * missing (the voice step is then held, FR-252, and the captions wait with it).
  */
 function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT; issues: Issue[] } {
   const issues: Issue[] = [];
@@ -75,6 +76,10 @@ function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT;
       return null;
     }
     if (voice?.ready) return { ...s, args: { ...a, source: 'voice', text, status: 'ready' } };
+    // Entry 35 (FR-252): a voice-over whose model is missing is HELD and continues after the install; captions for it stay a voice
+    // step that waits with it, so they are timed over the real voice. (Script pages over the whole video, set now, never followed
+    // the voice that came later: 40 s of captions over a 6 s voice in the QA run.)
+    if (voice && !voice.ready) return { ...s, dependsOn: s.dependsOn.length ? s.dependsOn : [...tts.keys()].slice(0, 1), args: { ...a, source: 'voice', text, status: 'ready' } };
     // Script captions (no model needed): pages over the window, set now in the same Composition Version.
     const from = a.atMs ?? 0, to = a.durationMs !== undefined ? from + a.durationMs : videoMs;
     const pages = scriptPages(text, from, Math.min(to, videoMs));

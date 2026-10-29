@@ -12,6 +12,7 @@ import { ScreenErrors } from '../components/ScreenErrors.js';
 import { AssignForm, ConnectForm } from './Providers.js';
 import type { OnboardingStep } from '../api/types.js';
 import { formatBytes, translate, type Lang } from '../i18n/index.js';
+import { onboardingLangFor } from '../prefs.js';
 
 const STEPS = ['welcome', 'provider', 'models', 'hardware', 'tour', 'done'] as const;
 type Step = (typeof STEPS)[number];
@@ -25,7 +26,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
   const [providerDone, setProviderDone] = useState(state.connections.some((c) => c.status === 'valid'));
   const [skipped, setSkipped] = useState<OnboardingStep[]>(state.settings?.onboardingSkippedSteps ?? []);
   const [checking, setChecking] = useState(false);
-  const ol: Lang = prefs.onboardingLang;
+  const ol: Lang = onboardingLangFor(prefs, state.settings?.uiLanguage);
   const o = (k: string, v?: Record<string, string | number>) => translate(ol, k, v);
   const go = (n: number) => { setStep(n); setPrefs({ onboardingStep: n }); };
   const skip = (...ids: OnboardingStep[]) => { const next = [...new Set([...skipped, ...ids])]; setSkipped(next); return next; };
@@ -76,7 +77,7 @@ export function Onboarding({ onClose }: { onClose: () => void }) {
             <>
               <div className="flex items-center gap-3">
                 <Button variant="primary" size={36} onClick={() => go(1)}>{o('onb.welcome.start')}</Button>
-                <button type="button" className="text-em-accent underline" onClick={() => setPrefs({ onboardingLang: ol === 'en' ? 'id' : 'en' })}>{ol === 'en' ? 'Bahasa Indonesia' : 'English'}</button>
+                <button type="button" className="text-em-accent underline" onClick={() => setPrefs({ onboardingLang: ol === 'en' ? 'id' : 'en', onboardingLangPicked: true })}>{ol === 'en' ? 'Bahasa Indonesia' : 'English'}</button>
               </div>
               <p className="text-[12px] text-em-muted">{o('onb.welcome.footnote')}</p>
             </>

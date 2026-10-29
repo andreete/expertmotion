@@ -61,7 +61,7 @@ describe('GS-23 faceless video from a prompt, no assets', () => {
     expect(validate(m, { assets: [], tier: s.tier }).filter((i) => i.severity === 'block')).toEqual([]);
     expect(hashModel(m)).not.toBe(s.head);
   });
-  it('without the voice model the voice step waits for the Model Manager, captions come from the script now, the rest still runs', async () => {
+  it('without the voice model the voice step waits for the Model Manager, its captions wait with it (timed over the voice later), the rest still runs', async () => {
     const { s, r } = await plan({ tts: { ...TTS, installed: false } });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -69,11 +69,12 @@ describe('GS-23 faceless video from a prompt, no assets', () => {
     expect(r.plan.steps[1]).toMatchObject({ tool: 'tts.generate', args: { status: 'needs-model', modelKey: 'piper-id-news' } });
     expect(r.plan.risks).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'model-missing', severity: 'warn' })]));
     expect(r.plan.risks.find((x) => x.code === 'model-missing')!.message).toContain('Model Manager');
-    expect(r.plan.steps[2]!.tool).toBe('composition.applyOps');            // script captions became ops in the same version
+    // Entry 35: the captions of the held voice stay a voice step (FR-252: held with it, timed over the real voice after the
+    // install) — script pages over the whole video, set now, never followed the voice that came later.
+    expect(r.plan.steps[2]).toMatchObject({ tool: 'captions.generate', args: { source: 'voice', status: 'ready' } });
+    expect(r.plan.steps[2]!.dependsOn).toContain(r.plan.steps[1]!.n);
     const m = applyPlan(s, r.plan);
-    expect(m.tracks.caption.pages.length).toBeGreaterThan(5);
-    expect(m.tracks.caption.styleId).toBe('preset:caption.editorial');
-    const end = deriveTiming(m).durationMs;
-    expect(m.tracks.caption.pages.at(-1)!.startMs + m.tracks.caption.pages.at(-1)!.durationMs).toBeLessThanOrEqual(end);
+    expect(m.tracks.caption.pages.length).toBe(0);                          // no out-of-sync captions before the voice exists
+    expect(deriveTiming(m).durationMs).toBeGreaterThan(0);
   });
 });

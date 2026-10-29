@@ -172,7 +172,7 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
       const questions = m.role === 'assistant' ? editorQuestions(p) : null;
       const origin = m.role === 'user' ? m.blocks.find((b): b is Extract<typeof b, { type: 'origin' }> => b.type === 'origin') : undefined;
       rows.push({ at: m.createdAt, key: `e-${m.id}`, node: (
-        <Bubble key={`e-${m.id}`} m={m} agent="editor" onRetry={() => void actions.plan()} text={questions ?? undefined} hideText={m.role === 'assistant' && Boolean(p) && !questions}>
+        <Bubble key={`e-${m.id}`} m={m} agent="editor" onRetry={() => void actions.plan()} text={questions ?? undefined} hideText={m.role === 'assistant' && Boolean(p) && !questions} collapsible={Boolean(origin)}>
           {origin && (
             <span data-el="agent.editor.message.origin" className="flex max-w-[92%] items-center gap-1 rounded-full border border-em-warn/50 px-1.5 text-[11px] text-em-warn"><Lightbulb size={11} aria-hidden />{t(origin.auto ? 'ui.agent.handoff.origin.auto' : 'ui.agent.handoff.origin')}</span>
           )}

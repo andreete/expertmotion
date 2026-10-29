@@ -3,7 +3,7 @@
 import { bundle } from '@remotion/bundler';
 import fs from 'node:fs';
 const root = new URL('../../../', import.meta.url).pathname;
-const outDir = `${root}resources/engine/bundle`;
+const outDir = process.env.EM_BUNDLE_OUT || `${root}resources/engine/bundle`;   // EM_BUNDLE_OUT: e2e test bundles outside resources/
 fs.rmSync(outDir, { recursive: true, force: true });
 const t0 = Date.now();
 const serveUrl = await bundle({

@@ -3,8 +3,9 @@
 //   splash → licence activation → onboarding (provider skipped: release builds have no provider stub) → New project 720p
 //   → faceless video (texts + background through the Editor's own controls) → preview plays, bundled fonts loaded, no font
 //   error → Export MP4 720p (progress, low-memory wait FR-204 on a small machine) → file exists, ffprobe duration > 0
-//   → close → relaunch → Start screen, no auto-open (FR-202) → crash loop: crash right after opening a project, reopen,
-//   kill → next launch blocks the project with "Proyek terakhir gagal dibuka" → safe open (chat + preview hidden).
+//   → close → relaunch → an empty project, the last one in "Terakhir dibuka" (FR-260; was the Start screen of FR-202) → crash loop:
+//   crash right after opening a project, reopen, kill → next launch: empty project with "Proyek terakhir gagal dibuka"
+//   (sys.launch.notice) → safe open (chat + preview hidden).
 // Captured per step: renderer console errors / warnings, exceptions, CSP / network log entries, the Shell + Service logs,
 // cgroup memory.current, and a Page.captureScreenshot PNG.
 //
@@ -257,35 +258,37 @@ try {
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => undefined);
   });
   const projectName = 'Video Faceless Uji';
-  // ── close → relaunch: the Start screen, not the old project (QA #7) ──
+  // ── close → relaunch: an EMPTY project, not the old project (QA #7; FR-260 superseded the Start-screen launch of FR-202) ──
   await step('close-app', async () => {
     page.close(); page = null; await killApp('SIGTERM');
     check('app closed', app.exitCode !== null || app.signalCode !== null);
   });
   launchApp('2'); await attach();
-  await step('relaunch-start-screen', async () => {
-    check('Start screen shown on launch (no auto-open)', await waitFor(`!!document.querySelector('[data-el="scr.start"]')`, 90_000) && !(await exists('[data-el="stage.player.controls.play"]')));
-    check('recent list has the project', await waitFor(`[...document.querySelectorAll('[data-el="scr.start.item"]')].some((li) => li.textContent.includes(${JSON.stringify(projectName)}))`, 20_000));
+  const recentItem = `[...document.querySelectorAll('[data-el="stage.recent.item"]')].find((b) => b.textContent.includes(${JSON.stringify(projectName)}))`;
+  await step('relaunch-empty-project', async () => {
+    check('launch opens an empty project (no auto-open of the last one)', await waitFor(`/Untitled|Tanpa judul/.test(document.querySelector('[data-el="hdr.title"]')?.textContent ?? '') && !document.querySelectorAll('[data-el="stage.timeline.element"]').length`, 90_000),
+      { title: await page.evaluate(`document.querySelector('[data-el="hdr.title"]')?.textContent ?? null`) });
+    check('"Terakhir dibuka" has the project', await waitFor(`!!(${recentItem})`, 20_000));
   });
   // ── crash loop: crash right after opening, the Shell reloads, it reopens, the app is killed → blocked on the next launch ──
   await step('open-then-crash', async () => {
-    await click('[data-el="scr.start.item.open"]');
-    check('project opened from the Start screen', await waitFor(`!!document.querySelector('[data-region="stage"]')`, 30_000));
+    await page.evaluate(`(${recentItem})?.click()`);
+    check('project opened from "Terakhir dibuka"', await waitFor(`(document.querySelector('[data-el="hdr.title"]')?.textContent ?? '').includes(${JSON.stringify(projectName)})`, 30_000));
     await sleep(3000);                                                        // localStorage commit of the guard
     await page.send('Page.crash').catch(() => undefined);                     // renderer process gone (FR-185 main auto-reloads once)
     page.close(); await sleep(4000); await attach();
-    check('after the renderer crash the Shell reloaded and the in-window reload reopened the project', await waitFor(`!!document.querySelector('[data-region="stage"]')`, 60_000));
+    check('after the renderer crash the Shell reloaded and the in-window reload reopened the project', await waitFor(`(document.querySelector('[data-el="hdr.title"]')?.textContent ?? '').includes(${JSON.stringify(projectName)})`, 60_000));
     await sleep(4000);
   });
   await step('kill-during-reopen', async () => { page.close(); page = null; await killApp('SIGKILL'); });
   launchApp('3'); await attach();
   await step('crash-loop-notice', async () => {
-    check('Start screen with "last project failed to open" notice', await waitFor(`document.querySelector('[data-el="scr.start.notice"]')?.dataset.kind === 'crash-loop'`, 90_000),
-      { notice: await page.evaluate(`document.querySelector('[data-el="scr.start.notice"]')?.textContent ?? null`) });
-    check('the project is not auto-opened', !(await exists('[data-region="stage"]')));
+    check('empty project with the "last project failed to open" notice (sys.launch.notice)', await waitFor(`!!document.querySelector('[data-el="sys.launch.notice"]') && /Untitled|Tanpa judul/.test(document.querySelector('[data-el="hdr.title"]')?.textContent ?? '')`, 90_000),
+      { notice: await page.evaluate(`document.querySelector('[data-el="sys.launch.notice"]')?.textContent ?? null`) });
+    check('the project is not auto-opened', !(await page.evaluate(`(document.querySelector('[data-el="hdr.title"]')?.textContent ?? '').includes(${JSON.stringify(projectName)})`)));
   });
   await step('safe-open', async () => {
-    await click('[data-el="scr.start.notice.safe"]');
+    await click('[data-el="sys.launch.notice.safe"]');
     check('safe mode banner', await waitFor(`!!document.querySelector('[data-el="sys.safe.banner"]')`, 30_000));
     check('chat and preview hidden in safe mode', await exists('[data-el="sys.safe.chat"]') && await exists('[data-el="sys.safe.preview"]'));
     await click('[data-el="sys.safe.preview.show"]');

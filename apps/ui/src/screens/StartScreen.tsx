@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, FilePlus2, FolderOpen, ShieldCheck } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import type { ProjectDto } from '../api/types.js';
-import { Button, Empty, Spinner, cx } from '../components/ui.js';
+import { Button, Empty, Spinner, cx, noEllipsis } from '../components/ui.js';
 import { AppMark } from '../components/AppMark.js';
 import { formatDate, formatDuration, type Lang } from '../i18n/index.js';
 import { ProjectThumb } from './ProjectDialogs.js';
@@ -73,7 +73,7 @@ export function StartScreen() {
                   <button type="button" data-el="scr.start.item.open" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => (bad ? open(p, true) : open(p, false))}>
                     <ProjectThumb id={p.id} />
                     <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate font-medium">{p.name}</span>
+                      <span className="truncate font-medium" title={p.name}>{p.name}</span>
                       <span className="text-[11px] text-em-muted">{t('ui.scr.project.open.modified', { date: formatDate(p.updatedAt, lang as Lang) })} · {formatDuration(p.durationMs)}</span>
                     </span>
                     {bad && <span data-el="scr.start.item.failed" className="shrink-0 text-[11px] text-em-danger">{t('ui.scr.start.failed')}</span>}
@@ -178,7 +178,7 @@ export function RecentStrip() {
           className="max-w-[160px] truncate rounded-full border border-em-line px-2 py-0.5 text-em-text-2 hover:border-em-accent hover:text-em-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-em-accent"
           onClick={() => guardUnsaved({ state, actions }, () => { void actions.openProject(p.id); })}>{p.name}</button>
       ))}
-      <button type="button" data-el="stage.recent.all" className="rounded-full px-2 py-0.5 text-em-accent hover:underline" onClick={() => actions.setScreen({ kind: 'project.open' })}>{t('ui.stage.recent.all')}</button>
+      <button type="button" data-el="stage.recent.all" aria-label={noEllipsis(t('ui.stage.recent.all'))} className="rounded-full px-2 py-0.5 text-em-accent hover:underline" onClick={() => actions.setScreen({ kind: 'project.open' })}>{t('ui.stage.recent.all')}</button>
     </nav>
   );
 }

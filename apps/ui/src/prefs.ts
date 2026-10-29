@@ -6,6 +6,9 @@ export interface PanelSizes { lib?: number; agent?: number; timeline?: number }
 export interface Prefs {
   onboardingDone: boolean; onboardingStep: number; tourDone: boolean; tourStep: number; safeArea: boolean; draft: boolean; loop: boolean; muted: boolean; seekOnSelect: boolean;
   libCollapsed: boolean; agentCollapsed: boolean; nudgesDismissed: string[]; onboardingLang: 'en' | 'id';
+  /** Entry 36: true once the Creator switched the onboarding language on the Welcome step; until then onboarding and the tour
+   *  follow the UI language (the licence screen's choice), not the 'en' default. */
+  onboardingLangPicked?: boolean;
   /** FR-099: Output Settings collapsed (persisted with the panel layout in Settings `layout`). */
   outputCollapsed: boolean;
   /** Retired 2026-10-26 (one assistant chat): was the Brainstorming Chat share of the split chat area; kept for old prefs. */
@@ -55,6 +58,8 @@ const DEFAULTS: Prefs = {
   onboardingDone: false, onboardingStep: 0, tourDone: false, tourStep: 0, safeArea: false, draft: true, loop: false, muted: false, seekOnSelect: true,
   libCollapsed: false, agentCollapsed: false, nudgesDismissed: [], onboardingLang: 'en', panelSizes: {}, playerByProject: {}, outputCollapsed: true, chatSplit: 0.4, chatMaximized: null, chatModeByProject: {}, picksOpen: false, turboWarned: false,
 };
+/** The language of onboarding + tour copy (I18N-09): the Creator's own pick on the Welcome step, else the UI language. */
+export const onboardingLangFor = (p: Prefs, uiLanguage: 'en' | 'id' | undefined): 'en' | 'id' => (p.onboardingLangPicked || p.onboardingLang !== 'en' || !uiLanguage ? p.onboardingLang : uiLanguage);
 export const PREFS_KEY = 'expertmotion.prefs.v1';
 export function loadPrefs(): Prefs {
   try { const raw = globalThis.localStorage?.getItem(PREFS_KEY); return raw ? { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Prefs>) } : { ...DEFAULTS }; } catch { return { ...DEFAULTS }; }

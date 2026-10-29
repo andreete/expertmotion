@@ -144,6 +144,9 @@ const PRESET_CATEGORY_TO_INTENT: Record<string, IntentCategory> = {
   text: 'text', texteffect: 'text', font: 'text', palette: 'layout', fontpair: 'layout',
 };
 
+/** Entry 36: at most ~3 progress repaints per second per job (the Service sends ≤ 4/s). */
+export const PROGRESS_MIN_MS = 300;
+
 export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Runtime; children: ReactNode; initialPrefs?: Partial<Prefs> }) {
   const [state, rawDispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
@@ -151,6 +154,9 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
   const modelsInFlight = useRef(new Set<string>());
   /** Review U2: Stop pressed while the send is still in flight (run id unknown): the run is cancelled as soon as the 202 names it. */
   const stopAsked = useRef<Record<AgentKind, boolean>>({ brainstorm: false, editor: false });
+  /** Entry 36 (Windows: renderer "unresponsive" during a 1080p export): progress events re-render the whole Editor (one store),
+   *  so render / model progress is coalesced to at most one dispatch per PROGRESS_MIN_MS per job (the newest event wins). */
+  const progressGate = useRef(new Map<string, { last: number; timer: ReturnType<typeof setTimeout> | null; pending: ServiceEvent | null }>());
   stateRef.current = state;
   const dispatch = useCallback((a: Action) => { if (a.type === 'projectClosed') noteProjectClosed(); rawDispatch(a); }, []);
   const prefsRef = useRef<Prefs>({ ...loadPrefs(), ...(initialPrefs ?? {}) });
@@ -829,6 +835,22 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         return;
       }
     }
+    if (ev.name === 'render.progress' || ev.name === 'model.progress') {
+      const k = ev.name === 'render.progress' ? `r:${ev.data.jobId}` : `m:${ev.data.key}`;
+      const g = progressGate.current.get(k) ?? { last: 0, timer: null, pending: null };
+      progressGate.current.set(k, g);
+      const now = Date.now();
+      if (now - g.last >= PROGRESS_MIN_MS && !g.timer) { g.last = now; dispatch({ type: 'event', event: ev }); }
+      else {
+        g.pending = ev;
+        g.timer ??= setTimeout(() => { g.timer = null; g.last = Date.now(); if (g.pending) dispatch({ type: 'event', event: g.pending }); g.pending = null; }, Math.max(0, PROGRESS_MIN_MS - (now - g.last)));
+      }
+      return;
+    }
+    if (ev.name === 'render.done' || ev.name === 'render.failed') {   // a final event must not be overtaken by a late progress flush
+      const g = progressGate.current.get(`r:${ev.data.jobId}`);
+      if (g?.timer) { clearTimeout(g.timer); g.timer = null; g.pending = null; }
+    }
     dispatch({ type: 'event', event: ev });
     const L = stateRef.current.settings?.uiLanguage ?? 'en';
     switch (ev.name) {
@@ -1031,7 +1053,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
 
 /** Review U1: what a re-plan of `plan` asks for — its picks that are still queued, the Creator's message (an agent plan's goal) and
  *  the agent mode, so a stale / cancelled Editor-chat plan is planned again instead of becoming EM-9002 or a plan of the whole queue. */
-export function replanRequest(plan: Pick<PlanDto, 'origin' | 'goal' | 'intentIds'>, queue: AppState['queue']): { intentIds?: string[]; message?: string; mode?: 'agent' } {
+export function replanRequest(plan: Pick<PlanDto, 'origin' | 'goal' | 'intentIds'> & { id?: string }, queue: AppState['queue']): { intentIds?: string[]; message?: string; mode?: 'agent'; replanOf?: string } {
   const agent = plan.origin === 'editor-agent';
   const message = agent && plan.goal && plan.goal !== 'Plan the queued picks' ? plan.goal : undefined;
   const queued = queue ? new Set(queue.items.filter((i) => i.status === 'queued').map((i) => i.id)) : null;
@@ -1039,7 +1061,9 @@ export function replanRequest(plan: Pick<PlanDto, 'origin' | 'goal' | 'intentIds
   const left = all.filter((i) => !queued || queued.has(i));
   // nothing of the request is left and there is no message: ask for the old ids so the Service says so (EM-9003), never the whole queue
   const ids = left.length || message ? left : all;
-  return { ...(ids.length ? { intentIds: ids } : {}), ...(message ? { message } : {}), ...(agent ? { mode: 'agent' as const } : {}) };
+  // Entry 35: an Editor Agent plan is re-planned from the Creator's own message (the Service looks it up by `replanOf`); the goal
+  // line is only the fallback — re-planning "Video ekspor nikel: 6 adegan…" lost every figure and the whole voice script.
+  return { ...(ids.length ? { intentIds: ids } : {}), ...(message ? { message } : {}), ...(agent ? { mode: 'agent' as const } : {}), ...(agent && plan.id ? { replanOf: plan.id } : {}) };
 }
 
 /** FR-095: the Project defaults Reset restores (Settings defaults; 9:16 · 1080p when unset). */

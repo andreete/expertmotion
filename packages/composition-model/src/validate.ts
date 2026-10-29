@@ -2,7 +2,7 @@
 import { getPreset, validateParams, type Category } from '@expertmotion/catalogue';
 import { fitText, issue, type Issue } from '@expertmotion/shared';
 import type { AssetFacts, CompositionModelT, Tier } from './schema.js';
-import { contentEndWithoutClips, deriveTiming, MAX_DURATION_MS, MIN_DURATION_MS } from './timing.js';
+import { contentEndWithoutClips, deriveTiming, MAX_DURATION_MS, MIN_DURATION_MS, voiceEndMs } from './timing.js';
 import { frameInUnits, SAFE_MARGIN_U } from './units.js';
 import { laneConflicts } from './layers.js';
 
@@ -61,7 +61,7 @@ export function validate(model: CompositionModelT, ctx: ValidateContext): Issue[
 
   // CM-005 duration
   const timing = deriveTiming(model);
-  const content = v.length ? timing.clipStartMs[v.length - 1]! + v[v.length - 1]!.durationMs : contentEndWithoutClips(model);
+  const content = v.length ? Math.max(timing.clipStartMs[v.length - 1]! + v[v.length - 1]!.durationMs, voiceEndMs(model)) : contentEndWithoutClips(model);
   const total = model.durationPolicy === 'fixed' && model.fixedDurationMs ? model.fixedDurationMs : content;
   if (total < MIN_DURATION_MS || total > MAX_DURATION_MS) out.push(issue('CM-005', `Total duration ${total} ms is outside 1 s … 30 min.`, 'block', 'durationMs'));
   out.push(...timing.warnings);

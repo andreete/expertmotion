@@ -64,7 +64,7 @@ import {
   parseSessionMarker, runningMarker, safeModeChoice, safeModeDialog, type GpuCrashState, type GraphicsState, type SafeModeReason, type SessionMarker, type StartupDecision,
 } from './lib/graphics-mode.js';
 import {
-  displayStallDialog, initialWatchState, onBeat, onLoadStart, onSignal, onTick, parseBeat, parseSignal, stallChoice, WATCHDOG_TICK_MS, type StallKind, type WatchState,
+  displayStallDialog, HEARTBEAT_STALL_MS, initialWatchState, onBeat, onLoadStart, onSignal, onTick, parseBeat, parseSignal, stallChoice, WATCHDOG_TICK_MS, type StallKind, type WatchState,
 } from './lib/heartbeat.js';
 import { buildReportEntries, createZip, DIAGNOSTICS_SWITCH, gpuLogFields, readSmallJson, reportFileName, summarizeGpuInfo } from './lib/diagnostic-report.js';
 import { createDebounce, recoveryKey, reportFailedDialog, reportSavedDialog, trayItems, type RecoveryAction, type TrayAction } from './lib/escape-hatches.js';
@@ -501,7 +501,12 @@ function watchRenderer(win: BrowserWindow): void {
   });
   win.on('unresponsive', () => {
     if (win.isDestroyed()) return;
-    logLine('warn', 'editor unresponsive', { code: EM.rendererCrashed });
+    // Chromium also reports "unresponsive" while an in-page prompt holds a window close (beforeunload cancelled, e.g. "A render is
+    // still running" during an export) although the page still runs. The preload's heartbeat shares the page's main thread: when it
+    // beat recently the Editor is alive, so no dialog (a real hang stops the beats and the heartbeat watchdog asks).
+    const beatAgoMs = watch.lastBeatAt === null ? null : Date.now() - watch.lastBeatAt;
+    if (beatAgoMs !== null && beatAgoMs < HEARTBEAT_STALL_MS) { logLine('info', 'editor unresponsive ignored: heartbeat alive', { beatAgoMs }); return; }
+    logLine('warn', 'editor unresponsive', { code: EM.rendererCrashed, beatAgoMs });
     if (recoveryDialog !== null) return;                                  // one dialog per episode, never two at once
     void askRecovery(win, 'unresponsive', { type: 'warning', ...UNRESPONSIVE_DIALOG, buttons: [...UNRESPONSIVE_DIALOG.buttons] }).then((response) => {
       if (response === null || win.isDestroyed()) return;
@@ -1162,6 +1167,9 @@ function boot(): void {
     { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, codeCache: true } },
   ]);
   app.enableSandbox();
+  // No LAN discovery: Chromium's Cast / DIAL media router opens UDP sockets (mDNS / SSDP) on every interface, and Windows
+  // Firewall then asks the Creator to allow "public and private networks" for an app that only talks to 127.0.0.1 and HTTPS.
+  app.commandLine.appendSwitch('disable-features', 'MediaRouter,DialMediaRouteProvider,CastMediaRouteProvider,GlobalMediaControlsCastStartStop');
   // FR-199: the Start-menu "Diagnostik" shortcut. Before the single-instance lock: it must work while a black copy runs.
   if (process.argv.includes(DIAGNOSTICS_SWITCH)) { runDiagnosticsMode(); return; }
 

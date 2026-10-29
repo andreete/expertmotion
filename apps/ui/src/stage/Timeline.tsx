@@ -427,12 +427,13 @@ export function TimelineView({ height = 240 }: { height?: number } = {}) {
       </div>
       <div className="flex min-h-0 flex-1">
         <div ref={scroller} data-el="stage.timeline.scroll" className="flex min-h-0 min-w-0 flex-1 overflow-auto">
-        {showLanes && <div className="sticky left-0 z-40 flex w-24 shrink-0 flex-col self-start border-r border-em-line bg-em-panel">
+        {/* Entry 36: 96 px cut "New audio l…" / "Ca… Editorial" even at 1920 wide; wider column from 1280, full name as tooltip */}
+        {showLanes && <div data-el="stage.timeline.lanes.labels" className="sticky left-0 z-40 flex w-[120px] shrink-0 flex-col self-start border-r border-em-line bg-em-panel xl:w-[136px] 2xl:w-[176px]">
           <div className="sticky top-0 z-40 h-6 border-b border-em-line bg-em-panel" />
           {rows.map((r) => (
             <div key={r.key} className={cx('flex h-9 items-center gap-1 border-b border-em-line px-2 text-[12px]', r.isNew ? 'text-em-muted' : 'text-em-text-2')}>
-              <span className="flex-1 truncate">{laneName(r)}</span>
-              {TRACK_CHIP[r.kind] && projectChips[TRACK_CHIP[r.kind]!] && <span className="truncate rounded-full border border-em-line px-1 text-[10px]" title={projectChips[TRACK_CHIP[r.kind]!]}>{projectChips[TRACK_CHIP[r.kind]!]}</span>}
+              <span className="min-w-0 flex-1 truncate" title={laneName(r)}>{laneName(r)}</span>
+              {TRACK_CHIP[r.kind] && projectChips[TRACK_CHIP[r.kind]!] && <span className="max-w-[55%] shrink truncate rounded-full border border-em-line px-1 text-[10px]" title={projectChips[TRACK_CHIP[r.kind]!]}>{projectChips[TRACK_CHIP[r.kind]!]}</span>}
             </div>
           ))}
         </div>}

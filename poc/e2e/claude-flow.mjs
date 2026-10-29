@@ -325,6 +325,9 @@ try {
     }
     check('Editor tab opened at once with the phase stepper while it plans', samples.some((x) => x.tab === 'true' && x.phases), { first: samples[0], n: samples.length });
     check('Editor message carries "From Discussion"', await waitFor(`!!document.querySelector('[data-el="agent.editor.message.origin"]')`, 8000));
+    // Entry 35 (UI QA): the Creator sees a short hand-off line, never the internal instruction
+    const thread = await page.evaluate(`document.querySelector('[data-el="agent.chat.thread"]')?.innerText ?? ''`);
+    check('hand-off shows "Kirim draf dari Diskusi ke Editor", not the instruction', /Kirim draf dari Diskusi ke Editor|Send the Discussion draft to the Editor/.test(thread) && !/Ikuti persis|Follow it exactly|DRAF:/.test(thread), { sample: thread.slice(0, 300) });
     check('plan ready with a readable preview (rows)', await waitFor(`([...document.querySelectorAll('[data-el="agent.editor.execute"]')].at(-1)?.closest('[data-el="agent.editor.plancard"]')?.querySelectorAll('[data-el="agent.editor.plancard.preview.row"]').length ?? 0) > 0`, 20000), { rows: await count('[data-el="agent.editor.plancard.preview.row"]') });
     await click('[data-el="agent.chat.tab.brainstorm"]');
     check('Diskusi tab: the draft card says the plan is ready', await waitFor(`document.querySelector('[data-el="agent.brainstorm.handoff.card"]')?.getAttribute('data-state') === 'ready'`, 8000));

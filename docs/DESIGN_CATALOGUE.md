@@ -12,7 +12,7 @@
 ## 1. Rules
 
 1. A preset id is `preset:<category>.<name>` and never changes once shipped; renaming creates a new id and deprecates the old.
-2. Every preset has: label (EN / ID), category, Property Class behaviour, params schema (Zod in `packages/engine/src/catalogue/<category>.ts`), defaults, Remotion mapping (REMOTION_CAPABILITY_MAP.md row), preview asset `catalogue/<category>/<name>.webm` (2 s loop, 480 px, built at package time), flags: `p0|p1|p2`, `gpu` (needs WebGL on T0 → slower), `webgpu` (T2 only), `model:<id>` (needs a local model), `licence:paid` (excluded).
+2. Every preset has: label (EN / ID), category, Property Class behaviour, params schema (Zod in `packages/engine/src/catalogue/<category>.ts`), defaults, Remotion mapping (REMOTION_CAPABILITY_MAP.md row), preview asset `catalogue/<category>/<name>.webm` (2 s loop, 480 px, built at package time) + poster `<name>.jpg` (the frame at 1 s, shown on the paused card; frame 0 is the demo before its entrance — Entry 36), flags: `p0|p1|p2`, `gpu` (needs WebGL on T0 → slower), `webgpu` (T2 only), `model:<id>` (needs a local model), `licence:paid` (excluded).
 3. The Intent Compiler, the Editor Agent's capability list and the Preview Catalogue all read this registry; nothing else enumerates presets.
 4. Labels are shown in English in MVP; Indonesian labels are stored for later UI localisation and used in Indonesian chat replies.
 5. Params use milliseconds and normalised units (0–1) where possible; colours are hex; sizes are in `u` (layout unit = min(width,height)/1080) so presets fit every ratio.

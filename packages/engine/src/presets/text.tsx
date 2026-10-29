@@ -37,7 +37,10 @@ export const TextElement: React.FC<{ layer: TextLayerT; layout: Layout; duration
         <span style={{ display: 'inline-block', fontFamily: family, fontWeight: weight, fontSize: fs, lineHeight, color: colour, opacity: layer.style.opacity ?? t.textDefaults.opacity,
           fontStyle: (layer.style.italic ?? t.textDefaults.italic ?? v['italic']) ? 'italic' : 'normal', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textAlign: align,
           textWrap: 'balance',                                     // round 2: balanced lines, the estimator models the same (text-box.ts)
-          ...(counter || !/\s/.test(layer.text.trim()) ? { whiteSpace: 'nowrap' } : {}), ...(counter && align !== 'left' ? { fontVariantNumeric: 'tabular-nums' } : {}), ...box, ...bar }}>
+          // Entry 35: `text-wrap` is a shorthand that sets text-wrap-mode back to `wrap`, and it comes after `white-space` in this
+          // object, so `whiteSpace: nowrap` alone did not hold: a counting "+14,0%" (wider digits than the final "+17,2%") broke
+          // its "%" onto a second line over the label. A no-wrap text says it in both properties.
+          ...(counter || !/\s/.test(layer.text.trim()) ? { whiteSpace: 'nowrap', textWrap: 'nowrap' } : {}), ...(counter && align !== 'left' ? { fontVariantNumeric: 'tabular-nums' } : {}), ...box, ...bar }}>
           {v['italic'] ? '“' : ''}{content}{v['italic'] ? '”' : ''}
         </span>
       </div>

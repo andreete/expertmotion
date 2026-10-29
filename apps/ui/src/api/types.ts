@@ -158,7 +158,7 @@ export type MessageBlock =
   /** A notice with its EM code (research could not run, …). */
   | { type: 'notice'; code: string; text: string }
   /** FR-219: an Editor message that came from a Brainstorm draft. */
-  | { type: 'origin'; from: 'brainstorm'; messageId: Id; auto?: boolean }
+  | { type: 'origin'; from: 'brainstorm'; messageId: Id; auto?: boolean; /** the full request for the Editor Agent (not shown) */ instruction?: string }
   /** FR-219: a Brainstorm draft handed to the Editor; the state follows the Editor run. */
   | { type: 'handoff'; draftTitle: string; editorMessageId?: Id; editorRunId?: Id; state: 'sent' | 'planning' | 'ready' | 'applied' | 'failed'; scenes?: number };
 export interface WebSourceDto { url: string; title?: string; citedText?: string; pageAge?: string; cited?: boolean }
@@ -318,7 +318,7 @@ export interface EventMap {
   'ingest.failed': { assetId: Id; code: string; name: string; existingAssetId?: Id };
   'agent.run.started': { run: AgentRunDto; agent: AgentKind; modelId: string; planId?: Id };
   'agent.run.delta': { runId: Id; agent: AgentKind; delta: string; toolCall?: { name: string; input: unknown } };
-  'agent.run.done': { run: AgentRunDto; message: MessageDto; usage: UsageNumbers | null; contextUsage: { usedTokens: number; contextLength: number } | null };
+  'agent.run.done': { run: AgentRunDto; /** absent for a re-plan run (no chat message) */ message?: MessageDto; usage: UsageNumbers | null; contextUsage: { usedTokens: number; contextLength: number } | null };
   'agent.run.progress': { runId: Id; agent: AgentKind; phase: AgentPhase; attempt?: number; of?: number; waitMs?: number; tool?: string; /** FR-216 */ query?: string; url?: string };
   /** FR-223 / FR-224: Execute phases of a plan (voice clips first, measure, compose, apply). */
   'plan.progress': { planId: Id; phase: 'voice' | 'measure' | 'compose' | 'apply' | 'failed'; done?: number; total?: number; totalMs?: number };

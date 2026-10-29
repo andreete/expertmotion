@@ -41,7 +41,8 @@ function ModelCard({ m }: { m: ModelStateDto }) {
   );
 }
 
-function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | undefined; onChanged: () => void }) {
+/** `showRecommended`: only the first recommended model of a purpose group carries the badge (Entry 36: two "Recommended" voices). */
+function ModelRow({ m, focus, onChanged, showRecommended = true }: { m: ModelStateDto; focus?: string | undefined; onChanged: () => void; showRecommended?: boolean }) {
   const { state, runtime, actions, t, lang } = useStore();
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<'install' | 'remove' | null>(null);
@@ -54,16 +55,18 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
   const usedBy = [...(m.usedBy?.generators ?? []).map((g) => t(`ui.scr.models.usedby.${g}`)), ...(m.usedBy?.presets ?? [])];
   const install = () => (fits ? act(runtime.api.installModel(m.key)) : setConfirm('install'));   // FR-123: EM-7005 above the tier
   const name = localModelName(m, lang);                                                             // product name (Operator 2026-10-25); licence stays in the card
+  // Entry 36 (Windows UIA): every row's button was just "Install" / "Remove"; the accessible name carries the model.
+  const named = (action: string) => t('a11y.scr.models.action', { action, model: name });
   return (
     <div data-el="scr.models.row" data-model-key={m.key} tabIndex={focus === m.key ? -1 : undefined} data-focused={focus === m.key || undefined}
       className={cx('mb-1 flex flex-col gap-1 rounded-[6px] border p-2', focus === m.key ? 'border-em-accent' : 'border-em-line')}>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" data-el="scr.models.row.expand" aria-expanded={open} aria-label={open ? t('ui.common.close') : t('ui.common.expand')} className="text-em-muted" onClick={() => setOpen((v) => !v)}>
+        <button type="button" data-el="scr.models.row.expand" aria-expanded={open} aria-label={`${open ? t('ui.common.close') : t('ui.common.expand')}: ${name}`} className="text-em-muted" onClick={() => setOpen((v) => !v)}>
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
         <span data-el="scr.models.row.name" className="flex-1 font-medium">{name}</span>
-        {m.recommended && <Badge el="scr.models.row.recommended" tone="success">{t('ui.scr.models.recommended')}</Badge>}
-        {m.priority === 'P2' && <Badge>{t('ui.scr.models.p2')}</Badge>}
+        {m.recommended && showRecommended && <Badge el="scr.models.row.recommended" tone="success" title={t('ui.scr.models.recommended.tip')}>{t('ui.scr.models.recommended')}</Badge>}
+        {m.priority === 'P2' && <Badge el="scr.models.row.optional" title={t('ui.scr.models.p2.tip')}>{t('ui.scr.models.p2')}</Badge>}
         <span className="t-mono text-em-muted">{formatBytes(m.bytesTotal, lang)}</span>
         {(!fits || (m.tiers[0] ?? 'T0') !== 'T0') && <Badge el="scr.models.row.tier" tone={fits ? 'neutral' : 'warn'}>{fits ? t('ui.scr.models.mintier', { tier: m.tiers[0] ?? 'T0' }) : t('ui.scr.models.needsgpu', { tier: m.tiers[0] ?? 'T1' })}</Badge>}
       </div>
@@ -78,13 +81,13 @@ function ModelRow({ m, focus, onChanged }: { m: ModelStateDto; focus?: string | 
             : busyStatus(m.status) ? `${t(`ui.scr.models.status.${m.status}`)} ${pct} %`
             : t(`ui.scr.models.status.${m.status}`)}{m.errorCode ? ` · ${t(`err.${m.errorCode}.title`)} · ${m.errorCode}` : ''}
         </span>
-        {m.status === 'installed' && <Button el="scr.models.row.remove" size={28} variant="danger-ghost" onClick={() => setConfirm('remove')}>{t('ui.common.remove')}</Button>}
+        {m.status === 'installed' && <Button el="scr.models.row.remove" size={28} variant="danger-ghost" onClick={() => setConfirm('remove')} aria-label={named(t('ui.common.remove'))}>{t('ui.common.remove')}</Button>}
         {(m.status === 'not-installed' || m.status === 'failed') && (
-          <Button el="scr.models.row.install" size={28} variant="primary" disabledReason={priv ? t('err.EM-8202.title') : null} onClick={install}>{partial ? t('ui.scr.models.resume') : t('ui.scr.models.install')}</Button>
+          <Button el="scr.models.row.install" size={28} variant="primary" disabledReason={priv ? t('err.EM-8202.title') : null} onClick={install} aria-label={named(partial ? t('ui.scr.models.resume') : t('ui.scr.models.install'))}>{partial ? t('ui.scr.models.resume') : t('ui.scr.models.install')}</Button>
         )}
-        {busyStatus(m.status) && m.noNetwork && <Button el="scr.models.row.offline.retry" size={28} onClick={() => act(runtime.api.cancelModel(m.key).then(() => runtime.api.installModel(m.key)))}>{t('ui.sys.toast.tryagain')}</Button>}
-        {(m.status === 'downloading' || m.status === 'verifying') && <Button el="scr.models.row.pause" size={28} variant="ghost" onClick={() => act(runtime.api.cancelModel(m.key))}>{t('ui.scr.models.pause')}</Button>}
-        {(busyStatus(m.status) || partial) && <Button el="scr.models.row.cancel" size={28} variant="ghost" onClick={() => act(runtime.api.cancelModel(m.key, true))}>{t('ui.common.cancel')}</Button>}
+        {busyStatus(m.status) && m.noNetwork && <Button el="scr.models.row.offline.retry" size={28} onClick={() => act(runtime.api.cancelModel(m.key).then(() => runtime.api.installModel(m.key)))} aria-label={named(t('ui.sys.toast.tryagain'))}>{t('ui.sys.toast.tryagain')}</Button>}
+        {(m.status === 'downloading' || m.status === 'verifying') && <Button el="scr.models.row.pause" size={28} variant="ghost" onClick={() => act(runtime.api.cancelModel(m.key))} aria-label={named(t('ui.scr.models.pause'))}>{t('ui.scr.models.pause')}</Button>}
+        {(busyStatus(m.status) || partial) && <Button el="scr.models.row.cancel" size={28} variant="ghost" onClick={() => act(runtime.api.cancelModel(m.key, true))} aria-label={named(t('ui.common.cancel'))}>{t('ui.common.cancel')}</Button>}
       </div>
       {m.status === 'failed' && m.failReason && <p data-el="scr.models.row.failhint" role="note" className="text-[12px] text-em-warn">{t(`ui.scr.models.fail.${m.failReason}`)}</p>}
       {busyStatus(m.status) && (
@@ -160,7 +163,7 @@ export function ModelsScreen({ onClose, focus }: { onClose: () => void; focus?: 
           return (
             <div key={p} data-purpose={p}>
               <div className="t-label mb-1">{t(`ui.scr.models.task.${p}`)}</div>
-              {group.map((m) => <ModelRow key={m.key} m={m} focus={focus} onChanged={reload} />)}
+              {group.map((m) => <ModelRow key={m.key} m={m} focus={focus} onChanged={reload} showRecommended={group.find((x) => x.recommended) === m} />)}
             </div>
           );
         })}

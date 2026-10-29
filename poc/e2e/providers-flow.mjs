@@ -93,7 +93,10 @@ const waitFor = async (expr, ms = 15000) => { for (let t = 0; t < ms; t += 200) 
 const q = (sel) => JSON.stringify(sel);
 const click = async (sel) => page.evaluate(`(() => { const el = document.querySelector(${q(sel)}); if (!el) return false; el.scrollIntoView({ block: 'center' }); el.click(); return true; })()`);
 const realClick = async (sel) => {
-  const r = await page.evaluate(`(() => { const el = document.querySelector(${q(sel)}); if (!el) return null; el.scrollIntoView({ block: 'center' }); const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+  // scroll first, measure after the scroll settled (a smooth-scrolling list moved under the click: Entry 35 picked the wrong model row)
+  if (!(await page.evaluate(`(() => { const el = document.querySelector(${q(sel)}); if (!el) return false; el.scrollIntoView({ block: 'center', behavior: 'instant' }); return true; })()`))) return false;
+  await sleep(350);
+  const r = await page.evaluate(`(() => { const el = document.querySelector(${q(sel)}); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
   if (!r) return false;
   for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await page.send('Input.dispatchMouseEvent', { type, x: r.x, y: r.y, button: 'left', clickCount: 1 });
   return true;
@@ -210,7 +213,7 @@ try {
 
   // ── chat ModelPopover ──
   await step('popover-brainstorm', async () => {
-    await click('[data-el="agent.chat.mode.brainstorm"]');
+    await click('[data-el="agent.chat.tab.brainstorm"]');
     await realClick('[data-el="agent.chat.model"]');
     check('model popover open', await waitFor(`document.querySelectorAll('[data-el="agent.chat.model.row"]').length > 0`));
     await realClick('[data-el="agent.chat.model.row"][data-model-id="claude-sonnet-5-5"]');
@@ -218,7 +221,7 @@ try {
     check('popover pick stored', (await api('/providers/assignments')).body.brainstorm?.modelId === 'claude-sonnet-5-5');
   });
   await step('popover-editor', async () => {
-    await click('[data-el="agent.chat.mode.editor"]');
+    await click('[data-el="agent.chat.tab.editor"]');
     await realClick('[data-el="agent.chat.model"]');
     await waitFor(`document.querySelectorAll('[data-el="agent.chat.model.row"]').length > 0`);
     await typeInto('[data-el="agent.chat.model.search"]', 'opus 5');
@@ -231,13 +234,13 @@ try {
 
   // ── chat: Diskusi + Edit ──
   await step('diskusi', async () => {
-    await click('[data-el="agent.chat.mode.brainstorm"]');
+    await click('[data-el="agent.chat.tab.brainstorm"]');
     await typeInto('[data-el="agent.chat.composer"]', 'Buat ide video 3 tips hemat listrik');
     await key('Enter', 'Enter', 13);
     check('diskusi answer shown', await waitFor(`[...document.querySelectorAll('[data-el="agent.chat.message"][data-agent="brainstorm"][data-role="assistant"]')].some((m) => m.innerText.includes('hemat listrik'))`, 30000));
   });
   await step('edit', async () => {
-    await click('[data-el="agent.chat.mode.editor"]');
+    await click('[data-el="agent.chat.tab.editor"]');
     await typeInto('[data-el="agent.chat.composer"]', 'Buat videonya: 5 adegan dengan judul');
     await key('Enter', 'Enter', 13);
     check('edit plan card shown', await waitFor(`!!document.querySelector('[data-el^="agent.editor.plancard"]')`, 45000), { tail: page.consoleLines.slice(-4) });
@@ -250,7 +253,7 @@ try {
   // ── faults: overloaded / rate limited / bad key ──
   await step('fault-529', async () => {
     stub.configure('anthropic', { fault: '529', times: 10 });
-    await click('[data-el="agent.chat.mode.brainstorm"]');
+    await click('[data-el="agent.chat.tab.brainstorm"]');
     await typeInto('[data-el="agent.chat.composer"]', 'Satu ide lagi');
     await key('Enter', 'Enter', 13);
     check('529 shows an error bubble, not a crash', await waitFor(`!!document.querySelector('[data-el="agent.chat.message"][data-role="system"][data-code]')`, 40000), { code: await page.evaluate(`document.querySelector('[data-el="agent.chat.message"][data-role="system"][data-code]')?.getAttribute('data-code') ?? null`) });

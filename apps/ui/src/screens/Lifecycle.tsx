@@ -22,7 +22,7 @@ export function UnsavedDialog({ screen, onClose }: { screen: Extract<Screen, { k
       footer={<>
         <Button el="scr.unsaved.cancel" variant="ghost" onClick={onClose}>{t('ui.common.cancel')}</Button>
         <Button el="scr.unsaved.discard" onClick={() => void go(false)}>{t('ui.scr.unsaved.discard')}</Button>
-        <Button el="scr.unsaved.save" variant="primary" onClick={() => void go(true)}>{t('ui.common.save')}</Button>
+        <Button el="scr.unsaved.save" variant="primary" data-autofocus="" onClick={() => void go(true)}>{t('ui.common.save')}</Button>
       </>}>
       <p>{t(screen.closing ? 'ui.scr.unsaved.body.close' : 'ui.scr.unsaved.body')}</p>
       <p className="mt-2 text-[12px] text-em-muted">{t('ui.scr.unsaved.safe')}</p>
@@ -38,7 +38,7 @@ export function CloseRenderDialog({ screen, onClose }: { screen: Extract<Screen,
     <Modal el="scr.close.render" width={460} title={t('err.EM-8304.title')} onClose={onClose}
       footer={<>
         <Button el="scr.close.render.cancel" variant="danger" onClick={() => void cancelAndClose()}>{t('ui.scr.close.render.cancel')}</Button>
-        <Button el="scr.close.render.keep" variant="primary" onClick={onClose}>{t('ui.scr.close.render.keep')}</Button>
+        <Button el="scr.close.render.keep" variant="primary" data-autofocus="" onClick={onClose}>{t('ui.scr.close.render.keep')}</Button>
       </>}>
       <p>{t('err.EM-8304.body', { name: state.project?.name ?? '', percent: Math.round((job?.progress ?? 0) * 100) })}</p>
       <p className="t-mono mt-1 text-[11px] text-em-muted">EM-8304</p>

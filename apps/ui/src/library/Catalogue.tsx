@@ -33,6 +33,9 @@ const sameRef = (a: ElementRefT, b: ElementRefT) => a.kind === b.kind && (a.id ?
  * Resolution does for transitions); project-wide picks always count. Without a selection it is the default target, i.e. picks
  * made without an explicit element. Supersession keeps one live pick per property key, so an exclusive group shows one card.
  */
+/** The poster next to a prerendered loop (`…/name.webm` → `…/name.jpg`). */
+export const posterOf = (loopUrl: string): string => loopUrl.replace(/\.webm(?=$|[?#])/, '.jpg');
+
 export function selectedPresetIds(items: readonly EditIntent[], selection: readonly ElementRefT[], clips: ReadonlyArray<{ id: string }>): Set<string> {
   const out = new Set<string>();
   const live = items.filter((i) => i.presetId && LIVE.has(i.status));
@@ -82,7 +85,7 @@ export function Catalogue({ query, tab, onTab, onSuggest, onClear }: { query: st
   return (
     <div data-el="lib.catalogue" className="flex flex-col gap-2">
       {!q && (
-        <div role="tablist" aria-label={t('ui.lib.catalogue.tabs')} className="flex gap-1 overflow-x-auto pb-1"
+        <div role="tablist" aria-label={t('ui.lib.catalogue.tabs')} className="flex flex-wrap gap-x-1 pb-1"
           onKeyDown={(e) => {
             const i = CATALOGUE_TABS.indexOf(tab);
             const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
@@ -93,7 +96,7 @@ export function Catalogue({ query, tab, onTab, onSuggest, onClear }: { query: st
           }}>
           {CATALOGUE_TABS.map((c, i) => (
             <button key={c} ref={(r) => { tabRefs.current[i] = r; }} type="button" role="tab" aria-selected={tab === c} tabIndex={tab === c ? 0 : -1} data-el="lib.catalogue.tab" data-category={c} onClick={() => onTab(c)}
-              className={cx('h-7 shrink-0 whitespace-nowrap border-b-2 px-2 text-[12px] font-medium', tab === c ? 'border-em-accent text-em-text' : 'border-transparent text-em-muted hover:text-em-text')}>
+              className={cx('h-6 shrink-0 whitespace-nowrap border-b-2 px-1.5 text-[12px] font-medium', tab === c ? 'border-em-accent text-em-text' : 'border-transparent text-em-muted hover:text-em-text')}>
               {t(`ui.lib.catalogue.tab.${c}`)} <span className="t-mono text-em-muted">{counts[c]}</span>
             </button>
           ))}
@@ -183,7 +186,10 @@ export function CatalogueCard({ preset, item, selected, compact }: { preset: Pre
         className={cx('group relative flex w-full flex-col overflow-hidden rounded-[8px] border bg-em-panel text-left em-trans', selected ? 'border-em-accent shadow-[inset_0_0_0_2px_var(--em-accent)]' : 'border-em-line hover:border-em-line-strong',
           hover && !reason && '-translate-y-0.5', reason && 'opacity-50 cursor-not-allowed')} style={hover ? { boxShadow: 'var(--sh-2)' } : undefined}>
         <div data-el="lib.catalogue.card.thumb" className={cx('relative w-full', compact ? 'aspect-[16/7]' : 'aspect-video')}>
-          {loopUrl ? <video src={loopUrl} muted loop playsInline preload="metadata" aria-hidden onError={() => setLoopFailed(true)} className="h-full w-full object-cover" ref={(v) => { if (!v) return; if (hover) void v.play().catch(() => undefined); else v.pause(); }} />
+          {/* Entry 36: the paused card shows the loop's poster (frame at 1 s, build-loops.mjs). Frame 0 is the demo before its entrance
+              (an empty gradient) and app:// cannot seek; preload none = no decoder per card until it is hovered. */}
+          {loopUrl ? <video src={loopUrl} poster={posterOf(loopUrl)} muted loop playsInline preload="none" aria-hidden onError={() => setLoopFailed(true)} className="h-full w-full object-cover"
+            ref={(v) => { if (!v) return; if (hover) void v.play().catch(() => undefined); else if (!v.paused || v.currentTime > 0) { v.pause(); v.load(); } }} />
             : <PresetSwatch id={preset.id} category={preset.category} playing={hover} />}
           {selected && <span className="absolute left-1 top-1 text-em-accent" title={t('ui.lib.catalogue.inpicks')}><Bookmark size={14} fill="currentColor" /></span>}
           {gpu && <span className="absolute right-1 top-1"><span data-el="lib.catalogue.card.badge.gpu" title={gpuLabel} className="rounded-[4px] bg-black/60 px-1 text-em-warn"><Cpu size={12} /></span></span>}

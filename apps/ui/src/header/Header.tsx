@@ -42,7 +42,9 @@ export function Header() {
   const lowResources = state.tick ? state.tick.ramFreeMb < 2048 || (state.tick.diskFreeMb ?? Infinity) < 1024 : false;
   const close = () => setMenu(null);
   const mode = (m: LibMode, el: string, icon: ReactNode, key: string) => (
-    <button type="button" role="tab" aria-selected={state.libMode === m} data-el={el} onClick={() => { actions.setLibMode(m); setMenu(null); }}
+    // Entry 36 (Windows UIA): plain toggle buttons, not role="tab" — UI Automation exposes a tab as SelectionItem, so "Invoke"
+    // only focused it and the Library never switched; a button is Invoke (click / Enter / Space) with its state in aria-pressed.
+    <button type="button" aria-pressed={state.libMode === m} aria-current={state.libMode === m ? 'true' : undefined} data-el={el} onClick={() => { actions.setLibMode(m); setMenu(null); }}
       className={cx('flex h-12 items-center gap-1.5 px-2.5 text-[13px] font-medium border-b-2 em-trans', state.libMode === m ? 'border-em-accent text-em-text' : 'border-transparent text-em-text-2 hover:text-em-text')}>
       {icon}{t(key)}
     </button>
@@ -87,7 +89,7 @@ export function Header() {
         )}
       </div>
       {/* QA UX round 1: the Library mode tabs only switch the Library, which the Start screen (no project) does not show — hidden there */}
-      {p && <div role="tablist" aria-label={t('a11y.hdr.menu.tabs')} className="flex">
+      {p && <div role="group" aria-label={t('a11y.hdr.menu.tabs')} className="flex">
         {mode('home', 'hdr.menu.home', <Type size={16} aria-hidden />, 'ui.hdr.menu.home')}
         {mode('design', 'hdr.menu.design', <Sparkles size={16} aria-hidden />, 'ui.hdr.menu.design')}
         {mode('tools', 'hdr.menu.tools', <Wrench size={16} aria-hidden />, 'ui.hdr.menu.tools')}
@@ -116,7 +118,7 @@ export function Header() {
             {titleError && <span className="absolute top-11 text-[12px] text-em-danger" role="alert">{t('ui.hdr.title.error')}</span>}
           </span>
         ) : (
-          <button type="button" data-el="hdr.title" aria-label={t('a11y.hdr.title')} aria-describedby={p?.dirty ? 'em-dirty' : undefined} disabled={!p}
+          <button type="button" data-el="hdr.title" aria-label={t('a11y.hdr.title')} title={p?.name} aria-describedby={p?.dirty ? 'em-dirty' : undefined} disabled={!p}
             onClick={() => { setDraft(p?.name ?? ''); setEditing(true); }} className="max-w-[320px] truncate rounded-[6px] px-2 py-1 text-[14px] font-medium hover:bg-em-panel-2">
             {p?.isSample === true ? (() => { const st = sampleTitle(p.name, p.language); return <><span data-el="hdr.title.sample" className="font-semibold text-em-accent">{st.marker}</span>{' · '}{st.rest}</>; })() : (p?.name ?? '')}
           </button>

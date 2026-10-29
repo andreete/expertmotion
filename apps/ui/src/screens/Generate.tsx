@@ -4,7 +4,7 @@
 // inline Install (Model Download, FR-124), jobs that survive closing the sheet (R-131 on open) and the 7-day "Generated" list.
 // Insert is deterministic (no Editor Agent plan): R-134 applies the finished job's proposed ops (no re-run); a generated Asset
 // without proposed ops falls back to R-035.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Download, Trash2 } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
 import { useStore } from '../state/store.js';
@@ -85,6 +85,8 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
   const [error, setError] = useState<string | null>(null);
   const [inserting, setInserting] = useState(false);
   const [insertJobId, setInsertJobId] = useState<string | null>(null);
+  /** Where the result goes on the Timeline (voice: the playhead when it was made; thumbnail: the chosen frame), for the toast. */
+  const placedAt = useRef<number | null>(null);
   const pid = state.project?.id;
   const loadHistory = useMemo(() => async () => {
     if (!pid) return;
@@ -122,9 +124,18 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
         : kind === 'music' ? { prompt: input, durationMs: durationS * 1000, instrumental: true, language }
           : kind === 'thumbnail' ? { frameMs: Math.round(state.playheadMs), ...(input.trim() ? { titleText: input } : {}), ...(!frameOnly && prompt.trim() ? { prompt } : {}), count, style, language, ...(chosenKey ? { modelKey: chosenKey } : {}) }
             : { language, platform, tone, count };
+    placedAt.current = typeof body['atMs'] === 'number' ? body['atMs'] as number : typeof body['frameMs'] === 'number' ? body['frameMs'] as number : null;
     try { const j = await runtime.api.createGeneratorJob(state.project.id, kind, body); setJob(j); return j; } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); return null; } finally { setStarting(false); }
   };
-  const inserted = () => { void actions.refreshHead(); actions.toast('success', 'ui.scr.generate.inserted', { kind: t(`ui.lib.generator.${kind}.title`) }); onClose(); };
+  // Entry 36 (Windows QA): the panel closed with no word of what was added where — the toast now names it and the time.
+  const inserted = (atMs: number | null = placedAt.current) => {
+    void actions.refreshHead();
+    const what = t(`ui.lib.generator.${kind}.title`);
+    const noun = ['voice', 'captions', 'music', 'thumbnail'].includes(kind) ? t(`ui.scr.generate.noun.${kind}`) : what;
+    if (atMs === null) actions.toast('success', 'ui.scr.generate.inserted', { kind: what });
+    else actions.toast('success', kind === 'voice' && withCaptions ? 'ui.scr.generate.inserted.voicecaptions' : 'ui.scr.generate.inserted.at', { kind: noun, time: formatDuration(atMs) });
+    onClose();
+  };
   useEffect(() => {
     if (!insertJobId || !job || job.id !== insertJobId || job.status === 'running' || job.status === 'queued') return;
     setInserting(false); setInsertJobId(null);
@@ -138,7 +149,7 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
       if (Array.isArray(j.result?.['proposedOps']) && (j.result!['proposedOps'] as unknown[]).length) await runtime.api.insertGeneratorResult(j.id, editedPages ? { pages: editedPages } : thumb ?? undefined);
       else if (j.resultAssetId) await runtime.api.insertAssets(state.project.id, { assetIds: [j.resultAssetId], order: 'given', ...(kind === 'voice' ? { atMs: state.playheadMs } : {}) });
       else { setError('EM-9002'); return; }
-      inserted();
+      inserted(thumb ? thumb.atMs : job?.id === j.id ? placedAt.current : null);   // an older job from the history: no time
     } catch (e) { setError(e instanceof EmError ? e.code : 'EM-9001'); }
   };
   const remove = async (j: GeneratorJobDto) => { try { await runtime.api.deleteGeneratorJob(j.id); setHistory((h) => h.filter((x) => x.id !== j.id)); if (job?.id === j.id) setJob(null); } catch (e) { actions.error(e); } };

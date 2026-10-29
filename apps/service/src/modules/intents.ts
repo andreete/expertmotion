@@ -50,7 +50,9 @@ export const intentsModule: ServiceModule = {
     // R-070 / R-071
     route(router, 'post', '/projects/:id/plans', { params: ProjectParams, body: PlanCreateInput, status: 201 }, ({ params, body, res }) => {
       store.projectRow(params.id);
-      const r = workflow.createPlan(params.id, body);
+      const { replanOf, ...input } = body;
+      const original = replanOf ? replanMessage(ctx, params.id, replanOf) : null;
+      const r = workflow.createPlan(params.id, { ...input, ...(original ? { message: original, mode: 'agent' as const } : {}) });
       r.done.catch(() => {});
       if (r.runId) { res.status(202).json({ plan: r.plan, runId: r.runId }); return undefined; }
       res.setHeader('Location', `/api/v1/plans/${r.plan.id}`);
@@ -77,3 +79,18 @@ export const intentsModule: ServiceModule = {
     route(router, 'patch', '/plans/:planId/notes', { params: PlanParams, body: NotesInput }, ({ params, body }) => workflow.setNotes(params.planId, body.notes));
   },
 };
+
+/** Entry 35: the Creator's own chat message behind a plan (the user message of the plan's agent run), for a re-plan; null when none. */
+function replanMessage(ctx: ServiceContext, projectId: string, planId: string): string | null {
+  const row = ctx.db.prepare('SELECT agent_run_id a FROM edit_plans WHERE id = ? AND project_id = ?').get(planId, projectId) as { a: string | null } | undefined;
+  if (!row?.a) return null;
+  const m = ctx.db.prepare("SELECT blocks_json b FROM messages WHERE agent_run_id = ? AND role = 'user' ORDER BY created_at LIMIT 1").get(row.a) as { b: string } | undefined;
+  if (!m) return null;
+  try {
+    const blocks = JSON.parse(m.b) as Array<{ type?: unknown; text?: unknown; instruction?: unknown }>;
+    const list = Array.isArray(blocks) ? blocks : [];
+    const handoff = list.find((x) => x?.type === 'origin' && typeof x.instruction === 'string')?.instruction as string | undefined;   // a "Kirim ke Editor" hand-off
+    const text = handoff ?? list.filter((x) => x?.type === 'text' && typeof x.text === 'string').map((x) => x.text as string).join('\n').trim();
+    return text ? text.slice(0, 8000) : null;
+  } catch { return null; }
+}

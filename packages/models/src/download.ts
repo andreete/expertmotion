@@ -39,6 +39,9 @@ export interface DownloadOptions {
   retries?: number;
   /** Hard cap on transfers per file, progress or not (FR-245: 40). */
   maxAttempts?: number;
+  /** Retries in a row with NO route to the internet before giving up (default: maxAttempts, i.e. wait the outage out). A small
+   *  interactive download (a 3 MB music track the Creator is waiting for) passes a few, so "no internet" ends as EM-7002 in seconds. */
+  offlineRetries?: number;
   /** Delay before retry `attempt` (0-based). Default: 2 s · 2^attempt, max 60 s, ±20 % jitter. 429/503 use Retry-After / RateLimit `t=` instead (max 5 min). */
   backoffMs?: (attempt: number) => number;
   /** No byte for this long while streaming → the transfer is dropped and resumed (FR-245: 60 s). */
@@ -324,7 +327,7 @@ export async function downloadFile(spec: DownloadSpec, paths: { partPath: string
         // QA P1-9: no route to the internet at all (cable out, Wi-Fi off) is waited out up to maxAttempts (~40 min at the 60 s cap),
         // so the download resumes by itself when the network returns; the Service says "no internet" from the first failure.
         const offline = typeof err.detail.netCode === 'string' && /^(ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN|ENETDOWN)$/.test(err.detail.netCode);
-        const limit = err.detail.reason === 'tls' ? Math.min(1, retries) : offline ? maxAttempts : retries;
+        const limit = err.detail.reason === 'tls' ? Math.min(1, retries) : offline ? (opts.offlineRetries ?? maxAttempts) : retries;
         if (failsInRow > limit || attempts >= maxAttempts) {
           const { retryAfterMs: _ra, ...detail } = err.detail;
           throw emError('EM-7002', `Download of ${spec.name} failed (${err.detail.reason}${err.detail.httpStatus ? ` HTTP ${String(err.detail.httpStatus)}` : ''}${err.detail.netCode ? ` ${String(err.detail.netCode)}` : ''})`,

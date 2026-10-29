@@ -48,6 +48,7 @@ export class MusicLibraryService {
       try {
         await downloadFile({ name: t.file, url: t.url, bytes: t.bytes, bytesExact: true, sha256: t.sha256, modelKey: `music:${t.id}` }, { partPath: this.partPath(t), destPath: this.filePath(t) }, {
           fetch: fetchLike, freeBytes, signal: entry.ac.signal, allowedHosts: modelsServiceOf(ctx).downloadHosts(), privateMode: () => ctx.settings.get().privateMode, minFreeBytes: 200_000_000,
+          offlineRetries: 2,   // Entry 35: no internet → EM-7002 after ~6 s (with the Download button back), not a 40-minute spinner
           onProgress: (p) => { entry.bytesDone = p.bytesDone; emit(ctx, 'service.notice', { kind: 'music-library', trackId: t.id, status: 'downloading', percent: Math.floor((p.bytesDone / t.bytes) * 100) }); },
           onRetry: (r) => ctx.log.info({ track: t.id, attempt: r.attempt, reason: r.reason, httpStatus: r.httpStatus ?? null, netCode: r.netCode ?? null }, 'music download retrying'),
         });

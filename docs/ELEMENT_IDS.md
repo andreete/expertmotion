@@ -153,6 +153,7 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `stage.timeline` | rows under player | Timeline View container. |
 | `stage.timeline.ruler` / `.head` | (added) | Time ruler and playhead line. FR-253 / FR-254 (2026-10-28): the ruler is sticky at the top of the Timeline scroll area (`data-sticky="top"`); the playhead line is a `role="slider"` over the whole Timeline height (12 px grab zone, `aria-valuenow` = ms, `data-scrubbing` while dragged); press + drag on the ruler, the line or empty track space scrubs. |
 | `stage.timeline.scroll` | (added 2026-10-28, FR-254) | The single scroll container of the Timeline (both axes): lane names stick to the left, the ruler to the top. |
+| `stage.timeline.lanes.labels` | (added 2026-10-30, Entry 36) | The sticky lane-name column (120 px, 136 px from 1280, 176 px from 1536 wide); each name carries its full text as tooltip. |
 | `stage.timeline.head.handle` | (added 2026-10-28, FR-253) | Playhead marker inside the sticky ruler (stays visible while the lanes scroll). |
 | `stage.timeline.track.video` / `.caption` | rows in mockup | The video Track row and the caption row (captions render above every layer, so their row is the top row). |
 | `stage.timeline.lane.layer` | (added 2026-10-26, ADR-027) | One row per visual layer (texts, images, shapes), `data-layer="<n>"`, ordered front-most on top (CapCut order); between the caption row and the video Track. |
@@ -600,6 +601,9 @@ The startup and crash ids (`sys.splash.*`, `sys.crash.*`, `sys.fatal.retry`) are
 | `scr.export.waiting.memory.detail` | "Waited 12 s · 610 MB free, 900 MB needed" | Under EM-3107 while the export waits for free memory (render.queued `memoryWait`). |
 | `scr.project.new.customratio` / `.width` / `.height` | Custom ratio fields in the New dialog | Width / height (1:3…3:1); applied to the new project as an Output Settings pick. |
 | `scr.models.row.offline` / `scr.models.row.offline.retry` | "No internet connection — the download continues by itself…" + "Try again" | P1-9: shown from the first failed try that had no route to the internet (`model.progress noNetwork`); the download keeps retrying and resumes on its own. |
+| `scr.models.row.optional` | "Optional" / "Opsional" badge (was "Later version") | Entry 36: a P2 model, not needed for the main features; tooltip says so. `scr.models.row.recommended` shows on the first recommended model of each purpose only. |
+| `sys.toasts.more` | "+2 more" / "+2 lainnya" pill above the toast stack | Entry 36: at most two toasts show at once (the stack stays inside the Timeline View); the pill shows the older ones. |
+| `agent.chat.message.text` / `agent.chat.message.fold` | A user message's text / "Show all" · "Tampilkan semua" | Entry 36: the long draft sent from Diskusi ("Kirim ke Editor") starts folded to four lines (`data-folded`). |
 | `agent.chat.composer.count` | "6 120 / 8000" | Characters in the composer from 6 000 on; past 8 000 (the Service limit) it says so and Send is disabled (Send is also disabled for an empty / whitespace-only message). |
 | `scr.generate.music.library.meta` | artist · mood · genre · length | The track facts on their own wrapping line under the title. |
 | `lib.assets.card.duration` | "0:05" on the Asset card thumbnail | The length, moved off the name row so the name gets two lines (QA UX round 1, 1280 px). |

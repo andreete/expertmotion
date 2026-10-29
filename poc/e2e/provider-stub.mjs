@@ -8,7 +8,7 @@
 //   `mode: 'xml'` = tool calls written as <invoke> markup in plain text), /openai/v1/models + /chat/completions, /gemini/v1beta/models + :generateContent,
 //   /openrouter/api/v1/key + /models (450 rows, or E2E_OR_MODELS=<real list JSON>) + /chat/completions (JSON or SSE stream).
 // Shapes mirror the real APIs as read by apps/service/src/s3/adapters.ts. Keys containing "bad" get 401. Faults are set per
-// provider with POST /__stub/config {provider, fault: null|'401'|'429'|'529'|'500', delayMs, times, mode: 'native'|'xml', thinkMs};
+// provider with POST /__stub/config {provider, fault: null|'401'|'429'|'529'|'500'|'hang'|'malformed', delayMs, times, mode: 'native'|'xml', thinkMs};
 // GET /__stub/log lists calls (Anthropic calls also record tools / images / tool results / stream / validation errors).
 // Usage: import { startProviderStub } from './provider-stub.mjs'; const stub = await startProviderStub(4140);
 //        or standalone: node poc/e2e/provider-stub.mjs 4140
@@ -162,6 +162,11 @@ export function editorPlanFor(msgs) {
   if (/buat caption/i.test(m)) return plan('Membuat 2 halaman caption.', [{ n: 1, tool: 'composition.applyOps', ops: [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages: [
     { text: 'Kita butuh energi', startMs: 0, durationMs: 1500, tokens: [{ text: 'Kita', fromMs: 0, toMs: 500 }, { text: ' butuh', fromMs: 500, toMs: 1000 }, { text: ' energi', fromMs: 1000, toMs: 1500 }] },
     { text: 'energi besi. Tantangannya', startMs: 1500, durationMs: 1500, tokens: [{ text: 'energi', fromMs: 1500, toMs: 2000 }, { text: ' besi.', fromMs: 2000, toMs: 2500 }, { text: ' Tantangannya', fromMs: 2500, toMs: 3000 }] }] } }], expectedDiff: 'Caption 2 halaman' }]);
+  // Entry 35: a narration on the current scenes — a voice step (held when no voice model is installed, FR-252) + captions from it.
+  const narr = /^Tambahkan narasi( lebih lambat)?:\s*(.+)$/is.exec(m);
+  if (narr) return plan('Menambahkan narasi dan caption dari naskah.', [
+    { n: 1, tool: 'tts.generate', ops: [], args: { text: narr[2].trim(), atMs: 0, language: 'id', ...(narr[1] ? { speed: 0.8 } : {}) }, expectedDiff: 'Narasi dari naskah', dependsOn: [] },
+    { n: 2, tool: 'captions.generate', ops: [], args: { source: 'voice', text: narr[2].trim() }, expectedDiff: 'Caption dari suara', dependsOn: [1] }]);
   return EDITOR_PLAN;
 }
 const QA_INVOKE = '<invoke>\n<parameter name="input">{"query": "gradient", "category": "backgrounds"}</parameter>\n<parameter name="tool">catalogue.search</parameter>\n</invoke>';
@@ -241,6 +246,7 @@ async function streamAnthropic(res, model, content, stop, outTokens, c) {
 
 export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}) {
   const config = {};                        // provider → { fault, delayMs, times }
+  const hung = new Set();                    // responses held open by the 'hang' fault
   const calls = [];
   const orModels = openRouterModels();
   const server = http.createServer(async (req, res) => {
@@ -258,7 +264,12 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
     const c = config[provider];
     if (c?.delayMs) await sleep(c.delayMs);
     if (/bad/i.test(key)) return send(res, 401, errorBody(provider, 401));
-    if (c?.fault && c.times > 0) { c.times -= 1; const st = Number(c.fault); return send(res, st, errorBody(provider, st), st === 429 ? { 'retry-after': '1' } : {}); }
+    // Entry 35 faults: 'hang' = accept and never answer (the caller's timeout / Stop must end it); 'malformed' = Anthropic answers
+    // with a cut-off plan JSON (the repair loop must end in a visible EM code, never a spinner).
+    if (c?.fault === 'hang' && c.times > 0) { c.times -= 1; hung.add(res); res.on('close', () => hung.delete(res)); return; }
+    const malformed = c?.fault === 'malformed' && c.times > 0 && provider === 'anthropic' && p === '/v1/messages';
+    if (malformed) c.times -= 1;
+    if (c?.fault && !['hang', 'malformed'].includes(c.fault) && c.times > 0) { c.times -= 1; const st = Number(c.fault); return send(res, st, errorBody(provider, st), st === 429 ? { 'retry-after': '1' } : {}); }
     const text = answerFor(typeof body.system === 'string' ? body.system : body.messages?.find?.((m) => m.role === 'system')?.content ?? body.systemInstruction?.parts?.[0]?.text ?? '');
     const usage = { in: 1200, out: Math.ceil(text.length / 4) };
 
@@ -287,7 +298,9 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
         // `v1only` mirrors a model without the dynamic-filtering versions.
         if (webTools.length && c?.web === 'disabled') return send(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'Web search is not enabled for this organization. An administrator can enable it in the Claude Console.' }, request_id: 'req_stub_400' });
         if (webTools.some((t) => /_2026/.test(t.type)) && c?.web === 'v1only') return send(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: `tools.0: the tool type web_search_20260209 is not supported for model ${body.model}` }, request_id: 'req_stub_400' });
-        const content = anthropicAnswer(body, c ?? {});
+        const content = malformed ? [{ type: 'thinking', thinking: '', signature: 'EqQBCgIYAhIMstub' + 'x'.repeat(48) },
+          { type: 'text', text: '{"goal": "Tambah judul", "steps": [{"n": 1, "tool": "composition.applyOps", "ops": [{"op": "op:scene.add", "args": {"durationMs": 30' }]
+          : anthropicAnswer(body, c ?? {});
         const paused = content.some((b) => b.type === 'web_search_tool_result') && !content.some((b) => b.type === 'text' && b.citations);
         if (paused && c) c.pausedDone = true;
         const stop = paused ? 'pause_turn' : content.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn';
@@ -349,7 +362,7 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
     return send(res, 404, errorBody(provider, 404));
   });
   await new Promise((r) => server.listen(port, host, r));
-  return { origin: `http://${host}:${port}`, calls, close: () => new Promise((r) => server.close(() => r())),
+  return { origin: `http://${host}:${port}`, calls, hung, close: () => new Promise((r) => { for (const h of hung) h.destroy(); server.closeAllConnections?.(); server.close(() => r()); }),
     configure: (provider, c) => { config[provider] = { fault: c.fault ?? null, delayMs: c.delayMs ?? 0, times: c.times ?? Infinity, mode: c.mode ?? 'native', thinkMs: c.thinkMs ?? 0, web: c.web ?? 'on', pauseOnce: c.pauseOnce === true, searchMs: c.searchMs ?? 300 }; } };
 }
 

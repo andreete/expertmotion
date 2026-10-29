@@ -1,8 +1,12 @@
 // Prerenders the Preview catalogue loops (ADR-011, DESIGN_CATALOGUE §2): resources/catalogue/<category>/<name>.webm,
 // 2 s, 480 px wide (16:9 → 480×270), VP8, no audio. Build-time only; the shipped app never renders these.
 // Needs the Engine bundle (npm run build:bundle) and `tsc -b packages/engine`. Heavy: run inside the memory cap.
-//   bash scripts/run-capped.sh node packages/engine/scripts/build-loops.mjs [--only=transition,effect] [--limit=N] [--force]
+//   bash scripts/run-capped.sh node packages/engine/scripts/build-loops.mjs [--only=transition,effect] [--limit=N] [--force] [--posters-only]
+// Every loop also gets a poster <name>.jpg (the frame at POSTER_S): the Catalogue Card shows it while the loop is paused. Frame 0
+// is no good — every demo starts with its entrance (text / clip not visible yet), and app:// answers without Range support, so
+// the Editor cannot seek the paused <video> to a later frame (Entry 36: "empty brown gradients" on Windows).
 import { ensureBrowser, renderMedia, selectComposition } from '@remotion/renderer';
+import { execFileSync } from 'node:child_process';
 import { applyOperations, createEmptyModel } from '@expertmotion/composition-model';
 import { compileDefaults, listPresets } from '@expertmotion/catalogue';
 import crypto from 'node:crypto';
@@ -27,6 +31,27 @@ let n = 0; const newId = () => `e${++n}`;
 const apply = (m, ops, assets = []) => { const r = applyOperations(m, ops, { assets, tier: 'T2', newId }); if (!r.ok) throw new Error(JSON.stringify(r.issues)); return r.value.model; };
 const base = () => createEmptyModel('loops', { autoRatio: false, ratio: '16:9', resolution: '720p', fps: 30 });
 const SCALE = 480 / 1280;
+const POSTER_S = 1.0;
+const postersOnly = process.argv.includes('--posters-only');
+// The pinned Remotion compositor's FFmpeg (slim build: image2 + mjpeg are in it; no select/tile filters, so seek with -ss).
+const compositorDir = path.join(root, 'node_modules/@remotion', process.platform === 'win32' ? 'compositor-win32-x64-msvc' : process.platform === 'darwin' ? `compositor-darwin-${process.arch}` : 'compositor-linux-x64-gnu');
+function poster(loop) {
+  const out = loop.replace(/\.webm$/, '.jpg');
+  execFileSync(path.join(compositorDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'), ['-loglevel', 'error', '-y', '-ss', String(POSTER_S), '-i', loop, '-frames:v', '1', '-q:v', '4', '-f', 'image2', '-update', '1', `${out}.part`],
+    { env: { ...process.env, LD_LIBRARY_PATH: compositorDir, DYLD_LIBRARY_PATH: compositorDir }, stdio: ['ignore', 'ignore', 'pipe'] });
+  fs.renameSync(`${out}.part`, out);
+  return out;
+}
+if (postersOnly) {
+  let made = 0; const failed = [];
+  for (const p of listPresets({}).filter((x) => x.preview && (!only || only.includes(x.category)))) {
+    const loop = path.join(root, 'resources', p.preview);
+    if (!fs.existsSync(loop) || (!force && fs.existsSync(loop.replace(/\.webm$/, '.jpg')))) continue;
+    try { poster(loop); made++; } catch (e) { failed.push({ preset: p.id, error: String(e.message ?? e).slice(0, 200) }); }
+  }
+  log({ posters: made, failed });
+  process.exit(failed.length ? 1 : 0);
+}
 
 async function render(model, assetsProps, file) {
   const inputProps = { model, assets: assetsProps, quality: 'full' };
@@ -100,11 +125,11 @@ const report = { rendered: 0, skipped: 0, failed: [], seconds: 0 };
 const t0 = Date.now();
 for (const p of todo.slice(0, limit)) {
   const file = path.join(root, 'resources', p.preview);
-  if (!force && fs.existsSync(file)) { report.skipped++; continue; }
+  if (!force && fs.existsSync(file)) { if (!fs.existsSync(file.replace(/\.webm$/, '.jpg'))) poster(file); report.skipped++; continue; }
   try {
     const model = demo(p);
     if (!model) { report.skipped++; continue; }
-    const t = Date.now(); await render(model, ASSET_PROPS, file);
+    const t = Date.now(); await render(model, ASSET_PROPS, file); poster(file);
     report.rendered++; log({ preset: p.id, seconds: (Date.now() - t) / 1000, bytes: fs.statSync(file).size });
   } catch (e) { report.failed.push({ preset: p.id, error: String(e.message ?? e).slice(0, 300) }); log({ preset: p.id, failed: true }); }
 }

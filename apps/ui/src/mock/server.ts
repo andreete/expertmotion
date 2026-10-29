@@ -1121,7 +1121,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     if (body['baseVersion'] !== head(p).hash) throw new HttpError(409, 'EM-2301', 'Base version is not the head.');
     const reply = msg.blocks.flatMap((x) => (x.type === 'text' ? [x.text] : [])).join('\n');
     const text = `Kerjakan draf dari Diskusi ini di video sekarang.\n\nDRAF:\n${reply}`;
-    const user: MessageDto = { id: newId(), role: 'user', blocks: [{ type: 'text', text }, { type: 'origin', from: 'brainstorm', messageId: msg.id }], agentRunId: null, createdAt: nowIso() };
+    // like the Service (Entry 35): a short visible line, the instruction in the origin block
+    const user: MessageDto = { id: newId(), role: 'user', blocks: [{ type: 'text', text: `Kirim draf dari Diskusi ke Editor: “${reply.split('\n')[0]!.slice(0, 80)}”` }, { type: 'origin', from: 'brainstorm', messageId: msg.id, instruction: text }], agentRunId: null, createdAt: nowIso() };
     p.messages.editor.push(user);
     const res = createIntent(p, { source: 'chat', category: 'text', target: { kind: 'selection' }, instruction: text, baseVersion: head(p).hash, plan: 'none' }, 'chat');
     Object.assign(res.intent, { category: 'layout', propertyKey: `chat:${user.id}`, needsInterpretation: true });

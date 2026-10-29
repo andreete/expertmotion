@@ -227,6 +227,13 @@ export const toGenDto = (r: GenRow): Record<string, unknown> => ({ id: r.id, pro
 
 interface Prepared { modelKey: string | null; run: (j: JobContext) => Promise<{ assetId?: string; result: Record<string, unknown>; ops?: OperationT[] }> }
 
+/** Asset name of a generated voice: its first words ("Ekspor-nikel-Indonesia-naik-tajam"), so the Creator recognises it in Assets. */
+function voiceAssetName(text: string, jobId: string): string {
+  const fallback = `voice-${jobId.slice(-8).toLowerCase()}`;
+  const words = text.replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ').slice(0, 48);
+  return words ? sanitizeFilename(words, fallback) : fallback;
+}
+
 export class GeneratorsService {
   private readonly runner: JobRunner;
   private readonly engines: GeneratorEngines;
@@ -876,7 +883,7 @@ export class GeneratorsService {
       const atMs = typeof b['atMs'] === 'number' ? b['atMs'] : 0;
       const written = typeof b['captionText'] === 'string' && b['captionText'].trim() ? b['captionText'] : undefined;
       return { modelKey: voice.cloud ? null : voice.modelKey ?? null, run: (j) => this.withJobDir(j, async () => {
-        const c = await this.voiceClip(j, projectId, voice, { name: `voice-${short(j.jobId)}`, text, ...(written ? { written } : {}) },
+        const c = await this.voiceClip(j, projectId, voice, { name: voiceAssetName(text, j.jobId), text, ...(written ? { written } : {}) },
           { language, ...(typeof b['speed'] === 'number' ? { speed: b['speed'] } : {}), ...(typeof b['style'] === 'string' ? { style: b['style'] } : {}), part: (f) => j.progress(0.05 + f * 0.85, 'synthesize') });
         j.progress(0.95, 'ingest');
         const ops: OperationT[] = [{ op: 'op:audio.addLayer', args: { assetId: c.assetId, atMs, volume: 1, role: 'voice' } } as OperationT];
