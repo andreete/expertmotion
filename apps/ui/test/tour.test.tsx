@@ -69,6 +69,36 @@ describe('tour', () => {
     expect(JSON.parse(localStorage.getItem('expertmotion.prefs.v1')!).tourDone).toBe(true);
   }, 30_000);
 
+  it('closing card: "Keep the sample project" calls R-014 isSample:false and the title loses the sample marker; "Start my own project" does not', async () => {
+    const { runtime } = await renderEditor('sample', { prefs: { onboardingLang: 'id' } });
+    const patch = vi.spyOn(runtime.api, 'patchProject');
+    const toDone = async () => {
+      await act(async () => { window.dispatchEvent(new CustomEvent('em:tour', { detail: { source: 'onboarding' } })); });
+      await waitStep(1);
+      for (let i = 1; i <= TOUR_STEPS.length; i++) { await act(async () => { fireEvent.click(el('sys.tour.next')!); }); if (i < TOUR_STEPS.length) await waitStep(i + 1); }
+      await waitFor(() => { if (card()?.getAttribute('data-phase') !== 'done') throw new Error('not done'); });
+    };
+    await toDone();
+    const sampleId = (await runtime.api.createSampleProject({ language: 'id' })).id;
+    expect(el('hdr.title')?.textContent).toBe('Contoh · Kafe Senja');
+    await act(async () => { fireEvent.click(el('sys.tour.done.keep')!); });
+    expect(card()).toBeNull();
+    await waitFor(() => { if (el('hdr.title')?.textContent !== 'Kafe Senja') throw new Error(`title ${el('hdr.title')?.textContent}`); });
+    expect(patch).toHaveBeenCalledWith(sampleId, { isSample: false });
+    expect(el('hdr.title.sample')).toBeNull();
+    const kept = await runtime.api.getProject(sampleId);
+    expect(kept.isSample).toBeUndefined();
+    expect(kept.name).toBe('Kafe Senja');
+    // a new tour makes a fresh sample; "Start my own project" leaves it a sample (removed by the Service on the next new / open)
+    patch.mockClear();
+    await toDone();
+    const fresh = await runtime.api.createSampleProject({ language: 'id' });
+    expect(fresh.id).not.toBe(sampleId);
+    await act(async () => { fireEvent.click(el('sys.tour.done.own')!); });
+    expect(patch.mock.calls.some(([, b]) => 'isSample' in (b as object))).toBe(false);
+    expect((await runtime.api.getProject(fresh.id)).isSample).toBe(true);
+  }, 30_000);
+
   it('Esc skips immediately, End tour skips; Help re-runs it (choice on a project with clips, direct on the sample)', async () => {
     const { runtime } = await renderEditor('sample');
     const spy = vi.spyOn(runtime.api, 'createSampleProject');

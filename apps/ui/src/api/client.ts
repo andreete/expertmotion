@@ -175,7 +175,8 @@ export class ApiClient {
   createProject(body: ProjectCreateInput): Promise<ProjectDto> { return this.post('/projects', body); }                    // R-011
   recentProjects(): Promise<{ items: ProjectDto[] }> { return this.get('/projects/recent'); }                                // R-012
   getProject(id: Id): Promise<ProjectDto> { return this.get(`/projects/${id}`); }                                          // R-013
-  patchProject(id: Id, body: { name?: string; language?: 'id' | 'en'; uiState?: ProjectUiState }): Promise<ProjectDto> { return this.patch(`/projects/${id}`, body); } // R-014 (uiState: FR-012)
+  /** R-014 (uiState: FR-012; isSample:false = the tour's "Keep the sample project": an ordinary project without the sample marker). */
+  patchProject(id: Id, body: { name?: string; language?: 'id' | 'en'; uiState?: ProjectUiState; isSample?: false }): Promise<ProjectDto> { return this.patch(`/projects/${id}`, body); } // R-014
   /** R-015: soft delete by default; `permanent` (Open ▸ Delete, FR-178) removes rows, media and checkpoints now, Outputs unless `keepOutputs`. */
   deleteProject(id: Id, opts: { permanent?: boolean; keepOutputs?: boolean } = {}): Promise<void> {
     return this.del(`/projects/${id}`, opts.permanent ? { permanent: true, keepOutputs: opts.keepOutputs !== false } : undefined);

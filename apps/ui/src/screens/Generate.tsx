@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Download, Trash2 } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
+import { deriveTiming, voiceEndMs, type CompositionModelT } from '@expertmotion/composition-model';
 import { useStore } from '../state/store.js';
 import { useModelNames } from '../state/use-model-names.js';
 import type { GeneratorJobDto, GeneratorKind, GeneratorModelDto } from '../api/types.js';
@@ -24,6 +25,23 @@ const WEEK_MS = 7 * 24 * 3_600_000;
 export const THUMBNAIL_STYLES = ['bold', 'clean', 'cinematic', 'playful'] as const;
 export const HASHTAG_TONES = ['casual', 'professional', 'energetic', 'informative', 'funny'] as const;
 const TASK: Record<GeneratorKind, string | null> = { voice: 'tts', captions: 'stt', thumbnail: 'image', music: 'music', hashtags: null };
+
+/**
+ * Windows QA 2026-10-30: a voice that ends after the last video clip extends the project (`voiceEndMs`), but the picture after the
+ * last clip is only the background + captions. Reads the head (never changes it): whole seconds of the voice end, the end of the
+ * last clip and the gap between them; null when there are no clips or the gap is under half a second.
+ */
+export function voiceGap(model: CompositionModelT): { voiceS: number; videoS: number; gapS: number } | null {
+  const clips = model.tracks.video;
+  if (!clips.length) return null;
+  const timing = deriveTiming(model);
+  const last = clips[clips.length - 1]!;
+  const videoEnd = (timing.clipStartMs[clips.length - 1] ?? 0) + last.durationMs;
+  const voiceEnd = Math.min(voiceEndMs(model), timing.durationMs);
+  if (voiceEnd - videoEnd < 500) return null;
+  const voiceS = Math.round(voiceEnd / 1000), videoS = Math.round(videoEnd / 1000);
+  return { voiceS, videoS, gapS: Math.max(1, voiceS - videoS) };
+}
 
 /** FR-104: an edited page keeps its timing; word tokens are re-spread evenly over the page when the words changed. */
 export function retimePage(p: Page, text: string): Page {
@@ -134,6 +152,14 @@ export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose:
     const noun = ['voice', 'captions', 'music', 'thumbnail'].includes(kind) ? t(`ui.scr.generate.noun.${kind}`) : what;
     if (atMs === null) actions.toast('success', 'ui.scr.generate.inserted', { kind: what });
     else actions.toast('success', kind === 'voice' && withCaptions ? 'ui.scr.generate.inserted.voicecaptions' : 'ui.scr.generate.inserted.at', { kind: noun, time: formatDuration(atMs) });
+    // Windows QA 2026-10-30: a voice running past the last clip leaves the end without footage — say so and offer the Editor chat.
+    const id = state.project?.id;
+    if (kind === 'voice' && id) {
+      void runtime.api.getComposition(id).then((c) => {
+        const gap = c.head.model ? voiceGap(c.head.model) : null;
+        if (gap) actions.toast('info', 'ui.scr.generate.voicegap', gap, { action: { labelKey: 'ui.scr.generate.voicegap.action', run: () => window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent: 'editor' } })) } });
+      }).catch(() => undefined);
+    }
     onClose();
   };
   useEffect(() => {

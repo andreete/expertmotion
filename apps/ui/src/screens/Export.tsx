@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Copy, Info, Play, ShieldCheck, TriangleAlert, XCircle } from 'lucide-react';
 import { useStore, currentOutputProfile } from '../state/store.js';
-import type { OutputProfile, PreflightCheckName, RenderEstimate } from '../api/types.js';
+import type { OutputProfile, PreflightCheckName, ProjectSettingsExtras, RenderEstimate } from '../api/types.js';
 import { Button, ErrorBox, Field, Modal, Progress, Segmented, inputCls } from '../components/ui.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
 import { copyText } from '../api/client.js';
@@ -40,13 +40,35 @@ const RECOVERY_LABEL: Record<Recovery, string> = {
   diagnostics: 'ui.scr.export.fix.diagnostics', license: 'ui.scr.export.fix.license', progress: 'ui.scr.export.fix.progress', recheck: 'ui.scr.export.recheck',
 };
 
+/**
+ * Windows QA 2026-10-30: the folder field was empty with no placeholder while the hint spoke of "the folder shown". An empty field
+ * means the Service picks the folder (R-111: the project's own folder, else the app setting, else `<Videos>/Expertmotion` under the
+ * Desktop Shell), so the placeholder shows that folder: the project folder (R-017) or the app setting (R-002) as a path, else the
+ * Shell default label. Without any known folder (browser dev build, no Shell) there is no placeholder and the hint says so plainly.
+ */
+export function exportFolderDefault(o: { projectFolder: string | null | undefined; settingsFolder: string | null | undefined; shell: boolean }): { placeholder: string | null; shellDefault: boolean } {
+  const known = o.projectFolder?.trim() || o.settingsFolder?.trim() || '';
+  if (known) return { placeholder: known, shellDefault: false };
+  return { placeholder: null, shellDefault: o.shell };
+}
+
 export function ExportDialog({ onClose }: { onClose: () => void }) {
   const { state, runtime, actions, t, lang } = useStore();
   const [format, setFormat] = useState<Format>('mp4');
   const [quality, setQuality] = useState<Quality>('standard');
   const [fileName, setFileName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
-  const [folder, setFolder] = useState(state.settings?.outputFolder ?? '');
+  const [folder, setFolder] = useState('');
+  const [projectFolder, setProjectFolder] = useState<string | null>(null);
+  const exportPid = state.project?.id;
+  useEffect(() => {
+    if (!exportPid) return;
+    let live = true;
+    runtime.api.getProjectSettings(exportPid).then((x) => { if (live) setProjectFolder((x as ProjectSettingsExtras).outputFolder ?? null); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [exportPid, runtime]);
+  const folderDefault = exportFolderDefault({ projectFolder, settingsFolder: state.settings?.outputFolder, shell: typeof window !== 'undefined' && Boolean(window.expertmotion?.pickFolder) });
+  const folderPlaceholder = folderDefault.placeholder ?? (folderDefault.shellDefault ? t('ui.scr.project.output.folder.default') : undefined);
   const [stillMs, setStillMs] = useState(state.playheadMs);
   const [est, setEst] = useState<RenderEstimate | null>(null);
   const [recheck, setRecheck] = useState(0);
@@ -84,7 +106,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const reveal = async () => { const p = await outPath(); if (p) await window.expertmotion?.openFolder?.(p); };
   const play = async () => { const p = await outPath(); if (p) await (window.expertmotion?.openPath ?? window.expertmotion?.openFolder)?.(p); };
   const copyPath = async () => { const p = output?.path ?? (await outPath()); if (!p) return; const ok = await copyText(p); if (ok) setCopied(true); };
-  const pickFolder = () => void window.expertmotion?.pickFolder?.({ ...(folder ? { defaultPath: folder } : {}) }).then((f) => { if (f) setFolder(f); });
+  const pickFolder = () => { const start = folder || folderDefault.placeholder; void window.expertmotion?.pickFolder?.({ ...(start ? { defaultPath: start } : {}) }).then((f) => { if (f) setFolder(f); }); };
   const fix = (r: Recovery) => {
     if (r === 'folder') pickFolder();
     else if (r === 'standard') void actions.setProfile('standard');
@@ -147,8 +169,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             )}
             <Field label={t('ui.scr.export.filename')} htmlFor="em-ex-f" hint={`.${format}`}><input id="em-ex-f" data-el="scr.export.filename" className={inputCls} value={name} maxLength={80} onChange={(e) => { setNameTouched(true); setFileName(e.target.value); }} /></Field>
           </div>
-          <Field label={t('ui.scr.export.folder')} htmlFor="em-ex-d" hint={folder ? undefined : t('ui.scr.export.folder.default')}>
-            <div className="flex gap-2"><input id="em-ex-d" data-el="scr.export.folder" className={inputCls} value={folder} placeholder={state.settings?.outputFolder || undefined} title={folder || state.settings?.outputFolder || undefined} onChange={(e) => setFolder(e.target.value)} />
+          <Field label={t('ui.scr.export.folder')} htmlFor="em-ex-d" hint={folder ? undefined : t(folderPlaceholder ? 'ui.scr.export.folder.default' : 'ui.scr.export.folder.default.unknown')}>
+            <div className="flex gap-2"><input id="em-ex-d" data-el="scr.export.folder" className={inputCls} value={folder} placeholder={folderPlaceholder} title={folder || folderPlaceholder} onChange={(e) => setFolder(e.target.value)} />
               <Button onClick={pickFolder}>{t('ui.scr.project.open.browse')}</Button></div>
           </Field>
           <ul data-el="scr.export.preflight" aria-label={t('ui.scr.export.preflight')} className="flex flex-col gap-1">

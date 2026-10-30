@@ -23,7 +23,7 @@ export interface OutputProfile {
 export interface ProjectDto {
   id: Id; name: string; settings: ProjectSettingsT; language: Lang; headVersionId: Id | null; headHash: string | null; durationMs: number;
   assetCount: number; createdAt: Iso; updatedAt: Iso; openedAt: Iso | null; dirty: boolean; warnings?: string[];
-  /** R-025 sample project for the tour ("Sample · Kafe Senja" / "Contoh · Kafe Senja"); absent on ordinary projects. */
+  /** R-025 sample project for the tour ("Sample · Kafe Senja" / "Contoh · Kafe Senja"); absent on ordinary projects and once kept (R-014 `isSample:false`). */
   isSample?: boolean;
   /** FR-012: Editor UI state stored by Save (R-014 `uiState`); absent until the first Save. */
   uiState?: ProjectUiState;

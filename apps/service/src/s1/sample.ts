@@ -2,7 +2,7 @@
 // bundled CC0 files in ctx.resources.sampleDir (packages/engine/scripts/build-sample.mjs). Created on demand (idempotent), the
 // files go through the normal S2 ingest path, and once ingest settles one Composition Version inserts the three clips in order,
 // imports the SRT as captions and sets the palette. The sample is hard-deleted (rows + media, no 30-day retention) as soon as the
-// Creator creates or opens another project.
+// Creator creates or opens another project, unless they chose "Keep the sample project" (R-014 isSample:false → `keep`).
 import fs from 'node:fs';
 import path from 'node:path';
 import type { OperationT } from '@expertmotion/composition-model';
@@ -17,6 +17,8 @@ import type { CompositionStore } from './store.js';
 export const SAMPLE_FILES = ['clip-1.mp4', 'clip-2.mp4', 'clip-3.mp4', 'kafe-senja.srt'] as const;
 export const SAMPLE_NAMES = { id: 'Contoh · Kafe Senja', en: 'Sample · Kafe Senja' } as const;
 export const SAMPLE_PALETTE = 'preset:palette.editorial-dark';
+/** The sample marker at the start of the name (UI `sampleTitle` renders it as a badge while `isSample`). */
+const SAMPLE_MARKER = /^(Sample|Contoh)\s*·\s*/u;
 
 export class SampleProjects {
   /** Preparation in flight per sample project (aborted when the sample is deleted). */
@@ -27,6 +29,11 @@ export class SampleProjects {
   current(): string | null {
     const r = this.ctx.db.prepare('SELECT id FROM projects WHERE is_sample = 1 AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1').get() as { id: string } | undefined;
     return r?.id ?? null;
+  }
+
+  /** The project still exists (a kept sample keeps its preparation; a removed one aborted it). */
+  private alive(id: string): boolean {
+    return this.ctx.db.prepare('SELECT 1 FROM projects WHERE id = ? AND deleted_at IS NULL').get(id) !== undefined;
   }
 
   /** R-025. Returns the existing sample (created=false) or creates one and queues its preparation (created=true). */
@@ -60,6 +67,19 @@ export class SampleProjects {
   removeExcept(keepId: string): string[] {
     const ids = (this.ctx.db.prepare('SELECT id FROM projects WHERE is_sample = 1 AND id != ?').all(keepId) as Array<{ id: string }>).map((r) => r.id);
     return ids.filter((id) => this.remove(id));
+  }
+
+  /**
+   * R-014 `isSample:false` ("Keep the sample project", ONBOARDING_TOUR §3): the sample becomes an ordinary project (is_sample = 0,
+   * never auto-deleted). Returns the name without the "Contoh · " / "Sample · " marker (a free one, " (2)" if taken) when the
+   * name still carries it, else null. A project that is not a sample is left alone (null). Throws EM-6101 for an unknown id.
+   */
+  keep(id: string): string | null {
+    const row = this.store.projectRow(id);
+    if (row.is_sample !== 1) return null;
+    this.ctx.db.prepare('UPDATE projects SET is_sample = 0 WHERE id = ?').run(id);
+    const plain = row.name.replace(SAMPLE_MARKER, '').trim();
+    return plain && plain !== row.name ? this.freeName(plain) : null;
   }
 
   private remove(id: string): boolean {
@@ -108,12 +128,12 @@ export class SampleProjects {
       for (const r of ready) if (r && r.kind === 'video') ops.push({ op: 'op:clip.insert', target: { kind: 'sequence' }, args: { assetId: r.id } });
       for (const r of ready) if (r && r.kind === 'subtitle') ops.push({ op: 'op:caption.importSrt', target: { kind: 'project' }, args: { assetId: r.id } });
       ops.push({ op: 'op:theme.set', target: { kind: 'project' }, args: { paletteId: SAMPLE_PALETTE } });
-      if (this.current() !== projectId) return;
+      if (!this.alive(projectId)) return;
       this.ctx.hooks.applyOps(projectId, ops, { kind: 'asset', summary: 'Sample project: Kafe Senja' });
       this.ctx.bus.emit('service.notice', { at: this.ctx.now(), kind: 'sample', projectId, ready: failed.length === 0, ...(failed.length ? { failed } : {}) });
     } catch (e) {
       if (signal.aborted) return;
-      try { if (this.current() !== projectId) return; } catch { return; }
+      try { if (!this.alive(projectId)) return; } catch { return; }
       this.ctx.log.warn({ projectId, err: errorMessage(e) }, 'sample project preparation failed');
       this.ctx.bus.emit('service.notice', { at: this.ctx.now(), kind: 'sample', projectId, ready: false, code: e instanceof EmError ? e.code : 'EM-9001' });
     }

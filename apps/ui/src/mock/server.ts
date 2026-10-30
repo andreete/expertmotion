@@ -721,6 +721,17 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       p.dto.name = body['name'].trim();
     }
     if (body['language'] === 'id' || body['language'] === 'en') p.dto.language = body['language'];
+    if ('isSample' in body && body['isSample'] !== false) throw new HttpError(400, 'EM-9002', 'isSample can only be false.');
+    // R-014 isSample:false ("Keep the sample project"): an ordinary project, the "Contoh · " / "Sample · " marker dropped unless a name was given
+    if (body['isSample'] === false && p.dto.isSample) {
+      delete p.dto.isSample;
+      const plain = p.dto.name.replace(/^(Sample|Contoh)\s*·\s*/u, '').trim();
+      if (typeof body['name'] !== 'string' && plain && plain !== p.dto.name) {
+        const taken = (n: string) => [...projects.values()].some((x) => x !== p && x.dto.name.toLowerCase() === n.toLowerCase());
+        let name = plain; for (let i = 2; taken(name); i++) name = `${plain} (${i})`;
+        p.dto.name = name; p.dto.dirty = true; setTimeout(() => { p.dto.dirty = false; }, 10_000);
+      }
+    }
     if (body['uiState'] && typeof body['uiState'] === 'object') p.dto.uiState = structuredClone(body['uiState']) as NonNullable<ProjectDto['uiState']>;   // FR-012
     touch(p); return p.dto;
   });

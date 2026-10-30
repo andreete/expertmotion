@@ -47,7 +47,15 @@ export const projectsModule: ServiceModule = {
     });
     // R-013 … R-016
     route(router, 'get', '/projects/:id', { params: ProjectParams }, ({ params }) => store.projectDto(params.id));
-    route(router, 'patch', '/projects/:id', { params: ProjectParams, body: ProjectPatchInput }, ({ params, body }) => projects.patch(params.id, body));
+    // R-014; isSample:false keeps the sample (is_sample = 0, "Contoh · " / "Sample · " dropped unless a name is given) in one transaction
+    route(router, 'patch', '/projects/:id', { params: ProjectParams, body: ProjectPatchInput }, ({ params, body }) => {
+      const { isSample, ...rest } = body;
+      if (isSample === undefined) return projects.patch(params.id, rest);
+      return ctx.db.transaction(() => {
+        const name = sample.keep(params.id);
+        return projects.patch(params.id, rest.name === undefined && name ? { ...rest, name } : rest);
+      })();
+    });
     route(router, 'delete', '/projects/:id', { params: ProjectParams, query: ProjectDeleteQuery }, ({ params, query }) => {
       if (query.permanent) projects.deletePermanently(params.id, query.keepOutputs); else projects.softDelete(params.id);
     });

@@ -140,6 +140,61 @@ describe('R-025 POST /projects/sample', () => {
     expect((await s.json('/projects')).body.items.map((p: any) => p.name)).toEqual(['Proyek Baru']);
   });
 
+  it('"Keep the sample project" (R-014 isSample:false): becomes an ordinary project named without the marker and survives a new project and opening another', async () => {
+    s = await start();
+    const sample = (await s.json('/projects/sample', { method: 'POST' })).body;
+    await settled(s, sample.id);
+    expect((await s.json(`/projects/${sample.id}/open`, { method: 'POST' })).status).toBe(200);
+    const kept = await s.json(`/projects/${sample.id}`, { method: 'PATCH', json: { isSample: false } });
+    expect(kept.status).toBe(200);
+    expect(kept.body).toMatchObject({ id: sample.id, name: 'Kafe Senja', assetCount: 4 });
+    expect(kept.body.isSample).toBeUndefined();
+    expect((s.ctx.db.prepare('SELECT is_sample FROM projects WHERE id = ?').get(sample.id) as { is_sample: number }).is_sample).toBe(0);
+    // File ▸ New (R-011), then open the new one (R-016): the kept project stays, with its media
+    const created = await s.json('/projects', { method: 'POST', json: { name: 'Proyek Baru' } });
+    expect(created.status).toBe(201);
+    expect((await s.json(`/projects/${created.body.id}/open`, { method: 'POST' })).status).toBe(200);
+    const after = await s.json(`/projects/${sample.id}`);
+    expect(after.status).toBe(200);
+    expect(after.body).toMatchObject({ name: 'Kafe Senja', assetCount: 4 });
+    expect(fs.existsSync(path.join(s.ctx.paths.media, sample.id))).toBe(true);
+    expect((await s.json('/projects/recent')).body.items.map((p: any) => p.id)).toEqual([created.body.id, sample.id]);
+    expect((await s.json('/projects')).body.items.map((p: any) => p.name).sort()).toEqual(['Kafe Senja', 'Proyek Baru']);
+    // a later tour makes a fresh sample under the marked name; repeating the keep on an ordinary project changes nothing
+    const again = await s.json('/projects/sample', { method: 'POST' });
+    expect(again.status).toBe(201);
+    expect(again.body).toMatchObject({ name: 'Contoh · Kafe Senja', isSample: true });
+    expect((await s.json(`/projects/${sample.id}`, { method: 'PATCH', json: { isSample: false } })).body.name).toBe('Kafe Senja');
+    await settled(s, again.body.id);
+  });
+
+  it('Keep: a taken plain name gets " (2)", an explicit name wins, isSample:true is refused, an unknown id is 404', async () => {
+    s = await start();
+    await s.json('/projects', { method: 'POST', json: { name: 'Kafe Senja' } });
+    const a = (await s.json('/projects/sample', { method: 'POST' })).body;
+    await settled(s, a.id);
+    expect((await s.json(`/projects/${a.id}`, { method: 'PATCH', json: { isSample: true } })).status).toBe(400);
+    expect((await s.json(`/projects/${a.id}`, { method: 'PATCH', json: { isSample: false, name: 'Kafe Senja' } })).body.error.code).toBe('EM-6103');
+    expect((await s.json(`/projects/${a.id}`)).body.isSample).toBe(true);                  // the failed rename rolled the keep back
+    const kept = await s.json(`/projects/${a.id}`, { method: 'PATCH', json: { isSample: false } });
+    expect(kept.body).toMatchObject({ name: 'Kafe Senja (2)' });
+    const b = (await s.json('/projects/sample', { method: 'POST' })).body;
+    await settled(s, b.id);
+    const named = await s.json(`/projects/${b.id}`, { method: 'PATCH', json: { isSample: false, name: 'Kafe Senja Sore' } });
+    expect(named.body).toMatchObject({ name: 'Kafe Senja Sore' });
+    expect(named.body.isSample).toBeUndefined();
+    expect((await s.json('/projects/01ARZ3NDEKTSV4RRFFQ69G5FAV', { method: 'PATCH', json: { isSample: false } })).status).toBe(404);
+  });
+
+  it('"Start my own project" / Skip keep today\'s behaviour: a sample that was not kept is removed by the next new project', async () => {
+    s = await start();
+    const sample = (await s.json('/projects/sample', { method: 'POST' })).body;
+    await settled(s, sample.id);
+    await s.json(`/projects/${sample.id}`, { method: 'PATCH', json: { name: 'Contoh · Kafe Senja Baru' } });   // a plain rename does not keep it
+    expect((await s.json('/projects', { method: 'POST', json: { name: 'Proyek Saya' } })).status).toBe(201);
+    expect((await s.json(`/projects/${sample.id}`)).status).toBe(404);
+  });
+
   it.skipIf(!hasFfmpeg)('prepares one version: three clips in order, SRT captions, editorial-dark palette; emits ingest.*, composition.updated, service.notice ready', async () => {
     s = await start();
     const sample = (await s.json('/projects/sample', { method: 'POST' })).body;

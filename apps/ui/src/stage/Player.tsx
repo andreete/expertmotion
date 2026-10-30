@@ -207,6 +207,28 @@ export function StagePlayer() {
     return () => playerBus.set(null);
   }, [fps, meta?.durationInFrames, durationMs, actions]);
 
+  // Windows QA 2026-10-30 ("playhead carries over between projects"): the local time only followed Player events, so after
+  // New / Open / switching a Project it kept the previous project's time while the store (and the Timeline) had moved on. The
+  // settled playhead in the store is the one source: whenever it changes, the Project changes or the duration changes, the
+  // Player frame and the time display follow it, clamped to the last frame; a playhead beyond a shrunken duration is clamped
+  // in the store too (not for a transient catalogue preview), so Player and Timeline always show the same time.
+  const msRef = useRef(ms);
+  msRef.current = ms;
+  const lastFrame = meta ? Math.max(0, meta.durationInFrames - 1) : null;
+  useEffect(() => {
+    if (ref.current?.isPlaying()) return;
+    const want = Math.max(0, state.playheadMs);
+    if (lastFrame === null) { if (msRef.current !== want) setMs(want); return; }
+    const f = Math.min(lastFrame, Math.round((want / 1000) * fps));
+    const v = (f / fps) * 1000;
+    if (Math.round((msRef.current / 1000) * fps) !== f) {
+      ref.current?.seekTo(f);
+      setMs(v);
+      playerBus.emit(v);
+    }
+    if (!preview && Math.round((want / 1000) * fps) > lastFrame) actions.seek(v);
+  }, [state.playheadMs, pid, lastFrame, fps, !preview, remountKey, empty]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => { if (pp.muted) ref.current?.mute(); else ref.current?.unmute(); }, [pp.muted, remountKey, empty]);
 
   const fit = meta ? Math.min((size.w - 32) / meta.width, (size.h - 32) / meta.height) : 1;

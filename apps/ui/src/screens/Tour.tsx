@@ -56,7 +56,7 @@ type Phase = { kind: 'idle' } | { kind: 'choose' } | { kind: 'preparing'; projec
 const CARD_W = 320;
 
 export function Tour() {
-  const { prefs, setPrefs, actions, state } = useStore();
+  const { prefs, setPrefs, actions, state, runtime, dispatch } = useStore();
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [cardH, setCardH] = useState(220);
@@ -76,6 +76,26 @@ export function Tour() {
     setPhase(id ? { kind: 'preparing', projectId: id, failed: false } : { kind: 'preparing', projectId: null, failed: true });
   }, [actions, lang]);
   const end = useCallback(() => { setPhase({ kind: 'idle' }); setRect(null); setPrefs({ tourDone: true }); }, [setPrefs]);
+  /**
+   * Closing card "Keep the sample project" (ONBOARDING_TOUR §3): R-014 `isSample:false` turns the sample into an ordinary project
+   * (shown in Recent / Open, never auto-deleted) named without the "Contoh · " / "Sample · " marker. "Start my own project" and
+   * Skip leave it a sample, removed when another project is created or opened.
+   */
+  const keep = useCallback(async () => {
+    end();
+    const p = stateRef.current.project;
+    if (!p?.isSample) return;
+    try {
+      const kept = await runtime.api.patchProject(p.id, { isSample: false });
+      if (stateRef.current.project?.id !== p.id) return;
+      dispatch({ type: 'project', project: kept });
+      // FR-173 / FR-165: the rename is unsaved until the autosave (≤ 10 s) — adopt the Service's dirty flag after it, as a rename does.
+      if (kept.dirty) setTimeout(() => {
+        if (stateRef.current.project?.id !== p.id || !stateRef.current.project.dirty) return;
+        void runtime.api.getProject(p.id).then((fresh) => { const cur = stateRef.current.project; if (cur?.id === p.id && !fresh.dirty) dispatch({ type: 'project', project: { ...cur, dirty: false } }); }).catch(() => undefined);
+      }, 11_000);
+    } catch (e) { actions.error(e); }
+  }, [end, runtime, dispatch, actions]);
   const phaseRef = useRef(phase); phaseRef.current = phase;
   const next = useCallback(() => {
     const p = phaseRef.current;
@@ -241,7 +261,7 @@ export function Tour() {
             <p className="mb-1 font-semibold">{o('tour.done.title')}</p>
             <p className="mb-3 text-em-text-2">{o('tour.done.body')}</p>
             <div className="flex flex-wrap gap-2">
-              <Button el="sys.tour.done.keep" size={28} autoFocus onClick={end}>{o('tour.done.keep')}</Button>
+              <Button el="sys.tour.done.keep" size={28} autoFocus onClick={() => void keep()}>{o('tour.done.keep')}</Button>
               <Button el="sys.tour.done.own" size={28} variant="primary" onClick={() => { end(); actions.setScreen({ kind: 'project.new' }); }}>{o('tour.done.own')}</Button>
             </div>
           </>

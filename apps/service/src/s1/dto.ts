@@ -32,7 +32,8 @@ export const DiskUsageQuery = z.object({ projectId: Id.optional() });
 export const SampleCreateInput = z.object({ language: z.enum(['id', 'en']).default('id') }).strict();
 /** FR-012: `uiState` is the Editor's per-project UI state written by Save (Library mode, playhead, selection, Player toggles; ≤ 16 KB JSON). */
 export const UiStateInput = z.record(z.string().max(64), z.unknown()).refine((v) => JSON.stringify(v).length <= 16_384, 'uiState is larger than 16 KB');
-export const ProjectPatchInput = z.object({ name: z.string().trim().min(1).max(120).optional(), language: z.enum(['id', 'en']).optional(), uiState: UiStateInput.optional() }).strict();
+// isSample:false = "Keep the sample project" (ONBOARDING_TOUR §3 closing card): the R-025 sample becomes an ordinary project (never true: only R-025 makes samples).
+export const ProjectPatchInput = z.object({ name: z.string().trim().min(1).max(120).optional(), language: z.enum(['id', 'en']).optional(), uiState: UiStateInput.optional(), isSample: z.literal(false).optional() }).strict();
 export const ProjectListQuery = PageQuery.extend({ includeDeleted: boolQ });
 export const DuplicateInput = z.object({ name: z.string().trim().min(1).max(120), copyMedia: z.boolean().default(true) }).strict();
 export const BackupInput = z.object({ folder: z.string().min(1).max(1024), passphrase: z.string().min(8).max(1024).optional(), includeOutputs: z.boolean().default(false) }).strict();

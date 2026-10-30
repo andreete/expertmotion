@@ -86,7 +86,9 @@ describe('FR-253 playhead from anywhere', () => {
     expect(timeMs()).toBe(0);
     await act(async () => { fireEvent.keyDown(head, { key: 'ArrowRight', shiftKey: true }); });
     expect(timeMs()).toBe(1000);
-    const step = vi.spyOn(playerBus.get()!, 'stepFrames');                              // one frame (the Player mock has no frame clock)
+    // one frame; not called through: the Player mock has no frame clock (getCurrentFrame() is always 0), so a real step would settle
+    // the store at frame 0/1 and the Player time now follows the store (Windows QA 2026-10-30)
+    const step = vi.spyOn(playerBus.get()!, 'stepFrames').mockImplementation(() => undefined);
     await act(async () => { fireEvent.keyDown(head, { key: 'ArrowRight' }); fireEvent.keyDown(head, { key: 'ArrowLeft' }); });
     expect(step.mock.calls).toEqual([[1], [-1]]);
     await act(async () => { fireEvent.keyDown(el('lib.search.input')!, { key: 'Home' }); });
