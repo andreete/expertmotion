@@ -362,8 +362,8 @@ describe('web tools (ADR-041): web.images sources and web.screenshot', () => {
     const src = sourcesOfToolCalls([rec, { name: 'web.images', input: { query: 'q', source: 'page', url: 'https://news.example/b' }, output: { candidates: [] }, ok: true }]);
     expect(src.map((s) => s.url)).toEqual(['https://www.kompas.com/x', 'https://news.example/b']);
   });
-  it('prompt set 1.9.1: P-1 has the viral explainer flow with the honesty rule, P-2 the image role, cutaways and the web tools', () => {
-    expect(PROMPT_SET_VERSION).toBe('1.9.1');
+  it('prompt set 1.9.2: P-1 has the viral explainer flow with the honesty rule, P-2 the image role, cutaways and the web tools', () => {
+    expect(PROMPT_SET_VERSION).toBe('1.9.2');
     expect(BRAINSTORM_SYSTEM).toContain('VIRAL EXPLAINER FLOW'); expect(BRAINSTORM_SYSTEM).toContain('web.screenshot'); expect(BRAINSTORM_SYSTEM).toMatch(/quoted material/);
     expect(EDITOR_SYSTEM).toContain('VIRAL EXPLAINER'); expect(EDITOR_SYSTEM).toContain('"image"'); expect(EDITOR_SYSTEM).toContain('CUTAWAYS'); expect(EDITOR_SYSTEM).toContain('web.screenshot'); expect(EDITOR_SYSTEM).toContain('dark-grain');
   });

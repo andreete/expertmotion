@@ -6,18 +6,74 @@
   "mood": "viral",
   "captions": true,
   "captionStyle": "preset:caption.emphasis",
-  "watermark": { "assetId": "LOGO", "position": "top-center" },
-  "music": { "mood": "cinematic" },
+  "watermark": {
+    "assetId": "LOGO",
+    "position": "top-center"
+  },
+  "music": {
+    "mood": "cinematic"
+  },
   "voice": {
     "clips": [
-      { "id": "v1", "text": "Lo bayangin nih, pekerjaannya tuh yang mereka buat." },
-      { "id": "v2", "text": "Tapi kelasnya, tapi para elit-elit juga nggak punya." },
-      { "id": "v3", "text": "Apa yang terjadi? Jawabannya adalah diekspor secara paksa." }
+      {
+        "id": "v1",
+        "text": "Lo bayangin nih, pekerjaannya tuh yang mereka buat."
+      },
+      {
+        "id": "v2",
+        "text": "Tapi kelasnya, tapi para elit-elit juga nggak punya."
+      },
+      {
+        "id": "v3",
+        "text": "Apa yang terjadi? Jawabannya adalah diekspor secara paksa."
+      }
     ]
   },
   "scenes": [
-    { "role": "footage", "clips": ["v1"], "footage": { "assetId": "CLIP-factory", "fromMs": 0, "toMs": 9000, "grade": "dark-grain" }, "headline": "Lo bayangin nih", "keywords": ["bayangin"] },
-    { "role": "footage", "clips": ["v2"], "footage": { "assetId": "CLIP-crowd", "fromMs": 2000, "toMs": 11000, "grade": "dark-grain" }, "headline": "Tapi para elit-elit", "keywords": ["elit-elit"] },
-    { "role": "footage", "clips": ["v3"], "footage": { "assetId": "CLIP-port", "fromMs": 0, "toMs": 10000, "grade": "dark-grain" }, "headline": "Diekspor secara paksa", "keywords": ["Diekspor"] }
+    {
+      "role": "footage",
+      "clips": [
+        "v1"
+      ],
+      "footage": {
+        "assetId": "CLIP-factory",
+        "fromMs": 0,
+        "toMs": 9000,
+        "grade": "dark-grain"
+      },
+      "keywords": [
+        "bayangin"
+      ]
+    },
+    {
+      "role": "footage",
+      "clips": [
+        "v2"
+      ],
+      "footage": {
+        "assetId": "CLIP-crowd",
+        "fromMs": 2000,
+        "toMs": 11000,
+        "grade": "dark-grain"
+      },
+      "keywords": [
+        "elit-elit"
+      ]
+    },
+    {
+      "role": "footage",
+      "clips": [
+        "v3"
+      ],
+      "footage": {
+        "assetId": "CLIP-port",
+        "fromMs": 0,
+        "toMs": 10000,
+        "grade": "dark-grain"
+      },
+      "keywords": [
+        "Diekspor"
+      ]
+    }
   ]
 }

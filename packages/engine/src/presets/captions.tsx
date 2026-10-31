@@ -57,9 +57,13 @@ export const CaptionPageView: React.FC<{ page: CaptionPageT; styleId: string; pa
   const pad = yU !== undefined ? { paddingTop: yU * layout.u } : pos === 'top' ? { paddingTop: layout.safe.top } : pos === 'bottom' ? { paddingBottom: layout.safe.bottom } : {};
   const box = styleId === 'preset:caption.box' ? { background: 'rgba(0,0,0,0.75)', borderRadius: 0.3 * size, padding: `${0.25 * size}px ${0.45 * size}px` } : {};
   const tokens = captionChunk(page.tokens, typeof params['maxWordsPerPage'] === 'number' ? params['maxWordsPerPage'] : undefined, nowMs);
+  // a long one-line page shrinks to stay inside the safe area (never wraps or runs to the frame edge)
+  const availPx = layout.width - layout.safe.left - layout.safe.right;
+  const widthEm = textWidthEm(tokens.map((x) => x.text).join('').trim(), weight, family);
+  const fitPx = widthEm > 0 ? Math.min(size, availPx / widthEm) : size;
   return (
     <AbsoluteFill style={{ justifyContent: justify, alignItems: 'center', paddingLeft: layout.safe.left, paddingRight: layout.safe.right, ...pad }}>
-      <div data-em-caption style={{ fontFamily: fontStack(family), fontWeight: weight, fontSize: size, lineHeight: 1.2, textAlign: 'center', whiteSpace: 'pre', color: t.text, textShadow: styleId === 'preset:caption.box' ? 'none' : `0 ${0.04 * size}px ${0.12 * size}px rgba(0,0,0,0.8)`, ...box }}>
+      <div data-em-caption style={{ fontFamily: fontStack(family), fontWeight: weight, fontSize: fitPx, lineHeight: 1.2, textAlign: 'center', whiteSpace: 'pre', color: t.text, textShadow: styleId === 'preset:caption.box' ? 'none' : `0 ${0.04 * size}px ${0.12 * size}px rgba(0,0,0,0.8)`, ...box }}>
         {tokens.map((tok, i) => {
           const active = tok.fromMs <= nowMs && tok.toMs > nowMs;
           const spoken = tok.toMs <= nowMs;

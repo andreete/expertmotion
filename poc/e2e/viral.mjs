@@ -19,7 +19,7 @@ const INPUTS = process.env.E2E_VIRAL_INPUTS; if (!INPUTS) throw new Error('E2E_V
 const token = fs.readFileSync(path.join(dir, 'token'), 'utf8').trim();
 const dataDir = fs.mkdtempSync(path.join(dir, 'viral-data-'));
 const home = path.join(dataDir, 'home'); fs.mkdirSync(path.join(home, 'Videos'), { recursive: true });
-const out = path.join(dir, 'viral-out'); fs.mkdirSync(out, { recursive: true });
+const out = path.join(dir, process.env.E2E_OUT ?? 'viral-out'); fs.mkdirSync(out, { recursive: true });
 const log = (o) => console.log(JSON.stringify(o));
 const results = [];
 const check = (id, name, ok, extra = {}) => { results.push({ id, name, ok: !!ok, ...extra }); log({ check: `${id} ${name}`, ok: !!ok, ...extra }); return !!ok; };
@@ -110,8 +110,10 @@ try {
   } else check('I3', 'R-089 import of a page picture', false, { reason: 'no page candidate in the thread' });
 
   // Editor: the viral spec with the Library's pictures (fixture → real asset ids)
-  const spec = JSON.parse(fs.readFileSync(path.join(root, 'packages/agents/test/fixtures/viral-spec.json'), 'utf8'));
-  const map = { 'IMG-poster': shot?.id ?? ids.poster, 'IMG-post': pageAsset?.id ?? ids.news, 'IMG-news': ids.news, 'IMG-photo': ids.photo, 'IMG-comment': ids.face, LOGO: ids.logo };
+  const spec = JSON.parse(fs.readFileSync(path.join(root, 'packages/agents/test/fixtures', process.env.E2E_SPEC ?? 'viral-spec.json'), 'utf8'));   // E2E_SPEC=satu-persen-spec.json + E2E_FOOTAGE=<video>: the footage + emphasis look
+  const clip = process.env.E2E_FOOTAGE ? await upload(process.env.E2E_FOOTAGE, 'footage.mp4') : null;
+  if (clip) for (let i = 0; i < 300 && (await api(`/projects/${pid}/assets`)).body.items?.find((a) => a.id === clip)?.status !== 'ready'; i++) await sleep(1000);
+  const map = { ...(clip ? { 'CLIP-factory': clip, 'CLIP-crowd': clip, 'CLIP-port': clip } : {}), 'IMG-poster': shot?.id ?? ids.poster, 'IMG-post': pageAsset?.id ?? ids.news, 'IMG-news': ids.news, 'IMG-photo': ids.photo, 'IMG-comment': ids.face, LOGO: ids.logo };
   const walk = (v) => (Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'assetId' && map[x] ? map[x] : walk(x)])) : v);
   const spec2 = walk(spec);
   fs.writeFileSync(path.join(out, 'spec.json'), JSON.stringify(spec2, null, 1));

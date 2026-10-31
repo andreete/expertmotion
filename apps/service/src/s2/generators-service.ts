@@ -471,7 +471,8 @@ export class GeneratorsService {
               pages.push(...pg); timedTo = 'voice'; method = tx?.method ?? method;
             }
             if (!pages.length) { notice(st.n, st.tool, 'skipped', { code: 'EM-7103' }); continue; }
-            const ops = this.withCaptionStyle(projectId, [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT, ...(typeof st.args['presetId'] === 'string' ? [{ op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: st.args['presetId'] } } as OperationT] : [])]);
+            const ops = this.withCaptionStyle(projectId, [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT, // the same style already set by the composer keeps its params (keywords, emphasis colour, font): re-setting it reset them to the defaults (E2E Satu-Persen look)
+              ...(typeof st.args['presetId'] === 'string' && ctx.hooks.composition(projectId).model.tracks.caption.styleId !== st.args['presetId'] ? [{ op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: st.args['presetId'] } } as OperationT] : [])]);
             ctx.hooks.applyOps(projectId, ops, { kind: 'generator', ref: planId, summary: 'Captions from the script' });
             notice(st.n, st.tool, 'done', { pages: pages.length, voices: jobNs.length, timedTo, timing: method ?? 'proportional' });
           }

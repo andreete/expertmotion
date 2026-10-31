@@ -401,8 +401,8 @@ describe('media tools, envelope block and prompt set', () => {
     const plain = buildRewriteEnvelope({ model, baseVersion: 'v', assets: ASSETS, intents: [], lockedKeys: [], tier: 'T1' });
     expect(plain.footageAnalysis).toBeUndefined(); expect(plain.capabilities.sceneCompose).not.toContain('TALKING-HEAD MODE');
   });
-  it('prompt set v1.9.1: P-1 has the channel profile block and the PRD-first flow, P-2 the talking-head mode and cover.render; both see the preview (FR-310)', () => {
-    expect(PROMPT_SET_VERSION).toBe('1.9.1');
+  it('prompt set v1.9.2: P-1 has the channel profile block and the PRD-first flow, P-2 the talking-head mode and cover.render; both see the preview (FR-310)', () => {
+    expect(PROMPT_SET_VERSION).toBe('1.9.2');
     for (const sys of [BRAINSTORM_SYSTEM, EDITOR_SYSTEM]) { expect(sys).toContain('SEE BEFORE YOU ANSWER ABOUT THE PICTURE'); expect(sys).toContain('composition.frames'); expect(sys).toMatch(/Never say you cannot see/); }
     expect(EDITOR_SYSTEM).toContain('Minta saya cek hasilnya');
     expect(BRAINSTORM_SYSTEM).toContain('{{channel_profile}}');
