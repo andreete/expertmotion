@@ -12,7 +12,7 @@ import { useStore } from '../state/store.js';
 import { useModelNames } from '../state/use-model-names.js';
 import type { GeneratorJobDto, GeneratorKind, GeneratorModelDto } from '../api/types.js';
 import { Badge, Button, ErrorBox, Field, Modal, Progress, cx, inputCls } from '../components/ui.js';
-import { GENERATOR_MODEL, useGeneratorCards } from '../library/Generators.js';
+import { GENERATOR_MODEL, useGeneratorCards, type CardKind } from '../library/Generators.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
 import { copyText } from '../api/client.js';
 import { VoicePicker } from './VoicePicker.js';
@@ -24,7 +24,7 @@ const WEEK_MS = 7 * 24 * 3_600_000;
 /** FR-103 / FR-105: the same lists the Local Service validates (generators-service THUMBNAIL_STYLES, HASHTAG_TONES). */
 export const THUMBNAIL_STYLES = ['bold', 'clean', 'cinematic', 'playful'] as const;
 export const HASHTAG_TONES = ['casual', 'professional', 'energetic', 'informative', 'funny'] as const;
-const TASK: Record<GeneratorKind, string | null> = { voice: 'tts', captions: 'stt', thumbnail: 'image', music: 'music', hashtags: null };
+const TASK: Record<CardKind, string | null> = { voice: 'tts', captions: 'stt', thumbnail: 'image', music: 'music', hashtags: null };
 
 /**
  * Windows QA 2026-10-30: a voice that ends after the last video clip extends the project (`voiceEndMs`), but the picture after the
@@ -55,7 +55,7 @@ export function generatedList(jobs: GeneratorJobDto[], now = Date.now()): Genera
   return jobs.filter((j) => j.status === 'done' && typeof j.result?.['versionId'] !== 'string' && now - Date.parse(j.createdAt) < WEEK_MS);
 }
 
-export function GenerateSheet({ kind, onClose }: { kind: GeneratorKind; onClose: () => void }) {
+export function GenerateSheet({ kind, onClose }: { kind: CardKind; onClose: () => void }) {
   const { state, runtime, actions, t, lang } = useStore();
   const names = useModelNames();
   const p = `scr.generate.${kind}`;

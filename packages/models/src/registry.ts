@@ -107,6 +107,9 @@ const FLUX_FILES: ModelFileDef[] = [
 const MODEL_LIST: ModelDef[] = [
   // §2.1 Speech-to-text — whisper.cpp
   whisper('whisper-small', 'ggml-small.bin', 488 * MB, 1.0 * GB, 'T0', ['T0'], 'P1', ['alt. ggml-small-q5_1.bin (190 MB)', 'T0 default']),
+  // FR-285 (Reels prep): quantised variants for PCs with little RAM (small-q5: ~400 MB RSS, 128 s of audio in ~200 s on 2 cores)
+  whisper('whisper-small-q5', 'ggml-small-q5_1.bin', 190 * MB, 0.6 * GB, 'T0', ['T0'], 'P1', ['quantised small (q5_1); the footage prep default when RAM < 6 GB', 'T0 option']),
+  whisper('whisper-medium-q5', 'ggml-medium-q5_0.bin', 539 * MB, 1.2 * GB, 'T0', [], 'P2', ['quantised medium (q5_0); offered for footage prep', 'T0 option with a speed warning']),
   whisper('whisper-medium', 'ggml-medium.bin', 1.53 * GB, 2.6 * GB, 'T0', [], 'P1', ['alt. ggml-medium-q5_0.bin (539 MB)', 'T0 option with a speed warning']),
   whisper('whisper-large-v3-turbo', 'ggml-large-v3-turbo.bin', 1.62 * GB, 2.5 * GB, 'T0', ['T1', 'T2'], 'P1', ['alt. -q5_0.bin 574 MB, -q8_0.bin 874 MB', 'T1/T2 default (Vulkan engine)']),
   whisper('whisper-large-v3', 'ggml-large-v3.bin', 3.1 * GB, 4.7 * GB, 'T0', [], 'P2', ['T2 "best quality" option']),
@@ -219,10 +222,13 @@ export function isCommerciallyAllowed(key: string): boolean {
 }
 
 // §5 Hardware Tier → defaults. `offered` = shown with a warning, never the default.
-export interface TierChoice { default: ModelKey; offered: ModelKey[] }
+export interface TierChoice { default: ModelKey; offered: ModelKey[]; /** the default on a machine with less than LOW_RAM_BYTES of RAM (FR-282) */ lowRam?: ModelKey }
 export type TierTable = Record<Tier, TierChoice>;
+/** Below this much total RAM the `lowRam` default applies (the full whisper-small needs ≈ 1 GB on top of the Service + Chrome). */
+export const LOW_RAM_BYTES = 6 * 1024 * 1024 * 1024;
 export const TIER_DEFAULTS: Readonly<{ stt: TierTable; 'tts.id': TierTable; 'tts.en': TierTable; music: TierTable; image: TierTable }> = Object.freeze({
-  stt: { T0: { default: 'whisper-small', offered: ['whisper-medium'] }, T1: { default: 'whisper-large-v3-turbo', offered: [] }, T2: { default: 'whisper-large-v3-turbo', offered: ['whisper-large-v3'] } },
+  // FR-282 (Reels prep): the quantised small model is the default under 6 GB of RAM (190 MB, ≈ 400 MB RSS measured on the 1.9 GB server); medium-q5 is offered.
+  stt: { T0: { default: 'whisper-small', lowRam: 'whisper-small-q5', offered: ['whisper-small-q5', 'whisper-medium-q5', 'whisper-medium'] }, T1: { default: 'whisper-large-v3-turbo', offered: [] }, T2: { default: 'whisper-large-v3-turbo', offered: ['whisper-large-v3'] } },
   // FR-267 (ADR-036, provisional): Supertonic 3 is the default offline Indonesian voice (more natural; OpenRAIL-M allows commercial
   // use); Piper news_tts stays offered (smaller, but its training data is probably non-commercial, RISK-002).
   'tts.id': { T0: { default: 'supertonic-3-int8', offered: ['piper-id-news-medium'] }, T1: { default: 'supertonic-3-int8', offered: ['piper-id-news-medium'] }, T2: { default: 'supertonic-3-int8', offered: ['piper-id-news-medium'] } },
@@ -237,9 +243,10 @@ function tableFor(task: DefaultTask, language: Language): TierTable {
   if (task === 'tts') return language === 'en' ? TIER_DEFAULTS['tts.en'] : TIER_DEFAULTS['tts.id'];
   return TIER_DEFAULTS[task];
 }
-/** Default model for a task on a Hardware Tier (§5). TTS uses `language` (default 'id'). */
-export function defaultModelFor(task: DefaultTask, tier: Tier, opts: { language?: Language } = {}): ModelKey {
-  return tableFor(task, opts.language ?? 'id')[tier].default;
+/** Default model for a task on a Hardware Tier (§5). TTS uses `language` (default 'id'); with `ramBytes` below LOW_RAM_BYTES the row's `lowRam` choice wins. */
+export function defaultModelFor(task: DefaultTask, tier: Tier, opts: { language?: Language; ramBytes?: number } = {}): ModelKey {
+  const c = tableFor(task, opts.language ?? 'id')[tier];
+  return opts.ramBytes !== undefined && opts.ramBytes < LOW_RAM_BYTES && c.lowRam ? c.lowRam : c.default;
 }
 /** Default first, then the models offered with a warning on this tier. */
 export function modelsOfferedFor(task: DefaultTask, tier: Tier, opts: { language?: Language } = {}): ModelKey[] {

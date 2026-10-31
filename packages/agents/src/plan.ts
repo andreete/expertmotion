@@ -1,16 +1,19 @@
 // Step 8 (AI_WORKFLOW §2): deterministic validation of any Edit Plan (compiled or model-authored) before Execute is enabled.
 import { applyOperations, conflictsWithLocked, diffModels, deriveTiming, hashModel, propertyKeysOf, validate, type ApplyContext, type AssetFacts, type CompositionModelT, type ElementDiff, type OperationT, type Tier } from '@expertmotion/composition-model';
 import { balancedObjects, issue, parseLooseJson, stripReasoning, type Issue } from '@expertmotion/shared';
-import { CaptionsStepArgs, EditPlan, ModelPlanReply, MusicStepArgs, PLAN_STEP_TOOLS, TtsStepArgs, type EditPlanT } from './schemas.js';
+import { CaptionsStepArgs, CoverStepArgs, EditPlan, ModelPlanReply, MusicStepArgs, PLAN_STEP_TOOLS, TtsStepArgs, type EditPlanT } from './schemas.js';
 import { normalizeModelReply } from './plan-normalize.js';
 import { scriptPages } from './script-captions.js';
 import { expandSceneCompose, qualityGatePlan } from './auto-motion-plan.js';
+import type { FootageAnalysisLike, SfxAssets } from './reels-types.js';
 
 /** A local model a generator plan step needs (ADR-030): its Model Manager key, display label and whether it is installed. */
 export interface ToolModel { installed: boolean; modelKey: string; label: string }
 export interface PlanContext { model: CompositionModelT; baseVersion: string; assets: readonly AssetFacts[]; tier: Tier; lockedKeys: readonly string[]; newId: () => string; jobs?: ApplyContext['jobs'];
   /** ADR-030: models behind generator steps (voice: tts, transcription: stt); absent = not checked (tests, compile path). */
-  toolModels?: { tts?: ToolModel | null; stt?: ToolModel | null }; language?: 'id' | 'en' }
+  toolModels?: { tts?: ToolModel | null; stt?: ToolModel | null }; language?: 'id' | 'en';
+  /** ADR-039: the project's latest footage analysis and the SFX asset ids (`hooks.sfxAssets`), read by the talking-head composer. */
+  footageAnalysis?: FootageAnalysisLike; sfxAssets?: SfxAssets }
 export interface PlanValidation { plan: EditPlanT; issues: Issue[]; predicted?: { model: CompositionModelT; diff: ElementDiff[]; durationMs?: number } }
 export const MAX_OPS = 200, MAX_STEPS = 40;
 
@@ -94,13 +97,22 @@ function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT;
     if (!r.success) { const x = r.error.issues[0]!; issues.push(issue('EM-2102', `Step ${s.n} (music.generate): ${[...x.path].join('.') || 'args'}: ${x.message}. Expected args {prompt (mood / style words, e.g. "tenang, akustik"), durationMs?, volume? (0.02–1, default 0.2), trackId?}.`, 'block', `steps[${i}].args`)); return s; }
     return { ...s, args: { ...r.data, durationMs: r.data.durationMs ?? Math.max(1000, videoMs), status: 'ready' } };
   });
+  // ADR-039: cover.render needs no model (a still of the cover composition through POST /projects/:id/cover); the master must exist.
+  steps = steps.map((s, i) => {
+    if (s.tool !== 'cover.render') return s;
+    const r = CoverStepArgs.safeParse(stripRuntime(s.args));
+    if (!r.success) { const x = r.error.issues[0]!; issues.push(issue('EM-2102', `Step ${s.n} (cover.render): ${[...x.path].join('.') || 'args'}: ${x.message}. Expected args {spec: {cutId|atMs, hookWord, kicker?, line, subline?, pills?, icons?, source?, handle}, masterAssetId?}.`, 'block', `steps[${i}].args`)); return s; }
+    const master = r.data.masterAssetId ?? ctx.footageAnalysis?.masterAssetId;
+    if (master && !ctx.assets.some((a) => a.id === master && a.kind === 'video' && a.status === 'ready')) issues.push(issue('EM-1301', `Step ${s.n} (cover.render): the master asset ${master} is not in the project.`, 'block', `steps[${i}].args.masterAssetId`));
+    return { ...s, args: { ...r.data, ...(master ? { masterAssetId: master } : {}), status: 'ready' } };
+  });
   return { plan: { ...plan, steps, risks }, issues };
 }
 
 /** Validates a plan; returns it with status valid | invalid | stale, the validation rows, touchesLockedKeys and the predicted diff. */
 export function validatePlan(input: EditPlanT, ctx: PlanContext): PlanValidation {
   // ADR-034: scene.compose steps become ordinary ops first (auto-motion-plan.ts), then generator steps are prepared.
-  const expanded = expandSceneCompose(input, { model: ctx.model, assets: ctx.assets, tier: ctx.tier, lockedKeys: ctx.lockedKeys, ...(ctx.language ? { language: ctx.language } : {}) });
+  const expanded = expandSceneCompose(input, { model: ctx.model, assets: ctx.assets, tier: ctx.tier, lockedKeys: ctx.lockedKeys, ...(ctx.language ? { language: ctx.language } : {}), ...(ctx.footageAnalysis ? { footageAnalysis: ctx.footageAnalysis } : {}), ...(ctx.sfxAssets ? { sfxAssets: ctx.sfxAssets } : {}) });
   const prepared = prepareToolSteps(expanded.plan, ctx);
   let plan = prepared.plan;
   const issues: Issue[] = [...expanded.issues, ...prepared.issues];
@@ -110,7 +122,7 @@ export function validatePlan(input: EditPlanT, ctx: PlanContext): PlanValidation
   if (plan.steps.length > MAX_STEPS) issues.push(issue('EM-2304', `The plan has ${plan.steps.length} steps; the limit is ${MAX_STEPS}.`, 'block', 'steps'));
   if (plan.steps.length === 0 && !plan.risks.some((r) => r.code === 'needs-input')) issues.push(issue('EM-4302', 'The plan is empty.', 'block', 'steps'));
   plan.steps.forEach((s, i) => {
-    if (!(PLAN_STEP_TOOLS as readonly string[]).includes(s.tool)) issues.push(issue('EM-2303', `Step ${s.n}: "${s.tool}" is not a plan tool; use composition.applyOps, scene.compose, tts.generate, captions.generate or music.generate.`, 'block', `steps[${i}].tool`));
+    if (!(PLAN_STEP_TOOLS as readonly string[]).includes(s.tool)) issues.push(issue('EM-2303', `Step ${s.n}: "${s.tool}" is not a plan tool; use composition.applyOps, scene.compose, tts.generate, captions.generate, music.generate or cover.render.`, 'block', `steps[${i}].tool`));
     else if (s.tool !== 'composition.applyOps' && s.ops.length) issues.push(issue('EM-2303', `Step ${s.n}: operations must go through composition.applyOps.`, 'block', `steps[${i}].tool`));
   });
   const touched = conflictsWithLocked(ops.flatMap(propertyKeysOf), ctx.lockedKeys);

@@ -8,7 +8,9 @@ export interface DisplayName { en: string; id: string }
 /** One entry per registry key (the registry test requires every row to have one). */
 export const DISPLAY_NAMES: Readonly<Record<string, DisplayName>> = Object.freeze({
   'whisper-small': { en: 'Auto Captions — Fast', id: 'Teks Otomatis — Cepat' },
+  'whisper-small-q5': { en: 'Auto Captions — Fast (small)', id: 'Teks Otomatis — Cepat (ringkas)' },
   'whisper-medium': { en: 'Auto Captions — Balanced', id: 'Teks Otomatis — Seimbang' },
+  'whisper-medium-q5': { en: 'Auto Captions — Balanced (small)', id: 'Teks Otomatis — Seimbang (ringkas)' },
   'whisper-large-v3-turbo': { en: 'Auto Captions — Accurate', id: 'Teks Otomatis — Akurat' },
   'whisper-large-v3': { en: 'Auto Captions — Best', id: 'Teks Otomatis — Terbaik' },
   'piper-id-news-medium': { en: 'Indonesian Voice — News', id: 'Suara Indonesia — Berita' },

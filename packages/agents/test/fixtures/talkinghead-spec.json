@@ -1,0 +1,50 @@
+{
+  "title": "Kenapa harga kopi naik?",
+  "ratio": "9:16",
+  "fps": 30,
+  "language": "id",
+  "maxDurationMs": 60000,
+  "talkingHead": { "masterAssetId": "MASTER", "voiceAssetId": "VOICE" },
+  "captions": { "from": "analysis", "keywords": [{ "words": ["naik", "mahal"], "colour": "#FFA94D" }, { "words": ["tumbuh", "tahu"], "colour": "#4DD4C4" }], "yU": 1455, "fontSizeU": 68, "maxWords": 3 },
+  "music": { "trackId": "cc0-calm-01", "volume": 0.3, "liftOverSilent": 1.5, "fadeInMs": 500, "fadeOutMs": 2500 },
+  "sfx": { "enabled": true, "level": 0.55 },
+  "sourceTagYU": 1285,
+  "credits": ["Musik: pustaka CC0, trek cc0-calm-01"],
+  "cover": { "cutId": "c1", "hookWord": "NAIK", "kicker": "Harga kopi", "line": "Kenapa kopi makin mahal?", "subline": "3 alasan dalam 60 detik",
+    "pills": [{ "text": "cuaca", "tone": "warn" }, { "text": "ongkos kirim", "tone": "info" }, { "text": "permintaan", "tone": "positive" }],
+    "icons": ["cloud", "money", "globe"], "source": "Sumber: Laporan pasar kopi 2026", "handle": "@kopi.cerita" },
+  "scenes": [
+    { "role": "talk", "cut": "c1", "pops": [{ "say": "naik" }], "heading": "Kenapa kopi makin mahal?", "keywords": ["mahal"],
+      "blocks": [
+        { "kind": "chip", "icon": "cloud", "text": "Cuaca tak menentu", "at": { "say": "cuaca" } },
+        { "kind": "chip", "icon": "money", "text": "Harga pupuk & kirim", "at": { "say": "harga" } },
+        { "kind": "chip", "icon": "globe", "text": "Permintaan Asia tumbuh", "at": { "say": "bukan" } }
+      ] },
+    { "role": "explain", "cut": "c2", "heading": "3 alasan harga kopi naik",
+      "blocks": [
+        { "kind": "rows", "at": { "say": "tiga" }, "rows": [
+          { "badge": "1", "title": "Cuaca", "sub": "hujan tak menentu", "tone": "warn" },
+          { "badge": "2", "title": "Ongkos kirim", "sub": "kapal dan bahan bakar" },
+          { "badge": "3", "title": "Permintaan", "sub": "Asia tumbuh paling cepat", "tone": "positive" } ] },
+        { "kind": "tag", "text": "klaim lembaga", "tone": "warn", "at": { "say": "permintaan" } },
+        { "kind": "source", "text": "Sumber: Laporan pasar kopi 2026 · dicek 30 Okt 2026" }
+      ] },
+    { "role": "card", "durationMs": 3000, "heading": "Laporan harga kopi dunia",
+      "blocks": [{ "kind": "browser-card", "urlText": "laporan-kopi.example", "title": "Harga kopi arabika, 2016–2026", "fromLabel": "2016", "toLabel": "2026", "progress": 1, "caption": "Indeks harga naik", "inner": "none" }],
+      "tag": "ilustrasi · bukan cuplikan asli", "source": "Sumber: Laporan pasar kopi 2026" },
+    { "role": "explain", "cut": "c3", "heading": "Panen turun",
+      "blocks": [
+        { "kind": "stat", "value": "−12", "unit": "%", "label": "panen dua produsen terbesar", "tone": "negative", "at": { "say": "turun" } },
+        { "kind": "note", "text": "hujan datang tidak menentu", "tone": "warning", "at": { "say": "hujan" } }
+      ], "source": "Sumber: Badan pertanian, 2026" },
+    { "role": "explain", "cut": "c4", "heading": "Permintaan tumbuh",
+      "blocks": [
+        { "kind": "bars", "at": { "say": "tumbuh" }, "bars": [{ "label": "Asia", "value": 5.2, "unit": "%" }, { "label": "Eropa", "value": 1.1, "unit": "%" }, { "label": "Amerika", "value": 0.8, "unit": "%" }] },
+        { "kind": "tag", "text": "OPINI", "tone": "opinion", "at": { "say": "paling" } }
+      ], "source": "Sumber: Asosiasi kopi, 2026" },
+    { "role": "hold", "durationMs": 1200 },
+    { "role": "talk", "cut": "c5", "pops": [{ "say": "mahal" }] },
+    { "role": "talk", "cut": "c6", "blocks": [{ "kind": "typing-box", "text": "kopi", "prefixBadge": "DM", "at": { "say": "ketik" } }] },
+    { "role": "poster", "imageAssetId": "POSTER", "scale": 0.78, "handle": "@kopi.cerita", "durationMs": 3500 }
+  ]
+}

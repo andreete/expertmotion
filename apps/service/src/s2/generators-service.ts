@@ -12,7 +12,7 @@ import { applyOperations, deriveTiming, type CompositionModelT, type GeneratedRe
 import { compileDefaults } from '@expertmotion/catalogue';
 import { EmError, sanitizeFilename, timestamp } from '@expertmotion/shared';
 import { SUPERTONIC_FILES, CancelledError, JobRunner, createJobDir, defaultModelFor, defaultThreads, generateImage, generateMusic, preparePiperVoice, removeJobDir, synthesize, transcribe, transcribeToPages,
-  displayNameOf, buildTranscript, cuesToCaptionPages, energyFrames, parseWav, refineWordTimes, silences, speechWindow, transcriptToSrt, wavDurationMs,
+  displayNameOf, buildTranscript, cuesToCaptionPages, energyFrames, parseWav, refineWordTimes, silences, speechWindow, transcribeMany, transcriptToSrt, wavDurationMs,
   MUSIC_LIBRARY, MUSIC_LIBRARY_LICENCE, type JobContext, type JobEvent, type ModelDef, type RecognisedToken, type Transcript } from '@expertmotion/models';
 import { voicesServiceOf, type VoiceDto } from './voices-service.js';
 import { musicLibraryOf } from './music-library-service.js';
@@ -27,10 +27,12 @@ import { engineBrowserOf, type BrowserLike } from '../services/engine-browser.js
 import { getOutput, outputRelPath, toOutputDto } from './render-repo.js';
 import { s2, useModel } from './state.js';
 import { assertEngineSpawnAllowed } from './spawn-gate.js';
+import { PREP_STAGE_LABELS, analysisSummary, latestAnalysis, rotationOf, runFootagePrep, type PrepInput, type PrepStage } from './reels/footage-prep.js';
+import { renderCover, type CoverSpec } from './reels/cover-service.js';
 
 /** Review A2: voice-first clips remembered for reuse (ids + durations only). */
 const VOICE_REUSE_MAX = 256;
-export const GENERATOR_KINDS = ['voice', 'music', 'thumbnail', 'captions', 'hashtags'] as const;
+export const GENERATOR_KINDS = ['voice', 'music', 'thumbnail', 'captions', 'hashtags', 'prep'] as const;
 /** FR-251 batch input / output (documented in API_SPECIFICATION R-138 and for the agent runtime). */
 export interface VoiceBatchInput { clips: Array<{ id: string; text: string; written?: string }>; voiceId: string; language?: 'id' | 'en'; speed?: number; style?: string; maxTotalMs?: number;
   startMs?: number; gapMs?: number; sceneGapMs?: number; scenes?: string[][]; insert?: boolean; captions?: boolean }
@@ -49,10 +51,12 @@ export const HASHTAG_TONES = ['casual', 'professional', 'energetic', 'informativ
 /** FR-104: caption style applied on Insert when the project has none (same default as op:caption.importSrt). */
 export const DEFAULT_CAPTION_STYLE = 'preset:caption.editorial';
 /** FR-102: an inserted music bed uses the preset:audio.bed-soft Compile defaults (volume, loop, fades). */
-export function musicBedOp(assetId: string, opts: { volume?: number } = {}): OperationT {
+export function musicBedOp(assetId: string, opts: { volume?: number; fadeInMs?: number; fadeOutMs?: number } = {}): OperationT {
   const cd = compileDefaults('preset:audio.bed-soft');
   const args: Record<string, unknown> = { volume: 0.2, loop: true, fadeInMs: 1000, fadeOutMs: 1000, ...(cd?.args ?? {}), assetId };
   if (opts.volume !== undefined) args['volume'] = opts.volume;
+  if (opts.fadeInMs !== undefined) args['fadeInMs'] = opts.fadeInMs;    // ADR-039: the Reels composer's fades
+  if (opts.fadeOutMs !== undefined) args['fadeOutMs'] = opts.fadeOutMs;
   // FR-266: the bed always ducks under speech (voice layers and footage with sound): its own level between speech, ~1/3 under it
   const v = Number(args['volume']);
   args['duckingPresetId'] = 'preset:audio.duck-voice';
@@ -103,11 +107,13 @@ export function placePages(pages: unknown[], placements: readonly AudioPlacement
 }
 export type GeneratorKind = (typeof GENERATOR_KINDS)[number];
 /** ADR-016 priority tag per Generator Card (FR-100). */
-export const GENERATOR_PRIORITY: Record<GeneratorKind, 'P1' | 'P2'> = { voice: 'P1', captions: 'P1', hashtags: 'P1', music: 'P2', thumbnail: 'P2' };
+export const GENERATOR_PRIORITY: Record<GeneratorKind, 'P1' | 'P2'> = { voice: 'P1', captions: 'P1', hashtags: 'P1', music: 'P2', thumbnail: 'P2', prep: 'P1' };
 /** FR-108: results that were not inserted stay listed for 7 days. */
 export const GENERATED_RETENTION_MS = 7 * 24 * 3_600_000;
 const TIER_RANK = { T0: 0, T1: 1, T2: 2 } as const;
-const MODEL_TASKS: Record<Exclude<GeneratorKind, 'hashtags'>, ReadonlyArray<ModelDef['task']>> = { captions: ['stt'], voice: ['tts'], music: ['music', 'library'], thumbnail: ['image'] };
+const MODEL_TASKS: Record<Exclude<GeneratorKind, 'hashtags'>, ReadonlyArray<ModelDef['task']>> = { captions: ['stt'], voice: ['tts'], music: ['music', 'library'], thumbnail: ['image'], prep: ['stt'] };
+/** FR-285: RAM the Service, Chrome and ffmpeg keep for themselves when choosing the prep's whisper model (the model's `ramBytes` must fit the rest). */
+export const PREP_RAM_RESERVE = 1.5 * 1024 ** 3;
 
 export interface EngineStepCtx { engineDir: string; jobDir: string; signal: AbortSignal; onProgress: (f: number) => void }
 /** Engine steps (default: packages/models adapters). Tests inject fakes; nothing here knows engine argv. */
@@ -115,10 +121,12 @@ export interface GeneratorEngines {
   captions(i: { modelPath: string; wavPath: string; language: string; audioDurationMs: number }, c: EngineStepCtx): Promise<{ pages: unknown[]; language: string | null }>;
   voice(i: { modelDir: string; text: string; speed?: number; speakerId?: number; language?: 'id' | 'en' }, c: EngineStepCtx): Promise<{ wavPath: string }>;
   /** FR-249: word timings for alignment (whisper.cpp word tokens of a 16 kHz mono wav). Default: transcribeToPages captions. */
-  wordTokens?(i: { modelPath: string; wavPath: string; language: string; audioDurationMs: number }, c: EngineStepCtx): Promise<RecognisedToken[]>;
+  wordTokens?(i: { modelPath: string; wavPath: string; language: string; audioDurationMs: number; /** FR-285: names-only initial prompt */ prompt?: string }, c: EngineStepCtx): Promise<RecognisedToken[]>;
+  /** FR-285 (Reels listen): word tokens of SEVERAL short wavs in one whisper-cli process (one list per file, in order). Default: transcribeMany. */
+  listenPieces?(i: { modelPath: string; wavPaths: string[]; language: string; audioDurationMs: number; prompt?: string }, c: EngineStepCtx): Promise<RecognisedToken[][]>;
   music(i: { modelDir: string; prompt: string; durationMs: number; seed: number; tier: 'T0' | 'T1' | 'T2' }, c: EngineStepCtx): Promise<{ wavPath: string }>;
   image(i: { model: ModelDef; modelDir: string; prompt: string; width: number; height: number; seed: number; tier: 'T0' | 'T1' | 'T2' }, c: EngineStepCtx): Promise<{ pngPath: string }>;
-  frame(i: { model: CompositionModelT; projectId: string; frameMs: number; outPath: string; assetIds: string[] }, c: EngineStepCtx & { ctx: ServiceContext; jobId: string }): Promise<void>;
+  frame(i: { model: CompositionModelT; projectId: string; frameMs: number; outPath: string; assetIds: string[]; /** FR-289: JPEG stills (cover), default PNG */ format?: 'png' | 'jpeg' }, c: EngineStepCtx & { ctx: ServiceContext; jobId: string }): Promise<void>;
 }
 export interface GeneratorsOptions {
   /** Kinds enabled in this build; others answer EM-9004 (API §6.13: a P0 build passes []). Default: all. */
@@ -151,8 +159,11 @@ const firstWith = (dir: string, re: RegExp): string => { const f = fs.readdirSyn
 function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
   const ectx = (c: EngineStepCtx) => ({ engineDir: c.engineDir, jobDir: c.jobDir, signal: c.signal, onProgress: c.onProgress });
   return {
-    wordTokens: async (i, c) => (await transcribe({ modelPath: i.modelPath, wavPath: i.wavPath, language: i.language, threads: threads(), audioDurationMs: i.audioDurationMs }, ectx(c))).captions
+    wordTokens: async (i, c) => (await transcribe({ modelPath: i.modelPath, wavPath: i.wavPath, language: i.language, threads: threads(), audioDurationMs: i.audioDurationMs, ...(i.prompt ? { prompt: i.prompt } : {}) }, ectx(c))).captions
       .map((x) => ({ text: x.text, fromMs: x.startMs, toMs: x.endMs })),
+    // per-piece runs pay a decode warm-up per file and a medium model on 2 threads runs ~18× realtime: 40× speech + 2 min
+    listenPieces: async (i, c) => (await transcribeMany({ modelPath: i.modelPath, wavPaths: i.wavPaths, language: i.language, threads: threads(), audioDurationMs: i.audioDurationMs, ...(i.prompt ? { prompt: i.prompt } : {}) }, { ...ectx(c), timeoutMs: 40 * i.audioDurationMs + 120_000 }))
+      .map((r) => r.captions.map((x) => ({ text: x.text, fromMs: x.startMs, toMs: x.endMs, ...(typeof x.confidence === 'number' ? { conf: x.confidence } : {}) }))),
     captions: async (i, c) => { const r = await transcribeToPages({ modelPath: i.modelPath, wavPath: i.wavPath, language: i.language, threads: threads(), audioDurationMs: i.audioDurationMs }, ectx(c)); return { pages: r.pages, language: r.language }; },
     voice: async (i, c) => {
       // FR-267: Supertonic 3 (vector_estimator + voice.bin speaker table); Kokoro (sherpa-onnx export) ships a voice table;
@@ -206,7 +217,7 @@ function defaultEngines(opts: GeneratorsOptions): GeneratorEngines {
         if (warm) common['puppeteerInstance'] = warm;
         const composition = await R.selectComposition({ ...common, id: 'ExpertmotionTimeline' });
         const frame = Math.max(0, Math.min(composition.durationInFrames - 1, Math.round((i.frameMs / 1000) * composition.fps)));
-        await R.renderStill({ ...common, composition, frame, output: i.outPath, imageFormat: 'png', cancelSignal });
+        await R.renderStill({ ...common, composition, frame, output: i.outPath, imageFormat: i.format ?? 'png', ...(i.format === 'jpeg' ? { jpegQuality: 92 } : {}), cancelSignal });
         ok = true;
       } catch (e) {
         if (c.signal.aborted) throw new CancelledError();
@@ -274,6 +285,7 @@ export class GeneratorsService {
     const enabled = this.opts.enabledKinds ?? GENERATOR_KINDS;
     const out: Array<Record<string, unknown>> = [];
     for (const kind of GENERATOR_KINDS) {
+      if (kind === 'prep') continue;                                  // FR-285: the footage prep is a job behind the Assets panel / Brainstorm tool, not a Generator Card
       const base = { kind, enabled: enabled.includes(kind), priority: GENERATOR_PRIORITY[kind] };
       if (kind === 'hashtags') { out.push({ ...base, model: null, models: [], llm: true, tierHint: 'ok' }); continue; }
       const task = kind === 'captions' ? 'stt' : kind === 'voice' ? 'tts' : kind === 'music' ? 'music' : 'image';
@@ -308,11 +320,16 @@ export class GeneratorsService {
     if (e.type === 'running') ctx.db.prepare("UPDATE generator_jobs SET status = 'running', started_at = ? WHERE id = ?").run(now, j.id);
     else if (e.type === 'progress') ctx.db.prepare('UPDATE generator_jobs SET progress = ? WHERE id = ?').run(j.progress, j.id);
     else if (e.type === 'failed' || e.type === 'cancelled') ctx.db.prepare('UPDATE generator_jobs SET status = ?, error_code = ?, finished_at = ? WHERE id = ?').run(e.type, j.error?.code ?? null, now, j.id);
-    else if (e.type === 'done') {
+    let status: string = j.status;
+    if (e.type === 'done') {
       const r = e.result as { assetId?: string; result: Record<string, unknown> };
-      ctx.db.prepare("UPDATE generator_jobs SET status = 'done', progress = 1, result_asset_id = ?, result_json = ?, finished_at = ? WHERE id = ?").run(r.assetId ?? null, JSON.stringify(r.result), now, j.id);
+      // FR-286: a prep job that stopped for the rotation confirmation (R-148 continues it) is `needs-input`, not done
+      if (j.kind === 'prep' && r.result['needsInput'] === true) status = 'needs-input';
+      ctx.db.prepare("UPDATE generator_jobs SET status = ?, progress = 1, result_asset_id = ?, result_json = ?, finished_at = ? WHERE id = ?").run(status, r.assetId ?? null, JSON.stringify(r.result), now, j.id);
     }
-    if (e.type !== 'queued') emit(ctx, 'service.notice', { kind: 'generator', projectId: j.projectId, jobId: j.id, generator: j.kind, status: j.status, percent: Math.round(j.progress * 100),
+    // FR-285: the prep job's stage id and its Indonesian / English label, so the progress card can name the step
+    const stage = j.kind === 'prep' && j.stage && (PREP_STAGE_LABELS as Record<string, { id: string; en: string }>)[j.stage] ? { stage: j.stage, stageLabel: PREP_STAGE_LABELS[j.stage as PrepStage] } : {};
+    if (e.type !== 'queued') emit(ctx, 'service.notice', { kind: 'generator', projectId: j.projectId, jobId: j.id, generator: j.kind, status, percent: Math.round(j.progress * 100), ...stage,
       done: e.type === 'done' || e.type === 'failed' || e.type === 'cancelled', ...(j.error ? { code: j.error.code } : {}) });
     if (e.type === 'done' || e.type === 'failed' || e.type === 'cancelled') { if (j.modelKey) useModel(ctx, j.modelKey, -1); this.inserts.delete(j.id); s2(ctx).events.emit('generator.final', j.id); }
   }
@@ -332,11 +349,21 @@ export class GeneratorsService {
       if (this.inserts.get(id) && out.ops?.length) {
         const versionId = ctx.hooks.applyOps(projectId, out.ops, { kind: 'generator', ref: id, summary: `Inserted generated ${kind}` });
         out.result['versionId'] = versionId;
+        // ADR-039: the Reels composer's gain lifts over silent cards go on the bed the job just inserted
+        if (kind === 'music' && Array.isArray(body['gain']) && body['gain'].length && out.assetId) { const v2 = this.applyBedGain(projectId, out.assetId, body['gain'] as unknown[], id); if (v2) out.result['versionId'] = v2; }
       }
       if (out.ops) out.result['proposedOps'] = out.ops;
       return out;
     } });
     return toGenDto(this.get(id)!);
+  }
+  /** ADR-039: `op:audio.setGain {segments}` on the newest bed of `assetId` (the layer id exists only after the bed was added). */
+  private applyBedGain(projectId: string, assetId: string, segments: unknown[], ref: string): string | null {
+    const ctx = this.ctx;
+    const bed = [...ctx.hooks.composition(projectId).model.tracks.audio].reverse().find((a) => a.assetId === assetId && a.role === 'bed');
+    if (!bed) return null;
+    try { return ctx.hooks.applyOps(projectId, [{ op: 'op:audio.setGain', target: { kind: 'audio', id: bed.id }, args: { segments } } as OperationT], { kind: 'generator', ref, summary: 'Music lifts over silent scenes' }); }
+    catch (e) { ctx.log.warn({ projectId, assetId, code: e instanceof EmError ? e.code : 'EM-7101' }, 'bed gain not applied'); return null; }
   }
   /** ADR-030: the model behind a generator plan step — an installed one for the language first (default first), else the default. */
   async planToolModel(task: 'tts' | 'stt', language: 'id' | 'en'): Promise<ToolModel | null> {
@@ -376,13 +403,28 @@ export class GeneratorsService {
               ...(typeof st.args['speed'] === 'number' ? { speed: st.args['speed'] } : {}), ...(typeof st.args['style'] === 'string' ? { style: st.args['style'] } : {}), insert: true });
             const wait = this.waitJob(String(job['id'])); voices.set(st.n, wait); voiceAt.set(wait, typeof st.args['atMs'] === 'number' ? st.args['atMs'] : 0);
             notice(st.n, st.tool, 'started', { jobId: job['id'] });
+          } else if (st.tool === 'music.generate' && typeof st.args['assetId'] === 'string') {
+            // ADR-039: a music Asset already in the project → the bed (volume, fades, ducking) + the composer's gain lifts, no job
+            const assetId = st.args['assetId']; const a = getAsset(ctx, assetId, projectId);
+            if (!a || a.status !== 'ready' || a.has_audio !== 1) throw em('EM-1301', 'The music asset is not in the project.', { details: { assetId } });
+            const fades = { ...(typeof st.args['fadeInMs'] === 'number' ? { fadeInMs: st.args['fadeInMs'] } : {}), ...(typeof st.args['fadeOutMs'] === 'number' ? { fadeOutMs: st.args['fadeOutMs'] } : {}) };
+            let versionId = ctx.hooks.applyOps(projectId, [musicBedOp(assetId, { ...(typeof st.args['volume'] === 'number' ? { volume: st.args['volume'] } : {}), ...fades })], { kind: 'generator', ref: planId, summary: 'Music bed' });
+            if (Array.isArray(st.args['gain']) && st.args['gain'].length) versionId = this.applyBedGain(projectId, assetId, st.args['gain'] as unknown[], planId) ?? versionId;
+            notice(st.n, st.tool, 'done', { assetId, versionId });
           } else if (st.tool === 'music.generate') {
-            // FR-266: a best-fit CC0 library track (downloaded + verified on first use), looped / faded to the video, ducked under speech
+            // FR-266: a best-fit CC0 library track (downloaded + verified on first use), looped / faded to the video, ducked under speech;
+            // ADR-039: `trackId` picks the track, `fadeInMs` / `fadeOutMs` / `gain` come from the Reels composer
             const model = ctx.hooks.composition(projectId).model;
             const durationMs = Math.max(1000, Math.min(1_800_000, typeof st.args['durationMs'] === 'number' ? st.args['durationMs'] : deriveTiming(model).durationMs));
             const job = await this.create(projectId, 'music', { prompt: String(st.args['prompt'] ?? 'calm'), durationMs, modelKey: 'loop-library-cc0', insert: true,
-              ...(typeof st.args['volume'] === 'number' ? { volume: st.args['volume'] } : {}), ...(typeof st.args['trackId'] === 'string' ? { trackId: st.args['trackId'] } : {}) });
+              ...(typeof st.args['volume'] === 'number' ? { volume: st.args['volume'] } : {}), ...(typeof st.args['trackId'] === 'string' ? { trackId: st.args['trackId'] } : {}),
+              ...(typeof st.args['fadeInMs'] === 'number' ? { fadeInMs: st.args['fadeInMs'] } : {}), ...(typeof st.args['fadeOutMs'] === 'number' ? { fadeOutMs: st.args['fadeOutMs'] } : {}), ...(Array.isArray(st.args['gain']) ? { gain: st.args['gain'] } : {}) });
             notice(st.n, st.tool, 'started', { jobId: job['id'] });
+          } else if (st.tool === 'cover.render') {
+            // ADR-039 (FR-289): the cover still through the same path as R-153 (composeCover → JPEG still → Output kind still)
+            const spec = (st.args['spec'] ?? {}) as CoverSpec;
+            const out = await renderCover(ctx, projectId, { ...spec, ...(typeof st.args['masterAssetId'] === 'string' ? { masterAssetId: st.args['masterAssetId'] } : {}) });
+            notice(st.n, st.tool, 'done', { outputId: out['id'], path: out['path'], fileName: out['fileName'] });
           } else if (st.tool === 'captions.generate' && st.args['source'] === 'sequence') {
             const job = await this.create(projectId, 'captions', { source: 'sequence', language: lang(st.args), insert: true, ...(typeof st.args['presetId'] === 'string' ? { presetId: st.args['presetId'] } : {}),
               ...(typeof st.args['modelKey'] === 'string' ? { modelKey: st.args['modelKey'] } : {}) });   // the installed model the plan checked (prepareToolSteps)
@@ -807,6 +849,85 @@ export class GeneratorsService {
     return { jobId: row.id, ...(JSON.parse(row.result_json ?? '{}') as Omit<VoiceBatchResult, 'jobId'>) };
   }
 
+  /**
+   * FR-285: the transcription model of a prep job: the LARGEST installed whisper whose `ramBytes` fits `totalmem − 1.5 GB` (small-q5
+   * is weak on Indonesian speech; an 8 GB laptop runs medium-q5), then the Creator's `sttModelKey`, then the download default
+   * (small-q5 below 6 GB RAM, else medium-q5; EM-7001 names it so the notice can offer the install).
+   */
+  async prepModel(asked?: string, totalMem = os.totalmem()): Promise<ModelDef> {
+    const models = modelsServiceOf(this.ctx);
+    const fits = models.defs().filter((d) => d.task === 'stt' && d.engine === 'whisper.cpp' && d.availability !== 'virtual' && d.ramBytes <= totalMem - PREP_RAM_RESERVE).sort((a, b) => b.ramBytes - a.ramBytes || b.bytes - a.bytes);
+    for (const d of fits) if (await models.isInstalled(d.key)) return d;
+    if (asked) return this.requireInstalled(asked, 'Siapkan rekaman');
+    const want = totalMem < 6 * 1024 ** 3 ? 'whisper-small-q5' : 'whisper-medium-q5';
+    return this.requireInstalled(models.def(want) ? want : defaultModelFor('stt', this.ctx.hooks.tier()), 'Siapkan rekaman');
+  }
+  /**
+   * FR-285 … FR-287 (R-130 kind `prep`): the footage prep job (s2/reels/footage-prep.ts) with this service's ffmpeg (heavy lock),
+   * Asset registration (ingest) and whisper engine step. The master Asset is the job's `resultAssetId`.
+   */
+  private async prepareFootagePrep(projectId: string, b: Record<string, unknown>, _tier: 'T0' | 'T1' | 'T2'): Promise<Prepared> {
+    const ctx = this.ctx; const models = modelsServiceOf(ctx);
+    const voice = getAsset(ctx, String(b['voiceAssetId']), projectId);
+    if (!voice || voice.deleted_at) throw em('EM-9003', 'Not found.', { path: 'body.voiceAssetId' });
+    const def = await this.prepModel(typeof b['sttModelKey'] === 'string' ? b['sttModelKey'] : undefined);
+    const input: PrepInput = { voiceAssetId: voice.id, ...(typeof b['cameraAssetId'] === 'string' ? { cameraAssetId: b['cameraAssetId'] } : {}), ...(typeof b['script'] === 'string' && b['script'].trim() ? { script: b['script'] } : {}),
+      ...(rotationOf(b['rotation']) !== null ? { rotation: rotationOf(b['rotation'])! } : {}), ...(typeof b['targetFps'] === 'number' ? { targetFps: b['targetFps'] } : {}), ...(typeof b['maxTotalMs'] === 'number' ? { maxTotalMs: b['maxTotalMs'] } : {}),
+      sttModelKey: def.key, ...(typeof b['offsetMs'] === 'number' ? { offsetMs: b['offsetMs'] } : {}), ...(b['sync'] && typeof b['sync'] === 'object' ? { sync: b['sync'] as NonNullable<PrepInput['sync']> } : {}),
+      ...(typeof b['resumedFrom'] === 'string' ? { resumedFrom: b['resumedFrom'] } : {}), ...(typeof b['shortSide'] === 'number' ? { shortSide: b['shortSide'] } : {}), ...(b['confirmRotation'] === true ? { confirmRotation: true } : {}) };
+    return { modelKey: def.key, run: (j) => this.withJobDir(j, () => runFootagePrep({
+      ctx, modelKey: def.key,
+      ffmpeg: (jj, args, cwd, timeoutMs, o = {}) => s2(ctx).heavy.run(() => runTool({ exe: ctx.resources.ffmpeg, args: ['-v', o.verbose ? 'info' : 'error', '-nostdin', '-y', ...args], cwd, timeoutMs, signal: jj.signal,
+        ...(o.onStderrLine ? { onStderrLine: o.onStderrLine } : {}), ...(o.onStdoutLine ? { onStdoutLine: o.onStdoutLine } : {}) })),
+      register: (pid, file, name) => this.register(pid, file, name),
+      listen: (jj, i) => this.engineStep(jj, 'whisper.cpp', 'listen', (c) => this.engines.listenPieces!({ modelPath: firstWith(models.dirOf(def), /\.bin$/), wavPaths: i.wavPaths, language: i.language, audioDurationMs: i.audioDurationMs, ...(i.prompt ? { prompt: i.prompt } : {}) },
+        { ...c, onProgress: (f) => jj.progress(0.68 + f * 0.2, 'listen') })),
+    }, j, projectId, input)) };
+  }
+  /**
+   * FR-286 (R-148): continue a prep job that stopped for the rotation confirmation: a new prep job with the Creator's rotation and
+   * the offset already measured; the stopped job is closed as `done` so it leaves the pending list. Returns the new job DTO.
+   */
+  async continuePrep(projectId: string, jobId: string, rotation: 0 | 90 | 180 | 270): Promise<Record<string, unknown>> {
+    const r = this.get(jobId);
+    if (!r || r.project_id !== projectId || r.kind !== 'prep') throw em('EM-9003', 'Not found.');
+    if (r.status !== 'needs-input') throw em('EM-9002', 'This job is not waiting for a rotation.', { status: 409, details: { status: r.status } });
+    const res = (r.result_json ? JSON.parse(r.result_json) : {}) as { input?: Record<string, unknown> };
+    const body = { ...(res.input ?? JSON.parse(r.input_json) as Record<string, unknown>), rotation, resumedFrom: jobId };
+    const job = await this.create(projectId, 'prep', body);
+    this.ctx.db.prepare("UPDATE generator_jobs SET status = 'done' WHERE id = ?").run(jobId);
+    return job;
+  }
+  /** FR-289: one still of a Composition Model rendered with the Engine (PNG or JPEG) into `outPath`, under the heavy lock. */
+  async renderStill(projectId: string, model: CompositionModelT, frameMs: number, outPath: string, format: 'png' | 'jpeg' = 'png', signal?: AbortSignal): Promise<void> {
+    const jobId = this.ctx.newId(); const ac = new AbortController();
+    signal?.addEventListener('abort', () => ac.abort(), { once: true });
+    const j = { jobId, signal: ac.signal, progress: () => undefined } as unknown as JobContext;
+    const assetIds = [...new Set([...model.tracks.video.flatMap((c) => (c.assetId ? [c.assetId] : [])), ...model.tracks.audio.map((a) => a.assetId), ...model.tracks.overlay.map((o) => (o as { assetId?: string }).assetId).filter((x): x is string => typeof x === 'string')])];
+    await createJobDir(this.ctx.paths.tmp, jobId);
+    try { await this.engineStep(j, 'none', 'still', (c) => this.engines.frame({ model, projectId, frameMs, outPath, assetIds, format }, { ...c, ctx: this.ctx, jobId })); }
+    finally { await removeJobDir(this.ctx.paths.tmp, jobId).catch(() => undefined); }
+  }
+  /**
+   * FR-285 (Brainstorm tool `media.analyze`): the stored analysis for these assets, else a prep job started now and awaited up to
+   * `waitMs`; a job still running after that answers `{status: 'running', jobId}` (the next call returns the result).
+   */
+  async analyzeFootage(projectId: string, input: { voiceAssetId: string; cameraAssetId?: string; script?: string }, waitMs = 150_000): Promise<Record<string, unknown>> {
+    const ctx = this.ctx;
+    const stored = latestAnalysis(ctx, projectId);
+    if (stored && stored.voiceAssetId === input.voiceAssetId && (input.cameraAssetId === undefined || stored.cameraAssetId === input.cameraAssetId)) return { status: 'done', ...analysisSummary(stored) };
+    const live = ctx.db.prepare("SELECT id FROM generator_jobs WHERE project_id = ? AND kind = 'prep' AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1").get(projectId) as { id: string } | undefined;
+    const waiting = ctx.db.prepare("SELECT id, result_json FROM generator_jobs WHERE project_id = ? AND kind = 'prep' AND status = 'needs-input' ORDER BY created_at DESC LIMIT 1").get(projectId) as { id: string; result_json: string | null } | undefined;
+    if (waiting && !live) return { status: 'needs-input', jobId: waiting.id, code: 'EM-1503', note: 'The Creator must confirm the video rotation (four thumbnails are shown in the chat); call again afterwards.' };
+    const jobId = live?.id ?? String((await this.create(projectId, 'prep', { voiceAssetId: input.voiceAssetId, ...(input.cameraAssetId ? { cameraAssetId: input.cameraAssetId } : {}), ...(input.script ? { script: input.script } : {}) }))['id']);
+    const row = await Promise.race([this.waitJob(jobId), new Promise<undefined>((r) => { const h = setTimeout(() => r(undefined), waitMs); h.unref?.(); })]);
+    if (!row) return { status: 'running', jobId, note: 'Still analysing; call media.analyze again in a minute.' };
+    if (row.status === 'needs-input') return { status: 'needs-input', jobId, code: 'EM-1503', note: 'The Creator must confirm the video rotation (four thumbnails are shown in the chat); call again afterwards.' };
+    if (row.status !== 'done') return { status: row.status, jobId, error: { code: row.error_code ?? 'EM-7101' } };
+    const a = latestAnalysis(ctx, projectId);
+    return a ? { status: 'done', jobId, ...analysisSummary(a) } : { status: 'done', jobId };
+  }
+
   /** FR-104: captions for the Sequence audio: each video Clip's audio segment is transcribed and its pages placed on the timeline. */
   private async prepareSequenceCaptions(projectId: string, b: Record<string, unknown>, tier: 'T0' | 'T1' | 'T2'): Promise<Prepared> {
     const ctx = this.ctx; const models = modelsServiceOf(ctx);
@@ -850,6 +971,7 @@ export class GeneratorsService {
     if (lang !== undefined && lang !== 'id' && lang !== 'en') throw em('EM-7105', 'Only Indonesian and English are supported.', { details: { tool: kind, language: lang } });
     const short = (id: string) => id.slice(-8).toLowerCase();
 
+    if (kind === 'prep') return this.prepareFootagePrep(projectId, b, tier);
     if (kind === 'captions' && (b['source'] === 'sequence' || b['assetId'] === undefined)) return this.prepareSequenceCaptions(projectId, b, tier);
     if (kind === 'captions') {
       const asset = getAsset(ctx, String(b['assetId']), projectId);
@@ -917,7 +1039,8 @@ export class GeneratorsService {
           '-t', (durationMs / 1000).toFixed(3), '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', wav], cwd: path.dirname(wav), timeoutMs: 120_000, signal: j.signal }));
         j.progress(0.9, 'ingest');
         const assetId = await this.register(projectId, wav, `music-${track.id}.wav`);
-        return { assetId, result: { assetId, durationMs, source: 'loop-library', instrumental: true, cc0: true, trackId: track.id, title: track.title, artist: track.artist, credit: track.credit, licence: MUSIC_LIBRARY_LICENCE.url }, ops: [musicBedOp(assetId, typeof b['volume'] === 'number' && b['volume'] >= 0.02 && b['volume'] <= 1 ? { volume: b['volume'] } : {})] };
+        const bed = { ...(typeof b['volume'] === 'number' && b['volume'] >= 0.02 && b['volume'] <= 1 ? { volume: b['volume'] } : {}), ...(typeof b['fadeInMs'] === 'number' ? { fadeInMs: b['fadeInMs'] } : {}), ...(typeof b['fadeOutMs'] === 'number' ? { fadeOutMs: b['fadeOutMs'] } : {}) };
+        return { assetId, result: { assetId, durationMs, source: 'loop-library', instrumental: true, cc0: true, trackId: track.id, title: track.title, artist: track.artist, credit: track.credit, licence: MUSIC_LIBRARY_LICENCE.url }, ops: [musicBedOp(assetId, bed)] };
       }) };
     }
     if (kind === 'thumbnail') {

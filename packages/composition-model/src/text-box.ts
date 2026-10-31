@@ -24,6 +24,8 @@ set('ijl|!.,:;\'`·', 0.26); set('ftrI()[]{}', 0.36); set(' ', 0.27); set('01234
 set('m', 0.86); set('M', 0.87); set('w', 0.78); set('ABCDGHKNOQRUVXY', 0.7); set('EFLPSTZ', 0.62); set('W', 0.95); set('%', 0.8); set('@', 0.95); set('+−–-=±<>~$#&*/', 0.6); set('—', 0.9); set('"“”\'‘’', 0.3);
 W['\u00A0'] = W[' ']!;
 const WEIGHT_FACTOR = (weight: number) => 1 + Math.max(0, weight - 400) * 0.00018;
+/** ADR-039: Poppins (geometric, wide) runs about 9 % wider than the sans table above; other non-Inter faces keep the table as is. */
+const FAMILY_FACTOR = (family?: string) => (family && /poppins/i.test(family) ? 1.09 : 1);
 /** Inter (the default and editorial face) uses the advance widths MEASURED from the bundled files (round 2), the nearest weights
  *  interpolated, plus Chrome's kerning for common pairs; other sans faces keep the approximate table above. */
 const usesInter = (family?: string): boolean => family === undefined || family === '' || /inter/i.test(family);
@@ -47,7 +49,7 @@ export function textWidthEm(text: string, weight = 400, family?: string): number
   if (!tab && usesInter(family)) return interWidthEm(text, weight);
   let w = 0;
   for (const ch of text) w += tab && ch >= '0' && ch <= '9' ? 0.62 : W[ch] ?? (ch.charCodeAt(0) > 0x2000 ? 0.6 : 0.56);
-  return w * WEIGHT_FACTOR(weight);
+  return w * WEIGHT_FACTOR(weight) * FAMILY_FACTOR(family);
 }
 /** Breakable white space (a no-break space glues, glue.ts). */
 const BREAK = /[^\S\u00A0\n]+/;

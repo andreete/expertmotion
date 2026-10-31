@@ -19,6 +19,9 @@ import { IntentQueue, targetText } from './IntentQueue.js';
 import { PlanCard, PlanSummary } from './PlanCard.js';
 import { ProposalCard, intentTitle } from './proposals.js';
 import { SectionBoundary } from '../startup/ErrorBoundary.js';
+import { CoverPicker, PrepCard } from './Reels.js';
+import { parseTimestamp, prdReady } from './reels.js';
+import { FileCheck2 } from 'lucide-react';
 
 /** FR-085: picks that compiled and applied without any model (Compile path), shown as a compact system line. */
 export function appliedDirectly(items: readonly EditIntent[]): EditIntent[] {
@@ -80,6 +83,7 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     runtime.api.listPlans(projectId, { limit: 50 }).then((p) => { if (live) setPlans(Object.fromEntries(p.items.map((x) => [x.id, x]))); }).catch(() => undefined);
     return () => { live = false; };
   }, [projectId, runtime, state.messages.editor.length]);
+  useEffect(() => { if (projectId) void actions.loadFootage(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps  -- FR-28x: the prep job / analysis of the open project
   useEffect(() => {                                                  // FR-067: "Ask the Editor" from the inspector → Edit mode
     if (!draft) return;
     setValue(draft.text);
@@ -101,7 +105,10 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
     const target = agent === 'editor' ? draftTarget : null;
     const sentTargets = targets;
     setLastSent({ agent, text, att: attachments, targets: sentTargets, target });
-    const ok = await actions.send(agent, text, attachments, target, sentTargets, documents);
+    // FR-28x: "perbaiki di 0:23" — the typed time becomes the message's playhead (and the Player jumps there)
+    const stamp = agent === 'editor' ? parseTimestamp(text) : null;
+    if (stamp) actions.seek(stamp.ms);
+    const ok = await actions.send(agent, text, attachments, target, sentTargets, documents, stamp ? { playheadMs: stamp.ms } : {});
     if (!ok) setValue(text);                                         // composer restored on failure (IX-12 point 9)
     else {
       actions.setChatTargets([]); setDismissed(new Set(sentTargets.map(targetKey)));   // chips are used up by the message
@@ -152,6 +159,7 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
       if (m.role === 'assistant' && !messageText(m).trim() && !m.blocks.some((b) => b.type === 'proposed_intents')) return;
       const handed = m.blocks.find((b): b is Extract<typeof b, { type: 'handoff' }> => b.type === 'handoff');
       const canApply = m.role === 'assistant' && !handed && Boolean(messageText(m).trim());
+      const prd = canApply && prdReady(messageText(m));              // FR-28x: the PRD's closing line offers approval + hand-off in one step
       rows.push({ at: m.createdAt, key: `b-${m.id}`, node: (
         <Bubble key={`b-${m.id}`} m={m} agent="brainstorm" onApply={canApply ? () => void applyToVideo(m) : undefined} onRetry={m.role === 'system' ? () => {
           // FR-077: a restored failure re-sends the request it answered
@@ -160,6 +168,8 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
           if (text) void actions.send('brainstorm', text, prev?.blocks.flatMap((b) => (b.type === 'attachment' && b.assetId ? [b.assetId] : [])) ?? []);
         } : undefined}>
           {m.blocks.map((b, i) => (b.type === 'proposed_intents' && !handed ? <ProposalCard key={i} message={m} intents={b.intents} handoffState={b.handoffState} onApplied={() => setMode('editor')} onSendDraft={() => void applyToVideo(m)} /> : null))}
+          {prd && <button type="button" data-el="agent.chat.prd.approve" title={t('ui.agent.prd.approve.tip')} onClick={() => void applyToVideo(m)}
+            className="inline-flex items-center gap-1 rounded-[6px] border border-em-accent bg-em-accent/10 px-2 py-1 text-[12px] font-semibold text-em-accent hover:bg-em-accent/20"><FileCheck2 size={13} aria-hidden />{t('ui.agent.prd.approve')}</button>}
           {handed && <HandoffCard block={handed} onOpenEditor={() => setMode('editor')} />}
         </Bubble>
       ) });
@@ -215,6 +225,9 @@ export function AssistantChat({ layout }: { layout: ChatLayoutProps }) {
         {mode === 'brainstorm' ? <><StreamingBubble agent="brainstorm" /><AgentErrorBubble agent="brainstorm" onRetry={() => retry('brainstorm')} onRephrase={() => rephrase('brainstorm')} /></>
           : <><StreamingBubble agent="editor" /><AgentErrorBubble agent="editor" onRetry={() => retry('editor')} onRephrase={() => rephrase('editor')} /></>}
         {mode === 'editor' && plan && !thread.current && <div className="flex flex-col items-start gap-1"><ModeTag agent="editor" /><PlanCard plan={plan} /></div>}
+        {/* FR-28x (Reels): the footage prep card and the cover picker live in both chats (the prep is started from Diskusi, used by the Editor) */}
+        {state.prep && <PrepCard />}
+        {state.analysis && <CoverPicker />}
       </Thread>
       <IntentQueue hidden={mode !== 'editor'} />
       {mode === 'editor' && capAt && !targets.some((x) => x.kind === 'caption' && x.index === capAt.i) && (

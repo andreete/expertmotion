@@ -8,6 +8,7 @@ import type {
   ChatDocumentDto, ConversationDto, DesignPickInput, DiskUsageDto, ElementDiff, ExecutionResult, GeneratorCardDto, GeneratorJobDto, GeneratorKind, HardwareProfileDto, HardwareTickDto, HealthDto, Id,
   IntentCreateResponse, IntentQueueDto, LicenseDto, MediaGrantDto, MediaVariant, MessageDto, ModelRegistrySource, ModelStateDto, OpenProjectResponse, OutputDto, Page, PlanDto,
   ProbeResultDto, ProjectCreateInput, ProjectDto, ProjectSettingsExtras, ProjectUiState, ProviderKind, ProviderKindInfo, RecentCodeDto, RecoverySummaryDto, RenderCreateInput, RenderEstimate, RenderJobDto, SettingsDto, VersionDto, VoiceListDto, MusicTrackDto, TranscriptCueDto,
+  CoverInput, FootageAnalysisDto, PrepInput, Rotation,
 } from './types.js';
 
 export interface Bootstrap { baseUrl: string; token: string }
@@ -334,6 +335,24 @@ export class ApiClient {
   listGenerators(): Promise<{ items: GeneratorCardDto[] }> { return this.get('/generators'); }                                // R-135
   saveGeneratorOutput(jobId: Id, assetId: Id): Promise<OutputDto> { return this.post(`/generator-jobs/${jobId}/save-output`, { assetId }); } // R-136
   deleteGeneratorJob(jobId: Id): Promise<void> { return this.del(`/generator-jobs/${jobId}`); }                            // R-137
+  // ── FR-28x Reels pipeline: footage prep, analysis, contact sheet, cover (DESIGN §C; names fixed with the Service) ──
+  /** R-130 kind `prep`: the Footage prep job (voice + camera → synced master, phrases, words, cuts). */
+  startFootagePrep(id: Id, body: PrepInput): Promise<GeneratorJobDto> { return this.createGeneratorJob(id, 'prep', body as unknown as Record<string, unknown>); }
+  /** A prep job that stopped with `needs-input` (rotation unknown, EM-1503) resumes with the Creator's answer. */
+  continueFootagePrep(id: Id, jobId: Id, rotation: Rotation): Promise<GeneratorJobDto> { return this.post(`/projects/${id}/footage-prep/${jobId}/continue`, { rotation }); }
+  /** The latest stored FootageAnalysis of the project (404 → EM-9003 when none). */
+  footageAnalysis(id: Id): Promise<FootageAnalysisDto> { return this.get(`/projects/${id}/footage-analysis`); }
+  /** JPEG contact sheet of `count` master frames from `atMs` on, as a Blob (an <img> cannot send the Service Token). */
+  async footageFrames(id: Id, q: { atMs?: number; count?: number; rotation?: Rotation }): Promise<Blob> {
+    const r = await this.fetchImpl(this.url(`/projects/${id}/footage-analysis/frames`, { atMs: q.atMs, count: q.count, rotation: q.rotation }), { method: 'GET', headers: { Authorization: `Bearer ${this.token}` } });
+    if (r.status !== 200) { let code = 'EM-9001'; try { code = (JSON.parse(await r.text()) as { error: { code: string } }).error.code; } catch { /* not json */ } throw new EmError(toEmCode(code), 'Frames failed', { status: r.status }); }
+    return r.blob();
+  }
+  /** Renders a 1080×1920 JPG cover still of a cut (or a time) and saves it as an Output (kind `still`). */
+  async renderCover(id: Id, body: CoverInput): Promise<OutputDto> {
+    const r = await this.post<OutputDto | { output: OutputDto }>(`/projects/${id}/cover`, body);
+    return 'output' in r && r.output ? r.output : (r as OutputDto);
+  }
   // ── 6.14 models ──
   listModels(): Promise<{ items: ModelStateDto[]; tier: string; totalInstalledBytes: number; diskFreeBytes: number; registry?: ModelRegistrySource }> { return this.get('/models'); } // R-140
   getModel(key: string): Promise<ModelStateDto> { return this.get(`/models/${encodeURIComponent(key)}`); }                 // R-141

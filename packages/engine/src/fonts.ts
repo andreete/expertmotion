@@ -9,14 +9,20 @@ import { continueRender, delayRender, staticFile } from 'remotion';
 import { listPresets } from '@expertmotion/catalogue';
 
 export interface FontLoadResult { loaded: number; failed: string[] }
-export interface FontFile { family: string; url: string; weight: string; style: 'normal' | 'italic' }
+/** `format` (ADR-039): the CSS `format()` hint; woff2 for the @fontsource families, truetype for fonts shipped as TTF (Poppins). */
+export interface FontFile { family: string; url: string; weight: string; style: 'normal' | 'italic'; format: 'woff2' | 'truetype' }
 
-/** Every bundled font file of the catalogue's font presets (`fonts/<stem>-<weight>-<style>.woff2`). */
+/**
+ * Every bundled font file of the catalogue's font presets (`fonts/<stem>-<weight>-<style>.<ext>`). A preset's data may narrow
+ * `styles` (default normal + italic) and name `ext` / `format` (default woff2); ADR-039 ships Poppins 500–900 upright as TTF.
+ */
 export function bundledFontFiles(resolve: (p: string) => string = staticFile): FontFile[] {
   const out: FontFile[] = [];
   for (const p of listPresets({ category: 'font' })) {
     const family = String(p.data?.['family']), stem = String(p.data?.['fileStem']);
-    for (const w of (p.data?.['weights'] as number[] | undefined) ?? []) for (const style of ['normal', 'italic'] as const) out.push({ family, url: resolve(`${stem}-${w}-${style}.woff2`), weight: String(w), style });
+    const styles = ((p.data?.['styles'] as string[] | undefined) ?? ['normal', 'italic']).filter((x): x is 'normal' | 'italic' => x === 'normal' || x === 'italic');
+    const ext = String(p.data?.['ext'] ?? 'woff2'), format = p.data?.['format'] === 'truetype' ? 'truetype' : 'woff2';
+    for (const w of (p.data?.['weights'] as number[] | undefined) ?? []) for (const style of styles) out.push({ family, url: resolve(`${stem}-${w}-${style}.${ext}`), weight: String(w), style, format });
   }
   return out;
 }
@@ -26,7 +32,7 @@ export async function loadFontFace(f: FontFile, timeoutMs = 15_000): Promise<boo
   if (typeof FontFace === 'undefined' || typeof document === 'undefined' || !document.fonts) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const face = new FontFace(f.family, `url(${JSON.stringify(f.url)}) format("woff2")`, { weight: f.weight, style: f.style, display: 'block' });
+    const face = new FontFace(f.family, `url(${JSON.stringify(f.url)}) format(${JSON.stringify(f.format ?? 'woff2')})`, { weight: f.weight, style: f.style, display: 'block' });
     const timeout = new Promise<never>((_, j) => { timer = setTimeout(() => j(new Error('font load timeout')), timeoutMs); });
     await Promise.race([face.load(), timeout]);
     document.fonts.add(face);

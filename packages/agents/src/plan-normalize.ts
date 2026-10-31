@@ -247,9 +247,10 @@ function normalizeOp(raw: unknown, m: CompositionModelT, fixes: string[], n: str
 /** Step tool args (live QA 2026-10-26: captions.generate {stylePreset}): near-miss names renamed, unknown keys dropped. */
 const STEP_ARGS: Record<string, { keys: string[]; alias: Record<string, string[]> }> = {
   'tts.generate': { keys: ['text', 'atMs', 'voiceId', 'language', 'speed'], alias: { text: ['script', 'content', 'narration', 'voiceover', 'voiceOver'], voiceId: ['voice'], atMs: ['startMs', 'start'], language: ['lang'], speed: ['rate'] } },
-  'music.generate': { keys: ['prompt', 'durationMs', 'volume', 'trackId'], alias: { prompt: ['mood', 'style', 'description', 'genre', 'query'], durationMs: ['duration', 'lengthMs'], trackId: ['track', 'id'] } },
+  'music.generate': { keys: ['prompt', 'durationMs', 'volume', 'trackId', 'assetId', 'fadeInMs', 'fadeOutMs', 'gain'], alias: { prompt: ['mood', 'style', 'description', 'genre', 'query'], durationMs: ['duration', 'lengthMs'], trackId: ['track', 'id'] } },
   'captions.generate': { keys: ['source', 'text', 'atMs', 'durationMs', 'presetId', 'language'], alias: { presetId: ['stylePreset', 'style', 'styleId', 'captionStyle', 'preset', 'stylePresetId'], text: ['script', 'content', 'captionText'], atMs: ['startMs', 'start'], durationMs: ['duration'], language: ['lang'] } },
 };
+STEP_ARGS['cover.render'] = { keys: ['spec', 'masterAssetId'], alias: { spec: ['cover'] } };   // ADR-039
 function normalizeStepArgs(tool: string, raw: Obj, fixes: string[], n: string): Obj {
   const spec = STEP_ARGS[tool];
   if (!spec) return raw;

@@ -79,6 +79,8 @@ export interface Hooks {
   onModelInstalled?(modelFlag: string): void;
   /** assets module (FR-018): re-run ingest from the kept originals so derived files (proxy, thumbnails, waveform) are regenerated. */
   reingest?(projectId: string, assetIds: string[]): void;
+  /** generators module (FR-288, Reels): the project's procedural SFX Assets (made once, deduped by source_key `sfx:<kind>`) by kind. */
+  sfxAssets?(projectId: string): Promise<Record<string, string>>;
 }
 
 export interface ServiceContext {

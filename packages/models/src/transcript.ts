@@ -28,7 +28,7 @@ export interface Transcript {
   cues: TranscriptCue[];
   stats: { words: number; matched: number; interpolated: number };
 }
-export interface RecognisedToken { text: string; fromMs: number; toMs: number }
+export interface RecognisedToken { text: string; fromMs: number; toMs: number; /** mean token probability when the recogniser reports one (ADR-039 ad-lib word rule) */ conf?: number }
 
 // ───────────────────────────── text helpers ─────────────────────────────
 export const splitWords = (s: string): string[] => s.replace(/\s+/g, ' ').trim().split(' ').filter((w) => /[\p{L}\p{N}]/u.test(w) || w.length > 0).filter(Boolean);

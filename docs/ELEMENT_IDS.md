@@ -4,7 +4,7 @@
 |---|---|
 | Status | Baseline (new elements may be added; existing IDs never change meaning) |
 | Owner | UI/UX lead |
-| Last updated | 2026-10-27 |
+| Last updated | 2026-10-31 |
 | Depends on | GLOSSARY.md, docs/assets/expertmotion-editor-mockup.png |
 | Used by | FRD.md, UI_UX_SPECIFICATION.md, EDITOR_INTERACTION_MODEL.md, TEST_PLAN.md, ONBOARDING_TOUR.md, ERROR_CATALOGUE.md |
 
@@ -607,6 +607,27 @@ The startup and crash ids (`sys.splash.*`, `sys.crash.*`, `sys.fatal.retry`) are
 | `agent.chat.composer.count` | "6 120 / 8000" | Characters in the composer from 6 000 on; past 8 000 (the Service limit) it says so and Send is disabled (Send is also disabled for an empty / whitespace-only message). |
 | `scr.generate.music.library.meta` | artist · mood · genre · length | The track facts on their own wrapping line under the title. |
 | `lib.assets.card.duration` | "0:05" on the Asset card thumbnail | The length, moved off the name row so the name gets two lines (QA UX round 1, 1280 px). |
+
+## Additions for the Reels pipeline (FR-280 … FR-299, DESIGN §E, 2026-10-31)
+
+| Element ID | Mockup / label | Purpose |
+|---|---|---|
+| `scr.channel` / `scr.channel.text` / `scr.channel.count` / `scr.channel.ratio` / `scr.channel.import` / `scr.channel.import.input` / `scr.channel.clear` / `scr.channel.save` | "Profil kanal" dialog | The channel's standing rules (≤ 6 000 characters, setting `channelProfile`, R-171), loaded into both agents; `scr.channel.ratio` shows the format the text implies (`data-ratio`); `scr.channel.import` reads a .md / .txt. Opened from `agent.chat.menu.profile`, `hdr.menu.help.channel` and `agent.chat.attach.profile`. |
+| `hdr.menu.help.channel` | Help ▸ "Profil kanal" | Opens `scr.channel`. |
+| `agent.chat.menu` / `agent.chat.menu.profile` / `agent.chat.menu.prep` | "⋮" in the chat header | Chat menu: Profil kanal, Siapkan rekaman (disabled with its reason without a video + audio pair). |
+| `agent.chat.attach.profile` | "Jadikan profil kanal" on an attached .md / .txt chip | Opens `scr.channel` with the file's text as the draft (shown when the Editor read the file itself). |
+| `agent.chat.composer.time` | "0:23" chip in the Editor composer | A time typed in the message ("perbaiki di 0:23"; `data-ms`) is sent as `playheadMs` with the message and the Player jumps there. |
+| `agent.chat.prd.approve` | "PRD siap · Setujui & kirim ke Editor" | On a Diskusi answer that ends with "PRD siap": the same hand-off as `agent.chat.sendtoeditor` (R-083b). |
+| `agent.chat.prep` | Footage prep card | The prep job (R-130 kind `prep`); `data-status` = `running` / `needs-input` / `done` / `failed`, `data-stage` = probe / sync / master / phrases / listen / takes / timing. |
+| `agent.chat.prep.stages` / `agent.chat.prep.stage` / `agent.chat.prep.percent` | Indonesian stage list + "45 % · 12 s" | One `agent.chat.prep.stage` per stage (`data-stage`, `data-state` done / active / todo). |
+| `agent.chat.prep.rotate` / `agent.chat.prep.rotation` | "Putar video?" with four thumbnails | `needs-input` (EM-1503): one `agent.chat.prep.rotation` button per `data-rotation` 0 / 90 / 180 / 270 → `POST /projects/:id/footage-prep/:jobId/continue`. |
+| `agent.chat.prep.summary` / `agent.chat.prep.cuts` / `agent.chat.prep.cut` / `agent.chat.prep.dropped` | "Offset 3.54 dtk · 8 potongan · 0:57 dipakai" + cut table | Done: the cut table (no · recording time range · words · spoken text; `data-cut-id`) and the dropped count. |
+| `agent.chat.prep.error` / `agent.chat.prep.retry` | failure line with its EM code | Failed: EM-1500 … EM-1505 title and body, "Coba lagi". |
+| `agent.chat.cover` / `agent.chat.cover.open` / `agent.chat.cover.sheet` / `agent.chat.cover.cell` / `agent.chat.cover.form` / `agent.chat.cover.hook` / `agent.chat.cover.line` / `agent.chat.cover.handle` / `agent.chat.cover.render` / `agent.chat.cover.result` / `agent.chat.cover.result.image` / `agent.chat.cover.reveal` / `agent.chat.cover.copypath` | "Cover" card | Cover candidates: the contact sheet (`GET …/footage-analysis/frames`) with one `agent.chat.cover.cell` per cut (`data-cut-id`, `aria-selected`), the words, "Buat cover" → `POST /projects/:id/cover` → the saved JPG (`data-state` idle / open / done) with Open folder (R-119) and Copy path. |
+| `agent.editor.stage` / `agent.editor.stage.prep` / `agent.editor.stage.preview` / `agent.editor.stage.final` | "Siapkan · Pratinjau · Final" | On the Plan Card and the hand-off card of a project with a recording: prep with the project's video + audio, Execute + 720p render, 1080p render (the Export dialog opens on the running job). Disabled with a reason while a prep / render runs. |
+| `lib.assets.prep` | "Siapkan rekaman" in the Asset Panel | Shown when the project has at least one ready video and one ready audio Asset; starts the prep job. |
+| `scr.export.codec.jpg` / `scr.export.done.credits` | "Cover (JPG)" format · "CREDITS.txt ditulis di samping video" | Export: a JPEG still (`format:'jpg'`, same still-time field as PNG); after a video render the note that the Service wrote `<name>-CREDITS.txt`. |
+| `scr.project.new.ratio.channel` | "Dari profil kanal" under the ratio select | New project: the ratio came from the channel profile (Reels / Shorts / TikTok / 9:16 → 9:16). |
 
 ## Retired ids
 

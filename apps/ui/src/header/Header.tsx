@@ -105,6 +105,7 @@ export function Header() {
             <MenuItem el="hdr.menu.help.diagnostics" onClick={() => { close(); actions.setScreen({ kind: 'diagnostics' }); }}>{t('ui.hdr.menu.help.diagnostics')}</MenuItem>
             <MenuItem el="hdr.menu.help.license" onClick={() => { close(); actions.setScreen({ kind: 'license' }); }}>{t('ui.hdr.menu.help.license')}</MenuItem>
             <MenuItem el="hdr.menu.help.docs" onClick={() => { close(); actions.setScreen({ kind: 'help' }); }}>{t('ui.hdr.menu.help.docs')}</MenuItem>
+            <MenuItem el="hdr.menu.help.channel" onClick={() => { close(); actions.setScreen({ kind: 'channel.profile' }); }}>{t('ui.scr.channel.title')}</MenuItem>
             <MenuItem el="hdr.menu.help.about" onClick={() => { close(); actions.setScreen({ kind: 'about' }); }}>{t('ui.hdr.menu.help.about')}</MenuItem>
           </Popover>
         )}

@@ -12,7 +12,7 @@ import { resolveDimensions } from '@expertmotion/engine/formats';
 import type {
   AgentKind, AssetDto, ChatTarget, AssignmentDto, CapabilityRow, CatalogueItemDto, CheckpointDto, ConnectionDto, DesignPickInput, EditIntent, ExecutionResult,
   GeneratorJobDto, MusicTrackDto, HardwareProfileDto, IntentCategory, IntentQueueDto, LicenseDto, MediaGrantDto, MessageBlock, MessageDto, ModelStateDto, OutputDto,
-  PlanDto, ProjectDto, RenderCreateInput, RenderJobDto, SettingsDto, VersionCause, VersionDto,
+  PlanDto, ProjectDto, RenderCreateInput, RenderJobDto, SettingsDto, VersionCause, VersionDto, FootageAnalysisDto, Rotation,
 } from '../api/types.js';
 import type { MediaResolver } from '../api/client.js';
 import { MockBus } from './MockEventSource.js';
@@ -84,7 +84,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   const cancelledRenders = new Set<string>();
   let settings: SettingsDto = {
     privateMode: false, outputFolder: 'C:\\Users\\User\\Videos\\Expertmotion', autoPlan: false, uiLanguage: 'en', theme: 'dark', defaultPerformanceProfile: 'standard',
-    defaultRatio: '9:16', defaultResolution: '1080p', defaultFps: 30, checkUpdates: true, diagnosticsIncludeStructure: false,
+    defaultRatio: '9:16', defaultResolution: '1080p', defaultFps: 30, checkUpdates: true, diagnosticsIncludeStructure: false, channelProfile: '',
   };
   const UNLICENSED: LicenseDto = { status: 'unlicensed', tier: null, licenseeHash: null, licenseeName: null, updatesUntil: null, updatesEligible: false, machineCode: 'MC1-7Q4K-2M9X-HV3T-8PZD', clockAnomaly: false };
   const licensedDto = (): LicenseDto => ({ ...UNLICENSED, status: 'licensed', tier: 'standard', licenseeHash: 'a1b2c3', licenseeName: null, updatesUntil: new Date(Date.now() + 365 * 86400_000).toISOString(), updatesEligible: true });
@@ -631,7 +631,7 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
       job.progress = Math.min(1, step / 10); job.renderedFrames = Math.round(job.progress * e.totalFrames); job.etaMs = step >= 2 ? (10 - step) * 400 : null;
       if (step < 10) { emit('render.progress', { projectId: p.dto.id, jobId: job.id, progress: job.progress, renderedFrames: job.renderedFrames, totalFrames: e.totalFrames, etaMs: job.etaMs, stage: 'rendering' }); later(400, tick); return; }
       const fileName = `${(body.fileName ?? p.dto.name).replace(/[^A-Za-z0-9._-]+/g, '-')}.${body.outputProfile.format}`;
-      const out: OutputDto = { id: newId(), projectId: p.dto.id, renderJobId: job.id, kind: body.outputProfile.format === 'gif' ? 'gif' : body.outputProfile.format === 'png' ? 'still' : 'video', fileName, bytes: e.estimate.bytes ?? 0, width: e.dimensions.width, height: e.dimensions.height, fps: body.outputProfile.fps, durationMs: e.durationMs, validated: true, path: `${settings.outputFolder}\\${fileName}`, media: { file: true, thumb: false }, createdAt: nowIso() };
+      const out: OutputDto = { id: newId(), projectId: p.dto.id, renderJobId: job.id, kind: body.outputProfile.format === 'gif' ? 'gif' : body.outputProfile.format === 'png' || body.outputProfile.format === 'jpg' ? 'still' : 'video', fileName, bytes: e.estimate.bytes ?? 0, width: e.dimensions.width, height: e.dimensions.height, fps: body.outputProfile.fps, durationMs: e.durationMs, validated: true, path: `${settings.outputFolder}\\${fileName}`, media: { file: true, thumb: false }, createdAt: nowIso() };
       p.outputs.unshift(out);
       job.status = 'done'; job.progress = 1; job.outputId = out.id; job.finishedAt = nowIso(); job.etaMs = 0;
       emit('render.done', { projectId: p.dto.id, jobId: job.id, output: out, notices: [] });
@@ -1089,7 +1089,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     }
     const runId = newId();
     emit('agent.run.started', { projectId: p.dto.id, run: run(p, runId, 'brainstorm', 'running', null), agent: 'brainstorm', modelId: assignments.brainstorm?.modelId ?? 'mock' });
-    const reply = 'Here is an idea: open with a short energetic title, keep cuts quick, and use readable captions. I can hand these to the Editor Agent.';
+    // FR-28x: a request that mentions the PRD answers with the document's closing line, so the "PRD siap" approve button can be exercised.
+    const reply = /\bPRD\b/i.test(text) ? 'Berikut PRD-nya: tujuan, cek fakta, tabel potongan, dan cover sudah tersusun.\n\nPRD siap.' : 'Here is an idea: open with a short energetic title, keep cuts quick, and use readable captions. I can hand these to the Editor Agent.';
     reply.split(/(?<=[.,:]) /).forEach((chunk, i) => later(150 * (i + 1), () => emit('agent.run.delta', { projectId: p.dto.id, runId, agent: 'brainstorm', delta: `${chunk} ` })));
     later(900, () => {
       const pi = (category: IntentCategory, presetId: string | undefined, needs: boolean, instruction?: string): EditIntent => ({ id: newId(), projectId: p.dto.id, source: 'brainstorm', createdAt: nowIso(), category, ...(presetId ? { presetId } : {}), params: {}, target: category === 'transition' ? { kind: 'selection' } : { kind: 'project' }, resolvedTargets: [], propertyKey: '', propertyClass: 'exclusive-group', needsInterpretation: needs, ...(instruction ? { instruction } : {}), status: 'queued', supersedes: [], baseVersion: head(p).hash });
@@ -1273,6 +1274,74 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   const withCaptionStyle = (p: Parameters<typeof head>[0], ops: OperationT[]): OperationT[] =>
     ops.some((o) => o.op === 'op:caption.setPages') && !ops.some((o) => o.op === 'op:caption.setStyle') && head(p).model.tracks.caption.styleId === null
       ? [...ops, { op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: 'preset:caption.editorial' } }] : ops;
+  // ── FR-28x Reels: footage prep (R-130 kind `prep`), continue, footage-analysis, frames, cover — shaped like DESIGN §C ──
+  const analyses = new Map<string, FootageAnalysisDto>();                                   // projectId → latest analysis
+  const prepNotice = (p: ProjectState, job: GeneratorJobDto, stage: string, percent: number, extra: Record<string, unknown> = {}) =>
+    emit('service.notice', { projectId: p.dto.id, kind: 'generator', jobId: job.id, generator: 'prep', status: job.status, stage, percent, done: job.status === 'done' || job.status === 'failed', ...extra });
+  const mockAnalysis = (p: ProjectState, voiceAssetId: string, cameraAssetId: string | undefined, rotation: Rotation): FootageAnalysisDto => {
+    const words = (t0: number, ws: string[]) => ws.map((w, i) => ({ text: w, fromMs: t0 + i * 320, toMs: t0 + i * 320 + 280 }));
+    const cut = (id: string, lineIndex: number, startMs: number, text: string) => { const ws = words(startMs + 120, text.split(' ')); return { id, lineIndex, startMs, endMs: ws[ws.length - 1]!.toMs + 150, text, words: ws, quietStartDb: -48, quietEndDb: -46 }; };
+    const cuts = [cut('cut-1', 0, 8140, 'Bayangkan reaktor nuklir sebesar kontainer'), cut('cut-2', 1, 48720, 'Pusat data AI butuh listrik stabil sepanjang hari'), cut('cut-3', 2, 68720, 'Solusinya SMR atau Small Modular Reactor')];
+    const master = cameraAssetId ? addAsset(p, { name: `${p.assets.find((a) => a.id === voiceAssetId)?.name ?? 'voice'} · master`, kind: 'video', status: 'ready', progress: 1, durationMs: 120_000, width: 1080, height: 1920, fps: 30, hasAudio: true, bytes: 48_000_000,
+      media: { original: true, playable: false, proxy: false, thumb: false, filmstrip: false, waveform: false } }, null) : null;
+    if (master) emit('ingest.done', { projectId: p.dto.id, asset: master });
+    return { version: 1, voiceAssetId, ...(cameraAssetId ? { cameraAssetId } : {}), ...(master ? { masterAssetId: master.id } : {}), offsetMs: 3536, rotation, rotationSource: 'creator', phrases: cuts.map((c) => ({ fromMs: c.startMs, toMs: c.endMs })),
+      words: cuts.flatMap((c) => c.words), lines: cuts.map((c) => ({ index: c.lineIndex, text: c.text, source: 'script' as const })), cuts,
+      dropped: [{ startMs: 47_200, endMs: 48_300, text: 'Nah, alasannya', reason: 'false-start' }], loudness: { inputI: -21.4, inputTp: -3.1, outputI: -16 }, durationMs: 122_200, model: 'whisper-small-q5', warnings: [] };
+  };
+  const finishPrep = (p: ProjectState, job: GeneratorJobDto, input: Record<string, unknown>, rotation: Rotation) => {
+    const stages: Array<[string, number]> = [['master', 45], ['phrases', 55], ['listen', 75], ['takes', 90], ['timing', 97]];
+    stages.forEach(([stage, percent], i) => later(120 * (i + 1), () => { if (job.status !== 'running') return; job.progress = percent / 100; prepNotice(p, job, stage, percent); }));
+    later(120 * (stages.length + 1), () => {
+      if (job.status !== 'running') return;
+      const analysis = mockAnalysis(p, String(input['voiceAssetId']), typeof input['cameraAssetId'] === 'string' ? input['cameraAssetId'] : undefined, rotation);
+      analyses.set(p.dto.id, analysis);
+      job.status = 'done'; job.progress = 1; job.finishedAt = nowIso(); job.result = { analysis, analysisId: newId(), ...(analysis.masterAssetId ? { masterAssetId: analysis.masterAssetId } : {}) };
+      prepNotice(p, job, 'done', 100);
+    });
+  };
+  r('POST', '/projects/:id/generators/prep', (m, b) => {
+    const p = proj(m[1]!), body = obj(b);
+    const voice = p.assets.find((a) => a.id === body['voiceAssetId']);
+    if (!voice) throw new HttpError(422, 'EM-1501', 'No voice recording.');
+    const camera = typeof body['cameraAssetId'] === 'string' ? p.assets.find((a) => a.id === body['cameraAssetId']) : undefined;
+    const job: GeneratorJobDto = { id: newId(), projectId: p.dto.id, kind: 'prep', status: 'running', progress: 0, modelKey: 'whisper-small-q5', resultAssetId: null, result: null, errorCode: null, createdAt: nowIso(), startedAt: nowIso(), finishedAt: null };
+    p.genJobs.unshift(job);
+    later(60, () => prepNotice(p, job, 'probe', 5));
+    later(120, () => { job.progress = 0.2; prepNotice(p, job, 'sync', 20); });
+    // Like the Service: a landscape camera file without a rotation flag for a 9:16 project asks the Creator (EM-1503) unless `rotation` came along.
+    const asks = camera && camera.kind === 'video' && (camera.width ?? 1920) > (camera.height ?? 1080) && body['rotation'] === undefined;
+    if (asks) later(180, () => { job.status = 'needs-input'; job.progress = 0.3; job.errorCode = 'EM-1503'; job.result = { needsRotationConfirm: true, thumbnails: ([0, 90, 180, 270] as Rotation[]).map((rotation) => ({ rotation, url: sampleImage(`${rotation}°`, '#33415C', '#0B1526', 270, 480) })) }; prepNotice(p, job, 'sync', 30, { code: 'EM-1503' }); });
+    else later(180, () => finishPrep(p, job, body, (typeof body['rotation'] === 'number' ? body['rotation'] : 0) as Rotation));
+    return accepted(job);
+  });
+  r('POST', '/projects/:id/footage-prep/:jid/continue', (m, b) => {
+    const p = proj(m[1]!); const job = p.genJobs.find((x) => x.id === m[2] && x.kind === 'prep');
+    if (!job) throw new HttpError(404, 'EM-9003', 'Not found.');
+    if (job.status !== 'needs-input') throw new HttpError(409, 'EM-9002', 'This job is not waiting for an answer.');
+    const rotation = Number(obj(b)['rotation']) as Rotation;
+    if (![0, 90, 180, 270].includes(rotation)) throw new HttpError(400, 'EM-9002', 'rotation must be 0, 90, 180 or 270.');
+    job.status = 'running'; job.errorCode = null; job.result = null;
+    const input = { voiceAssetId: p.assets.find((a) => a.kind === 'audio')?.id ?? '', cameraAssetId: p.assets.find((a) => a.kind === 'video')?.id, rotation };
+    prepNotice(p, job, 'master', 35);
+    finishPrep(p, job, input, rotation);
+    return accepted(job);
+  });
+  r('GET', '/projects/:id/footage-analysis', (m) => { const a = analyses.get(proj(m[1]!).dto.id); if (!a) throw new HttpError(404, 'EM-9003', 'No footage analysis yet.'); return a; });
+  r('GET', '/projects/:id/footage-analysis/frames', (m) => {
+    if (!analyses.get(proj(m[1]!).dto.id)) throw new HttpError(404, 'EM-9003', 'No footage analysis yet.');
+    return new Response(new Blob([Uint8Array.from([0xff, 0xd8, 0xff, 0xd9])], { type: 'image/jpeg' }), { status: 200, headers: { 'Content-Type': 'image/jpeg' } });   // a stub JPEG body
+  });
+  r('POST', '/projects/:id/cover', (m, b) => {
+    const p = proj(m[1]!), body = obj(b); const a = analyses.get(p.dto.id);
+    if (!a) throw new HttpError(422, 'EM-1501', 'Run the footage prep first.');
+    if (typeof body['hookWord'] !== 'string' || typeof body['line'] !== 'string') throw new HttpError(400, 'EM-9002', 'hookWord and line are required.');
+    const fileName = `${p.dto.name.replace(/[^A-Za-z0-9._-]+/g, '-')}-cover.jpg`;
+    const out: OutputDto = { id: newId(), projectId: p.dto.id, renderJobId: newId(), kind: 'still', fileName, bytes: 182_000, width: 1080, height: 1920, fps: null, durationMs: null, validated: true, path: `${settings.outputFolder}\\${fileName}`, media: { file: true, thumb: false }, createdAt: nowIso() };
+    media.set(out.id, sampleImage('Cover', '#FFD43B', '#0B1526', 1080, 1920));
+    p.outputs.unshift(out);
+    return created(out);
+  });
   r('POST', '/projects/:id/generators/:kind', (m, b) => {
     const p = proj(m[1]!), kind = m[2] as GeneratorJobDto['kind'], body = obj(b);
     if (kind === 'thumbnail') throw new HttpError(422, 'EM-9004', 'Coming in a later version.', { feature: kind });

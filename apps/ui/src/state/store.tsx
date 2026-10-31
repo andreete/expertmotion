@@ -8,6 +8,7 @@ import { createEventStream, type EventStream } from '../api/events.js';
 import type {
   AgentKind, AssetDto, ChatTarget, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, ItemsEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
+  FootageAnalysisDto,
 } from '../api/types.js';
 import { initialState, PENDING_RUN, reducer, safeMessage, type Action, type AppState, type Screen, type ToastKind, type LibMode } from './reducer.js';
 import type { Runtime } from './runtime.js';
@@ -78,7 +79,13 @@ export interface Actions {
   stopRun(agent: AgentKind): Promise<void>;
   setNotes(notes: string): Promise<void>;
   /** FR-067 / FR-080: the Editor message carries the inspector target (if any), the selection and the playhead. */
-  send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null, targets?: ChatTarget[], documents?: string[]): Promise<boolean>;
+  send(agent: AgentKind, text: string, attachments?: string[], target?: ElementRefT | null, targets?: ChatTarget[], documents?: string[], extra?: { /** FR-28x: a time typed in the message ("perbaiki di 0:23") wins over the playhead */ playheadMs?: number }): Promise<boolean>;
+  /** FR-28x Reels: starts the Footage prep job (voice + camera) and shows its card in the chat; resolves the job id (null when refused). */
+  startPrep(input: { voiceAssetId: string; cameraAssetId?: string; script?: string }): Promise<string | null>;
+  /** FR-28x: answers the "Putar video?" question of a prep job that waits with `needs-input` (EM-1503). */
+  continuePrep(rotation: 0 | 90 | 180 | 270): Promise<void>;
+  /** FR-28x: loads the project's latest prep job and FootageAnalysis (on open / after a reload). */
+  loadFootage(): Promise<void>;
   /** FR-219: "Kirim ke Editor" — hand a Brainstorm draft to the Editor (its own run with progress; the Plan Card previews it). */
   sendDraftToEditor(message: MessageDto): Promise<boolean>;
   /** FR-217: import an openly licensed picture from a research answer into the Library. */
@@ -666,7 +673,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
         window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: mode ? { agent: mode } : {} }));   // FR-194: "Ask Editor Agent" also switches to Edit
       },
       setChatTargets(targets) { dispatch({ type: 'chatTargets', targets }); },
-      async send(agent, text, attachments = [], target = null, targets = [], documents = []) {
+      async send(agent, text, attachments = [], target = null, targets = [], documents = [], extra = {}) {
         const id = pid(); if (!id) return false;
         try {
           dispatch({ type: 'agentError', agent, code: null });
@@ -674,7 +681,7 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           stopAsked.current[agent] = false;
           dispatch({ type: 'streamingStart', agent, runId: PENDING_RUN, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '', ...(attachments.length ? { attaching: true } : {}) });
           const s0 = stateRef.current;
-          const editorCtx = agent === 'editor' ? { ...(target ? { target } : {}), ...(s0.selection.length ? { selection: s0.selection.slice(0, 50) } : {}), playheadMs: Math.max(0, Math.round(s0.playheadMs)) } : {};
+          const editorCtx = agent === 'editor' ? { ...(target ? { target } : {}), ...(s0.selection.length ? { selection: s0.selection.slice(0, 50) } : {}), playheadMs: Math.max(0, Math.round(extra.playheadMs ?? s0.playheadMs)) } : {};
           const res = await api.sendMessage(id, agent, { text, attachments: attachments.map((assetId) => ({ assetId })), ...(documents.length ? { documents: documents.map((documentId) => ({ documentId })) } : {}), baseVersion: headHash(), ...editorCtx, ...(targets.length ? { targets: targets.slice(0, 12) } : {}) });
           dispatch({ type: 'messageAdded', agent, message: res.message });
           if (!stoppedEarly(agent, res.runId)) dispatch({ type: 'streamingStart', agent, runId: res.runId, modelId: stateRef.current.assignments?.[agent]?.modelId ?? '' });
@@ -684,6 +691,28 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
           dispatch({ type: 'agentError', agent, code: errCode(e), detail });
           return false;
         }
+      },
+      // ── FR-28x Reels: footage prep (R-130 `prep`, continue, footage-analysis) ──
+      async startPrep(input) {
+        const id = pid(); if (!id) return null;
+        try {
+          const job = await api.startFootagePrep(id, input);
+          dispatch({ type: 'prepJob', job });
+          announce(translate(stateRef.current.settings?.uiLanguage ?? 'en', 'ui.agent.prep.started'));
+          return job.id;
+        } catch (e) { error(e); return null; }
+      },
+      async continuePrep(rotation) {
+        const id = pid(); const job = stateRef.current.prep?.job; if (!id || !job) return;
+        try { dispatch({ type: 'prepJob', job: await api.continueFootagePrep(id, job.id, rotation) }); } catch (e) { error(e); }
+      },
+      async loadFootage() {
+        const id = pid(); if (!id) return;
+        const [jobs, analysis] = await Promise.all([api.listGeneratorJobs(id, { kind: 'prep', limit: 1 }).catch(() => null), api.footageAnalysis(id).catch(() => null)]);
+        if (stateRef.current.project?.id !== id) return;
+        const job = jobs?.items?.find((j) => j.kind === 'prep');
+        if (job) dispatch({ type: 'prepJob', job });
+        dispatch({ type: 'analysis', analysis: analysis && typeof analysis === 'object' && Array.isArray((analysis as FootageAnalysisDto).cuts) ? analysis : null });
       },
       async handoff(message, intentIds, opts = {}) {
         const id = pid(); if (!id) return false;
@@ -885,6 +914,16 @@ export function StoreProvider({ runtime, children, initialPrefs }: { runtime: Ru
       case 'agent.run.failed': if (ev.data.code === 'EM-8202') actions.toast('info', 'err.EM-8202.title', undefined, { code: 'EM-8202' }); break;
       case 'service.notice':
         if (ev.data.kind === 'resync') void actions.reloadState();
+        // FR-28x: the prep job's result (rotation thumbnails, the analysis) lives on the job (R-132); fetched when it stops or waits.
+        if (ev.data.kind === 'generator' && ev.data['generator'] === 'prep' && typeof ev.data.jobId === 'string' && ev.data.projectId === stateRef.current.project?.id && (ev.data.done || ev.data['status'] === 'needs-input' || ev.data['status'] === 'done' || ev.data['status'] === 'failed')) {
+          const jobId = ev.data.jobId, projectId = stateRef.current.project?.id ?? '';
+          void runtime.api.getGeneratorJob(jobId).then((job) => {
+            if (stateRef.current.project?.id !== projectId) return;
+            dispatch({ type: 'prepJob', job });
+            if (job.status === 'done') { const a = (job.result as { analysis?: FootageAnalysisDto } | null)?.analysis; if (a) dispatch({ type: 'analysis', analysis: a }); else void actions.loadFootage(); void runtime.api.listAssets(projectId, { limit: 200 }).then((p) => dispatch({ type: 'assets', assets: p.items })).catch(() => undefined); }
+            if (job.status === 'failed') actions.toast('danger', `err.${job.errorCode ?? 'EM-1504'}.title`, undefined, { code: job.errorCode ?? 'EM-1504' });
+          }).catch(() => undefined);
+        }
         // FR-252: a plan voice step waits for its model — one click installs it, the Service continues the plan by itself afterwards
         if (ev.data.kind === 'plan-step' && ev.data['status'] === 'needs-model' && typeof ev.data['modelKey'] === 'string' && ev.data.projectId === stateRef.current.project?.id) {
           const key = ev.data['modelKey'];

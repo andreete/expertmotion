@@ -108,7 +108,11 @@ function demo(p) {
       return apply(m, [{ op: d.op, target: { kind: 'clip', id: m.tracks.video[0].id }, args: d.args }], ASSETS);
     }
     case 'background': return apply(base(), [{ op: d.op, args: d.args }, label, fixed]);
-    case 'shape': return apply(base(), [{ op: 'op:background.set', args: { presetId: 'preset:background.solid' } }, { op: d.op, args: { ...d.args, atMs: 0, durationMs: 2000 } }, fixed]);
+    case 'shape': {
+      // ADR-039 infographic pills / cards are wide: give them a w × h demo box (the generic demo is a 200 u square)
+      const box = /\.(typing-box|tag|source-tag)$/.test(p.id) ? { size: 640, height: 150 } : /\.browser-card$/.test(p.id) ? { size: 560, height: 380 } : {};
+      return apply(base(), [{ op: 'op:background.set', args: { presetId: 'preset:background.solid' } }, { op: d.op, args: { ...d.args, ...box, atMs: 0, durationMs: 2000 } }, fixed]);
+    }
     case 'text': return apply(base(), [{ op: 'op:background.set', args: { presetId: 'preset:background.solid' } }, { op: d.op, args: { ...d.args, text: 'Harga Naik Lagi', atMs: 0, durationMs: 2000 } }, fixed]);
     case 'texteffect': case 'motion': {
       const m = apply(base(), [{ op: 'op:background.set', args: { presetId: 'preset:background.solid' } }, { op: 'op:text.add', args: { text: 'Harga Naik Lagi', variant: 'preset:text.title', atMs: 0, durationMs: 2000 } }, fixed]);

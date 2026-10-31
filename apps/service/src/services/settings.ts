@@ -13,6 +13,9 @@ export const SettingsSchema = z.object({
   // Private Mode blocks it regardless, SEC-140).
   webResearch: z.boolean().default(true),
   outputFolder: z.string().max(1024).optional(),
+  // FR-286: "Profil kanal" — the Creator's standing channel rules (format, tone, caption style, sources policy), injected into the
+  // Brainstorming context and the Editor envelope on every run. Plain text, ≤ 6000 characters.
+  channelProfile: z.string().max(6000).default(''),
   autosaveDebounceMs: z.number().int().min(500).max(10_000).default(2000),
   autosaveMaxMs: z.number().int().min(1000).max(10_000).default(5000),
   telemetry: z.literal(false).default(false),

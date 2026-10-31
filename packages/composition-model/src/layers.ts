@@ -6,7 +6,7 @@
 import type { AudioLayerT, CompositionModelT, OverlayElementT, TextLayerT } from './schema.js';
 
 export type VisualItem = TextLayerT | OverlayElementT;
-export type VisualKind = 'text' | 'image' | 'shape';
+export type VisualKind = 'text' | 'image' | 'shape' | 'video';   // `video` = a video overlay (ADR-039), not a Clip
 export type LayerMove = 'up' | 'down' | 'front' | 'back';
 export interface Span { fromMs: number; toMs: number }
 

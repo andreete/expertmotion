@@ -11,16 +11,18 @@ import { s2 } from '../s2/state.js';
 import { availableMemBytes } from '../services/memory.js';
 import { EngineBrowser, engineBrowserOf, setEngineBrowser, warmupEnabled, type BrowserLike } from '../services/engine-browser.js';
 import { startEngineCheck } from '../s2/engine-check.js';
+import { latestPlanCredits } from '../s2/reels/credits.js';
 
 const Id = z.string().regex(ULID, 'expected an id');
 export const OutputProfile = z.object({
   ratio: z.enum(['16:9', '9:16', '1:1', '4:5', '5:4', '4:3', '3:4', 'custom']), customRatio: z.object({ w: z.number().int().min(1), h: z.number().int().min(1) }).optional(),
   resolution: z.enum(['720p', '1080p', '2k', '2160p']), fps: z.union([z.literal(24), z.literal(25), z.literal(30), z.literal(50), z.literal(60)]),
-  format: z.enum(['mp4', 'webm', 'gif', 'png', 'wav']), codec: z.enum(['h264', 'vp9', 'gif', 'png', 'pcm']).optional(), crf: z.number().int().min(1).max(51).optional(),
+  format: z.enum(['mp4', 'webm', 'gif', 'png', 'jpg', 'wav']), codec: z.enum(['h264', 'vp9', 'gif', 'png', 'jpg', 'pcm']).optional(), crf: z.number().int().min(1).max(51).optional(),   // FR-289: jpg stills
   alpha: z.boolean().default(false), stillAtMs: z.number().int().min(0).optional(),
 });
 export const RenderCreateInput = z.object({ projectId: Id, versionId: Id.optional(), outputProfile: OutputProfile, performanceProfile: z.enum(['standard', 'accelerated', 'turbo']),
-  fileName: z.string().max(80).optional(), folder: z.string().max(1024).optional() });
+  fileName: z.string().max(80).optional(), folder: z.string().max(1024).optional(),
+  /** FR-288: source lines for the CREDITS file beside the finished video. */ credits: z.array(z.string().max(300)).max(50).optional() });
 const Page = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), cursor: z.string().max(400).optional() });
 const FINAL = new Set(['done', 'failed', 'cancelled']);
 
@@ -53,7 +55,8 @@ export function createRendersModule(opts: RenderOptions = {}): ServiceModule {
       route(router, 'post', '/renders', { body: RenderCreateInput, status: 202 }, async ({ body, req, res }) => {     // R-111
         const key = req.headers['idempotency-key'];
         if (key !== undefined && (typeof key !== 'string' || key.length > 128)) throw em('EM-9002', 'Invalid request: Idempotency-Key', { status: 400, path: 'headers.idempotency-key' });
-        const r = await svc.create(body, key);
+        // FR-288: without explicit credits the newest executed plan's `credits` lines go into the CREDITS file
+        const r = await svc.create({ ...body, credits: body.credits ?? latestPlanCredits(ctx, body.projectId) }, key);
         if (r.repeat) { res.status(200).json({ ...r.job, notice: 'EM-2308', notices: r.notices }); return; }
         return { ...r.job, notices: r.notices };
       });

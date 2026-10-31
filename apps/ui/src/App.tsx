@@ -21,6 +21,7 @@ import { ProvidersScreen } from './screens/Providers.js';
 import { ModelsScreen } from './screens/Models.js';
 import { CustomRatioDialog, HistoryScreen, NewProjectDialog, OpenProjectDialog, ProjectSettingsDialog, RecoverDialog } from './screens/ProjectDialogs.js';
 import { ExportDialog } from './screens/Export.js';
+import { ChannelProfileDialog } from './screens/ChannelProfile.js';
 import { GenerateSheet } from './screens/Generate.js';
 import { AboutScreen, BackupDialog, ConfirmModal, DiagnosticsScreen, HelpScreen, ShortcutSheet } from './screens/Misc.js';
 import { CloseRenderDialog, LifecycleEffects, UnsavedDialog } from './screens/Lifecycle.js';
@@ -379,7 +380,7 @@ function ScreenSwitch({ s, close }: { s: NonNullable<ReturnType<typeof useStore>
     case 'project.open': return <OpenProjectDialog onClose={close} />;
     case 'project.settings': return <ProjectSettingsDialog onClose={close} />;
     case 'project.recover': return <RecoverDialog onClose={close} />;
-    case 'export': return <ExportDialog onClose={close} />;
+    case 'export': return <ExportDialog onClose={close} {...(s.jobId ? { jobId: s.jobId } : {})} />;
     case 'generate': return <GenerateSheet kind={s.generator} onClose={close} />;
     case 'diagnostics': return <DiagnosticsScreen onClose={close} />;
     case 'about': return <AboutScreen onClose={close} />;
@@ -389,6 +390,7 @@ function ScreenSwitch({ s, close }: { s: NonNullable<ReturnType<typeof useStore>
     case 'ratio.custom': return <CustomRatioDialog onClose={close} />;
     case 'history': return <HistoryScreen onClose={close} />;
     case 'shortcuts': return <ShortcutSheet onClose={close} />;
+    case 'channel.profile': return <ChannelProfileDialog onClose={close} draft={s.draft} />;
     case 'confirm': return <ConfirmModal screen={s} onClose={close} />;
     default: return null;
   }

@@ -7,6 +7,7 @@ import { useStore } from '../state/store.js';
 import type { AgentKind, MessageBlock, PlanDto } from '../api/types.js';
 import { cx } from '../components/ui.js';
 import { PENDING_RUN } from '../state/reducer.js';
+import { StageButtons } from './Reels.js';
 
 export const HANDOFF_PHASES = ['reading', 'planning', 'checking', 'ready'] as const;
 /** The stepper index of a run phase (provider stream phases count as "menyusun adegan"). */
@@ -73,6 +74,7 @@ export function HandoffCard({ block, onOpenEditor }: { block: Extract<MessageBlo
       {running && <PhaseStepper />}
       {st === 'ready' && plan && plan.status === 'valid' && <span className="text-em-text-2">{t('ui.agent.handoff.ready.hint')}</span>}
       <button type="button" data-el="agent.brainstorm.handoff.open" className="self-start font-semibold text-em-accent underline" onClick={onOpenEditor}>{t('ui.agent.handoff.open')}</button>
+      {(st === 'ready' || st === 'applied') && (state.assets.some((a) => a.kind === 'video') || state.analysis) && <StageButtons plan={plan} />}
     </div>
   );
 }

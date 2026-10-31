@@ -84,7 +84,7 @@ describe('lenient plan parsing (unambiguous repairs only)', () => {
   });
   it('the envelope carries every op signature', () => {
     const t = opArgsTable();
-    expect(Object.keys(t)).toHaveLength(53);
+    expect(Object.keys(t)).toHaveLength(58);   // ADR-039: + overlay.addVideo, overlay.setShape, clip.setZoom, audio.setVolume, audio.setGain
     expect(t['op:clip.setVolume']).toBe("{volume: number 0..1, fadeInMs?: int 0.., fadeOutMs?: int 0..} target: clip");
   });
 });

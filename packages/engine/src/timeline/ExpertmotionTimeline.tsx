@@ -3,7 +3,7 @@ import React, { useMemo } from 'react';
 import { AbsoluteFill, Img, Sequence, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Audio, Video } from '@remotion/media';
 import { TransitionSeries, linearTiming, springTiming } from '@remotion/transitions';
-import { deriveFrameTiming, framesOf, visualStack, type AudioLayerT, type ClipT, type CompositionModelT } from '@expertmotion/composition-model';
+import { deriveFrameTiming, framesOf, visualStack, type AudioLayerT, type ClipT, type CompositionModelT, type OverlayVideoT } from '@expertmotion/composition-model';
 import type { EngineInputProps, AssetUrls } from '../inputs.js';
 import { ThemeProvider, useTheme } from '../theme.js';
 import { useLayout, type Layout } from '../layout.js';
@@ -16,8 +16,9 @@ import { BackgroundLayer, VideoDim } from '../presets/backgrounds.js';
 import { SHAPES } from '../presets/shapes.js';
 import { TextElement } from '../presets/text.js';
 import { CaptionPageView } from '../presets/captions.js';
-import { clipTransformStyle, overlayTransform } from '../transform.js';
+import { clipTransformStyle, clipZoomScale, focusTransform, overlayTransform } from '../transform.js';
 import { duckedVolume } from '../audio-duck.js';
+import { gainMultiplier } from '../audio-gain.js';
 
 const clampOpts = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 
@@ -61,7 +62,7 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
       {/* DOM order is the stacking order (no z-index): later siblings paint in front; captions stay on top. */}
       {stack.map((x) => 'kind' in x ? (
         <Sequence key={x.id} name={`layer-${x.layer}`} from={framesOf(x.timing.atMs, fps)} durationInFrames={Math.max(1, framesOf(x.timing.durationMs, fps))} premountFor={premountFor}>
-          <OverlayView element={x} urls={x.kind === 'image' ? assets[x.assetId] : undefined} layout={layout} quality={quality} durationInFrames={Math.max(1, framesOf(x.timing.durationMs, fps))} />
+          <OverlayView element={x} urls={x.kind === 'shape' ? undefined : assets[x.assetId]} layout={layout} quality={quality} durationInFrames={Math.max(1, framesOf(x.timing.durationMs, fps))} />
         </Sequence>
       ) : (
         <Sequence key={x.id} name={`layer-${x.layer}`} from={framesOf(x.timing.atMs, fps)} durationInFrames={Math.max(1, framesOf(x.timing.durationMs, fps))} layout="none">
@@ -85,10 +86,11 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
 
 const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'draft' | 'full'; layout: Layout; durationInFrames: number }> = ({ clip, urls, quality, layout, durationInFrames }) => {
   const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const t = useTheme();
+  const zoomScale = clipZoomScale(clip.zoom, frame, durationInFrames, fps);     // ADR-039: punch-in keyframes multiply the canvas scale
   // ADR-030: a scene clip (no media) paints its own background preset; motion, transform and transitions apply as for media.
   if (clip.scene) return (
     <AbsoluteFill style={{ ...motionStyle(clip.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId), overflow: 'hidden', backgroundColor: t.bg }} data-em-scene={clip.scene.presetId}>
-      <AbsoluteFill style={clipTransformStyle(clip.transform, layout.width, layout.height)}><BackgroundLayer background={clip.scene} /></AbsoluteFill>
+      <AbsoluteFill style={clipTransformStyle(clip.transform, layout.width, layout.height, zoomScale)}><BackgroundLayer background={clip.scene} /></AbsoluteFill>
     </AbsoluteFill>
   );
   if (!urls) return <AbsoluteFill style={{ backgroundColor: '#000' }} />;
@@ -101,7 +103,7 @@ const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'd
   // ADR-028: the media is moved / zoomed / rotated inside the clip's frame, which clips it (also during a transition).
   return (
     <AbsoluteFill style={{ ...motionStyle(clip.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId), overflow: 'hidden' }}>
-      <AbsoluteFill data-em-transform={clip.transform ? 'clip' : undefined} style={clipTransformStyle(clip.transform, layout.width, layout.height)}>
+      <AbsoluteFill data-em-transform={clip.transform || clip.zoom ? 'clip' : undefined} data-em-zoom={clip.zoom ? zoomScale : undefined} style={clipTransformStyle(clip.transform, layout.width, layout.height, zoomScale)}>
         {urls.kind === 'image'
           ? <Img src={src} style={{ ...style, objectFit: clip.objectFit }} effects={effects} />
           : <Video src={src} trimBefore={framesOf(clip.trimBeforeMs, fps)} playbackRate={clip.playbackRate} muted={clip.muted} volume={clip.volume * fadeIn * fadeOut} objectFit={clip.objectFit} style={style} effects={effects} />}
@@ -123,15 +125,36 @@ const OverlayView: React.FC<{ element: CompositionModelT['tracks']['overlay'][nu
     return Shape ? <div data-em-shape={element.id} style={{ ...box, ...(element.opacity === undefined ? {} : { opacity: element.opacity }) }}><div style={inner}><Shape w={w} h={h} u={layout.u} fill={element.fill} stroke={element.stroke} strokeWidth={element.strokeWidth === undefined ? undefined : element.strokeWidth * layout.u} params={element.params} draw={mf.draw} /></div></div> : null;
   }
   if (!urls) return null;
+  if (element.kind === 'video') return <div data-em-video={element.id} style={{ ...box, ...(element.opacity === undefined ? {} : { opacity: element.opacity }) }}><div style={inner}><OverlayVideoView element={element} urls={urls} w={w} h={h} u={layout.u} quality={quality} /></div></div>;
   return <div style={{ ...box, opacity: element.opacity }}><div style={inner}><Img src={quality === 'draft' && urls.proxy ? urls.proxy : urls.playable} style={{ width: '100%', height: '100%', objectFit: element.objectFit }} effects={effectsFor(element.effects, frame, durationInFrames, fps)} /></div></div>;
 };
 
-/** Frames (absolute) where speech plays: voice layers and Clips with audio that are not muted. Used by preset:audio.duck-voice. */
+/**
+ * ADR-039 face bubble: the video is cover-fitted inside a box masked to a circle (50 %) or rounded rectangle (`radius` u), with
+ * `overflow: hidden`; the ring is a `box-shadow` spread of `ring.widthU` u outside the mask (a shadow is never clipped by its own
+ * element); `focus` moves the source point (x, y fractions) to the box centre and zooms there (focusTransform, exact with the
+ * asset size from AssetUrls, approximate without). Muted by default; an unmuted bubble plays its own sound.
+ */
+const OverlayVideoView: React.FC<{ element: OverlayVideoT; urls: AssetUrls; w: number; h: number; u: number; quality: 'draft' | 'full' }> = ({ element, urls, w, h, u, quality }) => {
+  const { fps } = useVideoConfig();
+  const radius = element.shape === 'circle' ? '50%' : `${Math.round((element.radius ?? 0) * u * 100) / 100}px`;
+  const ring = element.ring && element.ring.widthU > 0 ? `0 0 0 ${Math.round(element.ring.widthU * u * 100) / 100}px ${element.ring.colour}` : undefined;
+  const tf = focusTransform(element.focus, w, h, urls.width, urls.height);
+  const src = quality === 'draft' && urls.proxy ? urls.proxy : urls.playable;
+  return (
+    <div data-em-bubble={element.shape} style={{ width: '100%', height: '100%', borderRadius: radius, overflow: 'hidden', backgroundColor: '#000', ...(ring ? { boxShadow: ring } : {}) }}>
+      <Video src={src} trimBefore={framesOf(element.trimBeforeMs, fps)} muted={element.muted} volume={element.muted ? 0 : 1} objectFit="cover" style={{ width: '100%', height: '100%', ...(tf ? { transform: tf, transformOrigin: '50% 50%' } : {}) }} />
+    </div>
+  );
+};
+
+/** Frames (absolute) where speech plays: voice layers, Clips with audio that are not muted and unmuted video overlays. Used by preset:audio.duck-voice. */
 function voiceWindows(model: CompositionModelT, assets: Record<string, AssetUrls>, fps: number): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   for (const a of model.tracks.audio) if (a.role === 'voice') out.push([framesOf(a.atMs, fps), framesOf(a.atMs + (a.durationMs ?? 0), fps)]);
   const ft = deriveFrameTiming(model);
   model.tracks.video.forEach((c, i) => { if (!c.muted && c.volume > 0 && c.assetId !== undefined && assets[c.assetId]?.hasAudio) out.push([ft.clipStartFrames[i]!, ft.clipStartFrames[i]! + ft.clipFrames[i]!]); });
+  for (const o of model.tracks.overlay) if (o.kind === 'video' && !o.muted && assets[o.assetId]?.hasAudio) out.push([framesOf(o.timing.atMs, fps), framesOf(o.timing.atMs + o.timing.durationMs, fps)]);
   return out;
 }
 
@@ -147,6 +170,7 @@ const AudioLayerView: React.FC<{ layer: AudioLayerT; src: string; startFrame: nu
     const k = Math.max(0, ...duck.map(([a, b]) => Math.min(interpolate(abs, [a - ramp, a], [0, 1], clampOpts), interpolate(abs, [b, b + ramp], [1, 0], clampOpts))));
     vol = duckedVolume(layer.volume, p, k);                                    // FR-266: the bed's own level, dipped by the preset's ratio
   }
+  vol *= gainMultiplier(layer.gain, ((startFrame + frame) / fps) * 1000);        // ADR-039: lift / dip segments in composition time
   return <Audio src={src} trimBefore={framesOf(layer.trimBeforeMs, fps)} loop={layer.loop} volume={vol * fadeIn * fadeOut} />;
 };
 

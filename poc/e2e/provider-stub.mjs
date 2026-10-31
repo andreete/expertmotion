@@ -85,6 +85,8 @@ const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 const blocksOf = (m) => (Array.isArray(m?.content) ? m.content : typeof m?.content === 'string' ? [{ type: 'text', text: m.content }] : []);
 const anthropicImages = (body) => (body.messages ?? []).flatMap((m) => blocksOf(m).filter((b) => b.type === 'image').map((b) => ({ mediaType: b.source?.media_type, bytes: Math.floor(String(b.source?.data ?? '').length * 0.75) })));
 const anthropicToolResults = (body) => (body.messages ?? []).flatMap((m) => blocksOf(m).filter((b) => b.type === 'tool_result').map((b) => b.tool_use_id));
+/** The text the model received back from client tools (first 4000 chars), for drivers that check what a tool returned. */
+const anthropicToolResultText = (body) => (body.messages ?? []).flatMap((m) => blocksOf(m).filter((b) => b.type === 'tool_result').map((b) => typeof b.content === 'string' ? b.content : (b.content ?? []).map((c) => c.text ?? (c.type === 'image' ? '[image]' : '')).join(''))).join('\n').slice(0, 4000);
 /** The 400 reason the real API gives for a malformed request, or null. */
 export function anthropicProblem(body) {
   const msgs = Array.isArray(body.messages) ? body.messages : null;
@@ -211,6 +213,18 @@ export function anthropicAnswer(body, c = {}) {
     { category: 'text', needsInterpretation: true, instruction: 'Teks CTA "Bangun Bersama Kami"', source: 'brainstorm' },
   ] }) }];
 }
+/** A scripted reply → Anthropic content blocks (see /__stub/script). */
+function scriptedContent(r, body = {}) {
+  const thinking = { type: 'thinking', thinking: '', signature: 'EqQBCgIYAhIMstub' + 'x'.repeat(48) };
+  const out = [thinking];
+  if (r.text) out.push({ type: 'text', text: r.text });
+  // `fillBaseVersion`: an Editor plan needs the envelope's baseVersion (the first user message is the RewriteEnvelope JSON)
+  let json = r.json;
+  if (json !== undefined && r.fillBaseVersion) { try { const env = JSON.parse(blocksOf((body.messages ?? [])[0]).find((b) => b.type === 'text')?.text ?? '{}'); if (env.baseVersion) json = { ...json, baseVersion: env.baseVersion }; } catch { /* keep as is */ } }
+  if (json !== undefined) out.push({ type: 'text', text: JSON.stringify(json) });
+  if (r.toolUse) out.push({ type: 'tool_use', id: `toolu_stub_${Date.now()}`, name: r.toolUse.name, input: r.toolUse.input ?? {} });
+  return out;
+}
 /** SSE per the Messages streaming docs; `thinkMs` keeps the thinking block open (with pings) like a long adaptive think. */
 async function streamAnthropic(res, model, content, stop, outTokens, c) {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'request-id': `req_stub_${Date.now()}` });
@@ -248,6 +262,7 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
   const config = {};                        // provider → { fault, delayMs, times }
   const hung = new Set();                    // responses held open by the 'hang' fault
   const calls = [];
+  const scripted = {};
   const orModels = openRouterModels();
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url ?? '/', `http://${host}`);
@@ -256,6 +271,9 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
     if (provider === '__stub') {
       if (p === '/config' && req.method === 'POST') { const b = await readBody(req); config[b.provider] = { fault: b.fault ?? null, delayMs: b.delayMs ?? 0, times: b.times ?? Infinity, mode: b.mode ?? 'native', thinkMs: b.thinkMs ?? 0, web: b.web ?? 'on', pauseOnce: b.pauseOnce === true, searchMs: b.searchMs ?? 300 }; return send(res, 200, { ok: true, config }); }
       if (p === '/log') return send(res, 200, { calls });
+      // Scripted replies (reels42.mjs): a queue of Anthropic answers consumed in order by /v1/messages. Each entry: {text} | {json}
+      // (JSON.stringify'd) | {toolUse: {name, input}, text?} (stop_reason tool_use). An empty queue falls back to anthropicAnswer.
+      if (p === '/script' && req.method === 'POST') { const b = await readBody(req); scripted[b.provider ?? 'anthropic'] = [...(b.replies ?? [])]; return send(res, 200, { ok: true, queued: scripted[b.provider ?? 'anthropic'].length }); }
       return send(res, 404, {});
     }
     const body = req.method === 'POST' ? await readBody(req) : {};
@@ -289,7 +307,7 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
         const problem = anthropicProblem(body);
         const rec = calls[calls.length - 1];
         const lastUser = [...(body.messages ?? [])].reverse().find((m) => m.role === 'user');
-        Object.assign(rec, { tools: (body.tools ?? []).map((t) => t.name), toolChoice: body.tool_choice?.type ?? null, images: anthropicImages(body), toolResults: anthropicToolResults(body), maxTokens: body.max_tokens, problem,
+        Object.assign(rec, { tools: (body.tools ?? []).map((t) => t.name), toolChoice: body.tool_choice?.type ?? null, images: anthropicImages(body), toolResults: anthropicToolResults(body), toolResultText: anthropicToolResultText(body), maxTokens: body.max_tokens, problem,
           lastUserText: blocksOf(lastUser).filter((b) => b.type === 'text').map((b) => String(b.text)).join('\n').slice(0, 20000) });
         if (problem) return send(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: problem }, request_id: 'req_stub_400' });
         const webTools = (body.tools ?? []).filter((t) => t.type);
@@ -300,7 +318,7 @@ export async function startProviderStub(port = 4140, { host = '127.0.0.1' } = {}
         if (webTools.some((t) => /_2026/.test(t.type)) && c?.web === 'v1only') return send(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: `tools.0: the tool type web_search_20260209 is not supported for model ${body.model}` }, request_id: 'req_stub_400' });
         const content = malformed ? [{ type: 'thinking', thinking: '', signature: 'EqQBCgIYAhIMstub' + 'x'.repeat(48) },
           { type: 'text', text: '{"goal": "Tambah judul", "steps": [{"n": 1, "tool": "composition.applyOps", "ops": [{"op": "op:scene.add", "args": {"durationMs": 30' }]
-          : anthropicAnswer(body, c ?? {});
+          : scripted.anthropic?.length ? scriptedContent(scripted.anthropic.shift(), body) : anthropicAnswer(body, c ?? {});
         const paused = content.some((b) => b.type === 'web_search_tool_result') && !content.some((b) => b.type === 'text' && b.citations);
         if (paused && c) c.pausedDone = true;
         const stop = paused ? 'pause_turn' : content.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn';

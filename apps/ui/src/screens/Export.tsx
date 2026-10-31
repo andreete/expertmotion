@@ -11,7 +11,9 @@ import { RATIOS, RESOLUTIONS, type Ratio, type Resolution } from '@expertmotion/
 
 const RES_LABEL: Record<Resolution, string> = { '720p': '720p', '1080p': '1080p', '2k': '2K', '2160p': '2160p (4K)' };
 
-type Format = 'mp4' | 'webm' | 'gif' | 'png';
+type Format = 'mp4' | 'webm' | 'gif' | 'png' | 'jpg';
+/** FR-28x: still formats share the still-time field; `jpg` is the Reels cover (1080×1920 JPEG, quality 92 on the Service). */
+const isStill = (f: Format): boolean => f === 'png' || f === 'jpg';
 /** FR-138: WebM with alpha (VP9 + PNG frames) only when the Composition has no background or `preset:background.none`. */
 export function alphaAllowed(model: { background?: { presetId: string } | null } | null | undefined): boolean {
   return !model?.background || model.background.presetId === 'preset:background.none';
@@ -52,7 +54,7 @@ export function exportFolderDefault(o: { projectFolder: string | null | undefine
   return { placeholder: null, shellDefault: o.shell };
 }
 
-export function ExportDialog({ onClose }: { onClose: () => void }) {
+export function ExportDialog({ onClose, jobId: initialJobId }: { onClose: () => void; /** FR-28x: open on a job the stage buttons started */ jobId?: string }) {
   const { state, runtime, actions, t, lang } = useStore();
   const [format, setFormat] = useState<Format>('mp4');
   const [quality, setQuality] = useState<Quality>('standard');
@@ -74,7 +76,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const [recheck, setRecheck] = useState(0);
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const [jobId, setJobId] = useState<string | null>(state.renders.find((j) => j.status === 'rendering' || j.status === 'queued')?.id ?? null);
+  const [jobId, setJobId] = useState<string | null>((initialJobId && state.renders.some((j) => j.id === initialJobId) ? initialJobId : null) ?? state.renders.find((j) => j.status === 'rendering' || j.status === 'queued')?.id ?? null);
   const job = state.renders.find((j) => j.id === jobId) ?? null;
   const output = job?.outputId ? state.outputs.find((o) => o.id === job.outputId) : undefined;
   const durationMs = state.head?.durationMs ?? 0;
@@ -82,7 +84,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => { if (format === 'webm' && !alphaOk) setFormat('mp4'); }, [format, alphaOk]);
   const profile: OutputProfile = { ...currentOutputProfile(state), format, codec: format === 'mp4' ? 'h264' : format === 'webm' ? 'vp9' : format,
     ...(format === 'mp4' || format === 'webm' ? { crf: QUALITY_CRF[quality] } : {}), ...(format === 'webm' ? { alpha: true } : {}),
-    ...(format === 'png' ? { stillAtMs: Math.max(0, Math.min(stillMs, Math.max(0, durationMs - 1))) } : {}) };
+    ...(isStill(format) ? { stillAtMs: Math.max(0, Math.min(stillMs, Math.max(0, durationMs - 1))) } : {}) };
   const name = nameTouched ? fileName : (est?.defaultFileName ?? fileName);
   const body = { outputProfile: profile, performanceProfile: state.performanceProfile, ...(nameTouched && fileName.trim() ? { fileName: fileName.trim() } : {}), ...(folder ? { folder } : {}) };
   const priv = est?.privateMode ?? Boolean(state.settings?.privateMode);
@@ -119,7 +121,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   };
   const elapsedMs = job?.startedAt ? Math.max(0, (job.finishedAt ? Date.parse(job.finishedAt) : now) - Date.parse(job.startedAt)) : 0;
   const thumb = output?.media.thumb && state.grant ? runtime.api.outputMediaUrl(state.grant, output.id, 'thumb') : output?.kind === 'still' && state.grant ? runtime.api.outputMediaUrl(state.grant, output.id, 'file') : null;
-  const summary = `${est ? `${est.dimensions.width}×${est.dimensions.height}` : '…'} · ${format === 'png' ? t('ui.scr.export.still') : `${format === 'gif' ? Math.min(15, profile.fps) : profile.fps} fps`} · ${formatDuration(format === 'png' ? 0 : durationMs)} · ${t(`ui.agent.output.profile.${state.performanceProfile}`)}`
+  const summary = `${est ? `${est.dimensions.width}×${est.dimensions.height}` : '…'} · ${format === 'jpg' ? t('ui.scr.export.cover') : format === 'png' ? t('ui.scr.export.still') : `${format === 'gif' ? Math.min(15, profile.fps) : profile.fps} fps`} · ${formatDuration(isStill(format) ? 0 : durationMs)} · ${t(`ui.agent.output.profile.${state.performanceProfile}`)}`
     + ` · ≈ ${est?.estimate.bytes != null ? formatBytes(est.estimate.bytes, lang) : '…'} · ≈ ${est?.estimate.seconds != null ? formatDuration(est.estimate.seconds * 1000) : '…'}`;
   const notices = (est?.notices ?? []).filter((n) => n === 'EM-3208');
 
@@ -151,7 +153,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           <div data-el="scr.export.codec"><Segmented<Format> label={t('ui.scr.export.codec')} value={format} onChange={setFormat}
             options={[{ value: 'mp4', label: 'MP4 (H.264)', el: 'scr.export.codec.mp4' },
               { value: 'webm', label: t('ui.scr.export.codec.webm'), el: 'scr.export.codec.webm', disabledReason: alphaOk ? null : t('ui.scr.export.alpha.needsnone') },
-              { value: 'gif', label: 'GIF', el: 'scr.export.codec.gif' }, { value: 'png', label: t('ui.scr.export.still'), el: 'scr.export.codec.png' }]} /></div>
+              { value: 'gif', label: 'GIF', el: 'scr.export.codec.gif' }, { value: 'png', label: t('ui.scr.export.still'), el: 'scr.export.codec.png' },
+              { value: 'jpg', label: t('ui.scr.export.cover'), el: 'scr.export.codec.jpg' }]} /></div>
           {!alphaOk && <p data-el="scr.export.codec.webm.reason" className="-mt-1 text-[12px] text-em-muted">{t('ui.scr.export.alpha.needsnone')}</p>}
           <div className="grid grid-cols-2 gap-2">
             {(format === 'mp4' || format === 'webm') && (
@@ -159,8 +162,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
                 <option value="standard">{t('ui.scr.export.quality.standard')}</option><option value="smaller">{t('ui.scr.export.quality.smaller')}</option></select></Field>
             )}
             {format === 'gif' && <p data-el="scr.export.quality" className="self-end pb-1 text-[12px] text-em-text-2">{t('ui.scr.export.gif.note')}</p>}
-            {format === 'png' && (
-              <Field label={t('ui.scr.export.still.time')} htmlFor="em-ex-t" hint={t('ui.scr.export.still.hint', { time: formatDuration(durationMs) })}>
+            {isStill(format) && (
+              <Field label={t('ui.scr.export.still.time')} htmlFor="em-ex-t" hint={t(format === 'jpg' ? 'ui.scr.export.cover.hint' : 'ui.scr.export.still.hint', { time: formatDuration(durationMs) })}>
                 <div className="flex gap-2">
                   <input id="em-ex-t" data-el="scr.export.still.time" type="number" min={0} step={0.1} max={durationMs / 1000} className={inputCls} value={(stillMs / 1000).toFixed(1)} onChange={(e) => setStillMs(Math.round(Number(e.target.value) * 1000) || 0)} />
                   <Button size={32} onClick={() => setStillMs(state.playheadMs)}>{t('ui.scr.export.still.playhead')}</Button>
@@ -253,6 +256,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             </div>
           )}
           {output && <code className="t-mono max-w-full truncate text-[11px] text-em-muted select-all">{output.path}</code>}
+          {/* FR-28x: the Service writes <name>-CREDITS.txt (music, SFX, poster, sources) next to every finished video */}
+          {output?.kind === 'video' && <p data-el="scr.export.done.credits" className="text-[12px] text-em-text-2">{t('ui.scr.export.done.credits')}</p>}
         </div>
       )}
       {job && job.status === 'failed' && <ErrorBox code={job.errorCode ?? 'EM-3201'} vars={{ percent: Math.round(job.progress * 100), name, folder: folder || '…', need: '…', have: '…' }} actions={<>

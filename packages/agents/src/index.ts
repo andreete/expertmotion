@@ -14,3 +14,4 @@ export * from './script-captions.js';
 export * from './research.js';
 export * from './auto-motion.js';
 export * from './auto-motion-plan.js';
+export { composeCover } from './auto-motion-reels.js';   // ADR-039: the Reels cover still (Service R-153 / plan step cover.render)

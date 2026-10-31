@@ -2,7 +2,7 @@
 // Brainstorming Agent, "Edit" = Editor Agent): CMP-13 bubbles tagged with their agent, the thread, the composer with the
 // mode switch, and the header with "Model: <label> ▾" (per mode), status and compact usage.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AtSign, CircleHelp, Clapperboard, Copy, ExternalLink as ExternalIcon, FileText, Globe, ImagePlus, Info, Lightbulb, Loader, Maximize2, Minimize2, Music, Paperclip, Scissors, SendHorizontal, ShieldCheck, Square, TriangleAlert, X } from 'lucide-react';
+import { AtSign, CircleHelp, Clapperboard, Clock, Copy, ExternalLink as ExternalIcon, FileText, Globe, ImagePlus, Info, Lightbulb, Loader, Maximize2, Minimize2, Music, Paperclip, Scissors, SendHorizontal, ShieldCheck, Square, TriangleAlert, X } from 'lucide-react';
 import { errCode, useStore } from '../state/store.js';
 import type { AgentKind, CapabilityRow, ChatDocumentDto, ChatTarget, ImageCandidateDto, MessageDto, WebSourceDto } from '../api/types.js';
 import { useOpenSource } from '../components/ExternalLink.js';
@@ -18,6 +18,8 @@ import { ModelText, modelReplyText } from './ModelText.js';
 import { ModelPopover } from './ModelPopover.js';
 import { SectionBoundary } from '../startup/ErrorBoundary.js';
 import { PhaseStepper } from './Handoff.js';
+import { ChatMenu } from './Reels.js';
+import { parseTimestamp } from './reels.js';
 
 /** FR-072: largest image the composer attaches from disk (EM-1002 above it). */
 export const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
@@ -418,6 +420,10 @@ const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus'];
 const DOC_EXTS = ['pdf', 'docx', 'txt', 'md', 'markdown', 'srt', 'vtt', 'csv', 'json', 'rtf', 'fountain', 'fdx'];
 const extOf = (name: string) => (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? '').toLowerCase();
+/** The text of a small file (FileReader: jsdom and older WebViews have no Blob.text()); undefined when it cannot be read. */
+export const readFileText = (f: Blob): Promise<string | undefined> => new Promise((resolve) => {
+  try { const r = new FileReader(); r.onload = () => resolve(typeof r.result === 'string' ? r.result : undefined); r.onerror = () => resolve(undefined); r.readAsText(f); } catch { resolve(undefined); }
+});
 /** Largest audio file the composer attaches (the Library's own limit applies on import too). */
 export const MAX_AUDIO_BYTES = 500 * 1024 * 1024;
 export const MAX_DOC_BYTES = 20 * 1024 * 1024;
@@ -444,6 +450,8 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
   const [attachError, setAttachError] = useState<{ code: string; vars?: Record<string, string | number> } | null>(null);
   const [importing, setImporting] = useState(false);
   const [docs, setDocs] = useState<ChatDocumentDto[]>([]);
+  /** FR-28x: the text of an attached .md / .txt when the file itself passed through here (browser path), for "Jadikan profil kanal". */
+  const docTexts = useRef(new Map<string, string>());
   const ref = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
   const cap = useAssignedCapability(agent);
@@ -472,9 +480,9 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
   };
   const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
   /** FR-221: a document is read as text by the Service (nothing uploaded anywhere); it shows as a chip with its size in characters. */
-  const attachDocument = async (run: () => Promise<{ document: ChatDocumentDto }>) => {
+  const attachDocument = async (run: () => Promise<{ document: ChatDocumentDto }>, text?: string) => {
     setImporting(true); setAttachError(null);
-    try { const r = await run(); setDocs((d) => [...d.filter((x) => x.id !== r.document.id), r.document].slice(0, 3)); }
+    try { const r = await run(); if (text !== undefined) docTexts.current.set(r.document.id, text); setDocs((d) => [...d.filter((x) => x.id !== r.document.id), r.document].slice(0, 3)); }
     catch (e) { setAttachError({ code: errCode(e) }); } finally { setImporting(false); }
   };
   const pickFile = async (what: 'image' | 'audio' | 'document') => {
@@ -500,7 +508,8 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
     const paths = runtime.mode === 'live' ? shell?.getPathsForFiles?.([f]) ?? [] : [];
     if (DOC_EXTS.includes(ext)) {
       if (f.size > MAX_DOC_BYTES) { setAttachError({ code: 'EM-1002', vars: { size: `${(f.size / 1048576).toFixed(1)} MB`, limit: '20 MB' } }); return; }
-      await attachDocument(() => (paths[0] ? runtime.api.attachDocumentPath(projectId, paths[0]) : runtime.api.attachDocumentFile(projectId, f)));
+      const profileText = /\.(md|markdown|txt)$/i.test(f.name) && f.size <= 200_000 ? await readFileText(f) : undefined;
+      await attachDocument(() => (paths[0] ? runtime.api.attachDocumentPath(projectId, paths[0]) : runtime.api.attachDocumentFile(projectId, f)), profileText);
       return;
     }
     if (AUDIO_EXTS.includes(ext) || f.type.startsWith('audio/')) {
@@ -532,6 +541,8 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
   }, [setMode]);
   // QA: Send needs text (not only spaces) and at most the Service's 8 000 characters; a counter shows from 6 000 on.
   const chars = [...value].length, tooLong = chars > COMPOSER_MAX, empty = !value.trim() && !attachments.length && !docs.length;
+  // FR-28x: "perbaiki di 0:23" — a time typed in an Editor message goes along as the playhead (chip shows what was read)
+  const stamp = mode === 'editor' ? parseTimestamp(value) : null;
   const send = () => { const v = value.trim(); if (!v || tooLong || reason || busy || preparing) return; onSend(attachments, docs.map((d) => d.id)); setAttachments([]); setDocs([]); setAttachError(null); };
   const images = state.assets.filter((a) => (a.kind === 'image' || a.kind === 'audio') && a.status === 'ready');
   return (
@@ -553,6 +564,7 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
         {docs.map((d) => (
           <span key={d.id} data-el="agent.chat.attach.chip" data-kind="document" data-truncated={d.truncated ? 'true' : undefined} title={d.truncated ? t('ui.agent.message.attach.truncated') : undefined} className="inline-flex items-center gap-1 rounded-[4px] border border-em-line px-1 text-[11px]">
             <FileText size={10} aria-hidden />{d.name} <span className="text-em-muted">· {t('ui.agent.message.attach.chars', { n: d.chars.toLocaleString() })}{d.truncated ? ' ✂' : ''}</span>
+            {docTexts.current.has(d.id) && <button type="button" data-el="agent.chat.attach.profile" title={t('ui.agent.composer.attach.profile.tip')} className="text-em-accent underline" onClick={() => actions.setScreen({ kind: 'channel.profile', draft: docTexts.current.get(d.id) ?? '' })}>{t('ui.agent.composer.attach.profile')}</button>}
             <button type="button" aria-label={t('ui.agent.composer.attach.remove')} onClick={() => setDocs((x) => x.filter((y) => y.id !== d.id))}><X size={10} /></button></span>))}
         {preparing && <span data-el="agent.chat.attach.preparing" role="status" className="inline-flex items-center gap-1 text-[11px] text-em-text-2"><Loader size={10} className="em-spin" aria-hidden />{t('ui.agent.composer.attach.preparing')}</span>}
       </div>}
@@ -596,6 +608,7 @@ export function Composer({ mode, setMode, placeholder, targets = [], onRemoveTar
             )}
             <input ref={file} data-el="agent.chat.attach.input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden aria-hidden tabIndex={-1} onChange={(e) => { void attachFile(e.target.files?.[0]); e.target.value = ''; }} />
           </span>
+          {stamp && <span data-el="agent.chat.composer.time" data-ms={stamp.ms} role="status" title={t('ui.agent.composer.time.tip')} className="inline-flex items-center gap-0.5 rounded-full border border-em-accent/60 px-1.5 text-[11px] text-em-accent"><Clock size={10} aria-hidden />{t('ui.agent.composer.time', { time: stamp.label })}</span>}
           <span className="flex-1" />
           {chars > COMPOSER_COUNTER_FROM && <span data-el="agent.chat.composer.count" role="status" className={cx('t-mono text-[11px]', tooLong ? 'text-em-danger' : 'text-em-muted')}>{tooLong ? t('ui.agent.composer.toolong', { max: COMPOSER_MAX }) : `${chars} / ${COMPOSER_MAX}`}</span>}
           {busy
@@ -683,6 +696,7 @@ export function ChatHeader({ mode, setMode, layout }: { mode: AgentKind; setMode
         {limit ? `${formatNumber(Math.min(100, (used / limit) * 100), lang, used / limit < 0.1 ? 1 : 0)} %` : formatTokens(used, lang)}
       </span>}
       <span title={help} aria-label={help} className="shrink-0 text-em-muted"><CircleHelp size={14} /></span>
+      <ChatMenu />
       <IconButton el="agent.chat.maximize" size={28} aria-pressed={layout.maximized} label={layout.maximized ? t('ui.agent.chat.restore') : t('ui.agent.chat.maximize.one')}
         icon={layout.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />} onClick={layout.onToggleMax} />
     </div>

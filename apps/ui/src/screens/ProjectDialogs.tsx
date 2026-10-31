@@ -11,6 +11,7 @@ import { Button, Empty, Field, IconButton, Modal, Spinner, inputCls, cx } from '
 import { formatBytes, formatDate, formatDuration, type Lang } from '../i18n/index.js';
 import { guardUnsaved } from './Lifecycle.js';
 import { withoutScratch } from '../startup/scratch.js';
+import { channelProfileRatio } from '../agent/reels.js';
 
 const MIN_FIXED_S = 1, MAX_FIXED_S = 1800;     // FR-015: fixed duration 1 s … 30 min
 
@@ -50,7 +51,9 @@ export function NewProjectDialog({ onClose, saveAs }: { onClose: () => void; sav
   const [name, setName] = useState(saveAs && state.project ? `${state.project.name} copy` : t('ui.hdr.title.untitled'));
   const [fps, setFps] = useState<Fps>(state.settings?.defaultFps ?? 30);
   // FR-009: the New dialog defaults to 9:16 (or the Settings default ratio); Auto stays an explicit choice.
-  const [ratio, setRatio] = useState<Ratio | 'auto'>(outputDefaults(state).ratio);
+  // FR-28x: a channel profile that names Reels / Shorts / TikTok / 9:16 (or 16:9) wins over the Settings default for new projects.
+  const channelRatio = channelProfileRatio(state.settings?.channelProfile);
+  const [ratio, setRatio] = useState<Ratio | 'auto'>(channelRatio ?? outputDefaults(state).ratio);
   const [resolution, setResolution] = useState<Resolution>(state.settings?.defaultResolution ?? '1080p');
   // QA UX round 1: Custom ratio right here (same 1:3…3:1 bounds as scr.ratio.custom)
   const [cw, setCw] = useState('2'); const [ch, setCh] = useState('3');
@@ -86,7 +89,7 @@ export function NewProjectDialog({ onClose, saveAs }: { onClose: () => void; sav
       {!saveAs && <>
         <Field label={t('ui.scr.project.fps')} htmlFor="em-new-fps"><select id="em-new-fps" data-el="scr.project.new.fps" className={inputCls} value={fps} onChange={(e) => setFps(Number(e.target.value) as Fps)}>{FPS_VALUES.map((f) => <option key={f} value={f}>{f} fps</option>)}</select></Field>
         <div className="grid grid-cols-2 gap-2">
-          <Field label={t('ui.scr.project.ratio')} htmlFor="em-new-ratio"><select id="em-new-ratio" data-el="scr.project.new.ratio" className={inputCls} value={ratio} onChange={(e) => setRatio(e.target.value as Ratio | 'auto')}><option value="auto">{t('ui.agent.output.ratio.auto')}</option>{RATIOS.map((r) => <option key={r} value={r}>{r === 'custom' ? t('ui.agent.output.ratio.custom') : r}</option>)}</select></Field>
+          <Field label={t('ui.scr.project.ratio')} htmlFor="em-new-ratio" {...(channelRatio && ratio === channelRatio ? { hint: <span data-el="scr.project.new.ratio.channel">{t('ui.scr.project.ratio.channel')}</span> } : {})}><select id="em-new-ratio" data-el="scr.project.new.ratio" className={inputCls} value={ratio} onChange={(e) => setRatio(e.target.value as Ratio | 'auto')}><option value="auto">{t('ui.agent.output.ratio.auto')}</option>{RATIOS.map((r) => <option key={r} value={r}>{r === 'custom' ? t('ui.agent.output.ratio.custom') : r}</option>)}</select></Field>
           <Field label={t('ui.scr.project.resolution')} htmlFor="em-new-res"><select id="em-new-res" data-el="scr.project.new.resolution" className={inputCls} value={resolution} onChange={(e) => setResolution(e.target.value as Resolution)}>{RESOLUTIONS.map((r) => <option key={r} value={r}>{r}</option>)}</select></Field>
         </div>
         {ratio === 'custom' && (

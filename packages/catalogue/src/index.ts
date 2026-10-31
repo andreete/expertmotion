@@ -6,7 +6,7 @@ import type { Category, CatalogueRegistry, PresetDef, PresetId, Priority } from 
 
 export * from './types.js';
 export { COMPILE_RULES, AUDIO_RULES, type CompileRule } from './compile-defaults.js';
-export { ALL_PRESETS } from './presets.js';
+export { ALL_PRESETS, ICON_NAMES } from './presets.js';
 
 export const catalogue: CatalogueRegistry = (() => {
   const m = new Map<PresetId, PresetDef>();

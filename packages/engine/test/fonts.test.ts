@@ -19,16 +19,19 @@ beforeEach(() => {
 afterEach(() => { delete (globalThis as Record<string, unknown>)['FontFace']; vi.restoreAllMocks(); });
 
 describe('bundled fonts (FR-203)', () => {
-  it('every catalogue font file is a woff2 under fonts/, loaded from a url() source without fetch()', async () => {
+  it('every catalogue font file is a woff2 (or ADR-039 ttf) under fonts/, loaded from a url() source without fetch()', async () => {
     const fetchSpy = vi.fn(); vi.stubGlobal('fetch', fetchSpy);
     const files = bundledFontFiles((p) => `app://expertmotion/${p}`);
-    expect(files.length).toBeGreaterThanOrEqual(40);
-    expect(files.every((f) => /^app:\/\/expertmotion\/fonts\/[a-z0-9-]+-\d00-(normal|italic)\.woff2$/.test(f.url))).toBe(true);
+    expect(files.length).toBeGreaterThanOrEqual(45);
+    expect(files.every((f) => /^app:\/\/expertmotion\/fonts\/[a-z0-9-]+-\d00-(normal|italic)\.(woff2|ttf)$/.test(f.url))).toBe(true);
+    expect(files.filter((f) => f.format === 'truetype').map((f) => `${f.weight}${f.style[0]}`)).toEqual(['500n', '600n', '700n', '800n', '900n']);   // Poppins: upright only, no italics
+    expect(files.filter((f) => f.family === 'Poppins').every((f) => f.url.endsWith('.ttf'))).toBe(true);
     const r = await ensureFontsLoaded();
     expect(r.failed).toEqual([]);
     expect(r.loaded).toBe(files.length);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(made[0]!.source).toMatch(/^url\(".+\.woff2"\) format\("woff2"\)$/);
+    expect(made.find((f) => f.family === 'Poppins')!.source).toMatch(/^url\(".*\/fonts\/poppins-500-normal\.ttf"\) format\("truetype"\)$/);
     expect(added.length).toBe(files.length);
     vi.unstubAllGlobals();
   });

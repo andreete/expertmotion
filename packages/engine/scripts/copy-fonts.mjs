@@ -1,4 +1,5 @@
 // Copies bundled OFL fonts (latin subset, weights 400–800, normal + italic for FR-022) from @fontsource into public/fonts so renders never fetch fonts.
+// Poppins (ADR-039) is not an @fontsource package here: its TTFs (500–900 upright) and LICENSE-poppins.txt are committed in public/fonts directly.
 import fs from 'node:fs'; import path from 'node:path'; import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const out = new URL('../public/fonts/', import.meta.url).pathname; fs.mkdirSync(out, { recursive: true });

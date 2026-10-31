@@ -18,6 +18,7 @@ import { defaultOutputFolder, getJob, getOutput, outputRelPath, outputRoots, pro
 import { s2 } from './state.js';
 import { engineBrowserOf, type BrowserLike } from '../services/engine-browser.js';
 import { engineStatus } from './engine-check.js';
+import { writeCredits } from './reels/credits.js';
 
 /** FR-137 default filename stem: `<project>-<ratio>-<res>-<yyyymmdd-hhmm>` (the extension follows the codec). */
 export function defaultFileStem(projectName: string, profile: Pick<OutputProfileT, 'ratio' | 'resolution'>, d: Date = new Date()): string {
@@ -32,7 +33,9 @@ export function gifPaletteArgs(input: string, output: string, fps: number): stri
 }
 
 export type PerfProfile = 'standard' | 'accelerated' | 'turbo';
-export interface RenderInput { projectId: string; versionId?: string | undefined; outputProfile: OutputProfileT; performanceProfile: PerfProfile; fileName?: string | undefined; folder?: string | undefined }
+export interface RenderInput { projectId: string; versionId?: string | undefined; outputProfile: OutputProfileT; performanceProfile: PerfProfile; fileName?: string | undefined; folder?: string | undefined;
+  /** FR-288: source lines for the CREDITS file written beside a finished video (the Editor plan's `credits`). */
+  credits?: string[] | undefined }
 export interface Check { check: 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'folder'; ok: boolean; code?: string; details?: Record<string, unknown> }
 
 /** The subset of @remotion/renderer the queue uses (kept loose so a fake can stand in for tests). */
@@ -74,8 +77,9 @@ export function memoryNeed(profile: PerfProfile, dims: { width: number; height: 
 export const MEM_FLOOR = 300 * MB;
 const LOW_MEM_WAIT_MS = 90_000;
 const LOW_MEM_CACHE = 64 * MB;
-const EXT: Record<OutputProfileT['format'], string> = { mp4: 'mp4', webm: 'webm', gif: 'gif', png: 'png', wav: 'wav' };
-const KIND: Record<OutputProfileT['format'], 'video' | 'gif' | 'still' | 'audio'> = { mp4: 'video', webm: 'video', gif: 'gif', png: 'still', wav: 'audio' };
+const EXT: Record<OutputProfileT['format'], string> = { mp4: 'mp4', webm: 'webm', gif: 'gif', png: 'png', jpg: 'jpg', wav: 'wav' };
+const KIND: Record<OutputProfileT['format'], 'video' | 'gif' | 'still' | 'audio'> = { mp4: 'video', webm: 'video', gif: 'gif', png: 'still', jpg: 'still', wav: 'audio' };
+const STILL = (f: OutputProfileT['format']): boolean => f === 'png' || f === 'jpg';
 const PROFILE_POLICY: Record<PerfProfile, { cache: number; parallelEncoding: boolean }> = {
   standard: { cache: 256 * 1024 ** 2, parallelEncoding: false }, accelerated: { cache: 512 * 1024 ** 2, parallelEncoding: true }, turbo: { cache: 1024 ** 3, parallelEncoding: true },
 };
@@ -223,7 +227,7 @@ export class RenderService {
     }
     try { fs.mkdirSync(folder, { recursive: true }); fs.accessSync(folder, fs.constants.W_OK); } catch { throw em('EM-3206', 'Expertmotion cannot save files in this folder.', { details: { folder: path.basename(folder) } }); }
     requireProject(ctx, input.projectId);
-    const stem = input.fileName?.trim() ? sanitizeFilename(input.fileName.replace(/\.(mp4|webm|gif|png|wav)$/i, ''), 'video') : prep.defaultFileName;
+    const stem = input.fileName?.trim() ? sanitizeFilename(input.fileName.replace(/\.(mp4|webm|gif|png|jpg|jpeg|wav)$/i, ''), 'video') : prep.defaultFileName;
     const ext = EXT[prep.profile.format];
     let outFile = path.join(folder, `${stem}.${ext}`);
     for (let i = 2; fs.existsSync(outFile) || [...this.inputs.values()].some((x) => x.outFile === outFile); i++) outFile = path.join(folder, `${stem}-${i}.${ext}`);
@@ -353,9 +357,10 @@ export class RenderService {
         stage = 'render';
         const tmpOut = path.join(tmpDir, `out.${EXT[prep.profile.format]}`);
         const f = prep.profile.format;
-        if (f === 'png') {
+        if (STILL(f)) {
           const frame = Math.min(composition.durationInFrames - 1, Math.round(((prep.profile.stillAtMs ?? 0) / 1000) * composition.fps));
-          await R.renderStill({ ...common, composition, output: tmpOut, frame, imageFormat: 'png', cancelSignal });
+          // FR-289: JPEG stills (cover) at quality 92
+          await R.renderStill({ ...common, composition, output: tmpOut, frame, imageFormat: f === 'jpg' ? 'jpeg' : 'png', ...(f === 'jpg' ? { jpegQuality: 92 } : {}), cancelSignal });
         } else {
           // GIF: render a near-lossless H.264 intermediate, then palettegen/paletteuse with the ingestion FFmpeg (FR-147)
           const codec = f === 'mp4' || f === 'gif' ? 'h264' : f === 'webm' ? 'vp9' : 'wav';
@@ -390,6 +395,8 @@ export class RenderService {
         try { fs.mkdirSync(path.dirname(outFile), { recursive: true }); fs.accessSync(path.dirname(outFile), fs.constants.W_OK); }
         catch { throw em('EM-3206', 'Expertmotion cannot save files in this folder.', { details: { folder: path.basename(path.dirname(outFile)) } }); }
         await moveFile(tmpOut, outFile);
+        // FR-288: CREDITS beside every finished video (music, SFX, pictures, sources); a failure here never fails the render
+        const credits = f === 'mp4' || f === 'webm' || f === 'gif' ? writeCredits(ctx, input.projectId, prep.model, outFile, input.credits) : null;
         const outputId = ctx.newId();
         let thumbRel: string | null = null;
         if (f === 'mp4' || f === 'webm' || f === 'gif') {
@@ -404,10 +411,10 @@ export class RenderService {
         ctx.db.transaction(() => {
           ctx.db.prepare(`INSERT INTO outputs (id, project_id, render_job_id, path, thumb_path, kind, bytes, width, height, fps, duration_ms, validated, watermarked, created_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(outputId, input.projectId, jobId, outputRelPath(ctx, outFile), thumbRel, KIND[f], bytes, f === 'wav' ? null : composition.width,
-            f === 'wav' ? null : composition.height, f === 'png' || f === 'wav' ? null : composition.fps, f === 'png' ? null : prep.durationMs, v.validated ? 1 : 0, 0, ctx.now());   // outputs.watermarked: legacy column, always 0
+            f === 'wav' ? null : composition.height, STILL(f) || f === 'wav' ? null : composition.fps, STILL(f) ? null : prep.durationMs, v.validated ? 1 : 0, 0, ctx.now());   // outputs.watermarked: legacy column, always 0
           ctx.db.prepare('UPDATE render_jobs SET progress = 1, rendered_frames = ?, output_id = ?, eta_ms = 0 WHERE id = ?').run(prep.frames, outputId, jobId);
         })();
-        this.finish(getJob(ctx, jobId)!, 'done', null, undefined, { output: toOutputDto(ctx, getOutput(ctx, outputId)!), notices: prep.notices.filter((n) => n !== 'EM-3208') });
+        this.finish(getJob(ctx, jobId)!, 'done', null, undefined, { output: toOutputDto(ctx, getOutput(ctx, outputId)!), notices: prep.notices.filter((n) => n !== 'EM-3208'), ...(credits ? { credits } : {}) });
       } catch (e) {
         const job = getJob(ctx, jobId)!;
         if (ctl.reason === 'user' || ctl.reason === 'shutdown') this.finish(job, 'cancelled', null);
@@ -500,12 +507,12 @@ export function measuredRenderRate(ctx: ServiceContext): number | null {
 function estimateOf(p: OutputProfileT, dims: { width: number; height: number }, frames: number, durationMs: number, tier: 'T0' | 'T1' | 'T2', perf: PerfProfile, msPerFrameMp: number | null = null): Prepared['estimate'] {
   const px = dims.width * dims.height; const durS = durationMs / 1000;
   const baseMs = (tier === 'T0' ? 100 : tier === 'T1' ? 70 : 40) * (px / (1920 * 1080)) / (perf === 'standard' ? 1 : perf === 'accelerated' ? 1.6 : 2.5);
-  const effFrames = p.format === 'png' ? 1 : p.format === 'gif' ? Math.ceil(frames / Math.max(1, Math.round(p.fps / 15))) : frames;
+  const effFrames = STILL(p.format) ? 1 : p.format === 'gif' ? Math.ceil(frames / Math.max(1, Math.round(p.fps / 15))) : frames;
   const bytes = p.format === 'mp4' ? px * p.fps * 0.13 / 8 * durS + 24_000 * durS
     : p.format === 'webm' ? px * p.fps * 0.17 / 8 * durS
       : p.format === 'gif' ? px * Math.min(p.fps, 15) * durS * 0.05
-        : p.format === 'png' ? px * 1.5 : 48_000 * 4 * durS;
-  if (msPerFrameMp !== null && p.format !== 'png') return { seconds: Math.max(1, Math.round((effFrames * (px / 1e6) * msPerFrameMp) / 1000)), bytes: Math.round(bytes), confidence: 'medium' };
+        : p.format === 'png' ? px * 1.5 : p.format === 'jpg' ? px * 0.4 : 48_000 * 4 * durS;
+  if (msPerFrameMp !== null && !STILL(p.format)) return { seconds: Math.max(1, Math.round((effFrames * (px / 1e6) * msPerFrameMp) / 1000)), bytes: Math.round(bytes), confidence: 'medium' };
   return { seconds: Math.max(1, Math.round((effFrames * baseMs) / 1000 + 3)), bytes: Math.round(bytes), confidence: 'low' };
 }
 

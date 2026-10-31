@@ -31,7 +31,7 @@ export function canvasItemOf(model: CompositionModelT, ref: ElementRefT | undefi
     return { kind: 'clip', id: c.id, xf: { ...(c.transform ?? IDENTITY) }, baseW, baseH, frame: f, fromMs: w.fromMs, toMs: w.toMs, scaleMin: 0.1, scaleMax: 10 };
   }
   const o = model.tracks.overlay.find((x) => x.id === ref.id && x.kind === ref.kind);
-  if (!o) return null;
+  if (!o || o.kind === 'video') return null;                                       // FR-28x OverlayVideo: no Player handles yet
   return { kind: o.kind, id: o.id, xf: { x: o.position.x / f.w, y: o.position.y / f.h, scale: o.scale ?? 1, rotation: o.rotation ?? 0 }, baseW: o.size.w, baseH: o.size.h, frame: f,
     fromMs: o.timing.atMs, toMs: o.timing.atMs + o.timing.durationMs, scaleMin: 0.05, scaleMax: 20 };
 }

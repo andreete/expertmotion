@@ -14,6 +14,7 @@ import type { Checkpoints } from './checkpoints.js';
 import { issueError, type CompositionStore } from './store.js';
 import { brainstormTools, deltaEmitter, researchToolsFor } from '../modules/agents.js';
 import { composeScenes, type VideoSpecT } from '@expertmotion/agents';
+import { latestAnalysis } from '../s2/reels/footage-prep.js';
 import { getAssignment } from '../modules/providers.js';
 import { cachedModels } from '../s3/usage-store.js';
 import { discussionFor } from '../s3/shared-context.js';
@@ -26,7 +27,8 @@ export interface AgentPlanExtras { selection?: ElementRefT[] | undefined; playhe
   chat?: { messageId: string; target?: ElementRefT | undefined } | undefined;
   /** FR-189 pointed targets (chat chips); FR-190 run phases. */
   targets?: PointedTarget[] | undefined; onProgress?: ((p: RunProgress) => void) | undefined;
-  /** FR-216: web sources the Editor used (the S3 chat stores them under its reply). */ onSources?: ((s: { sources: Array<{ url: string; title?: string }>; images: unknown[] }) => void) | undefined }
+  /** FR-216: web sources the Editor used (the S3 chat stores them under its reply). */ onSources?: ((s: { sources: Array<{ url: string; title?: string }>; images: unknown[] }) => void) | undefined;
+  /** FR-286: the Creator's channel profile for the envelope (default: the `channelProfile` setting). */ channelProfile?: string | undefined }
 
 type Reason = 'created' | 'superseded' | 'restored' | 'removed' | 'cleared' | 'compiled' | 'executed' | 'rejected';
 export interface ExecutionResultT {
@@ -260,7 +262,7 @@ export class Workflow {
     // Locked Keys protect the Creator's picks from agent-authored changes (ADR-002); the Creator's own direct edits (UI drag,
     // Output Settings) are never blocked by them — the newest pick wins through supersession (AI-018, FR-068).
     const creatorOnly = intents.every((i) => i.source === 'ui' || i.source === 'system');
-    const v = validatePlan(plan, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: creatorOnly ? [] : lockedKeysFromQueue(queue), newId: this.ctx.newId });
+    const v = validatePlan(plan, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: creatorOnly ? [] : lockedKeysFromQueue(queue), newId: this.ctx.newId, ...this.reels(projectId) });
     if (v.plan.status !== 'valid') throw reject(v.issues.find((i) => i.severity === 'block') ?? issue('EM-2303', 'The change could not be applied.'));
     this.insertPlan({ plan: v.plan, baseVersionId: head.versionId, intentIds, message: null, agentRunId: null });
     const notices = comp.value.some((op) => op.op === 'op:theme.setTextDefaults') && intents.some((i) => i.category === 'text') ? [{ code: 'EM-2403' }] : [];
@@ -361,6 +363,13 @@ export class Workflow {
   }
 
   // ───────────────────────────── R-070 create plan ─────────────────────────────
+  /** ADR-039: the project's SFX asset ids (made by the Editor run of a talking-head project; `hooks.sfxAssets`), for the sync validate / Execute paths. */
+  private readonly sfx = new Map<string, Record<string, string>>();
+  /** ADR-039 (FR-285 … FR-288): the latest footage analysis and the SFX assets for validatePlan / composeScenes of a talking-head plan. */
+  private reels(projectId: string): { footageAnalysis?: NonNullable<ReturnType<typeof latestAnalysis>>; sfxAssets?: Record<string, string> } {
+    const fa = latestAnalysis(this.ctx, projectId); const sfx = this.sfx.get(projectId);
+    return { ...(fa ? { footageAnalysis: fa } : {}), ...(sfx ? { sfxAssets: sfx } : {}) };
+  }
   createPlan(projectId: string, input: { intentIds: string[]; message?: string | undefined; baseVersion: string; mode: 'auto' | 'compile-only' | 'agent'; signal?: AbortSignal | undefined; runId?: string | undefined; extras?: AgentPlanExtras | undefined })
     : { plan: ReturnType<Workflow['planDtoFor']>; runId?: string; done: Promise<ReturnType<Workflow['planDtoFor']>> } {
     const head = this.store.head(projectId);
@@ -386,7 +395,7 @@ export class Workflow {
     if (!comp.ok) throw issueError(comp.issues[0]!);
     const planId = this.ctx.newId();
     const plan = buildCompilePlan(comp.value, { id: planId, projectId, baseVersion: head.hash, goal: `Apply ${selected.filter((i) => !i.propertyKey.startsWith('group:')).length} pick(s)`, expectedDiff: selected.map((i) => i.category).join(', ') });
-    const v = validatePlan(plan, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: lockedKeysFromQueue(queue), newId: this.ctx.newId });
+    const v = validatePlan(plan, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: lockedKeysFromQueue(queue), newId: this.ctx.newId, ...this.reels(projectId) });
     this.insertPlan({ plan: v.plan, baseVersionId: head.versionId, intentIds: selected.map((i) => i.id), message: null, agentRunId: null });
     if (v.plan.status === 'valid') this.emitPlanReady(planId);
     else this.emitPlanInvalid(projectId, v.plan, v.plan.status, v.plan.touchesLockedKeys.length ? 'EM-2302' : v.issues.find((i) => i.severity === 'block' && /^EM-23\d\d$/.test(i.code))?.code ?? 'EM-2303');
@@ -440,10 +449,15 @@ export class Workflow {
         catch (e) { this.ctx.log.info({ projectId, code: e instanceof EmError ? e.code : 'EM-7101' }, 'footage read failed'); }
       }
       const notes = (this.ctx.db.prepare("SELECT json_extract(plan_json, '$.notes') AS n FROM edit_plans WHERE project_id = ? AND id != ? AND json_extract(plan_json, '$.notes') IS NOT NULL ORDER BY updated_at DESC LIMIT 1").get(projectId, planId) as { n: string } | undefined)?.n;
+      // FR-286: the channel profile (Settings ▸ Profil kanal); ADR-039: the footage analysis of a talking-head project and its SFX
+      // assets (made once here, cached for the sync validate / Execute paths; never made for projects without an analysis)
+      const channelProfile = (extras.channelProfile ?? this.ctx.settings.get().channelProfile ?? '').trim();
+      const footageAnalysis = latestAnalysis(this.ctx, projectId);
+      if (footageAnalysis && this.ctx.hooks.sfxAssets && !this.sfx.has(projectId)) { try { this.sfx.set(projectId, await this.ctx.hooks.sfxAssets(projectId)); assets = this.store.facts(projectId); } catch (e) { this.ctx.log.warn({ projectId, err: String(e).slice(0, 200) }, 'sfx assets not made'); } }
       const env = buildRewriteEnvelope({ model: head.model, baseVersion: head.hash, assets, intents, lockedKeys, tier, ...(message ? { creatorMessage: message } : {}), ...(notes ? { creatorNotes: notes } : {}),
         ...(extras.selection?.length ? { selection: extras.selection } : {}), ...(extras.playheadMs !== undefined ? { playheadMs: extras.playheadMs } : {}), ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
         discussion: discussionFor(this.ctx, projectId, this.editorContextLength()),   // AI_WORKFLOW §10.1: shared chat context
-        ...(extras.targets?.length ? { targets: extras.targets } : {}) });
+        ...(extras.targets?.length ? { targets: extras.targets } : {}), ...(channelProfile ? { channelProfile } : {}), ...(footageAnalysis ? { footageAnalysis } : {}) });
       // ADR-030: generator plan steps (voice-over, captions) and whether their local models are installed.
       let toolModels: { tts: ToolModel | null; stt: ToolModel | null } | undefined;
       try { toolModels = await this.ctx.hooks.planToolModels?.(head.model.settings.language); } catch { toolModels = undefined; }
@@ -457,7 +471,7 @@ export class Workflow {
       try {
         const progress = extras.onProgress ?? (external ? undefined : (p: RunProgress) => this.ctx.bus.emit('agent.run.progress', { at: this.ctx.now(), projectId, runId, agent: 'editor', ...p }));
         const research = researchToolsFor(this.ctx, 'editor', projectId, ac.signal, message ?? '');
-        const r = await runEditorAgent(env, provider, { model: head.model, baseVersion: head.hash, assets, tier, lockedKeys, newId: this.ctx.newId, planId, projectId, language: head.model.settings.language, ...(toolModels ? { toolModels } : {}) },
+        const r = await runEditorAgent(env, provider, { model: head.model, baseVersion: head.hash, assets, tier, lockedKeys, newId: this.ctx.newId, planId, projectId, language: head.model.settings.language, ...(toolModels ? { toolModels } : {}), ...this.reels(projectId) },
           { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId), tools: { ...brainstormTools(this.ctx, projectId, head.model.settings.language), ...research.handlers }, research: research.cfg, ...(progress ? { onProgress: progress } : {}),
             ...(onDelta ? { onDelta: (d: string) => { if (!ac.signal.aborted) onDelta(d); } } : {}), ...(extras.images?.length ? { images: extras.images } : {}) }).finally(() => own?.flush());
         usage = r.usage;
@@ -639,7 +653,7 @@ export class Workflow {
     const filled: VideoSpecT = { ...spec, voice: { ...spec.voice!, clips: spec.voice!.clips.map((c) => { const g = got.get(c.id); return g ? { ...c, assetId: g.assetId, durationMs: Math.max(100, Math.round(g.durationMs)) } : c; }) } };
     this.planProgress(projectId, planId, 'compose', { totalMs: r.totalMs });
     const head = this.store.head(projectId);
-    const c = composeScenes(filled, { model: head.model, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), language });
+    const c = composeScenes(filled, { model: head.model, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), language, ...this.reels(projectId) });
     if (!c.ok) throw new EmError('EM-2102', `The scenes could not be composed with the measured voice: ${c.problem}`);
     const ttsN = new Set(vf.ttsSteps);
     const secs = (c.totalMs / 1000).toFixed(1);
@@ -664,7 +678,7 @@ export class Workflow {
     const queue = this.loadQueue(projectId);
     const mine = queue.filter((i) => own.has(i.id));
     const creatorOnly = plan.origin === 'compile' && mine.length > 0 && mine.every((i) => i.source === 'ui' || i.source === 'system');   // see applyNow
-    const v = validatePlan({ ...plan, status: 'draft' }, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: creatorOnly ? [] : lockedKeysFromQueue(queue.filter((i) => !own.has(i.id))), newId: this.ctx.newId });
+    const v = validatePlan({ ...plan, status: 'draft' }, { model: head.model, baseVersion: head.hash, assets: this.store.facts(projectId), tier: this.ctx.hooks.tier(), lockedKeys: creatorOnly ? [] : lockedKeysFromQueue(queue.filter((i) => !own.has(i.id))), newId: this.ctx.newId, ...this.reels(projectId) });
     if (v.plan.status !== 'valid' || (!v.predicted && planOps(plan).length > 0)) {
       const st = v.plan.status === 'stale' ? 'stale' : 'invalid';
       this.updatePlan(planId, v.plan, st);

@@ -9,12 +9,18 @@ import { applyOperations, autoFixOps, textWidthEm, deriveFrameTiming, framesOf, 
 import { normalizeVideoSpec, VideoSpec, type SceneRole, type SpecAnchorT, type SpecBarT, type SpecEasingT, type SpecSceneT, type SpecStatT, type SpecTextT, type VideoSpecT } from './auto-motion-spec.js';
 
 import { findSaid, footageClipArgs, footageSceneMs, footageWindow, isFootageRole, pipBox, splitSide, type FootageWindow } from './auto-motion-footage.js';
+import { composeReels, type ReelsSummary } from './auto-motion-reels.js';
+import type { FootageAnalysisLike, SfxAssets } from './reels-types.js';
 
 export * from './auto-motion-spec.js';
 export * from './auto-motion-footage.js';
+export * from './auto-motion-reels.js';
+export * from './reels-types.js';
 
 export interface ComposeContext {
   model: CompositionModelT; assets: readonly AssetFacts[]; tier?: Tier; lockedKeys?: readonly string[]; language?: 'id' | 'en';
+  /** ADR-039: the project's footage analysis (cuts with timed words) and the SFX asset ids, for the talking-head mode. */
+  footageAnalysis?: FootageAnalysisLike; sfxAssets?: SfxAssets;
 }
 export interface ComposedElement {
   key: string; scene: number; kind: 'text' | 'shape' | 'image'; box: BoxU; fromMs: number; toMs: number; hasEntrance: boolean;
@@ -30,6 +36,8 @@ export interface ComposeOk {
   quality: { fixed: number; remaining: QualityIssue[] }; fixes: string[];
   /** FR-261: the footage clips placed (scene index, asset, whether it carries sound, the clip volume) — for captions / ducking steps. */
   footage: Array<{ scene: number; assetId: string; hasAudio: boolean; volume: number }>;
+  /** ADR-039: set by the talking-head composer (audio source, SFX placements, caption pages, the music plan, the cover). */
+  reels?: ReelsSummary;
 }
 export type ComposeResult = ComposeOk | { ok: false; problem: string; fixes: string[] };
 type Safe = { top: number; right: number; bottom: number; left: number };
@@ -103,6 +111,7 @@ export function composeScenes(raw: unknown, ctx: ComposeContext): ComposeResult 
 }
 
 function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): ComposeOk {
+  if (spec.talkingHead) return composeReels(spec, ctx, fixes);                      // ADR-039: the Reels talking-head mode
   const base = ctx.model, risks: ComposeRisk[] = [];
   const lang = ctx.language ?? spec.language ?? base.settings.language;
   const id = lang !== 'en';

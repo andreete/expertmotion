@@ -9,6 +9,7 @@ import { motionCss, motionFrame } from '../motion.js';
 import { easingFn, safeBezier, springDamping } from '../easing.js';
 import { textLayerFit } from '../text-fit.js';
 import { parseNumberIn, withNumber } from '../format-number.js';
+import { fontStack, symbolRuns } from '../font-stack.js';
 
 const clampOpts = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 /**
@@ -34,7 +35,7 @@ export const TextElement: React.FC<{ layer: TextLayerT; layout: Layout; duration
   return (
     <div data-em-text={layer.id} style={{ position: 'absolute', left: boxLeft, top: anchor.top, width: boxW, transform: layer.valign === 'top' ? 'translate(-50%, 0)' : 'translate(-50%, -50%)', textAlign: align }}>
       <div style={motionCss(mf)}>
-        <span style={{ display: 'inline-block', fontFamily: family, fontWeight: weight, fontSize: fs, lineHeight, color: colour, opacity: layer.style.opacity ?? t.textDefaults.opacity,
+        <span style={{ display: 'inline-block', fontFamily: fontStack(family), fontWeight: weight, fontSize: fs, lineHeight, color: colour, opacity: layer.style.opacity ?? t.textDefaults.opacity,
           fontStyle: (layer.style.italic ?? t.textDefaults.italic ?? v['italic']) ? 'italic' : 'normal', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textAlign: align,
           textWrap: 'balance',                                     // round 2: balanced lines, the estimator models the same (text-box.ts)
           // Entry 35: `text-wrap` is a shorthand that sets text-wrap-mode back to `wrap`, and it comes after `white-space` in this
@@ -101,7 +102,7 @@ function renderContent(layer: TextLayerT, frame: number, fps: number, accent: st
       const key = isKey(w);
       const s = stagger ? spring({ frame: frame - start - (wi++) * stagger, fps, config: { damping: 14 } }) : 1;
       const pop = key ? spring({ frame: frame - start - Math.round(0.35 * fps) - wi * stagger, fps, config: { damping: 10 } }) : 0;
-      return <span key={i} style={{ display: 'inline-block', ...(stagger ? { opacity: s, translate: `0px ${(1 - s) * 0.4}em` } : {}), ...(key ? { color: keyColour, scale: `${1 + 0.06 * Math.sin(Math.min(1, pop) * Math.PI)}` } : {}) }}>{w}</span>;
+      return <span key={i} style={{ display: 'inline-block', ...(stagger ? { opacity: s, translate: `0px ${(1 - s) * 0.4}em` } : {}), ...(key ? { color: keyColour, scale: `${1 + 0.06 * Math.sin(Math.min(1, pop) * Math.PI)}` } : {}) }}>{symbolRuns(w, `w${i}`)}</span>;
     });
   }
   const colour = String(layer.effect?.params['colour'] ?? accent);
@@ -120,6 +121,6 @@ function renderContent(layer: TextLayerT, frame: number, fps: number, accent: st
     case 'preset:texteffect.highlight': return perWord(Highlight, `color-mix(in srgb, ${colour} 70%, transparent)`);
     case 'preset:texteffect.underline': return perWord(Underline as typeof Highlight, colour);
     case 'preset:texteffect.circle': return <RoughCircle progress={progress} color={colour}>{text}</RoughCircle>;
-    default: return text;
+    default: return symbolRuns(text);                              // QA A16: ≤ ≥ ± … in Inter at the heading size
   }
 }

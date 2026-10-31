@@ -8,6 +8,9 @@
 export interface FilePin { readonly commit: string; readonly sha256: string; readonly bytes: number }
 export const HF_PINS: Readonly<Record<string, FilePin>> = Object.freeze({
   "ggerganov/whisper.cpp/ggml-small.bin": { commit: "5359861c739e955e79d9a303bcbc70fb988958b1", sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", bytes: 487601967 },
+  // Reels prep (FR-285): quantised whisper models for low-RAM PCs (sha256 + bytes read from the HF LFS metadata at the same commit, 2026-10-31).
+  "ggerganov/whisper.cpp/ggml-small-q5_1.bin": { commit: "5359861c739e955e79d9a303bcbc70fb988958b1", sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb", bytes: 190085487 },
+  "ggerganov/whisper.cpp/ggml-medium-q5_0.bin": { commit: "5359861c739e955e79d9a303bcbc70fb988958b1", sha256: "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f", bytes: 539212467 },
   "ggerganov/whisper.cpp/ggml-medium.bin": { commit: "5359861c739e955e79d9a303bcbc70fb988958b1", sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208", bytes: 1533763059 },
   "ggerganov/whisper.cpp/ggml-large-v3-turbo.bin": { commit: "5359861c739e955e79d9a303bcbc70fb988958b1", sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69", bytes: 1624555275 },
   "ggerganov/whisper.cpp/ggml-large-v3.bin": { commit: "5359861c739e955e79d9a303bcbc70fb988958b1", sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2", bytes: 3095033483 },

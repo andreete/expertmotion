@@ -12,6 +12,9 @@ import { BrainstormTurn, createIntents, resolvePointedTargets, runBrainstorm, ty
 import { availableOnTier, searchPresets, type Category } from '@expertmotion/catalogue';
 const SEARCH_CATEGORIES: readonly Category[] = ['transition', 'caption', 'background', 'motion', 'shape', 'easing', 'effect', 'audio', 'text', 'texteffect', 'font', 'palette', 'fontpair'];
 import { renderServiceOf } from '../s2/render-service.js';
+import { generatorsServiceOf } from '../s2/generators-service.js';
+import { analysisSummary, contactSheet, frameTimes, latestAnalysis } from '../s2/reels/footage-prep.js';
+import { s2 } from '../s2/state.js';
 import type { ServiceContext } from '../context.js';
 import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
@@ -180,6 +183,40 @@ export function brainstormContext(ctx: ServiceContext, project: { id: string; na
   const assets = (() => { try { return ctx.hooks.assetFacts(project.id).filter((a) => a.status === 'ready').slice(0, 40).map((a) => ({ id: a.id, kind: a.kind, name: a.name ?? a.id, ...(a.durationMs !== undefined ? { durationMs: a.durationMs } : {}) })); } catch { return []; } })();
   return { project: { name: project.name, language: project.language }, tier: ctx.hooks.tier(), composition, assets, ...(pointed.length ? { targets: pointed } : {}), ...(recentEdits ? { recentEdits } : {}) };
 }
+/** The latest FootageAnalysis of a project for the agents (full cuts / words; large), or null. */
+const analysisFor = (ctx: ServiceContext, projectId: string) => { const a = latestAnalysis(ctx, projectId); return a ? { ...analysisSummary(a), cuts: a.cuts.map((c) => ({ id: c.id, line: c.lineIndex, startMs: c.startMs, endMs: c.endMs, text: c.text, words: c.words })), dropped: a.dropped, lines: a.lines, phrases: a.phrases.length, offsetMs: a.offsetMs, rotation: a.rotation, masterAssetId: a.masterAssetId ?? null, durationMs: a.durationMs } : null; };
+/**
+ * FR-285 … FR-287 (Reels, ADR-039): the Brainstorming Agent's media tools. Names and inputs are declared in packages/agents tools.ts
+ * (`media.analyze`, `media.frames`, `media.analysis.get`); these are the Service handlers. `media.frames` returns the contact sheet
+ * as base64 JPEG (≤ 1.5 MB) plus the cell geometry; the runner lifts it into an image part for models with image input.
+ */
+export function mediaTools(ctx: ServiceContext, projectId: string): Record<string, (input: Record<string, unknown>) => unknown> {
+  return {
+    'media.analyze': async (i) => {
+      const voiceAssetId = String(i['voiceAssetId'] ?? ''); if (!voiceAssetId) return { error: { code: 'EM-9002', message: 'voiceAssetId is required.' } };
+      try {
+        return await generatorsServiceOf(ctx).analyzeFootage(projectId, { voiceAssetId, ...(typeof i['cameraAssetId'] === 'string' ? { cameraAssetId: i['cameraAssetId'] } : {}), ...(typeof i['script'] === 'string' ? { script: i['script'] } : {}) });
+      } catch (e) { return { error: { code: e instanceof EmError ? e.code : 'EM-7101', message: errorMessage(e).slice(0, 300), ...(e instanceof EmError && e.details ? { details: e.details } : {}) } }; }
+    },
+    'media.analysis.get': () => analysisFor(ctx, projectId),
+    'media.frames': async (i) => {
+      const a = latestAnalysis(ctx, projectId);
+      const nums = Array.isArray(i['atMs']) ? (i['atMs'] as unknown[]).filter((t): t is number => typeof t === 'number' && t >= 0) : typeof i['atMs'] === 'number' ? [i['atMs']] : [];
+      const cutIds = Array.isArray(i['cutIds']) ? (i['cutIds'] as unknown[]).map(String) : [];
+      const atMs = typeof i['count'] === 'number' ? frameTimes(a, { count: i['count'], fromMs: nums[0] ?? 0 }) : frameTimes(a, { ...(nums.length ? { atMs: nums } : {}), ...(cutIds.length ? { cutIds } : {}) });
+      if (!atMs.length) return { error: { code: 'EM-9002', message: 'atMs[] (or atMs + count) or cutIds[] is required.' } };
+      const rotation = i['rotation'];
+      try {
+        const sheet = await contactSheet(ctx, projectId, { atMs, ...(rotation === 0 || rotation === 90 || rotation === 180 || rotation === 270 ? { rotation } : {}), heavy: (fn) => s2(ctx).heavy.run(fn) });
+        try {
+          const buf = fs.readFileSync(sheet.file);
+          const tooBig = buf.length > 1_500_000;
+          return { cols: sheet.cols, rows: sheet.rows, cells: sheet.cells, mediaType: 'image/jpeg', ...(tooBig ? { note: 'The contact sheet is larger than 1.5 MB; ask for fewer frames.' } : { imageBase64: buf.toString('base64') }) };
+        } finally { fs.rmSync(sheet.dir, { recursive: true, force: true }); }
+      } catch (e) { return { error: { code: e instanceof EmError ? e.code : 'EM-7101', message: errorMessage(e).slice(0, 300) } }; }
+    },
+  };
+}
 
 /**
  * FR-075 / AI_WORKFLOW §9: the Brainstorming Agent's read-only tools. Every handler only reads (no composition mutation, no
@@ -187,6 +224,7 @@ export function brainstormContext(ctx: ServiceContext, project: { id: string; na
  */
 export function brainstormTools(ctx: ServiceContext, projectId: string, language: 'id' | 'en'): ToolHandlers {
   return {
+    ...(mediaTools(ctx, projectId) as ToolHandlers),   // FR-285: media.analyze / media.frames / media.analysis.get (names declared in packages/agents tools.ts)
     'composition.get': () => { try { const h = ctx.hooks.composition(projectId); return summarizeForAgent(h.model, ctx.hooks.assetFacts(projectId), 2000); } catch { return null; } },
     'assets.list': () => ctx.hooks.assetFacts(projectId).filter((a) => a.status === 'ready').slice(0, 100)
       .map((a) => ({ id: a.id, kind: a.kind, name: a.name ?? a.id, ...(a.durationMs !== undefined ? { durationMs: a.durationMs } : {}), ...(a.width ? { width: a.width, height: a.height } : {}), ...(a.hasAudio !== undefined ? { hasAudio: a.hasAudio } : {}) })),
@@ -314,8 +352,12 @@ async function executeBrainstorm(ctx: ServiceContext, run: RunRow, convId: strin
   const progress = progressEmitter(ctx, project.id, run.id, 'brainstorm');
   progress({ phase: 'reading' });
   const research = researchToolsFor(ctx, 'brainstorm', project.id, signal);
+  // FR-286: the channel profile goes into the system prompt ({{channel_profile}}); ADR-039: media.frames images reach the model
+  // only when its Capability Table row does not say imageInput false
+  const cap = run.connection_id ? cachedModels(ctx, run.connection_id)?.find((m) => m.modelId === run.model_id) : undefined;
+  const channelProfile = ctx.settings.get().channelProfile?.trim() || null;
   const ask = (imgs: ChatImage[]) => runBrainstorm(historyOf(ctx, convId), brainstormContext(ctx, project, targets), project.language, provider, {
-    signal, budgetCheck: () => ctx.hooks.budgetCheck(project.id), contextLength: contextLengthOf(ctx, run.connection_id, run.model_id), research: research.cfg,
+    signal, budgetCheck: () => ctx.hooks.budgetCheck(project.id), contextLength: contextLengthOf(ctx, run.connection_id, run.model_id), research: research.cfg, channelProfile, toolImages: cap?.imageInput !== false,
     tools: { ...brainstormTools(ctx, project.id, project.language), ...research.handlers }, onDelta: (d) => { if (!signal.aborted) deltas.push(d); }, ...(imgs.length ? { images: imgs } : {}), onProgress: progress,
   });
   let r = await ask(images);

@@ -1,6 +1,7 @@
 import React from 'react';
 import { makeArrow, makeCallout, makeCircle, makeEllipse, makeHeart, makePie, makePolygon, makeRect, makeSpark, makeStar, makeTriangle } from '@remotion/shapes';
 import { evolvePath } from '@remotion/paths';
+import { INFOGRAPHICS } from './infographics.js';
 
 /**
  * Shape props: `w` × `h` is the bounding box in px; `draw` (0…1, ADR-034 preset:motion.draw-on) strokes the outline on with
@@ -59,4 +60,6 @@ export const SHAPES: Record<string, React.FC<ShapeProps>> = {
   'preset:shape.pill': (p) => <PathShape {...p} geo={makeRect({ width: p.w, height: p.h, cornerRadius: Math.min(p.w, p.h) / 2 })} />,
   'preset:shape.check': (p) => <PathShape {...p} strokeWidth={p.strokeWidth ?? Math.min(p.w, p.h) * 0.13} geo={checkPath(Math.min(p.w, p.h))} strokeOnly />,
   'preset:shape.chevron': (p) => <PathShape {...p} strokeWidth={p.strokeWidth ?? Math.min(p.w, p.h) * 0.14} geo={chevronPath(Math.min(p.w, p.h))} strokeOnly />,
+  // ADR-039 (Reels infographics): data-driven presets drawn with HTML + inline SVG and the theme fonts (presets/infographics.tsx)
+  ...INFOGRAPHICS,
 };

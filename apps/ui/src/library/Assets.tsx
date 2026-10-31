@@ -6,12 +6,13 @@
 // ingest stage; FR-042 EM-1201 cards offer "Import again"; FR-045 select all (button, Ctrl+A while the panel has focus).
 import { assetTarget } from '../agent/targets.js';
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
-import { AudioLines, CheckSquare, File as FileIcon, FileText, Film, Image as ImageIcon, ListPlus, MoreHorizontal, Upload, X } from 'lucide-react';
+import { AudioLines, CheckSquare, File as FileIcon, FileText, Film, Image as ImageIcon, ListPlus, MoreHorizontal, Scissors, Upload, X } from 'lucide-react';
 import { useStore } from '../state/store.js';
 import type { AssetDto } from '../api/types.js';
 import { Badge, Button, IconButton, Popover, Progress, Spinner, cx } from '../components/ui.js';
 import { emptyBatch, nextImportBatch, type ImportBatch } from './import-batch.js';
 import { formatBytes, formatDuration } from '../i18n/index.js';
+import { footagePair } from '../agent/reels.js';
 
 const ACCEPT = '.mp4,.mov,.webm,.mkv,.png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.aac,.m4a,.ogg,.srt,.vtt';
 const KIND_ICON = { video: <Film size={14} />, image: <ImageIcon size={14} />, audio: <AudioLines size={14} />, subtitle: <FileText size={14} /> } as const;
@@ -170,6 +171,10 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
     ? <><Button el="lib.assets.error.action" size={28} onClick={() => { setImportErr(null); void pick(); }}>{t('ui.lib.assets.error.retry')}</Button>
       {importErr === 'EM-6401' && <Button el="lib.assets.error.diagnostics" size={28} variant="ghost" onClick={() => { setImportErr(null); actions.setScreen({ kind: 'diagnostics' }); }}>{t('ui.lib.assets.error.diagnostics')}</Button>}</>
     : <Button el="lib.assets.error.action" size={28} onClick={() => setImportErr(null)}>{importErr ? t(`err.${importErr}.action`) : t('ui.lib.assets.error.ok')}</Button>;
+  // FR-28x (Reels): a video + audio pair offers the Footage prep (sync, master, phrases, cuts) from here; the card shows in the chat.
+  const pair = footagePair(assets, state.assetSelection);
+  const prepBusy = state.prep?.job.status === 'running' || state.prep?.job.status === 'queued' || state.prep?.job.status === 'needs-input';
+  const prepFootage = async () => { if (!pair) return; const id = await actions.startPrep({ voiceAssetId: pair.audio, cameraAssetId: pair.video }); if (id) window.dispatchEvent(new CustomEvent('em:focus-composer', { detail: { agent: 'brainstorm' } })); };
   const onPanelKey = (e: KeyboardEvent) => {
     const tag = (e.target as HTMLElement).tagName;
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a' && tag !== 'INPUT' && tag !== 'TEXTAREA') { e.preventDefault(); e.stopPropagation(); void selectAll(); }
@@ -216,6 +221,7 @@ export function AssetPanel({ filter = '' }: { filter?: string }) {
             ))}
           </ul>
         )}
+        {pair && <Button el="lib.assets.prep" size={32} icon={<Scissors size={14} />} className="w-full" title={t('ui.agent.stage.prep.tip')} disabledReason={prepBusy ? t('ui.agent.stage.prep.running') : null} onClick={() => void prepFootage()}>{t('ui.agent.stage.prep.long')}</Button>}
         <Button el="lib.assets.insert" variant="primary" size={36} icon={<ListPlus size={16} />} className="w-full"
           aria-label={t('a11y.lib.assets.insert', { count: selected.length })}
           disabledReason={selected.length ? null : t('ui.lib.assets.insert.disabled')} onClick={() => void actions.insert(selected)}>

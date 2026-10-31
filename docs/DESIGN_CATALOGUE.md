@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (P0 set frozen; P1/P2 entries may gain params) |
 | Owner | Engine lead + UI/UX lead |
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-31 (ADR-039: Reels infographic shapes, caption keyword params, Poppins, reels-navy) |
 | Depends on | GLOSSARY.md, PRD.md (PRD-013), REMOTION_CAPABILITY_MAP.md, PERFORMANCE.md, ASSESSMENT.md §3 (book) |
 | Used by | AI_WORKFLOW.md (Compile table), SYSTEM_PROMPT.md, UI_UX_SPECIFICATION.md, FRD.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md |
 | Owner of | every `preset:` id, its parameters, defaults, property class, hardware/licence flags, preview asset path |
@@ -61,6 +61,8 @@ Mapping: `@remotion/captions` (`createTikTokStyleCaptions`, `parseSrt`, `parseVt
 | `preset:caption.none` | No captions / Tanpa caption | — | P0 | |
 
 P0 caption data comes from `op:caption.importSrt` (SRT/VTT import) or manual pages; P1 adds `captions.generate` (whisper.cpp, flag `model:whisper`).
+
+ADR-039 optional params on every style (absent = the behaviour above): `keywords` (`[{words[], colour}]`, ≤ 12 groups; a word matches after lower-casing and stripping punctuation and keeps its colour spoken or not), `yU` (top of the caption block from the frame top in u; wins over `position`), `fontSizeU` (u, 34–200; wins over `fontSize`), `fontFamily` / `weight` (default: theme heading font, 800), `maxWordsPerPage` (1–12: the renderer shows a page in chunks of at most N words, the chunk holding the current time). A page without tokens renders nothing (silent cards have no captions).
 
 ## 4. Backgrounds (`background`) — exclusive-group per project
 
@@ -125,8 +127,20 @@ Mapping: `@remotion/shapes` components; params: `size` (u), `fill` (theme accent
 | `preset:shape.pill` | Pill / Kapsul | `makeRect` w × h, radius h / 2 (button, badge) | P1 |
 | `preset:shape.check` | Check / Centang | stroked tick path (list) | P1 |
 | `preset:shape.chevron` | Chevron / Panah kecil | stroked chevron path (bullet) | P1 |
+| `preset:shape.icon` | Icon / Ikon | flat two-colour inline SVG pictogram: `icon` (reactor, chip-ai, bolt, atom, data-center, shield, check, sun, cloud, moon, solar-panel, factory, card-ace, qr, play, globe, chat, money, clock, warning; default bolt), colours `fill` + `accent` (default theme accent2) (ADR-039) | P1 |
+| `preset:shape.rows` | Rows / Baris | stacked rounded row panels with a letter `badge`, `title`, `sub`, `right` value, `rightSub`, `tone`; `rows` (≤ 8), `staggerMs` (120), `radiusU` (28); spring stagger entrance; `fill` = panel colour (theme bg2 when left at the accent) (ADR-039; no preview loop: data-driven) | P1 |
+| `preset:shape.day-strip` | Day strip / Garis hari | 0–24 h axis with tick labels `hours` ([0,6,12,18,24]) and rounded `bars` (`label`, `fromH`, `toH`, `colour`, `icon`) growing from their start, optional `note` under the axis (ADR-039; no preview loop) | P1 |
+| `preset:shape.browser-card` | Browser card / Kartu peramban | a drawn browser window: title bar with three dots and the `urlText` pill, `title`, optional `inner` pictogram pair (`reactor-datacenter` \| `none`), a progress track `fromLabel` → `toLabel` filling to `progress` (0–1) with a spring, `caption` (ADR-039) | P1 |
+| `preset:shape.typing-box` | Typing box / Kotak ketik | a DM input pill: `prefixBadge` ("DM"), `text` typed at 18 chars/s when `typing` (blinking caret), a send button that turns into a check with a small pop at `sendAt` (ms into the element) (ADR-039) | P1 |
+| `preset:shape.tag` | Tag / Label | small upper-case pill, `text`, `tone` (`info` accent2 \| `warn` \| `opinion` accent \| `illustration` outlined muted \| `positive` \| `negative` \| `neutral`); auto-fits the text (ADR-039) | P1 |
+| `preset:shape.source-tag` | Source tag / Label sumber | muted pill (theme bg2 / muted text, body font 500) for a `text` such as "Sumber · date · checked"; the text auto-fits the width (ADR-039) | P1 |
+| `preset:shape.bars-h` | Horizontal bars / Batang mendatar | label \| track \| value rows: `bars` (`label`, `value`, `unit`, `tone`; ≤ 8), `showValues` (true), `max` (default the largest value); bars grow with a stagger, values count in Indonesian number format (ADR-039; no preview loop) | P1 |
 
 ADR-034: every shape is drawn by one SVG path renderer from the `@remotion/shapes` `make*` geometry, inside a w × h box (`op:shape.add` `height` makes it non-square); `preset:shape.rect` takes `outline` (border only, stroke colour, `strokeWidth`, default 8 u) and `dashU` (dashed border, e.g. a target bar); `cornerRadius` is in u.
+
+ADR-039 (Reels infographics, `packages/engine/src/presets/infographics.tsx`): the eight data-driven presets above are HTML + inline SVG drawn with the theme fonts (heading / body) and the palette roles `bg2`, `muted`, `negative`, `warn` (fallbacks derived from bg / text when a palette lacks them); their text params are generic strings supplied by the composer (no project copy in the Engine). `rows`, `day-strip` and `bars-h` have no preview loop (`preview: false`): without data there is nothing to show.
+
+No cut-off text (QA A16, 2026-10-31): none of these presets truncates or clips a text. Every run first shrinks from its preferred size to a floor on one line (tag / source tag 22 u, rows title 30 u, rows sub 20 u, rows right value 24 u, bars label 24 u, day-strip label 22 u, browser-card title 30 u / caption 22 u), then wraps at the floor into at most 2 lines (3 for `source-tag`), measured with the shared estimator (`fitTextWidth` / `balancedLineTexts`, `fitRun` in the Engine) so the quality gate sees the same lines; the pill / row / bar / card grows with its text (the stored box is the minimum height). `source-tag` may widen up to 90 % of the frame before adding a line and uses normal letter-spacing; `rows` keeps ≥ 55 % of the row for the title and lets `right` / `rightSub` shrink or wrap; a `day-strip` label that does not fit its bar runs past it over the track in the text colour. Text limits: `tag.text` ≤ 120, `source-tag.text` ≤ 300, row title / sub ≤ 120, `right` ≤ 40, bar / day labels ≤ 80. Every text run uses the font stack `"<family>", Inter, sans-serif` and math symbols (≤ ≥ ± × ÷ ≈ ≠ → ∞) are set in Inter, so they render at the heading size in Poppins (`packages/engine/src/font-stack.ts`; the same applies to Text Layers and captions).
 
 ## 7. Easing (`easing`) — scalar (Theme default) or per motion
 
@@ -210,15 +224,15 @@ Text effects (`op:text.setEffect`, exclusive):
 | `preset:texteffect.counter` | Number counter / Angka berjalan | `AnimatedNumber` (ported, `packages/engine/src/format-number.ts`): the first number in the text counts from `from` (0) over `durationMs` (1200) after `delayMs` with `easingId` / `bezier`, written like the text (sign, Indonesian separators, decimals: "+17,2%", "US$ 25,96", "1.200"); never wraps | P1 |
 | `preset:texteffect.keyword` | Keyword colour / Warna kata kunci | the `words` (≤ 8) in the accent colour (or `colour`) with a small spring pop (ADR-034) | P1 |
 
-Fonts (bundled woff2, OFL): `preset:font.inter` (Inter), `preset:font.plus-jakarta-sans` (Plus Jakarta Sans), `preset:font.archivo` (Archivo), `preset:font.jetbrains-mono` (JetBrains Mono). Google Fonts are not used at runtime (offline rule).
+Fonts (bundled, OFL): `preset:font.inter` (Inter), `preset:font.plus-jakarta-sans` (Plus Jakarta Sans), `preset:font.archivo` (Archivo), `preset:font.jetbrains-mono` (JetBrains Mono) as woff2 (latin subset, 400–800, normal + italic, from `@fontsource`); `preset:font.poppins` (Poppins, ADR-039) as **TTF**, upright weights 500 / 600 / 700 / 800 / 900 only (no italics), files `packages/engine/public/fonts/poppins-<weight>-normal.ttf` taken unmodified from github.com/google/fonts at commit `8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5` (`ofl/poppins`, "Copyright 2020 The Poppins Project Authors", SIL Open Font License 1.1, `LICENSE-poppins.txt` beside the files; no woff2 converter is installed on the build host, so the loader uses `format("truetype")` from the preset's `format` data). Google Fonts are not used at runtime (offline rule).
 
 ## 11. Themes (`theme`) — scalar
 
-Palettes from the book §4.4 (contrast-checked): `preset:palette.editorial-dark` (#14120F / #F4EFE6 / #E8913A / #4FD1A5, default), `preset:palette.paper-light`, `preset:palette.neon-tech`, `preset:palette.pastel-friendly`, `preset:palette.high-contrast`, `preset:palette.corporate-blue`, `preset:palette.editorial-teal` (ADR-034, editorial data journalism: #0F1A1F / #FFFFFF / #5DCAA5 / #EF9F27, plus roles read by the scene composer: negative #F0997B, muted #9FB3B8, neutral #888780, pill #1D9E75). Font pairs: `preset:fontpair.jakarta-inter` (default), `preset:fontpair.archivo-inter`, `preset:fontpair.inter-mono`, `preset:fontpair.inter-inter` (ADR-034, Inter only).
+Palettes from the book §4.4 (contrast-checked): `preset:palette.editorial-dark` (#14120F / #F4EFE6 / #E8913A / #4FD1A5, default), `preset:palette.paper-light`, `preset:palette.neon-tech`, `preset:palette.pastel-friendly`, `preset:palette.high-contrast`, `preset:palette.corporate-blue`, `preset:palette.editorial-teal` (ADR-034, editorial data journalism: #0F1A1F / #FFFFFF / #5DCAA5 / #EF9F27, plus roles read by the scene composer: negative #F0997B, muted #9FB3B8, neutral #888780, pill #1D9E75), `preset:palette.reels-navy` (ADR-039, Reels explainer: bg #0B1526 / text #F4F6FB / accent #FFD43B yellow / accent2 #4DD4C4 cyan, plus bg2 #121F38 (panels), negative #FF5C5C, warn #FFA94D, muted #8A97B3). Font pairs: `preset:fontpair.jakarta-inter` (default), `preset:fontpair.archivo-inter`, `preset:fontpair.inter-mono`, `preset:fontpair.inter-inter` (ADR-034, Inter only), `preset:fontpair.poppins-inter` (ADR-039, Poppins headings + Inter body).
 
 ## 12. P0 summary (must exist for v1.0; PRD-013)
 
-Transitions 6 (+none) · Captions 3 (+none) · Backgrounds 5 (+video-dim, none) · Motion 5 (+none) · Shapes 4 · Easing 5 · Effects 6 · Audio 3 · Text variants 4 · Text effects 2 · Palettes 7 · Font pairs 4.
+Transitions 6 (+none) · Captions 3 (+none) · Backgrounds 5 (+video-dim, none) · Motion 5 (+none) · Shapes 4 · Easing 5 · Effects 6 · Audio 3 · Text variants 4 · Text effects 2 · Palettes 8 · Font pairs 5.
 
 ## 13. Catalogue search tags
 

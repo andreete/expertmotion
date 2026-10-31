@@ -15,6 +15,10 @@ export interface TranscribeInput {
   threads: number;
   /** Duration of the audio; sets the timeout (10 × seconds + 60 s). */
   audioDurationMs: number;
+  /** FR-285 (Reels prep): an initial prompt (names / acronyms only, never the script) that steers spelling; `--prompt`. */
+  prompt?: string;
+  /** Beam size (`-bs`); whisper-cli's default when absent. */
+  beamSize?: number;
 }
 export interface TranscribeResult { captions: Caption[]; language: string | null }
 
@@ -22,8 +26,10 @@ export const CAPTIONS_JSON_MAX_BYTES = 10 * 1024 * 1024;
 export const WHISPER_LANGUAGES = ['id', 'en', 'auto'] as const;
 
 /** Exact argv of LOCAL_AI_MODELS §3.2 (`-oj -ojf -ml 1 -sow -np -of <jobDir>/out`). */
-export function whisperArgs(input: { modelPath: string; wavPath: string; language: string; threads: number; outBase: string }): string[] {
-  return ['-m', input.modelPath, '-f', input.wavPath, '-l', input.language, '-t', String(input.threads), '-oj', '-ojf', '-ml', '1', '-sow', '-np', '-pp', '-of', input.outBase];   // -pp: `progress = NN%` lines on stderr
+export function whisperArgs(input: { modelPath: string; wavPath: string; language: string; threads: number; outBase: string; prompt?: string; beamSize?: number }): string[] {
+  const prompt = input.prompt?.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 800);
+  return ['-m', input.modelPath, '-f', input.wavPath, '-l', input.language, '-t', String(input.threads), '-oj', '-ojf', '-ml', '1', '-sow', '-np', '-pp', '-of', input.outBase,   // -pp: `progress = NN%` lines on stderr
+    ...(prompt ? ['--prompt', prompt] : []), ...(input.beamSize !== undefined && Number.isInteger(input.beamSize) && input.beamSize >= 1 ? ['-bs', String(Math.min(8, input.beamSize))] : [])];
 }
 
 interface WhisperToken { text?: unknown; p?: unknown }
@@ -71,7 +77,7 @@ export async function transcribe(input: TranscribeInput, ctx: EngineContext): Pr
   const onLine = (line: string): void => { const m = /progress\s*=\s*(\d{1,3})%/.exec(line); if (m) report(Number(m[1]) / 100); };
   await runProcess({
     engine: 'whisper.cpp', exe: join(ctx.engineDir, exeName('whisper-cli', ctx.platform)),
-    args: whisperArgs({ modelPath: input.modelPath, wavPath, language: input.language, threads, outBase }),
+    args: whisperArgs({ modelPath: input.modelPath, wavPath, language: input.language, threads, outBase, ...(input.prompt ? { prompt: input.prompt } : {}), ...(input.beamSize !== undefined ? { beamSize: input.beamSize } : {}) }),
     cwd: ctx.jobDir, env: buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}), ...(ctx.platform ? { platform: ctx.platform } : {}) }),
     timeoutMs: ctx.timeoutMs ?? ENGINE_TIMEOUTS.captions(input.audioDurationMs),
     onStderrLine: onLine, onStdoutLine: onLine,
@@ -91,6 +97,49 @@ export async function transcribe(input: TranscribeInput, ctx: EngineContext): Pr
 export async function transcribeToPages(input: TranscribeInput & { combineTokensWithinMs?: number }, ctx: EngineContext): Promise<TranscribeResult & { pages: CaptionPage[] }> {
   const r = await transcribe(input, ctx);
   return { ...r, pages: captionsToPages(r.captions, { combineTokensWithinMilliseconds: input.combineTokensWithinMs ?? 1200 }) };
+}
+
+export interface TranscribeManyInput extends Omit<TranscribeInput, 'wavPath'> { /** 16 kHz mono wavs inside the job dir; whisper-cli takes several `-f` and writes `<file>.json` for each. */ wavPaths: string[] }
+/** Argv for several files in ONE process (model loaded once): no `-of`, so `-oj` writes `<wav>.json` beside every input. */
+export function whisperArgsMany(input: { modelPath: string; wavPaths: string[]; language: string; threads: number; prompt?: string; beamSize?: number }): string[] {
+  const prompt = input.prompt?.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 800);
+  return ['-m', input.modelPath, ...input.wavPaths.flatMap((f) => ['-f', f]), '-l', input.language, '-t', String(input.threads), '-oj', '-ojf', '-ml', '1', '-sow', '-np', '-pp',
+    ...(prompt ? ['--prompt', prompt] : []), ...(input.beamSize !== undefined && Number.isInteger(input.beamSize) && input.beamSize >= 1 ? ['-bs', String(Math.min(8, input.beamSize))] : [])];
+}
+/**
+ * FR-285 (Reels prep "listen"): every phrase as its own file in one whisper-cli run, so timestamps never drift across pieces.
+ * Progress = files finished (`output_json: saving output to` lines). A piece with no speech yields an empty caption list; the
+ * result only fails when NO piece produced output. One result per input, in input order.
+ */
+export async function transcribeMany(input: TranscribeManyInput, ctx: EngineContext): Promise<TranscribeResult[]> {
+  if (!(WHISPER_LANGUAGES as readonly string[]).includes(input.language)) throw emError('EM-7105', 'Language not supported', { tool: 'captions.generate', language: input.language });
+  assertAbsolute(input.modelPath, 'model');
+  if (!input.wavPaths.length) return [];
+  for (const w of input.wavPaths) assertInside(ctx.jobDir, w, 'input audio');
+  const threads = Math.max(1, Math.floor(input.threads));
+  const report = reporter(ctx); report(0);
+  const fs = ctx.fs ?? nodeFs;
+  for (const w of input.wavPaths) await fs.remove(`${w}.json`);
+  let done = 0;
+  const onLine = (line: string): void => { if (/output_json: saving output to/.test(line)) { done++; report(Math.min(0.99, done / input.wavPaths.length)); } };
+  await runProcess({
+    engine: 'whisper.cpp', exe: join(ctx.engineDir, exeName('whisper-cli', ctx.platform)),
+    args: whisperArgsMany({ modelPath: input.modelPath, wavPaths: input.wavPaths, language: input.language, threads, ...(input.prompt ? { prompt: input.prompt } : {}), ...(input.beamSize !== undefined ? { beamSize: input.beamSize } : {}) }),
+    cwd: ctx.jobDir, env: buildChildEnv({ engineDir: ctx.engineDir, jobDir: ctx.jobDir, ...(ctx.parentEnv ? { parentEnv: ctx.parentEnv } : {}), ...(ctx.platform ? { platform: ctx.platform } : {}) }),
+    timeoutMs: ctx.timeoutMs ?? ENGINE_TIMEOUTS.captions(input.audioDurationMs),
+    onStderrLine: onLine, onStdoutLine: onLine,
+    ...(ctx.signal ? { signal: ctx.signal } : {}), ...(ctx.spawn ? { spawn: ctx.spawn } : {}), ...(ctx.killTree ? { killTree: ctx.killTree } : {}),
+  });
+  const out: TranscribeResult[] = []; let any = false;
+  for (const w of input.wavPaths) {
+    const file = `${w}.json`; const size = await fs.size(file).catch(() => -1);
+    if (size < 0) { out.push({ captions: [], language: null }); continue; }
+    if (size > CAPTIONS_JSON_MAX_BYTES) throw emError('EM-7101', 'Transcription output is too large', { engine: 'whisper.cpp', cause: 'output-too-large', bytes: size });
+    const r = parseWhisperJson((await fs.readFile(file)).toString('utf8')); any = true; out.push(r);
+  }
+  if (!any) throw emError('EM-7101', 'Transcription produced no output file', { engine: 'whisper.cpp', cause: 'output-missing' });
+  report(1);
+  return out;
 }
 
 export const whisperAdapter = (engineDir: string, defaults: Partial<EngineContext> = {}): EngineAdapter<TranscribeInput, TranscribeResult> => adapterFrom('transcribe', engineDir, transcribe, defaults);

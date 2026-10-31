@@ -282,6 +282,14 @@ All components accept `fill`, `stroke`, `strokeWidth`, `style`, `pathStyle`, `de
 | `preset:shape.pill` | `makeRect({width, height, cornerRadius: min(w, h) / 2})` | w × h | — | sibling list |
 | `preset:shape.check` | stroked path `M .1 .52 L .38 .8 L .9 .2` (× size) | strokeWidth | — | sibling list |
 | `preset:shape.chevron` | stroked path `M .3 .12 L .72 .5 L .3 .88` (× size) | strokeWidth | — | sibling list |
+| `preset:shape.icon` | inline `<svg viewBox="0 0 100 100">` pictogram from the `ICONS` table (`packages/engine/src/presets/infographics.tsx`), two colours `fill` + `accent` (ADR-039) | `icon`, `accent` | icon | — |
+| `preset:shape.rows` | HTML flex rows (badge square, title / sub, right value / sub) with `spring` stagger per row (`useCurrentFrame`), theme fonts (ADR-039) | `rows`, `staggerMs`, `radiusU` | rows | — |
+| `preset:shape.day-strip` | HTML: 24 h axis (ticks at `hours`), bars positioned by `fromH` / `toH` as fractions of the width, `spring` grow, optional inline icon (ADR-039) | `hours`, `bars`, `note` | — | — |
+| `preset:shape.browser-card` | HTML window chrome (dots, url pill), title, optional icon pair, progress fill `spring` → `progress` (ADR-039) | `urlText`, `title`, `fromLabel`, `toLabel`, `progress`, `caption`, `inner` | — | — |
+| `preset:shape.typing-box` | HTML pill: badge, `text.slice(0, typedChars(ms))` at 18 chars/s, caret blinks per half second, send check with `spring` pop at `sendAt` (ADR-039) | `text`, `prefixBadge`, `typing`, `sendAt` | — | — |
+| `preset:shape.tag` | HTML pill, text auto-fitted with the shared `textWidthEm` estimator, tone colours from the palette roles (ADR-039) | `text`, `tone` | — | — |
+| `preset:shape.source-tag` | HTML muted pill (bg2 / muted), body font 500, auto-fitted (ADR-039) | `text` | — | — |
+| `preset:shape.bars-h` | HTML label / track / value rows, bar width = value / max × `spring` stagger, values via `Intl.NumberFormat('id-ID')` (ADR-039) | `bars`, `showValues`, `max` | — | — |
 
 ### B.7 Easing (`preset:easing.*`) → `Easing` and `spring` from `remotion`
 
@@ -363,7 +371,7 @@ Each variant is a component in an overlay/text `<Sequence>`; font size in `u` is
 | `preset:text.callout` | 56 u in a rounded box (`borderRadius 24 u`) | same | book §4.1 |
 | `preset:text.quote` | 72 u, `fontStyle: 'italic'`, typographic quotes added | same | — |
 
-Fonts: `preset:font.inter`, `preset:font.plus-jakarta-sans`, `preset:font.archivo`, `preset:font.jetbrains-mono` (slugs proposed; DESIGN_CATALOGUE.md writes `preset:font.<name>` without pinning them, see Inconsistencies). Each is `loadFont({family, url: staticFile('fonts/<file>.woff2'), weight, style})` from `@remotion/fonts`, called once at module load of the bundle; it returns a promise and handles render delay itself (https://www.remotion.dev/docs/fonts).
+Fonts: `preset:font.inter`, `preset:font.plus-jakarta-sans`, `preset:font.archivo`, `preset:font.jetbrains-mono`, `preset:font.poppins` (ADR-039: OFL TTF 500–900 upright, loaded through FontFace `format('truetype')`; math symbols fall back to Inter per glyph) (slugs proposed; DESIGN_CATALOGUE.md writes `preset:font.<name>` without pinning them, see Inconsistencies). Each is `loadFont({family, url: staticFile('fonts/<file>.woff2'), weight, style})` from `@remotion/fonts`, called once at module load of the bundle; it returns a promise and handles render delay itself (https://www.remotion.dev/docs/fonts).
 
 ### B.11 Text effects (`preset:texteffect.*`)
 
@@ -393,6 +401,8 @@ Not Remotion APIs: the Local Service resolves the picked palette and font pair i
 | `preset:fontpair.archivo-inter` | heading `Archivo`, body `Inter` | — | same |
 | `preset:fontpair.inter-mono` | heading `Inter`, body/numbers `JetBrains Mono` (also used by `preset:texteffect.counter`) | — | same |
 | `preset:fontpair.inter-inter` | heading and body `Inter` (bundled 400–800) | — | ADR-034 |
+| `preset:palette.reels-navy` | `#0B1526` / `#F4F6FB` / `#FFD43B` / `#4DD4C4` (+ bg2 `#121F38`, negative `#FF5C5C`, warn `#FFA94D`, muted `#8A97B3`); the Engine's `tokensFor` exposes `bg2` / `muted` / `negative` / `warn` for every palette (derived with `color-mix` when a palette lacks them) | — | ADR-039 |
+| `preset:fontpair.poppins-inter` | heading `Poppins` (500–900 upright, TTF, `format("truetype")`), body `Inter` | — | ADR-039 |
 
 ---
 
@@ -440,6 +450,8 @@ Installed and used: `@remotion/transitions` (fade, slide, wipe, push-cut, iris, 
 
 Codecs that reach `<Video>` are always H.264 yuv420p + AAC in MP4 because ingestion transcodes everything else (ASSET_INGESTION.md §3). This is what keeps `@remotion/media`'s WebCodecs path on the fast lane in both Electron and Chrome Headless Shell.
 
+ADR-039 additions to the Clip and overlay rendering (`ExpertmotionTimeline.tsx`): (1) `Clip.zoom` punch-ins — `clipZoomScale(zoom, frame, totalFrames, fps)` (`transform.ts`, pure) is linear `from → to` across the clip plus every pop as an instant `+amount` that settles back with `spring({damping: 200})` over `durationMs` (default 450); the factor multiplies `transform.scale` inside `clipTransformStyle`, so a punch-in and a canvas zoom compose. (2) `OverlayVideo` (face bubble, kind `video` on the overlay Track) — `<Video muted trimBefore objectFit="cover">` inside a box with `borderRadius` (50 % for `circle`, `radius` u for `rect`) and `overflow: hidden`; the ring is a `box-shadow: 0 0 0 <widthU × u>px <colour>` spread on the masked box (a shadow is not clipped by its own overflow); `focus` → `focusTransform(focus, boxW, boxH, srcW, srcH)` = `scale(zoom) translate(tx, ty)` so the source point lands at the box centre (exact with the asset size, box-aspect approximation without). (3) `AudioLayer.gain` — `gainMultiplier(segments, compositionMs)` (`audio-gain.ts`) multiplies the layer volume with linear ramps (`rampMs`, default 300) after ducking and fades.
+
 ### C.2 Audio Layers → `@remotion/media` `<Audio>`
 
 ```tsx
@@ -478,7 +490,7 @@ Props available and their use: `trimBefore`, `durationInFrames`, `volume`, `play
 | `fillTextBox` | `@remotion/layout-utils` | `fillTextBox({maxBoxWidth, maxLines}).add({text, fontFamily, fontSize, fontWeight}) → {exceedsBox, newLine}` | Caption sub-agent re-pages long Indonesian lines to `maxLines` before storing pages | https://www.remotion.dev/docs/layout-utils/fill-text-box |
 | `measureText` | `@remotion/layout-utils` | measures token boxes for `moving-pill` | — | https://www.remotion.dev/docs/layout-utils |
 | ported `fitText` estimator (`fit.ts`) | packages/engine | DOM-free estimate used by the Local Service for `render.estimate` warnings ("title may wrap to 3 lines") | fallback when no DOM (Node) | ADR-013 |
-| `loadFont` | `@remotion/fonts` | `loadFont({family, url: staticFile(...), weight, style}) → Promise<void>` | 4 families × needed weights, bundled woff2 (OFL); no `@remotion/google-fonts` | https://www.remotion.dev/docs/fonts |
+| `loadFont` | `@remotion/fonts` | `loadFont({family, url: staticFile(...), weight, style}) → Promise<void>` | 4 families × needed weights, bundled woff2 (OFL); no `@remotion/google-fonts`. In practice the Engine loads with the CSS Font Loading API (`FontFace`, `packages/engine/src/fonts.ts`, FR-203); ADR-039 adds Poppins as TTF: the font preset's `ext` / `format` / `styles` data drive the file names and the `format()` hint | https://www.remotion.dev/docs/fonts |
 | rough-notation | `@remotion/rough-notation` | `<Highlight|Underline|Circle|Box|Bracket|StrikeThrough|CrossedOff color progress iterations padding …>` | §B.11 | https://www.remotion.dev/docs/rough-notation/highlight |
 
 ### D.2 Shapes

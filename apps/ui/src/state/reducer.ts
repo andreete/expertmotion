@@ -5,7 +5,7 @@ import type { ElementRefT } from '@expertmotion/composition-model';
 import type {
   AgentKind, AgentPhase, AssetDto, AssignmentsDto, ChatTarget, UsageNumbers, CapabilityRow, ConnectionDto, EditIntent, ElementDiff, HardwareProfileDto, HardwareTickDto, HealthDto, IntentQueueDto,
   LicenseDto, MediaGrantDto, MessageDto, ModelStateDto, OpenProjectResponse, OutputDto, PerformanceProfile, PlanDto, ProjectDto, RenderJobDto, ServiceEvent,
-  SettingsDto, VersionDto,
+  SettingsDto, VersionDto, FootageAnalysisDto, GeneratorJobDto,
 } from '../api/types.js';
 import type { StreamStatus } from '../api/events.js';
 import { normalizeMessageDto } from '@expertmotion/shared';
@@ -31,8 +31,10 @@ export interface Toast { id: string; kind: ToastKind; textKey: string; vars?: Re
 export interface BudgetFocus { field: 'project' | 'month'; connectionId?: string }
 export type Screen =
   | { kind: 'onboarding' } | { kind: 'license' } | { kind: 'providers'; focus?: BudgetFocus } | { kind: 'models'; focus?: string } | { kind: 'project.new'; saveAs?: boolean } | { kind: 'project.open' }
-  | { kind: 'project.settings' } | { kind: 'project.recover' } | { kind: 'export' } | { kind: 'generate'; generator: 'voice' | 'music' | 'thumbnail' | 'captions' | 'hashtags' }
+  | { kind: 'project.settings' } | { kind: 'project.recover' } | { kind: 'export'; /** FR-28x: open on this render job (stage buttons) */ jobId?: string } | { kind: 'generate'; generator: 'voice' | 'music' | 'thumbnail' | 'captions' | 'hashtags' }
   | { kind: 'diagnostics' } | { kind: 'about' } | { kind: 'help'; topic?: 'performance' } | { kind: 'backup' } | { kind: 'restore' } | { kind: 'ratio.custom' } | { kind: 'history' } | { kind: 'shortcuts' }
+  /** FR-28x: the channel profile editor ("Profil kanal"); `draft` = text taken from an attached .md / .txt ("Jadikan profil kanal"). */
+  | { kind: 'channel.profile'; draft?: string }
   | { kind: 'confirm'; titleKey: string; bodyKey?: string; vars?: Record<string, string | number>; confirmKey: string; danger?: boolean; onConfirm: () => void }
   /** FR-174: Save / Don't save / Cancel before switching or closing with unsaved UI state; `then` runs after Save or Don't save. */
   | { kind: 'unsaved'; then: () => void; closing?: boolean }
@@ -40,6 +42,8 @@ export type Screen =
   | { kind: 'close.render'; jobId: string; then: () => void };
 
 export interface Streaming { runId: string; text: string; modelId: string; /** FR-214: Send pressed with an image attachment */ attaching?: boolean; /** agent.run.progress (QA 2026-10-26 #5) */ phase?: AgentPhase; attempt?: number; of?: number; tool?: string; /** FR-216 web search query / page */ query?: string; url?: string; /** when the run started (elapsed seconds in the progress line) */ since?: number }
+/** FR-28x Reels: the project's Footage prep job as the chat card shows it (service.notice generator:prep + R-132 refetches). */
+export interface PrepState { job: GeneratorJobDto; stage: string; percent: number; since: number }
 /** agent.run.failed `message` / `details` (QA 2026-10-26 #3/#5): the reason shown in the error bubble; `details.recentKey` = new key. */
 export interface AgentErrorDetail { message?: string; details?: Record<string, unknown> }
 
@@ -106,6 +110,10 @@ export interface AppState {
   backupJob: { jobId: string; percent: number; done: boolean; path?: string; mode: 'backup' | 'restore'; projectId?: string; code?: string; name?: string } | null;
   /** Sample projects whose background preparation settled (`service.notice {kind:'sample', ready}`, R-025; ready:false = partial). */
   sampleReady: string[];
+  /** FR-28x: the latest Footage prep job of the open project (null = none started / none found). */
+  prep: PrepState | null;
+  /** FR-28x: the latest stored FootageAnalysis (cut table, cover candidates). */
+  analysis: FootageAnalysisDto | null;
 }
 
 export const initialState: AppState = {
@@ -114,7 +122,7 @@ export const initialState: AppState = {
   messages: { brainstorm: [], editor: [] }, streaming: { brainstorm: null, editor: null }, contextUsage: { brainstorm: null, editor: null }, lastUsage: { brainstorm: null, editor: null }, headLoading: false, doneRuns: [],
   agentError: { brainstorm: null, editor: null }, agentErrorDetail: { brainstorm: null, editor: null }, chatTargets: [], connections: [], assignments: null, capabilities: {}, models: [], toasts: [], live: null,
   libMode: 'design', selection: [], playheadMs: 0, previewPresetId: null, screen: null, pulse: null, performanceProfile: 'standard', assetSelection: [],
-  editorDraft: null, checkpointBadge: false, backupJob: null, update: null, sampleReady: [],
+  editorDraft: null, checkpointBadge: false, backupJob: null, update: null, sampleReady: [], prep: null, analysis: null,
 };
 
 export type Action =
@@ -160,6 +168,9 @@ export type Action =
   | { type: 'assetSelection'; ids: string[] }
   | { type: 'editorDraft'; draft: AppState['editorDraft'] }
   | { type: 'backupJob'; job: AppState['backupJob'] }
+  | { type: 'prep'; prep: PrepState | null }
+  | { type: 'prepJob'; job: GeneratorJobDto }
+  | { type: 'analysis'; analysis: FootageAnalysisDto | null }
   | { type: 'dismissUpdate' }
   | { type: 'update'; update: { status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'deferred' | 'paused' | 'error'; version?: string; percent?: number; code?: string } }
   | { type: 'event'; event: ServiceEvent };
@@ -281,6 +292,14 @@ export function reduceEvent(state: AppState, ev: ServiceEvent): AppState {
       // R-025: ready:true, or ready:false when a bundled file failed to ingest; either way the sample is settled and the tour continues on what is there.
       if (d.kind === 'sample' && typeof d['ready'] === 'boolean' && typeof d.projectId === 'string') return state.sampleReady.includes(d.projectId) ? state : { ...state, sampleReady: [...state.sampleReady, d.projectId] };
       if (d.kind === 'update') return { ...state, update: { version: typeof d['version'] === 'string' ? d['version'] : '', downloaded: Boolean(d['downloaded']) } };
+      // FR-28x: the prep job's stage / percent / status (the store refetches the job for its result on needs-input / done).
+      if (d.kind === 'generator' && d['generator'] === 'prep' && typeof d.jobId === 'string' && (!d.projectId || d.projectId === state.project?.id)) {
+        const cur = state.prep && state.prep.job.id === d.jobId ? state.prep : null;
+        const status = typeof d['status'] === 'string' ? d['status'] as GeneratorJobDto['status'] : cur?.job.status ?? 'running';
+        const job: GeneratorJobDto = cur?.job ?? { id: d.jobId, projectId: state.project?.id ?? '', kind: 'prep', status, progress: 0, modelKey: null, resultAssetId: null, result: null, errorCode: null, createdAt: ev.data.at, startedAt: ev.data.at, finishedAt: null };
+        const percent = typeof d.percent === 'number' ? d.percent : cur?.percent ?? 0;
+        return { ...state, prep: { job: { ...job, status, progress: percent / 100, ...(typeof d.code === 'string' ? { errorCode: d.code } : {}) }, stage: typeof d['stage'] === 'string' ? d['stage'] : cur?.stage ?? 'probe', percent, since: cur?.since ?? Date.now() } };
+      }
       if ((d.kind === 'backup' || d.kind === 'restore') && typeof d.jobId === 'string' && state.backupJob?.jobId === d.jobId) {
         return { ...state, backupJob: { ...state.backupJob, percent: d.percent ?? state.backupJob.percent, done: Boolean(d.done), ...(typeof d.path === 'string' ? { path: d.path } : {}), ...(typeof d.projectId === 'string' ? { projectId: d.projectId } : {}),
           ...(typeof d.code === 'string' ? { code: d.code } : {}), ...(typeof d['name'] === 'string' ? { name: d['name'] } : {}) } };
@@ -319,10 +338,10 @@ export function reducer(state: AppState, action: Action): AppState {
         canUndo: o.head.parentId !== null, canRedo: false, checkpointBadge: o.checkpointNewerThanSave !== null,
         messages: { brainstorm: action.messages?.brainstorm ?? [], editor: action.messages?.editor ?? [] },
         contextUsage: { brainstorm: action.contextUsage?.brainstorm ?? null, editor: action.contextUsage?.editor ?? null },
-        streaming: { brainstorm: null, editor: null }, agentError: { brainstorm: null, editor: null }, agentErrorDetail: { brainstorm: null, editor: null }, ...(state.project?.id === o.project.id ? {} : { chatTargets: [] }), outputs: [], pulse: null, headLoading: false, lastUsage: { brainstorm: null, editor: null },
+        streaming: { brainstorm: null, editor: null }, agentError: { brainstorm: null, editor: null }, agentErrorDetail: { brainstorm: null, editor: null }, ...(state.project?.id === o.project.id ? {} : { chatTargets: [], prep: null, analysis: null }), outputs: [], pulse: null, headLoading: false, lastUsage: { brainstorm: null, editor: null },
       };
     }
-    case 'projectClosed': return { ...state, project: null, head: null, grant: null, assets: [], queue: null, plan: null, previousPlans: [], selection: [], chatTargets: [], messages: { brainstorm: [], editor: [] } };
+    case 'projectClosed': return { ...state, project: null, head: null, grant: null, assets: [], queue: null, plan: null, previousPlans: [], selection: [], chatTargets: [], messages: { brainstorm: [], editor: [] }, prep: null, analysis: null };
     case 'project': return { ...state, project: action.project };
     case 'head': return { ...state, headLoading: false, head: action.head, canUndo: action.canUndo, canRedo: action.canRedo, project: state.project ? { ...state.project, headVersionId: action.head.id, headHash: action.head.hash, durationMs: action.head.durationMs, settings: action.head.model?.settings ?? state.project.settings } : null, selection: pruneSelection(state.selection, action.head) };
     case 'grant': return { ...state, grant: action.grant };
@@ -386,6 +405,9 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, update: { version: u.version ?? '', downloaded: u.status === 'downloaded' || u.status === 'deferred', status: u.status, ...(u.percent !== undefined ? { percent: u.percent } : {}), ...(u.code ? { code: u.code } : {}) } };
     }
     case 'backupJob': return { ...state, backupJob: action.job };
+    case 'prep': return { ...state, prep: action.prep };
+    case 'prepJob': { const cur = state.prep && state.prep.job.id === action.job.id ? state.prep : null; return { ...state, prep: { job: action.job, stage: cur?.stage ?? (action.job.status === 'done' ? 'done' : 'probe'), percent: Math.round(action.job.progress * 100), since: cur?.since ?? Date.now() } }; }
+    case 'analysis': return { ...state, analysis: action.analysis };
     case 'event': return reduceEvent(state, action.event);
     default: return state;
   }

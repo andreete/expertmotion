@@ -21,3 +21,4 @@ export * from './transcript.js';
 export * from './voices.js';
 export * from './music-library.js';
 export * from './audio-energy.js';
+export * as analysis from './analysis/index.js';   // footage analysis (FR-280 … FR-284): sync, phrases, takes, word timing, loudness, SFX, rotation

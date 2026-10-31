@@ -244,19 +244,30 @@ CREATE TABLE outputs (
   created_at     TEXT NOT NULL
 );
 
-CREATE TABLE generator_jobs (                 -- voice / music / thumbnail / captions (P1/P2)
+CREATE TABLE generator_jobs (                 -- voice / music / thumbnail / captions (P1/P2) / prep (Reels footage prep, FR-285)
   id             TEXT PRIMARY KEY,
   project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  kind           TEXT NOT NULL CHECK(kind IN ('voice','music','thumbnail','captions','hashtags')),
+  kind           TEXT NOT NULL CHECK(kind IN ('voice','music','thumbnail','captions','hashtags','prep')),
   input_json     TEXT NOT NULL CHECK(json_valid(input_json)),
   model_key      TEXT,                        -- LOCAL_AI_MODELS registry key or provider model
-  status         TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')),
+  status         TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled','needs-input')),   -- needs-input: a prep job waiting for the rotation confirmation (R-148)
   progress       REAL NOT NULL DEFAULT 0,
   result_asset_id TEXT REFERENCES assets(id),
   result_json    TEXT CHECK(result_json IS NULL OR json_valid(result_json)),
   error_code     TEXT,
   created_at     TEXT NOT NULL, started_at TEXT, finished_at TEXT
 );
+
+CREATE TABLE footage_analyses (               -- FR-285: the FootageAnalysis of a finished prep job (packages/models analysis types; recording time)
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  voice_asset_id TEXT NOT NULL REFERENCES assets(id),
+  camera_asset_id TEXT REFERENCES assets(id),
+  master_asset_id TEXT REFERENCES assets(id),   -- the master video built by the job (ingested like any Asset)
+  json           TEXT NOT NULL CHECK(json_valid(json)),
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX idx_footage_analyses_project ON footage_analyses(project_id, created_at);
 
 CREATE TABLE models (                         -- Model Manager state
   key            TEXT PRIMARY KEY,            -- e.g. 'whisper.large-v3-turbo'
@@ -347,9 +358,13 @@ export const Clip = z.object({
   objectFit: z.enum(['cover','contain']).default('cover'),
   crop: z.object({ left: z.number(), right: z.number(), top: z.number(), bottom: z.number() }).optional(), // 0..1
   transform: ClipTransform.optional(),        // ADR-028: absent = identity (the picture before ADR-028); op:element.setTransform
+  zoom: ClipZoom.optional(),                  // ADR-039: punch-in keyframes (op:clip.setZoom); absent = none; removed again at 1 → 1 without pops
   motion: Motion.nullable(),
   effects: z.array(EffectInstance).max(3),
 });
+// ADR-039: a linear zoom from `from` to `to` across the clip plus spring pops of `+amount` at `atMs` (CLIP-relative ms) that settle back over `durationMs` (default 450); multiplies transform.scale.
+export const ZoomPop = z.object({ atMs: z.number().int().min(0), amount: z.number().min(-2).max(2), durationMs: z.number().int().min(50).max(5000).optional() });
+export const ClipZoom = z.object({ from: z.number().min(0.1).max(10), to: z.number().min(0.1).max(10), pops: z.array(ZoomPop).max(200).optional() });
 // ADR-028: centre offset as a fraction of the frame width / height (0 = centred), scale 1 = the objectFit result, degrees clockwise ([0, 360) from applyOps).
 // applyOps deletes `transform` again when it reaches the identity, so a reset restores the earlier hash.
 export const ClipTransform = z.object({ x: z.number().min(-2).max(2), y: z.number().min(-2).max(2), scale: z.number().min(0.1).max(10), rotation: z.number().min(-360).max(360) });
@@ -373,6 +388,13 @@ const OverlayScale = z.number().min(0.05).max(20).optional(), OverlayRotation = 
 export const OverlayElement = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size, objectFit: z.enum(['cover','contain']), opacity: z.number(), scale: OverlayScale, rotation: OverlayRotation, motion: Motion.nullable(), effects: z.array(EffectInstance).max(3) }),
   z.object({ kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, layer: Lane, position: Position, size: Size, fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional() /* op:overlay.setOpacity */, scale: OverlayScale, rotation: OverlayRotation, params: z.record(z.unknown()).default({}), motion: Motion.nullable() }),
+  // ADR-039 (op:overlay.addVideo / setShape): a video on the overlay Track (face bubble, picture-in-picture); `position` = box centre (u);
+  // `shape` rect (`radius` u corners) | circle; `ring` drawn outside the mask; `focus` = SOURCE point (fractions 0..1) at the box centre, zoomed. Target kind `video`.
+  z.object({ kind: z.literal('video'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size,
+    trimBeforeMs: z.number().int().min(0).default(0), muted: z.boolean().default(true), shape: z.enum(['rect','circle']).default('rect'),
+    radius: z.number().min(0).max(2000).optional(), ring: z.object({ colour: Hex, widthU: z.number().min(0).max(200) }).optional(),
+    focus: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), zoom: z.number().min(0.1).max(10) }).optional(),
+    opacity: z.number().min(0).max(1).optional(), scale: OverlayScale, rotation: OverlayRotation, motion: Motion.nullable() }),
 ]);
 
 export const CaptionPage = z.object({ text: z.string(), startMs: z.number().int(), durationMs: z.number().int(), tokens: z.array(z.object({ text: z.string(), fromMs: z.number().int(), toMs: z.number().int() })) });
@@ -385,7 +407,10 @@ export const AudioLayer = z.object({
   trimBeforeMs: z.number().int().min(0).default(0), volume: z.number().min(0).max(1), loop: z.boolean().default(false),
   fadeInMs: z.number().int().default(0), fadeOutMs: z.number().int().default(0),
   ducking: z.object({ presetId: PresetId, params: z.record(z.unknown()).default({}) }).nullable(),
+  gain: z.array(GainSegment).max(500).optional(),  // ADR-039 (op:audio.setGain): lift / dip segments; absent or empty = the plain volume
 });
+// ADR-039: multiplies the layer volume by `mul` from `atMs` (COMPOSITION time) for `durationMs`, ramping in / out over `rampMs` (default 300); overlapping segments multiply.
+export const GainSegment = z.object({ atMs: z.number().int().min(0), durationMs: z.number().int().min(1), mul: z.number().min(0).max(4), rampMs: z.number().int().min(0).max(10_000).optional() });
 
 export const Background = z.object({ presetId: PresetId, params: z.record(z.unknown()).default({}) });
 ```
@@ -440,6 +465,7 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 | 20 | s2_render_failed_frame | `render_jobs.failed_frame INTEGER CHECK(failed_frame IS NULL OR failed_frame >= 0)`: the frame a failed, stalled or interrupted Render Job stopped at (FR-143), from the renderer error (`frame` / "frame N"), else the last progress report; startup recovery copies `rendered_frames` of jobs that were rendering. Shown in the Export failure dialog (`scr.export.failed.frame`) and sent as `render.failed.frame` |
 | 21 | s2_asset_soft_delete_source_key | `assets.deleted_at TEXT` (FR-052: Remove Asset soft-deletes while any Composition Version references the asset, so Undo restores Clips with media; listings and counts skip removed rows, composition facts keep them; unreferenced removed rows are purged with their files on R-031) and `assets.source_key TEXT` + partial index `(project_id, source_key)` (FR-041: sha256 of canonical source path, size and mtime of a path import, so the same file is recognised as EM-1006 before copying; a digest, never the path) |
 | 23 | s2_voice_keys_azure_google | rebuilds `voice_keys` with `provider IN ('elevenlabs','azure','google-cloud')` (rows kept): FR-269 voice-only keys for Azure AI Speech (sealed `<region>|<key>`) and Google Cloud Text-to-Speech, AAD `voice_keys:<provider>`, hint only (SEC-135). Migration 22 (`voice_keys`, `voice_transcripts`) is listed in DECISIONS ADR-035. |
+| 24 | s2_footage_prep | rebuilds `generator_jobs` (rows kept) with `kind IN (…, 'prep')` and `status IN (…, 'needs-input')` + `idx_generator_jobs_project(project_id, created_at)`; adds `footage_analyses(id, project_id → projects ON DELETE CASCADE, voice_asset_id, camera_asset_id, master_asset_id, json, created_at)` + `idx_footage_analyses_project` (FR-285 … FR-287 Reels footage prep, ADR-039). |
 | 30 | s3_budgets_defaults_handoffs | `project_budgets(project_id, limit_usd, updated_at)` (per-project AI cap per calendar month, NULL or 0 = no limit, FR-117); `provider_defaults(default_connection_id)` (R-097); `brainstorm_handoffs(id, project_id, message_id, intents_json, status pending/enqueued, created_at)` (R-082 payloads until the intents module enqueues them); `agent_runs.plan_id`; indexes on runs and `usage_records` |
 
 | 31 | s3_project_connection_budgets | `project_connection_budgets(project_id, connection_id, limit_usd, updated_at, PK(project_id, connection_id))` (FR-117: the per-Project cap is per Provider Connection; calendar month; NULL or 0 = no limit; both FKs cascade); existing `project_budgets` caps are copied onto every connection and the project-wide value is cleared (the table stays for R-100 rows without `connectionId`); index `agent_runs(project_id, connection_id)` |
@@ -455,6 +481,7 @@ Later migrations append rows here (ADR-024).
 |---|---|---|
 | 1 | initial (§4 as baselined 2026-10-24) | — |
 | 2 | ADR-027 (2026-10-26): `layer` on TextLayer / OverlayImage / OverlayShape, `lane` on AudioLayer; looping audio honours `durationMs` | `MIGRATIONS[1]` = `assignLanesV1`: visual items are taken in the v1 render order (overlays in array order, then texts in array order) and each gets the lowest layer above every earlier item it overlaps in time, so every overlapping pair keeps its v1 front/back order and lanes are dense; audio layers get the first free lane in array order; `durationMs` is removed from v1 looping layers (v1 looped them to the end regardless). Golden fixture: `test/fixtures/model-v1.json` → `model-v2.expected.json`. Stored versions migrate lazily on load; opening a project commits the migrated head as a `cause = 'system'` version (R-016); checkpoints written before the migration still verify against the hash of their stored JSON |
+| 2 (unchanged) | ADR-039 (2026-10-31): optional Clip `zoom`, optional AudioLayer `gain`, new overlay kind `video` (OverlayVideo) | none: the fields are optional and absent means the picture before; a stored model never holds a `video` overlay unless an ADR-039 build wrote it. Same caveat as ADR-028: an older build drops `zoom` / `gain` silently and refuses a model with a `video` overlay (unknown discriminator → EM-2001) |
 | 2 (unchanged) | ADR-028 (2026-10-26): optional Clip `transform`, optional `scale` / `rotation` on OverlayImage / OverlayShape | none: the fields are optional and absent means the identity, so every stored v2 model parses unchanged with the same hash (checkpoints keep verifying). Policy used (§4.5): an optional field whose absence reproduces the old picture needs no version bump; a field that must be defaulted into stored JSON does. Provisional caveat (ADR-028): a build from before ADR-028 drops the fields silently instead of refusing the project |
 
 ## 6. Backup, restore, portability

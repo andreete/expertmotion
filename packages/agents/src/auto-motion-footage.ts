@@ -57,16 +57,61 @@ function segmentWords(segs: ReadonlyArray<{ text: string; fromMs: number; toMs: 
   }
   return out;
 }
-const norm = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}\s]/gu, '').trim();
-/** Source time (ms) where `phrase` is said inside [from, from + len) of the transcript; null when not found. */
-export function findSaid(words: FootageWindow['words'], phrase: string, from: number, len: number, edge: 'start' | 'end' = 'start'): number | null {
-  const want = norm(phrase).split(/\s+/).filter(Boolean);
+export const normWord = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+/** Levenshtein distance of two short strings (words). */
+export function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length]!;
+}
+/** Normalised word similarity 1 − levenshtein / longer length (1 = same word, 0 = nothing in common). */
+export function wordSimilarity(a: string, b: string): number {
+  const x = normWord(a), y = normWord(b);
+  const n = Math.max(x.length, y.length);
+  return n ? 1 - levenshtein(x, y) / n : 1;
+}
+/** ADR-039: a fuzzy word match: ≥ `minSim` (0.75) per word; words of ≤ 3 letters must match exactly (no "di" ≈ "ke"). */
+export const DEFAULT_SAY_MIN_SIM = 0.75;
+export function wordMatches(heard: string, want: string, minSim = DEFAULT_SAY_MIN_SIM): boolean {
+  const h = normWord(heard), w = normWord(want);
+  if (h === w) return true;
+  if (w.length <= 3 || h.length <= 3) return false;
+  return wordSimilarity(h, w) >= minSim;
+}
+/**
+ * Source time (ms) where `phrase` is said inside [from, from + len) of the transcript; null when not found. Exact word matches win;
+ * otherwise the best fuzzy match (every word ≥ `minSim` similar, ADR-039: whisper spells "SMR" as "smr", "AI" as "ai" or "a i",
+ * "24" as "dua puluh empat" is NOT matched — the composer falls back to an explicit `fallbackMs`).
+ */
+export function findSaid(words: FootageWindow['words'], phrase: string, from: number, len: number, edge: 'start' | 'end' = 'start', opts: { minSim?: number } = {}): number | null {
+  const hit = findSaidIndex(words, phrase, from, len, opts);
+  if (!hit) return null;
+  return edge === 'end' ? words[hit.index + hit.length - 1]!.toMs : words[hit.index]!.fromMs;
+}
+/** The matched word run (index + length in `words`) and its mean similarity; null when nothing matches. */
+export function findSaidIndex(words: ReadonlyArray<{ text: string; fromMs: number; toMs: number }>, phrase: string, from: number, len: number, opts: { minSim?: number } = {}): { index: number; length: number; similarity: number } | null {
+  const want = normWord(phrase).split(/\s+/).filter(Boolean);
   if (!want.length) return null;
+  const minSim = opts.minSim ?? DEFAULT_SAY_MIN_SIM;
+  let best: { index: number; length: number; similarity: number } | null = null;
   for (let k = 0; k + want.length <= words.length; k++) {
     if (words[k]!.fromMs < from || words[k]!.fromMs >= from + len) continue;
-    if (want.every((w, j) => norm(words[k + j]!.text) === w)) return edge === 'end' ? words[k + want.length - 1]!.toMs : words[k]!.fromMs;
+    if (want.every((w, j) => normWord(words[k + j]!.text) === w)) return { index: k, length: want.length, similarity: 1 };
+    if (!want.every((w, j) => wordMatches(words[k + j]!.text, w, minSim))) continue;
+    const sim = want.reduce((a, w, j) => a + wordSimilarity(words[k + j]!.text, w), 0) / want.length;
+    if (!best || sim > best.similarity) best = { index: k, length: want.length, similarity: sim };
   }
-  return null;
+  return best;
+}
+/** ADR-039: the words of one cut of a footage analysis (recording time), [] when the cut is unknown. */
+export function cutWordsFor(cuts: ReadonlyArray<{ id: string; words: ReadonlyArray<{ text: string; fromMs: number; toMs: number }> }>, cutId: string): Array<{ text: string; fromMs: number; toMs: number }> {
+  return (cuts.find((c) => c.id === cutId)?.words ?? []).map((w) => ({ text: w.text, fromMs: w.fromMs, toMs: w.toMs }));
 }
 
 /** Scene length of a footage scene: its window, the voice / requested length if shorter, always leaving the outgoing transition room. */

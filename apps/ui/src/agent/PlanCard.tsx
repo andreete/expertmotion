@@ -11,6 +11,7 @@ import type { PlanDto } from '../api/types.js';
 import { Button, cx } from '../components/ui.js';
 import { formatMoney, formatTokens } from '../i18n/index.js';
 import { conflictsWithLocked, propertyKeysOf, type OperationT } from '@expertmotion/composition-model';
+import { StageButtons } from './Reels.js';
 
 /** FR-083: Execute needs a valid plan on the head, no block risk, no run in progress and at least one Clip; else the reason. */
 export function executeDisabledReason(plan: PlanDto | null, headHash: string | undefined, t: (k: string) => string, ctx: { hasClip?: boolean; running?: boolean } = {}): string | null {
@@ -175,7 +176,9 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
     return <div data-el="agent.editor.plancard" data-plan-id={plan.id} data-status="executed" data-collapsed="true" className="flex w-full max-w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded-[8px] border border-em-success px-2 py-1 text-[12px] text-em-success"><CheckCircle2 size={14} /><span className="min-w-0 flex-1 basis-[60%] truncate" title={plan.goal}><ModelText inline text={plan.goal} /></span>
       <span className="shrink-0">{t('ui.agent.plan.status.executed')} · v{(plan.result?.toVersion ?? headHash ?? '').slice(0, 6)}</span>{plan.result && <span data-el="agent.editor.plancard.result" className="shrink-0 text-em-text-2">· {diffSummary(plan.result, t)}</span>}
       <ShowInTimeline plan={plan} /><UndoPlan plan={plan} /><button type="button" className="shrink-0 underline" onClick={() => setCollapsed(false)}>{t('ui.common.details')}</button>
-      {toolNote && <span data-el="agent.editor.plancard.toolnote" className="shrink-0 text-em-text-2">· {toolNote}</span>}</div>;
+      {toolNote && <span data-el="agent.editor.plancard.toolnote" className="shrink-0 text-em-text-2">· {toolNote}</span>}
+      {/* FR-28x: Final (1080p) stays reachable after the preview collapsed the card */}
+      {(state.assets.some((a) => a.kind === 'video') || state.analysis) && <span className="basis-full"><StageButtons plan={plan} /></span>}</div>;
   }
   return (
     <section data-el="agent.editor.plancard" data-plan-id={plan.id} data-status={status} role="region" aria-label={t('a11y.agent.editor.plancard', { goal: plan.goal, status: h.text, version: base })}
@@ -281,6 +284,8 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
           <div role="progressbar" aria-label={t('ui.agent.plan.state.executing.changes', { n: Math.max(1, planChanges(plan)) })} className="h-1 w-full overflow-hidden rounded-full bg-em-line"><div className="em-indeterminate h-full w-1/3 bg-em-accent" /></div>
         </div>)}
       {status !== 'executing' && voicePending(plan) > 0 && <div data-el="agent.editor.plancard.estimate" role="note" className="text-[11px] text-em-warn">{t('ui.agent.plan.preview.estimate', { n: voicePending(plan) })}</div>}
+      {/* FR-28x (Reels): the footage path's three Creator actions on a project with a recording (prep · 720p preview · 1080p final) */}
+      {(state.assets.some((a) => a.kind === 'video') || state.analysis) && status !== 'executing' && status !== 'draft' && <StageButtons plan={plan} />}
       <div className="sticky bottom-0 flex items-center gap-2 border-t border-em-line bg-em-panel pt-2">
         {status !== 'executed' && status !== 'executing' && <Button size={28} variant="ghost" onClick={() => void actions.cancelPlan()}>{t('ui.agent.plan.discard')}</Button>}
         {(status === 'valid' || status === 'stale') && <Button el="agent.editor.plancard.revise" size={28} variant="ghost" icon={<Pencil size={12} />} title={t('ui.agent.plan.revise.tip')} onClick={() => { window.dispatchEvent(new CustomEvent('em:ask-editor', { detail: { text: t('ui.agent.plan.revise.prefix') } })); }}>{t('ui.agent.plan.revise')}</Button>}

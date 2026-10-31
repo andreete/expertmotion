@@ -19,7 +19,7 @@ const reply = (o: Record<string, unknown>) => JSON.stringify(o);
 describe('tool specs (FR-211)', () => {
   it('wire names are provider-safe and map back; every brainstorm tool has a JSON Schema object', () => {
     const specs = toolSpecs(BRAINSTORM_TOOL_NAMES);
-    expect(specs.map((s) => s.name)).toEqual(['composition_get', 'assets_list', 'catalogue_search', 'hardware_profile', 'project_settings_get', 'render_estimate', 'web_search', 'web_fetch', 'web_images']);   // FR-216: research tools (offered only with handlers)
+    expect(specs.map((s) => s.name)).toEqual(['composition_get', 'assets_list', 'catalogue_search', 'hardware_profile', 'project_settings_get', 'render_estimate', 'web_search', 'web_fetch', 'web_images', 'media_analyze', 'media_frames', 'media_analysis_get']);   // FR-216 (web) + ADR-039 (media prep tools) …: research tools (offered only with handlers)
     for (const s of specs) { expect(s.name).toMatch(/^[A-Za-z0-9_-]{1,64}$/); expect(s.inputSchema['type']).toBe('object'); expect(s.description.length).toBeGreaterThan(10); }
     expect(specs.find((s) => s.name === 'catalogue_search')!.inputSchema).toMatchObject({ required: ['query'], properties: { category: { enum: expect.arrayContaining(['background', 'transition']) } } });
     expect(fromWireToolName('catalogue_search')).toBe('catalogue.search');

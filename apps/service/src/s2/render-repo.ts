@@ -6,8 +6,8 @@ import type { ServiceContext } from '../context.js';
 
 export interface OutputProfileT {
   ratio: '16:9' | '9:16' | '1:1' | '4:5' | '5:4' | '4:3' | '3:4' | 'custom'; customRatio?: { w: number; h: number } | undefined;
-  resolution: '720p' | '1080p' | '2k' | '2160p'; fps: 24 | 25 | 30 | 50 | 60; format: 'mp4' | 'webm' | 'gif' | 'png' | 'wav';
-  codec?: 'h264' | 'vp9' | 'gif' | 'png' | 'pcm' | undefined; crf?: number | undefined; alpha: boolean; stillAtMs?: number | undefined;
+  resolution: '720p' | '1080p' | '2k' | '2160p'; fps: 24 | 25 | 30 | 50 | 60; format: 'mp4' | 'webm' | 'gif' | 'png' | 'jpg' | 'wav';   // FR-289: `jpg` = JPEG still (cover)
+  codec?: 'h264' | 'vp9' | 'gif' | 'png' | 'jpg' | 'pcm' | undefined; crf?: number | undefined; alpha: boolean; stillAtMs?: number | undefined;
 }
 export interface RenderJobRow {
   id: string; project_id: string; version_id: string; output_profile_json: string; performance_profile: 'standard' | 'accelerated' | 'turbo';

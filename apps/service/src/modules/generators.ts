@@ -1,5 +1,6 @@
 // Generators module: R-130…R-133 (API_SPECIFICATION §6.13); jobs live in s2/generators-service.ts.
 import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import type { ServiceModule } from './types.js';
 import { route } from '../http/route.js';
@@ -10,6 +11,10 @@ import { sendFile } from './media.js';
 import { MUSIC_MOODS, transcriptToSrt } from '@expertmotion/models';
 import { musicBedOp } from '../s2/generators-service.js';
 import { GENERATOR_KINDS, HASHTAG_TONES, THUMBNAIL_STYLES, generatorsServiceOf, toGenDto, type GeneratorKind, type GeneratorsOptions } from '../s2/generators-service.js';
+import { contactSheet, frameTimes, latestAnalysis, prepDir } from '../s2/reels/footage-prep.js';
+import { renderCover } from '../s2/reels/cover-service.js';
+import { ensureSfxAssets } from '../s2/sfx-service.js';
+import { s2 } from '../s2/state.js';
 
 const Id = z.string().regex(ULID, 'expected an id');
 const Lang = z.string();   // id|en checked by the service so unsupported languages answer EM-7105
@@ -31,7 +36,17 @@ const BODIES: Record<GeneratorKind, z.ZodType<Record<string, unknown>>> = {
   thumbnail: z.object({ frameMs: z.number().int().min(0).optional(), titleText: z.string().max(500).optional(), prompt: z.string().min(1).max(1000).optional(), count: z.number().int().min(1).max(4).optional(),
     style: z.enum(THUMBNAIL_STYLES).optional(), language: Lang.optional(), modelKey: z.string().max(64).optional(), size: z.object({ w: z.number().int().min(256).max(2048), h: z.number().int().min(256).max(2048) }).optional() }),
   hashtags: z.object({ language: Lang, platform: z.enum(['tiktok', 'instagram', 'youtube']), tone: z.enum(HASHTAG_TONES).optional(), count: z.number().int().min(5).max(30) }),
+  // FR-285 (Reels footage prep): the recorder's voice file (or a video with speech) and the optional camera file; `offsetMs` / `sync` /
+  // `resumedFrom` are what R-148 carries over from a job that stopped for the rotation confirmation
+  prep: z.object({ voiceAssetId: Id, cameraAssetId: Id.optional(), script: z.string().max(20_000).optional(), rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional(),
+    targetFps: z.union([z.literal(24), z.literal(25), z.literal(30)]).optional(), maxTotalMs: z.number().int().min(5000).max(600_000).optional(), sttModelKey: z.string().max(64).optional(),
+    offsetMs: z.number().int().min(-60_000).max(60_000).optional(), sync: z.record(z.string(), z.unknown()).optional(), resumedFrom: Id.optional(), shortSide: z.number().int().min(240).max(2160).optional(), confirmRotation: z.boolean().optional() }),
 };
+const Rotation = z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]);
+/** FR-289 (R-153): cover spec (composer builds the model) or, for tests and custom covers, a Composition Model. */
+const CoverBody = z.object({ cutId: z.string().max(64).optional(), atMs: z.number().int().min(0).optional(), hookWord: z.string().max(40).default(''), kicker: z.string().max(80).optional(), line: z.string().max(200).default(''),
+  subline: z.string().max(200).optional(), pills: z.array(z.object({ text: z.string().max(40), tone: z.string().max(20).optional() })).max(6).optional(), icons: z.array(z.string().max(40)).max(6).optional(),
+  source: z.string().max(200).optional(), handle: z.string().max(60).optional(), model: z.record(z.string(), z.unknown()).optional() }).strict();
 
 export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceModule {
   return {
@@ -51,6 +66,8 @@ export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceMod
       ctx.hooks.voiceCatalog = async (language) => (await voicesServiceOf(ctx).list(language)).map((v) => ({ id: v.id, name: v.name, provider: v.provider, gender: v.gender,
         traits: [...v.traits.id, ...v.traits.en], cloud: v.cloud, availability: v.availability, usdPer1kChars: v.usdPer1kChars ?? null }));
       ctx.hooks.voiceTranscript = (assetId) => svc.transcriptOf(assetId);
+      // FR-288 (Reels): the project's procedural SFX Assets for the Execute path (plan steps that place SFX)
+      ctx.hooks.sfxAssets = (projectId) => ensureSfxAssets(ctx, projectId);
     },
     register(router, ctx) {
       const svc = generatorsServiceOf(ctx, opts);
@@ -140,6 +157,40 @@ export function createGeneratorsModule(opts: GeneratorsOptions = {}): ServiceMod
       });
       route(router, 'post', '/generator-jobs/:jobId/cancel', { params: z.object({ jobId: Id }) }, ({ params }) => {   // R-133
         const r = svc.cancel(params.jobId); if (!r) throw em('EM-9003', 'Not found.'); return r;
+      });
+      // FR-285 … FR-289 (Reels pipeline, ADR-039): the stored analysis, rotation confirmation, contact sheet and cover still
+      route(router, 'get', '/projects/:id/footage-analysis', { params: z.object({ id: Id }) }, ({ params }) => {   // R-145
+        requireProject(ctx, params.id);
+        const a = latestAnalysis(ctx, params.id); if (!a) throw em('EM-9003', 'Not found.'); return a;
+      });
+      route(router, 'post', '/projects/:id/footage-prep/:jobId/continue', { params: z.object({ id: Id, jobId: Id }), body: z.object({ rotation: Rotation }).strict(), status: 202 }, ({ params, body }) => {   // R-148
+        requireProject(ctx, params.id);
+        return svc.continuePrep(params.id, params.jobId, body.rotation);
+      });
+      route(router, 'get', '/projects/:id/footage-prep/:jobId/thumbs/:deg', { params: z.object({ id: Id, jobId: Id, deg: z.enum(['0', '90', '180', '270']) }) }, async ({ params, req, res }) => {   // R-154
+        requireProject(ctx, params.id);
+        const r = svc.get(params.jobId); if (!r || r.project_id !== params.id) throw em('EM-9003', 'Not found.');
+        const file = path.join(prepDir(ctx, params.jobId), `rot-${params.deg}.jpg`);
+        if (!fs.existsSync(file)) throw em('EM-9003', 'Not found.');
+        await sendFile(req, res, file, { 'Cache-Control': 'private, max-age=3600' });
+      });
+      // R-149: `cutIds=a,b` → one frame per cut (its middle); `atMs=<ms>&count=<n>` → the middles of the first n cuts from that time on
+      // (evenly spaced frames without cuts); `atMs=a,b,c` → exactly those times. Grid: ceil(sqrt(n)) columns, row-major; cells in the header.
+      const Frames = z.object({ atMs: z.array(z.number().int().min(0)).max(12).optional(), cutIds: z.array(z.string().max(64)).max(12).optional(), count: z.number().int().min(1).max(12).optional(), rotation: Rotation.optional() });
+      route(router, 'get', '/projects/:id/footage-analysis/frames', { params: z.object({ id: Id }), query: z.object({ atMs: z.string().max(400).optional(), cutIds: z.string().max(800).optional(), count: z.coerce.number().optional(), rotation: z.coerce.number().optional() }) }, async ({ params, query, req, res }) => {   // R-149
+        requireProject(ctx, params.id);
+        const atMs = query.atMs ? query.atMs.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n >= 0) : undefined;
+        const cutIds = query.cutIds ? query.cutIds.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+        const q = parseOrThrow(Frames, { ...(atMs?.length ? { atMs } : {}), ...(cutIds?.length ? { cutIds } : {}), ...(query.count !== undefined ? { count: query.count } : {}), ...(query.rotation !== undefined ? { rotation: query.rotation } : {}) }, 'query');
+        const a = latestAnalysis(ctx, params.id);
+        const times = q.count !== undefined || (q.atMs?.length === 1 && !q.cutIds) ? frameTimes(a, { count: q.count ?? 1, fromMs: q.atMs?.[0] ?? 0 }) : frameTimes(a, { ...(q.atMs ? { atMs: q.atMs } : {}), ...(q.cutIds ? { cutIds: q.cutIds } : {}) });
+        if (!times.length) throw em('EM-9002', 'Invalid request: atMs, count or cutIds is required.', { status: 400, path: 'query.atMs' });
+        const sheet = await contactSheet(ctx, params.id, { atMs: times, ...(q.rotation !== undefined ? { rotation: q.rotation } : {}), heavy: (fn) => s2(ctx).heavy.run(fn) });
+        try { res.setHeader('X-Expertmotion-Cells', JSON.stringify({ cols: sheet.cols, rows: sheet.rows, cells: sheet.cells })); await sendFile(req, res, sheet.file); } finally { fs.rmSync(sheet.dir, { recursive: true, force: true }); }
+      });
+      route(router, 'post', '/projects/:id/cover', { params: z.object({ id: Id }), body: CoverBody }, async ({ params, body }) => {   // R-153
+        requireProject(ctx, params.id);
+        return renderCover(ctx, params.id, body);
       });
     },
   };

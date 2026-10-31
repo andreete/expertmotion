@@ -1,10 +1,12 @@
-// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (53 ops: ADR-020 additions, ADR-027 element timing/layer,
-// ADR-028 split and canvas transform, ADR-030 scenes for videos without media, ADR-033 caption text fixes).
+// The closed operation vocabulary of docs/AI_WORKFLOW.md §5 in code (58 ops: ADR-020 additions, ADR-027 element timing/layer,
+// ADR-028 split and canvas transform, ADR-030 scenes for videos without media, ADR-033 caption text fixes, ADR-039 Reels
+// pipeline: video overlays, clip zoom keyframes, audio volume / gain segments).
 // test/operations.test.ts fails if this table and the document disagree.
 import { z } from 'zod';
-import { CaptionPage, Hex, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
+import { CaptionPage, ClipZoom, GainSegment, Hex, OverlayFocus, OverlayRing, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
 
-export const TARGET_KINDS = ['sequence', 'clip', 'cut', 'text', 'caption', 'audio', 'shape', 'image', 'background', 'effect', 'project', 'selection', 'playhead'] as const;
+/** `video` (ADR-039) names a video OVERLAY (face bubble), never a Clip of the video Track (that is `clip`). */
+export const TARGET_KINDS = ['sequence', 'clip', 'cut', 'text', 'caption', 'audio', 'shape', 'image', 'video', 'background', 'effect', 'project', 'selection', 'playhead'] as const;
 export type TargetKind = (typeof TARGET_KINDS)[number];
 export const ElementRef = z.object({ kind: z.enum(TARGET_KINDS), id: z.string().optional(), index: z.number().int().min(0).optional() }).strict();
 export type ElementRefT = z.infer<typeof ElementRef>;
@@ -41,7 +43,10 @@ const ClipLookArgs = {
   objectFit: z.enum(['cover', 'contain']).optional(), crop: ClipCrop.optional(),
   transform: z.object({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.1).max(10).optional(), rotation: z.number().min(-360).max(360).optional() }).strict().optional(),
   playbackRate: z.number().min(0.25).max(4).optional(), motion: MotionArg.optional(), effects: z.array(EffectArg).max(3).optional(),
+  zoom: ClipZoom.strict().optional(),                        // ADR-039: so Duplicate / Paste keep a punch-in; absent = none
 };
+/** ADR-039 op:overlay.addVideo / op:overlay.setShape pieces (strict: the model sees an EM-2102 on a typo, not a silent ignore). */
+const FocusArg = OverlayFocus.strict(), RingArg = OverlayRing.strict(), GainArg = z.array(GainSegment.strict()).max(500);
 
 export type PropertyClass = 'scalar' | 'list' | 'exclusive-group';
 export interface OpDef { args: z.ZodType; targets: readonly TargetKind[] | null; propertyClass: PropertyClass | null; destructive: boolean }
@@ -102,26 +107,39 @@ export const OPERATIONS = {
   'op:shape.remove': def({}, ['shape'], null, true),
   // ADR-020 addition (Stage 3): image overlays (FR-029 "Insert Image", logo/product photo). size = width in u; height follows the image aspect.
   'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional(), layer: lane.optional(), motion: MotionArg.optional(), scale: OverlayScaleArg.optional(), rotation: RotationArg.optional() }, null, 'list'),
-  'op:overlay.remove': def({}, ['image'], null, true),
-  // FR-028 addition (Stage 3): opacity of an overlay image or a Shape on the overlay Track.
-  'op:overlay.setOpacity': def({ opacity: z.number().min(0).max(1) }, ['image', 'shape'], 'scalar'),
-  // ADR-027 (Timeline drag/trim/lanes): start and length of any text, image, shape or audio layer; optionally its lane at once
-  // (one op per Timeline gesture). `trimBeforeMs` (audio only) moves the source offset with a left-edge trim.
-  'op:element.setTiming': def({ atMs: ms, durationMs: dur, trimBeforeMs: ms.optional(), layer: lane.optional() }, ['text', 'image', 'shape', 'audio'], 'scalar'),
+  // ADR-039 (Reels face bubble / picture-in-picture): a video asset on the overlay Track, muted by default, trimmed at
+  // `trimBeforeMs`; `size` = width in u (height from the source aspect, or `height`; a circle uses `size` for both), masked
+  // `rect` (`radius` u) or `circle`, ring outside the mask, `focus` = source point (fractions) at the box centre, zoomed.
+  'op:overlay.addVideo': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), trimBeforeMs: ms.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), height: z.number().min(1).max(4000).optional(),
+    shape: z.enum(['rect', 'circle']).optional(), radius: z.number().min(0).max(2000).optional(), ring: RingArg.optional(), focus: FocusArg.optional(), muted: z.boolean().optional(), opacity: z.number().min(0).max(1).optional(),
+    layer: lane.optional(), motion: MotionArg.optional(), scale: OverlayScaleArg.optional(), rotation: RotationArg.optional() }, null, 'list'),
+  // ADR-039: mask, corner radius, ring and focus of a video overlay; `null` removes the ring / focus; omitted fields keep theirs.
+  'op:overlay.setShape': def({ shape: z.enum(['rect', 'circle']).optional(), radius: z.number().min(0).max(2000).nullable().optional(), ring: RingArg.nullable().optional(), focus: FocusArg.nullable().optional() }, ['video'], 'scalar'),
+  'op:overlay.remove': def({}, ['image', 'video'], null, true),
+  // FR-028 addition (Stage 3): opacity of an overlay image, video or a Shape on the overlay Track.
+  'op:overlay.setOpacity': def({ opacity: z.number().min(0).max(1) }, ['image', 'shape', 'video'], 'scalar'),
+  // ADR-039 (Reels punch-ins): linear zoom from → to across the clip plus spring pops at clip-relative times; 1 → 1 without pops removes it.
+  'op:clip.setZoom': def({ from: z.number().min(0.1).max(10), to: z.number().min(0.1).max(10), pops: z.array(z.object({ atMs: ms, amount: z.number().min(-2).max(2), durationMs: z.number().int().min(50).max(5000).optional() }).strict()).max(200).optional() }, ['clip'], 'scalar'),
+  // ADR-027 (Timeline drag/trim/lanes): start and length of any text, image, shape, video overlay or audio layer; optionally its lane at once
+  // (one op per Timeline gesture). `trimBeforeMs` (audio / video overlay) moves the source offset with a left-edge trim.
+  'op:element.setTiming': def({ atMs: ms, durationMs: dur, trimBeforeMs: ms.optional(), layer: lane.optional() }, ['text', 'image', 'shape', 'video', 'audio'], 'scalar'),
   // ADR-027: stacking order. Exactly one of `layer` (absolute lane) or `move`; audio has lanes but no stacking (`layer` or up/down only).
-  'op:element.setLayer': def({ layer: lane.optional(), move: z.enum(['up', 'down', 'front', 'back']).optional() }, ['text', 'image', 'shape', 'audio'], 'scalar'),
-  // ADR-028 (FR-179 cut / split): splits a clip, text, image, shape or audio layer at `atMs` (composition time, ms) into two
-  // adjacent parts; the second part gets a new id and continues the source (clip trimBeforeMs + d × playbackRate, audio + d).
-  'op:element.split': def({ atMs: ms }, ['clip', 'text', 'image', 'shape', 'audio'], null),
+  'op:element.setLayer': def({ layer: lane.optional(), move: z.enum(['up', 'down', 'front', 'back']).optional() }, ['text', 'image', 'shape', 'video', 'audio'], 'scalar'),
+  // ADR-028 (FR-179 cut / split): splits a clip, text, image, shape, video overlay or audio layer at `atMs` (composition time, ms) into two
+  // adjacent parts; the second part gets a new id and continues the source (clip trimBeforeMs + d × playbackRate, audio / video overlay + d).
+  'op:element.split': def({ atMs: ms }, ['clip', 'text', 'image', 'shape', 'video', 'audio'], null),
   // ADR-028 (FR-180 canvas transform): picture position / zoom / rotation. x, y = centre offset as a fraction of the frame width /
-  // height; scale 1 = the objectFit result (clip, 0.1…10) or the stored size (image / shape, 0.05…20); rotation in degrees.
-  'op:element.setTransform': def({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }, ['clip', 'image', 'shape', 'text'], 'scalar'),   // ADR-034: a text takes x / y only (quality-gate re-flow)
+  // height; scale 1 = the objectFit result (clip, 0.1…10) or the stored size (image / shape / video, 0.05…20); rotation in degrees.
+  'op:element.setTransform': def({ x: z.number().min(-2).max(2).optional(), y: z.number().min(-2).max(2).optional(), scale: z.number().min(0.05).max(20).optional(), rotation: z.number().min(-360).max(360).optional() }, ['clip', 'image', 'shape', 'video', 'text'], 'scalar'),   // ADR-034: a text takes x / y only (quality-gate re-flow)
   'op:audio.addBed': def({ assetId: z.string(), volume: z.number().min(0).max(1).default(0.2), loop: z.boolean().default(true), duckingPresetId: PresetId.optional(), duckingParams: Params.optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['project'], 'list'),   // FR-266: duckingParams (e.g. volume / duckTo of preset:audio.duck-voice)
   // Round 2: trimBeforeMs / durationMs / loop / ducking let Duplicate and Paste rebuild a voice / sfx layer exactly (absent = as before).
   'op:audio.addLayer': def({ assetId: z.string(), atMs: ms, volume: z.number().min(0).max(1), role: z.enum(['voice', 'sfx']).default('voice'), fadeInMs: ms.optional(), fadeOutMs: ms.optional(),
-    trimBeforeMs: ms.optional(), durationMs: dur.optional(), loop: z.boolean().optional(), ducking: z.object({ presetId: PresetId, params: Params.optional() }).strict().optional() }, null, 'list'),
+    trimBeforeMs: ms.optional(), durationMs: dur.optional(), loop: z.boolean().optional(), ducking: z.object({ presetId: PresetId, params: Params.optional() }).strict().optional(), gain: GainArg.optional() }, null, 'list'),
   'op:audio.setDucking': def({ presetId: PresetId, params: Params.optional() }, ['audio'], 'exclusive-group'),
   'op:audio.setFades': def({ fadeInMs: ms.optional(), fadeOutMs: ms.optional() }, ['audio'], 'scalar'),
+  // ADR-039: the layer's own level (beds, voice, sfx) and lift / dip segments (composition time) that multiply it with ramps.
+  'op:audio.setVolume': def({ volume: z.number().min(0).max(1) }, ['audio'], 'scalar'),
+  'op:audio.setGain': def({ segments: GainArg }, ['audio'], 'scalar'),
   'op:audio.remove': def({}, ['audio'], null, true),
   'op:theme.set': def({ paletteId: PresetId.optional(), fontPairId: PresetId.optional(), defaultEasingId: PresetId.optional() }, ['project'], 'scalar'),
   'op:theme.setTextDefaults': def(TextStyle.shape, ['project'], 'scalar'),
@@ -151,6 +169,7 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:clip.setPlaybackRate': return [`${el}.playbackRate`];
     case 'op:clip.setVolume': return [`${el}.volume`, ...fields(['fadeInMs', 'fadeOutMs']).map((f) => `${el}.${f}`)];
     case 'op:clip.setFit': return [`${el}.fit`];
+    case 'op:clip.setZoom': return [`${el}.zoom`];                                   // ADR-039
     case 'op:transition.set': case 'op:transition.clear': return [`cut:${t?.index ?? ''}.transition`];
     case 'op:text.setContent': return [`${el}.content`];
     case 'op:text.setStyle': return fields(['fontFamily', 'fontSize', 'weight', 'italic', 'colour', 'align', 'opacity', 'lineHeight', 'box', 'variant']).map((f) => `${el}.${f}`);
@@ -169,7 +188,10 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:effect.add': case 'op:effect.remove': case 'op:effect.setParams': return [`${el}.effects.${String(a['presetId'])}`];
     case 'op:audio.setDucking': return [`${el}.ducking`];
     case 'op:audio.setFades': return fields(['fadeInMs', 'fadeOutMs']).map((f) => `${el}.${f}`);
+    case 'op:audio.setVolume': return [`${el}.volume`];                              // ADR-039
+    case 'op:audio.setGain': return [`${el}.gain`];
     case 'op:overlay.setOpacity': return [`${el}.opacity`];
+    case 'op:overlay.setShape': return [`${el}.shape`];                              // ADR-039: mask, radius, ring and focus are one look
     case 'op:element.setTiming': return [`${el}.timing`, ...(a['layer'] === undefined ? [] : [`${el}.layer`])];
     case 'op:element.setLayer': return [`${el}.layer`];
     // A clip split changes its trim and adds a cut (cut indexes after it shift); other splits change the item's timing.
@@ -182,7 +204,7 @@ export function propertyKeysOf(op: OperationT): string[] {
     case 'op:output.setAutoRatio': return ['project.ratioAuto'];
     case 'op:project.setFps': return ['project.fps'];
     case 'op:project.setDurationPolicy': return ['project.durationPolicy'];
-    default: return [];                                         // list additions (text.add, scene.add, shape.add, audio.add*, generated.insert) touch no existing key
+    default: return [];                                         // list additions (text.add, scene.add, shape.add, overlay.add*, audio.add*, generated.insert) touch no existing key
   }
 }
 export function lockedKeysOf(ops: readonly OperationT[]): string[] {

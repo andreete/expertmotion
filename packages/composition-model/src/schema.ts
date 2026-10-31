@@ -1,5 +1,6 @@
 // Composition Model v2 (v1 + `layer` on visual items and `lane` on audio layers, ADR-027; optional Clip `transform` and overlay
-// `scale` / `rotation`, ADR-028, no version bump: absent = the picture before them): verbatim transcription of docs/DATABASE_SCHEMA.md §4 (the owner). Zod 4 requires a key schema
+// `scale` / `rotation`, ADR-028; ADR-039 optional Clip `zoom`, AudioLayer `gain` and the OverlayVideo kind, all without a version
+// bump: absent = the picture before them): verbatim transcription of docs/DATABASE_SCHEMA.md §4 (the owner). Zod 4 requires a key schema
 // for records, so `z.record(z.unknown())` in the doc is written `z.record(z.string(), z.unknown())` here.
 import { z } from 'zod';
 
@@ -47,6 +48,13 @@ export const Motion = z.object({
  */
 export const ClipTransform = z.object({ x: z.number().min(-2).max(2), y: z.number().min(-2).max(2), scale: z.number().min(0.1).max(10), rotation: z.number().min(-360).max(360) });
 export const IDENTITY_TRANSFORM = Object.freeze({ x: 0, y: 0, scale: 1, rotation: 0 });
+/**
+ * ADR-039 (Reels punch-ins): a linear zoom of the clip's picture from `from` to `to` across the clip, plus spring pops of
+ * `+amount` at `atMs` (clip-relative, ms) that settle back over `durationMs` (default 450). Multiplies `transform.scale`;
+ * absent = no zoom (the picture before). applyOps removes it again at the identity (1 → 1 without pops).
+ */
+export const ZoomPop = z.object({ atMs: z.number().int().min(0), amount: z.number().min(-2).max(2), durationMs: z.number().int().min(50).max(5000).optional() });
+export const ClipZoom = z.object({ from: z.number().min(0.1).max(10), to: z.number().min(0.1).max(10), pops: z.array(ZoomPop).max(200).optional() });
 /** ADR-028: overlay zoom (1 = `size` as stored) and rotation in degrees; absent = 1 / 0. Position stays `position` (u). */
 const OverlayScale = z.number().min(0.05).max(20).optional();
 const OverlayRotation = z.number().min(-360).max(360).optional();
@@ -66,6 +74,7 @@ export const Clip = z.object({
   objectFit: z.enum(['cover', 'contain']).default('cover'),
   crop: z.object({ left: z.number(), right: z.number(), top: z.number(), bottom: z.number() }).optional(),
   transform: ClipTransform.optional(),
+  zoom: ClipZoom.optional(),
   motion: Motion.nullable(),
   effects: z.array(EffectInstance).max(3),
 });
@@ -101,7 +110,21 @@ export const OverlayShape = z.object({
   kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, layer: Lane, position: Position, size: Size,
   fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional(), scale: OverlayScale, rotation: OverlayRotation, params: Params.default({}), motion: Motion.nullable(),
 });
-export const OverlayElement = z.discriminatedUnion('kind', [OverlayImage, OverlayShape]);
+/**
+ * ADR-039: a video overlay (face bubble, picture-in-picture still) — a muted (by default) `<Video>` inside a w × h box with a
+ * rectangular (`radius` u corners) or circular (`shape: 'circle'`) mask, an optional ring drawn outside the mask (`widthU` u,
+ * colour) and an optional `focus`: the SOURCE point (x, y as fractions 0..1 of the source frame) that lands at the box centre,
+ * zoomed by `zoom`. `position` is the box centre in u from the frame centre, like every overlay. Absent focus = cover fit.
+ */
+export const OverlayFocus = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), zoom: z.number().min(0.1).max(10) });
+export const OverlayRing = z.object({ colour: Hex, widthU: z.number().min(0).max(200) });
+export const OverlayVideo = z.object({
+  kind: z.literal('video'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size,
+  trimBeforeMs: z.number().int().min(0).default(0), muted: z.boolean().default(true), shape: z.enum(['rect', 'circle']).default('rect'),
+  radius: z.number().min(0).max(2000).optional(), ring: OverlayRing.optional(), focus: OverlayFocus.optional(),
+  opacity: z.number().min(0).max(1).optional(), scale: OverlayScale, rotation: OverlayRotation, motion: Motion.nullable(),
+});
+export const OverlayElement = z.discriminatedUnion('kind', [OverlayImage, OverlayShape, OverlayVideo]);
 
 export const CaptionToken = z.object({ text: z.string(), fromMs: z.number().int(), toMs: z.number().int() });
 export const CaptionPage = z.object({ text: z.string(), startMs: z.number().int(), durationMs: z.number().int(), tokens: z.array(CaptionToken) });
@@ -110,12 +133,19 @@ export const CaptionTrack = z.object({
   sourceAssetId: z.string().optional(), language: z.enum(['id', 'en']).optional(),
 });
 
+/**
+ * ADR-039: a gain segment multiplies the layer's volume by `mul` from `atMs` (COMPOSITION time, ms: a lift "over the silent
+ * card" names what is on screen) for `durationMs`, ramping in and out over `rampMs` (default 300). Overlapping segments
+ * multiply. Absent / empty = the plain volume (the picture before).
+ */
+export const GainSegment = z.object({ atMs: z.number().int().min(0), durationMs: z.number().int().min(1), mul: z.number().min(0).max(4), rampMs: z.number().int().min(0).max(10_000).optional() });
 export const AudioLayer = z.object({
   id: z.string(), assetId: z.string(), role: z.enum(['bed', 'voice', 'sfx']),
   atMs: z.number().int().min(0), durationMs: z.number().int().min(100).optional(), lane: Lane,
   trimBeforeMs: z.number().int().min(0).default(0), volume: z.number().min(0).max(1), loop: z.boolean().default(false),
   fadeInMs: z.number().int().default(0), fadeOutMs: z.number().int().default(0),
   ducking: z.object({ presetId: PresetId, params: Params.default({}) }).nullable(),
+  gain: z.array(GainSegment).max(500).optional(),
 });
 
 export const Background = z.object({ presetId: PresetId, params: Params.default({}) });
@@ -144,11 +174,14 @@ export type ThemeT = z.infer<typeof Theme>;
 export type ClipT = z.infer<typeof Clip>;
 export type SceneBackgroundT = z.infer<typeof SceneBackground>;
 export type ClipTransformT = z.infer<typeof ClipTransform>;
+export type ClipZoomT = z.infer<typeof ClipZoom>;
+export type GainSegmentT = z.infer<typeof GainSegment>;
 export type TransitionT = z.infer<typeof Transition>;
 export type TextLayerT = z.infer<typeof TextLayer>;
 export type OverlayElementT = z.infer<typeof OverlayElement>;
 export type OverlayImageT = z.infer<typeof OverlayImage>;
 export type OverlayShapeT = z.infer<typeof OverlayShape>;
+export type OverlayVideoT = z.infer<typeof OverlayVideo>;
 export type CaptionPageT = z.infer<typeof CaptionPage>;
 export type AudioLayerT = z.infer<typeof AudioLayer>;
 export type MotionT = z.infer<typeof Motion>;

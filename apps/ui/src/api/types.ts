@@ -17,7 +17,8 @@ export interface Page<T> { items: T[]; nextCursor: string | null; total?: number
 
 export interface OutputProfile {
   ratio: Ratio; customRatio?: { w: number; h: number }; resolution: Resolution; fps: Fps;
-  format: 'mp4' | 'webm' | 'gif' | 'png' | 'wav'; codec?: 'h264' | 'vp9' | 'gif' | 'png' | 'pcm'; crf?: number; alpha?: boolean; stillAtMs?: number;
+  /** FR-28x (Reels): `jpg` = a still saved as a JPEG cover (quality 92), same `stillAtMs` as `png`. */
+  format: 'mp4' | 'webm' | 'gif' | 'png' | 'jpg' | 'wav'; codec?: 'h264' | 'vp9' | 'gif' | 'png' | 'jpg' | 'pcm'; crf?: number; alpha?: boolean; stillAtMs?: number;
 }
 
 export interface ProjectDto {
@@ -197,7 +198,11 @@ export interface SettingsDto {
   onboardingDone?: boolean; onboardingSkippedSteps?: OnboardingStep[];
   /** FR-099 / FR-155: Editor layout (panel sizes per window-width bucket, collapsed panels); absent until first saved. */
   layout?: { panelSizes: Partial<Record<'narrow' | 'standard' | 'wide', { lib?: number; agent?: number; timeline?: number }>>; libCollapsed: boolean; agentCollapsed: boolean; outputCollapsed: boolean; chatSplit?: number; chatMaximized?: 'brainstorm' | 'editor' | null };
+  /** FR-28x (Reels, R-170/171): the channel's standing rules (≤ 6 000 characters), loaded into both agents' prompts; absent on older services. */
+  channelProfile?: string;
 }
+/** Longest channel profile the Service stores (SettingsSchema `channelProfile: z.string().max(6000)`). */
+export const CHANNEL_PROFILE_MAX = 6000;
 /** 'license' is no longer a step (licence screen before onboarding); old records may still contain it and are ignored. */
 export type OnboardingStep = 'provider' | 'models' | 'hardware' | 'tour';
 export type ModelTask = 'stt' | 'tts' | 'image' | 'music';
@@ -217,9 +222,10 @@ export interface ModelStateDto {
 }
 /** R-140 `registry` (SEC-072): which model list is in use. */
 export interface ModelRegistrySource { source: 'built-in' | 'signed'; seq: number; code: string | null; reason: string | null }
-export type GeneratorKind = 'voice' | 'music' | 'thumbnail' | 'captions' | 'hashtags';
+/** `prep` (FR-28x Reels): the Footage prep job (sync, master, phrases, listen, takes, timing) started through R-130 like any generator. */
+export type GeneratorKind = 'voice' | 'music' | 'thumbnail' | 'captions' | 'hashtags' | 'prep';
 export interface GeneratorJobDto {
-  id: Id; projectId: Id; kind: GeneratorKind; status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'; progress: number; modelKey: string | null; resultAssetId: Id | null;
+  id: Id; projectId: Id; kind: GeneratorKind; status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'needs-input'; progress: number; modelKey: string | null; resultAssetId: Id | null;
   result: Record<string, unknown> | null; errorCode: string | null; createdAt: Iso; startedAt: Iso | null; finishedAt: Iso | null;
 }
 
@@ -244,6 +250,27 @@ export interface GeneratorModelDto { key: string; label: string; displayName?: D
 export interface GeneratorCardDto {
   kind: GeneratorKind; enabled: boolean; priority: 'P1' | 'P2'; llm: boolean; tierHint: 'ok' | 'slow'; model: GeneratorModelDto | null; models: GeneratorModelDto[]; tier?: Tier;
 }
+// ── FR-28x Reels pipeline: footage prep (R-130 kind `prep`, footage-prep continue, footage-analysis, cover) ──
+/** Stages of the prep job in order (service.notice {kind:'generator', generator:'prep', stage}). */
+export const PREP_STAGES = ['probe', 'sync', 'master', 'phrases', 'listen', 'takes', 'timing'] as const;
+export type PrepStage = (typeof PREP_STAGES)[number];
+export type Rotation = 0 | 90 | 180 | 270;
+/** One kept take of the recording (recording time). */
+export interface FootageCutDto { id: string; lineIndex: number; startMs: number; endMs: number; text: string; words: Array<{ text: string; fromMs: number; toMs: number }>; quietStartDb?: number; quietEndDb?: number }
+export interface FootageDroppedDto { startMs: number; endMs: number; text?: string; reason: 'adlib' | 'false-start' | 'length' | string }
+/** `GET /projects/:id/footage-analysis` (latest) and the prep job's `result.analysis`. */
+export interface FootageAnalysisDto {
+  version: 1; voiceAssetId: Id; cameraAssetId?: Id; masterAssetId?: Id; proxyAssetId?: Id; offsetMs: number; rotation: Rotation; rotationSource: 'metadata' | 'heuristic' | 'creator' | 'none';
+  phrases: Array<{ fromMs: number; toMs: number }>; words: Array<{ text: string; fromMs: number; toMs: number; conf?: number }>; lines: Array<{ index: number; text: string; source: 'script' | 'extra' }>;
+  cuts: FootageCutDto[]; dropped: FootageDroppedDto[]; loudness?: { inputI: number; inputTp: number; outputI?: number }; durationMs: number; model: string; warnings: string[];
+}
+/** The prep job's `result` while it waits for the Creator (`status: 'needs-input'`) or once done. */
+export interface PrepResultDto { needsRotationConfirm?: boolean; thumbnails?: Array<{ rotation: Rotation; url: string }>; analysis?: FootageAnalysisDto; analysisId?: Id; masterAssetId?: Id }
+/** R-130 `prep` body. */
+export interface PrepInput { voiceAssetId: Id; cameraAssetId?: Id; script?: string; rotation?: Rotation }
+/** `POST /projects/:id/cover` body: a 1080×1920 JPG cover still from a cut (or a time) of the master. */
+export interface CoverInput { cutId?: string; atMs?: number; hookWord: string; kicker?: string; line: string; subline?: string; pills?: Array<{ text: string; tone?: string }>; handle?: string }
+
 /** R-182 recent EM codes (FR-150). */
 export interface RecentCodeDto { at: Iso; code: string; source: 'render' | 'generator' | 'agent' | 'log'; ref: string | null }
 
@@ -260,7 +287,7 @@ export interface SplitEdit { atMs: number; items: Array<{ kind: 'clip' | 'text' 
 /** ADR-028 / FR-180: picture position / zoom / rotation (op:element.setTransform); x / y fractions of the frame, scale 1 = fit, degrees. */
 export interface TransformEdit { kind: 'clip' | 'image' | 'shape'; id: Id; x?: number; y?: number; scale?: number; rotation?: number }
 /** ADR-031 / FR-192 / FR-193: Delete or Duplicate Timeline items (R-060 `itemsEdit`; effect ids `<clipId>|<presetId>`). */
-export interface ItemsEdit { action: 'remove' | 'duplicate' | 'paste'; items: Array<{ kind: 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut' | 'effect' | 'background' | 'caption'; id?: string; index?: number }>;
+export interface ItemsEdit { action: 'remove' | 'duplicate' | 'paste'; items: Array<{ kind: 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut' | 'effect' | 'background' | 'caption' | /** FR-28x OverlayVideo (face bubble) */ 'video'; id?: string; index?: number }>;
   /** FR-256: Paste — in-app clipboard snapshots rebuilt at `atMs` (items empty). */
   paste?: { atMs: number; entries: ClipboardEntry[] } }
 export interface ElementEdit { kind: 'text' | 'image' | 'shape' | 'audio'; id: Id; atMs?: number; durationMs?: number; trimBeforeMs?: number; layer?: number; move?: 'up' | 'down' | 'front' | 'back' }
@@ -287,7 +314,7 @@ export interface OpenProjectResponse {
   project: ProjectDto; head: VersionDto; mediaGrant: MediaGrantDto; checkpointNewerThanSave: CheckpointDto | null; intentQueue: IntentQueueDto; latestPlan: PlanDto | null; renderJobs: RenderJobDto[];
 }
 export interface CompositionHeadResponse { head: VersionDto; canUndo: boolean; canRedo: boolean; timing: { durationMs: number; cutStartMs: number[] }; issues: Issue[] }
-export interface RenderCreateInput { projectId: Id; versionId?: Id; outputProfile: OutputProfile; performanceProfile: PerformanceProfile; fileName?: string; folder?: string }
+export interface RenderCreateInput { projectId: Id; versionId?: Id; outputProfile: OutputProfile; performanceProfile: PerformanceProfile; fileName?: string; folder?: string; /** FR-28x: source lines for `<output>-CREDITS.txt` (R-111 `credits`) */ credits?: string[] }
 export type PreflightCheckName = 'disk' | 'memory' | 'dimensions' | 'duration' | 'assets' | 'engine' | 'folder';
 export interface RenderEstimate {
   ok: boolean; dimensions: { width: number; height: number }; totalFrames: number; durationMs: number;

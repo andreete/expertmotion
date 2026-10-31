@@ -12,8 +12,8 @@ import type { CompositionModelT } from './schema.js';
 import { placeVisual, visualItems, visualSpan, type VisualItem } from './layers.js';
 
 /** What a manual item edit may name: a Timeline Element ref as the Timeline selects it. */
-export type ItemKind = 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut' | 'effect' | 'background' | 'caption';
-export const ITEM_KINDS: readonly ItemKind[] = ['clip', 'text', 'image', 'shape', 'audio', 'cut', 'effect', 'background', 'caption'];
+export type ItemKind = 'clip' | 'text' | 'image' | 'shape' | 'video' | 'audio' | 'cut' | 'effect' | 'background' | 'caption';
+export const ITEM_KINDS: readonly ItemKind[] = ['clip', 'text', 'image', 'shape', 'video', 'audio', 'cut', 'effect', 'background', 'caption'];
 export interface ItemRef { kind: ItemKind; id?: string; index?: number }
 /** One resolved target and the operation it compiles to (one child intent each). */
 export interface ItemStep { target: ElementRefT; op: OperationT }
@@ -72,7 +72,7 @@ function exists(model: CompositionModelT, r: ItemRef): boolean {
   switch (r.kind) {
     case 'clip': return v.some((c) => c.id === r.id);
     case 'text': return model.tracks.text.some((x) => x.id === r.id);
-    case 'image': case 'shape': return model.tracks.overlay.some((o) => o.kind === r.kind && o.id === r.id);
+    case 'image': case 'shape': case 'video': return model.tracks.overlay.some((o) => o.kind === r.kind && o.id === r.id);
     case 'audio': return model.tracks.audio.some((a) => a.id === r.id);
     case 'cut': return r.index !== undefined && model.transitions.some((t) => t.cutIndex === r.index);
     case 'effect': { const [clipId, presetId] = (r.id ?? '').split('|'); return !!v.find((c) => c.id === clipId)?.effects.some((e) => e.presetId === presetId); }
@@ -88,7 +88,7 @@ function unique(model: CompositionModelT, items: readonly ItemRef[]): ItemRef[] 
 }
 
 // ───────────────────────────── Delete ─────────────────────────────
-const REMOVE_ORDER: Record<ItemKind, number> = { cut: 0, effect: 1, background: 2, caption: 3, text: 4, image: 4, shape: 4, audio: 5, clip: 6 };
+const REMOVE_ORDER: Record<ItemKind, number> = { cut: 0, effect: 1, background: 2, caption: 3, text: 4, image: 4, shape: 4, video: 4, audio: 5, clip: 6 };
 /**
  * The ops that delete `items` (those that still exist), in a safe order: transitions and effects first (cut indexes are still
  * valid), then the project background, caption pages (ONE op:caption.setPages without them), texts / images / shapes, audio,
@@ -106,7 +106,7 @@ export function removalSteps(model: CompositionModelT, items: readonly ItemRef[]
     switch (r.kind) {
       case 'clip': steps.push({ target: { kind: 'clip', id: r.id! }, op: { op: 'op:clip.remove', target: { kind: 'clip', id: r.id! }, args: {} } }); break;
       case 'text': steps.push({ target: { kind: 'text', id: r.id! }, op: { op: 'op:text.remove', target: { kind: 'text', id: r.id! }, args: {} } }); break;
-      case 'image': steps.push({ target: { kind: 'image', id: r.id! }, op: { op: 'op:overlay.remove', target: { kind: 'image', id: r.id! }, args: {} } }); break;
+      case 'image': case 'video': steps.push({ target: { kind: r.kind, id: r.id! }, op: { op: 'op:overlay.remove', target: { kind: r.kind, id: r.id! }, args: {} } }); break;
       case 'shape': steps.push({ target: { kind: 'shape', id: r.id! }, op: { op: 'op:shape.remove', target: { kind: 'shape', id: r.id! }, args: {} } }); break;
       case 'audio': steps.push({ target: { kind: 'audio', id: r.id! }, op: { op: 'op:audio.remove', target: { kind: 'audio', id: r.id! }, args: {} } }); break;
       case 'cut': steps.push({ target: { kind: 'cut', index: r.index! }, op: { op: 'op:transition.clear', target: { kind: 'cut', index: r.index! }, args: {} } }); break;
@@ -123,10 +123,11 @@ export function removalSteps(model: CompositionModelT, items: readonly ItemRef[]
 
 // ───────────────────────────── Duplicate ─────────────────────────────
 /** Kinds Duplicate supports (the add ops rebuild them with every field); captions, transitions, effects, the background and audio beds are not duplicated. */
-export const DUPLICABLE_KINDS: ReadonlySet<ItemKind> = new Set(['clip', 'text', 'image', 'shape', 'audio']);
+export const DUPLICABLE_KINDS: ReadonlySet<ItemKind> = new Set(['clip', 'text', 'image', 'shape', 'video', 'audio']);
 type TextT = CompositionModelT['tracks']['text'][number];
 type ImageT = Extract<CompositionModelT['tracks']['overlay'][number], { kind: 'image' }>;
 type ShapeT = Extract<CompositionModelT['tracks']['overlay'][number], { kind: 'shape' }>;
+type VideoT = Extract<CompositionModelT['tracks']['overlay'][number], { kind: 'video' }>;
 type MotionT = TextT['motion'];
 type Args = Record<string, unknown>;
 const clampInt = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(v)));
@@ -163,6 +164,14 @@ const SHAPE_FIELDS: Fields<ShapeT> = {
   fill: (v) => ({ fill: v }), stroke: (v) => opt('stroke', v), strokeWidth: (v) => opt('strokeWidth', v), opacity: (v) => opt('opacity', v),
   scale: (v) => opt('scale', v), rotation: (v) => opt('rotation', v), params: (v) => ({ params: structuredClone(v ?? {}) }), motion: (v) => motionArg(v),
 };
+/** ADR-039: a video overlay copy keeps its trim, mask, ring, focus, sound and look (op:overlay.addVideo carries every field). */
+const VIDEO_FIELDS: Fields<VideoT> = {
+  kind: () => ({}), assetId: (v) => ({ assetId: v }), position: (v) => ({ position: { x: v.x, y: v.y } }),
+  size: (v, x) => ({ size: sizeArg(v.w), ...(x.shape === 'circle' ? {} : { height: Math.max(1, Math.min(4000, Math.round(v.h))) }) }),
+  trimBeforeMs: (v) => ({ trimBeforeMs: v }), muted: (v) => ({ muted: v }), shape: (v) => ({ shape: v }), radius: (v) => opt('radius', v),
+  ring: (v) => opt('ring', v), focus: (v) => opt('focus', v), opacity: (v) => opt('opacity', v), scale: (v) => opt('scale', v), rotation: (v) => opt('rotation', v),
+  motion: (v) => motionArg(v),
+};
 type ClipT = CompositionModelT['tracks']['video'][number];
 type AudioT = CompositionModelT['tracks']['audio'][number];
 /** Round 2 (QA 2026-10-29): a clip copy keeps its sound, fades, fit / crop, frame transform, rate, motion and effects. Media clips
@@ -177,12 +186,14 @@ const CLIP_FIELDS: { [K in Exclude<keyof ClipT, 'id'>]-?: (v: ClipT[K], x: ClipT
   crop: (v) => opt('crop', v), transform: (v) => opt('transform', v),
   motion: (v) => (v ? motionArg(v) : {}),
   effects: (v) => (v.length ? { effects: v.map((e) => ({ presetId: e.presetId, params: { ...structuredClone(e.params ?? {}), motion: e.motion } })) } : {}),
+  zoom: (v) => opt('zoom', v),                                  // ADR-039
 };
 /** Round 2: a voice / sfx copy keeps its trim, length, volume, loop, fades and ducking (lane: the lane rule; atMs: the copy's time). */
 const AUDIO_FIELDS: { [K in Exclude<keyof AudioT, 'id' | 'atMs' | 'lane'>]-?: (v: AudioT[K], x: AudioT) => Args } = {
   assetId: (v) => ({ assetId: v }), role: (v) => ({ role: v }), durationMs: (v) => opt('durationMs', v), trimBeforeMs: (v) => ({ trimBeforeMs: v }),
   volume: (v) => ({ volume: v }), loop: (v) => ({ loop: v }), fadeInMs: (v) => ({ fadeInMs: v }), fadeOutMs: (v) => ({ fadeOutMs: v }),
   ducking: (v) => (v ? { ducking: { presetId: v.presetId, params: structuredClone(v.params ?? {}) } } : {}),
+  gain: (v) => opt('gain', v),                                  // ADR-039
 };
 const clipCopy = (c: ClipT, atIndex?: number): OperationT => ({ op: c.assetId !== undefined ? 'op:clip.insert' : 'op:scene.add', target: { kind: 'sequence' },
   args: { ...argsOf(c, CLIP_FIELDS), ...(atIndex === undefined ? {} : { atIndex }) } });
@@ -198,6 +209,7 @@ function argsOf<T extends object>(x: T, fields: { [k: string]: (v: never, x: T) 
 const textCopy = (x: TextT, atMs: number): OperationT => ({ op: 'op:text.add', args: { ...argsOf(x, TEXT_FIELDS), atMs, durationMs: x.timing.durationMs } });
 const overlayCopy = (o: CompositionModelT['tracks']['overlay'][number], atMs: number): OperationT => o.kind === 'image'
   ? { op: 'op:overlay.addImage', args: { ...argsOf(o, IMAGE_FIELDS), atMs, durationMs: o.timing.durationMs } }
+  : o.kind === 'video' ? { op: 'op:overlay.addVideo', args: { ...argsOf(o, VIDEO_FIELDS), atMs, durationMs: o.timing.durationMs } }
   : { op: 'op:shape.add', args: { ...argsOf(o, SHAPE_FIELDS), atMs, durationMs: o.timing.durationMs } };
 /**
  * The ops that duplicate `items` right after themselves (CapCut): a text / image / shape copy starts where the original ends (the
@@ -256,7 +268,7 @@ export const stepFor = (steps: readonly ItemStep[], target: ElementRefT | undefi
  * free lane). Audio voice / sfx layers paste as op:audio.addLayer with every field (round 2: trim, length, loop, ducking; beds are skipped);
  * captions, transitions, effects and the background are not copied.
  */
-export type ClipboardKind = 'clip' | 'scene' | 'text' | 'image' | 'shape' | 'audio';
+export type ClipboardKind = 'clip' | 'scene' | 'text' | 'image' | 'shape' | 'video' | 'audio';
 /**
  * `clip` (C8, review 2026-10-29): a text / image / shape that belongs to a copied scene clip (scene anchoring) names that clip by
  * its ordinal among the clip entries and keeps its offset from that clip's start, so non-adjacent scenes pasted back to back keep
@@ -264,10 +276,10 @@ export type ClipboardKind = 'clip' | 'scene' | 'text' | 'image' | 'shape' | 'aud
  */
 export interface ClipboardEntry { kind: ClipboardKind; offsetMs: number; durationMs: number; op: OperationT; clip?: { index: number; offsetMs: number } }
 /** The add operations a clipboard entry may carry (the Local Service refuses anything else; applyOperations validates the args). */
-export const PASTE_OPS: Readonly<Record<ClipboardKind, string>> = Object.freeze({ clip: 'op:clip.insert', scene: 'op:scene.add', text: 'op:text.add', image: 'op:overlay.addImage', shape: 'op:shape.add', audio: 'op:audio.addLayer' });
+export const PASTE_OPS: Readonly<Record<ClipboardKind, string>> = Object.freeze({ clip: 'op:clip.insert', scene: 'op:scene.add', text: 'op:text.add', image: 'op:overlay.addImage', shape: 'op:shape.add', video: 'op:overlay.addVideo', audio: 'op:audio.addLayer' });
 export const CLIPBOARD_MAX_ENTRIES = 50;
 /** Kinds Copy / Cut can put on the clipboard. */
-export const COPYABLE_KINDS: ReadonlySet<ItemKind> = new Set(['clip', 'text', 'image', 'shape', 'audio']);
+export const COPYABLE_KINDS: ReadonlySet<ItemKind> = new Set(['clip', 'text', 'image', 'shape', 'video', 'audio']);
 
 /**
  * Copy: snapshots of the listed items (those that still exist and can be rebuilt), a selected scene clip with its own texts /
@@ -297,7 +309,7 @@ export function copySnapshot(model: CompositionModelT, items: readonly ItemRef[]
       const x = r.kind === 'text' ? model.tracks.text.find((y) => y.id === r.id) : model.tracks.overlay.find((y) => y.id === r.id && y.kind === r.kind);
       if (!x) continue;
       const anchor = anchorOf.get(`${r.kind}:${r.id}`);
-      raw.push({ kind: r.kind as 'text' | 'image' | 'shape', fromMs: x.timing.atMs, order: 1e6, durationMs: x.timing.durationMs, op: 'kind' in x ? overlayCopy(x, 0) : textCopy(x, 0), ...(anchor ? { anchor } : {}) });
+      raw.push({ kind: r.kind as 'text' | 'image' | 'shape' | 'video', fromMs: x.timing.atMs, order: 1e6, durationMs: x.timing.durationMs, op: 'kind' in x ? overlayCopy(x, 0) : textCopy(x, 0), ...(anchor ? { anchor } : {}) });
     }
   }
   raw.sort((p, q) => p.fromMs - q.fromMs || p.order - q.order);

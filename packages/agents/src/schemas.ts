@@ -59,10 +59,19 @@ export type EditPlanT = z.infer<typeof EditPlan>;
  */
 // ADR-034: `scene.compose` (args = VideoSpec, auto-motion-spec.ts) is expanded into composition.applyOps (+ tts steps) before validation.
 // FR-266: `music.generate` = a background music bed from the CC0 library (best fit for prompt / mood), ducked under speech.
-export const PLAN_STEP_TOOLS = ['composition.applyOps', 'tts.generate', 'captions.generate', 'scene.compose', 'music.generate'] as const;
+// ADR-039: `cover.render` (args = the resolved VideoSpec `cover` + the master time) renders the cover still through POST /projects/:id/cover.
+export const PLAN_STEP_TOOLS = ['composition.applyOps', 'tts.generate', 'captions.generate', 'scene.compose', 'music.generate', 'cover.render'] as const;
 export type PlanStepTool = (typeof PLAN_STEP_TOOLS)[number];
 export const TtsStepArgs = z.object({ text: z.string().min(1).max(2000), atMs: z.number().int().min(0).optional(), /** FR-224: VideoSpec voice clip id */ clipId: z.string().min(1).max(40).optional(), voiceId: z.string().min(1).max(64).optional(), language: z.enum(['id', 'en']).optional(), speed: z.number().min(0.8).max(1.2).optional() }).strict();
-export const MusicStepArgs = z.object({ prompt: z.string().min(1).max(200).default('calm'), durationMs: z.number().int().min(1000).max(1_800_000).optional(), volume: z.number().min(0.02).max(1).optional(), trackId: z.string().min(1).max(80).optional() }).strict();
+/** ADR-039: `gain` lifts the bed over silent scenes (`op:audio.setGain` segments the Service applies with the bed); fades in ms. */
+export const MusicGainSegment = z.object({ atMs: z.number().int().min(0), durationMs: z.number().int().min(100), mul: z.number().min(0).max(4), rampMs: z.number().int().min(0).max(5000).optional() }).strict();
+export const MusicStepArgs = z.object({ prompt: z.string().min(1).max(200).default('calm'), durationMs: z.number().int().min(1000).max(1_800_000).optional(), volume: z.number().min(0.02).max(1).optional(), trackId: z.string().min(1).max(80).optional(), /** ADR-039: a music asset already in the project */ assetId: z.string().min(1).max(80).optional(),
+  fadeInMs: z.number().int().min(0).max(30_000).optional(), fadeOutMs: z.number().int().min(0).max(30_000).optional(), gain: z.array(MusicGainSegment).max(60).optional() }).strict();
+export const CoverStepArgs = z.object({
+  spec: z.object({ cutId: z.string().min(1).max(40).optional(), atMs: z.number().int().min(0).optional(), frame: z.union([z.enum(['end-of-line', 'start']), z.number().int().min(0)]).optional(), hookWord: z.string().min(1).max(40), kicker: z.string().min(1).max(60).optional(), line: z.string().min(1).max(120), subline: z.string().min(1).max(160).optional(),
+    pills: z.array(z.object({ text: z.string().min(1).max(40), tone: z.string().min(1).max(20).optional() }).strict()).max(5).optional(), icons: z.array(z.string().min(1).max(30)).max(5).optional(), source: z.string().min(1).max(160).optional(), handle: z.string().min(1).max(60) }).strict(),
+  masterAssetId: z.string().min(1).max(80).optional(),
+}).strict();
 export const CaptionsStepArgs = z.object({ source: z.enum(['script', 'voice', 'sequence']).default('script'), text: z.string().min(1).max(5000).optional(), atMs: z.number().int().min(0).optional(), durationMs: z.number().int().min(500).optional(),
   presetId: z.string().regex(PresetIdRe).optional(), language: z.enum(['id', 'en']).optional() }).strict();
 

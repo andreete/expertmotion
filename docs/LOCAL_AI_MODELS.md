@@ -34,7 +34,9 @@ Column notes: "Redist." = may the Operator mirror the weights on an Operator-con
 | Model id | File (Hugging Face `ggerganov/whisper.cpp`) | Size | Languages | Indonesian quality | Licence | Redist. | RAM | Speed T0 / T1 / T2 (est.) | Status | Flag |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `whisper-small` | `ggml-small.bin` (alt. `ggml-small-q5_1.bin`) | 488 MB (190 MB) | multilingual (id, en) | usable for clean speech; WER est. 20–30 % on CV-style Indonesian **[estimate]** | MIT (engine) + MIT (OpenAI weights) | yes | ≈ 1.0 GB | 1–2× realtime / 8× / 10× | P1 (T0 default) | `model:whisper` |
+| `whisper-small-q5` | `ggml-small-q5_1.bin` | 190 MB | multilingual (id, en) | as `whisper-small` with a small quantisation loss; on the 1.9 GB shared server 128 s of speech took 201 s at ≈ 400 MB RSS (process.md, 2026-10-31) | MIT + MIT | yes | ≈ 0.6 GB | 0.6× realtime (measured, 2 cores) / 8× / 10× | P1 (T0 default when RAM < 6 GB, FR-282) | `model:whisper` |
 | `whisper-medium` | `ggml-medium.bin` (alt. `ggml-medium-q5_0.bin`) | 1.53 GB (539 MB) | multilingual | WER est. 12–18 % **[estimate]** | MIT + MIT | yes | ≈ 2.6 GB | 0.3–0.5× / 6× / 8× | P1 (T0 option) | `model:whisper` |
+| `whisper-medium-q5` | `ggml-medium-q5_0.bin` | 539 MB | multilingual | as `whisper-medium` with a small quantisation loss; the "listen harder" option of the footage prep (FR-282) | MIT + MIT | yes | ≈ 1.2 GB | 0.2× / 6× / 8× **[estimate]** | P2 (T0 option with a speed warning) | `model:whisper` |
 | `whisper-large-v3-turbo` | `ggml-large-v3-turbo.bin` (alt. `-q5_0.bin` 574 MB, `-q8_0.bin` 874 MB) | 1.62 GB | multilingual | close to large-v3; large-v3 Indonesian WER ≈ 7.4 % (Common Voice 17, ASSESSMENT.md §7); turbo est. 8–10 % **[estimate]** | MIT + MIT | yes | ≈ 2.5 GB (+ VRAM when GPU) | 0.2× / 10–15× / 20× | P1 (T1/T2 default) | `model:whisper` |
 | `whisper-large-v3` | `ggml-large-v3.bin` | 3.1 GB | multilingual | best (≈ 7.4 % WER id) | MIT + MIT | yes | ≈ 4.7 GB | 0.1× / 4× / 8× | P2 (T2 "best quality" option) | `model:whisper` |
 
@@ -270,7 +272,7 @@ Tiers come from PERFORMANCE.md §1 (T0 CPU-only, T1 ≥ 4 GB VRAM, T2 ≥ 8 GB V
 
 | Task | T0 | T1 | T2 | Universal fallback |
 |---|---|---|---|---|
-| Captions (STT) | `whisper-small` default; `whisper-medium` offered with a speed warning | `whisper-large-v3-turbo` (Vulkan engine) | `whisper-large-v3-turbo`; `whisper-large-v3` offered | SRT/VTT import (`op:caption.importSrt`, P0) |
+| Captions (STT) | `whisper-small` default (`whisper-small-q5` is the default when the PC has less than 6 GB of RAM, FR-282); `whisper-small-q5`, `whisper-medium-q5` and `whisper-medium` offered with a speed warning | `whisper-large-v3-turbo` (Vulkan engine) | `whisper-large-v3-turbo`; `whisper-large-v3` offered | SRT/VTT import (`op:caption.importSrt`, P0) |
 | Voice (TTS, id) | `supertonic-3-int8` (ADR-036, provisional); `piper-id-news-medium` offered | same | same | import a recorded voice file |
 | Voice (TTS, en) | `piper-en-lessac-medium` | same; `kokoro-82m-v1.0` offered (P2) | `kokoro-82m-v1.0` default (P2) | import |
 | Music | `loop-library-cc0` (no generation) | `loop-library-cc0` (FR-247: ACE-Step is not shipped in this version; listed as `evaluate`) | `loop-library-cc0` (ACE-Step later, same note) | `loop-library-cc0` |

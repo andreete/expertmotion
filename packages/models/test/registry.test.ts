@@ -15,7 +15,7 @@ describe('registry ↔ LOCAL_AI_MODELS.md', () => {
   const docIds = [...regSection.matchAll(/^\| `([^`]+)` \|/gm)].map((m) => m[1]!);
 
   it('lists every model id of §2.1–2.4 and nothing else', () => {
-    expect(docIds.length).toBe(15);                                         // + supertonic-3-int8 (FR-267, 2026-10-29)
+    expect(docIds.length).toBe(17);                                         // + supertonic-3-int8 (FR-267, 2026-10-29) + whisper-small-q5 / whisper-medium-q5 (FR-282, 2026-10-31)
     expect([...MODEL_KEYS].sort()).toEqual([...docIds].sort());
   });
 

@@ -12,8 +12,10 @@ import { useModelNames } from '../state/use-model-names.js';
 export type GeneratorKind = 'voice' | 'captions' | 'music' | 'thumbnail' | 'hashtags';
 /** Fallback model keys when R-135 is unavailable (older service); the service is the source of truth. */
 export const GENERATOR_MODEL: Partial<Record<GeneratorKind, string>> = { voice: 'piper-id-news', captions: 'whisper-small' };
-const ICONS: Record<GeneratorKind, ReactNode> = { voice: <Mic size={20} />, captions: <Captions size={20} />, music: <Music2 size={20} />, thumbnail: <ImageIcon size={20} />, hashtags: <Hash size={20} /> };
-const ORDER: GeneratorKind[] = ['voice', 'captions', 'music', 'thumbnail', 'hashtags'];
+/** The Generator Cards (P1/P2 generators); the Reels `prep` job has its own chat card (agent.chat.prep), not a card here. */
+export type CardKind = Exclude<GeneratorKind, 'prep'>;
+const ICONS: Record<CardKind, ReactNode> = { voice: <Mic size={20} />, captions: <Captions size={20} />, music: <Music2 size={20} />, thumbnail: <ImageIcon size={20} />, hashtags: <Hash size={20} /> };
+const ORDER: CardKind[] = ['voice', 'captions', 'music', 'thumbnail', 'hashtags'];
 
 /** R-135 cards, refreshed whenever the Model Manager state changes (install/remove/progress). */
 export function useGeneratorCards(): GeneratorCardDto[] | null {

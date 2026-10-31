@@ -41,7 +41,14 @@ export function validate(model: CompositionModelT, ctx: ValidateContext): Issue[
     if (a?.durationMs !== undefined && !l.loop && l.durationMs !== undefined && l.trimBeforeMs + l.durationMs > a.durationMs + 1)
       out.push(issue('CM-002', `Audio ${l.id} needs more source media than ${a.durationMs} ms.`, 'block', `tracks.audio[${i}]`));
   });
-  model.tracks.overlay.forEach((o, i) => { if (o.kind === 'image') assetRef(o.assetId, `tracks.overlay[${i}].assetId`); });
+  model.tracks.overlay.forEach((o, i) => {
+    if (o.kind === 'image') assetRef(o.assetId, `tracks.overlay[${i}].assetId`);
+    if (o.kind === 'video') {                                                  // ADR-039: a video overlay needs a ready video asset with enough source
+      const a = assetRef(o.assetId, `tracks.overlay[${i}].assetId`);
+      if (a && a.kind !== 'video') out.push(issue('CM-001', `Video overlay ${o.id} points at a ${a.kind} asset.`, 'block', `tracks.overlay[${i}].assetId`));
+      if (a?.durationMs !== undefined && o.trimBeforeMs + o.timing.durationMs > a.durationMs + 1) out.push(issue('CM-002', `Video overlay ${o.id} needs more source media than ${a.durationMs} ms.`, 'block', `tracks.overlay[${i}]`));
+    }
+  });
 
   // CM-003 / CM-004 transitions
   const seen = new Set<number>();
@@ -80,7 +87,8 @@ export function validate(model: CompositionModelT, ctx: ValidateContext): Issue[
   });
   model.tracks.overlay.forEach((o, i) => {
     if (o.kind === 'shape') presetCheck(o.presetId, 'shape', undefined, `tracks.overlay[${i}].presetId`);
-    else { if (o.effects.length > maxFx) out.push(issue('CM-006', `Image ${o.id} has too many effects.`, 'block', `tracks.overlay[${i}].effects`)); o.effects.forEach((e, j) => presetCheck(e.presetId, 'effect', { ...e.params, motion: e.motion }, `tracks.overlay[${i}].effects[${j}]`)); }
+    else if (o.kind === 'image') { if (o.effects.length > maxFx) out.push(issue('CM-006', `Image ${o.id} has too many effects.`, 'block', `tracks.overlay[${i}].effects`)); o.effects.forEach((e, j) => presetCheck(e.presetId, 'effect', { ...e.params, motion: e.motion }, `tracks.overlay[${i}].effects[${j}]`)); }
+    if (o.motion) presetCheck(o.motion.presetId, 'motion', undefined, `tracks.overlay[${i}].motion`);
   });
   model.tracks.audio.forEach((l, i) => { if (l.ducking) presetCheck(l.ducking.presetId, 'audio', l.ducking.params, `tracks.audio[${i}].ducking`); });
   if (model.tracks.caption.styleId) presetCheck(model.tracks.caption.styleId, 'caption', model.tracks.caption.params, 'tracks.caption.styleId');

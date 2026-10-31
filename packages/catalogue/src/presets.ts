@@ -28,9 +28,16 @@ export const transitions = define('transition', transitionCommon, [
   { name: 'none', en: 'Hard cut', id: 'Potong langsung', p: 'p0', tags: ['cut', 'potong', 'instant'] },
 ]);
 
+// ADR-039 (Reels captions) optional on every style, absent = the behaviour before: `keywords` colour matching words (normalised
+// word match) per group, `yU` = top of the caption block from the frame top (u; wins over `position`), `fontSizeU` (u; wins over
+// `fontSize`), `fontFamily` / `weight` (default the theme heading font, 800), `maxWordsPerPage` (the renderer shows a page in
+// chunks of at most N words, the chunk holding the current time).
 const captionCommon = {
   position: z.enum(['bottom', 'center', 'top']).default('bottom'), fontSize: z.number().min(34).max(140).default(56),
   combineTokensWithinMs: ms(1200, 0, 10_000), maxLines: z.number().int().min(1).max(3).default(2), highlightColour: optionalHex(),
+  keywords: z.array(z.object({ words: z.array(z.string().min(1).max(40)).min(1).max(40), colour: hex('#FFD43B') }).strict()).max(12).optional(),
+  yU: z.number().min(0).max(4000).optional(), fontSizeU: z.number().min(34).max(200).optional(), fontFamily: z.string().min(1).max(100).optional(),
+  weight: z.number().int().min(100).max(900).optional(), maxWordsPerPage: z.number().int().min(1).max(12).optional(),
 };
 export const captions = define('caption', captionCommon, [
   { name: 'editorial', en: 'Editorial', id: 'Editorial', p: 'p0', tags: ['clean', 'calm', 'news'] },
@@ -83,6 +90,12 @@ export const motions = define('motion', motionCommon, [
   { name: 'none', en: 'Static', id: 'Diam', p: 'p0', preview: false },
 ]);
 
+/** ADR-039 infographic pieces (flat two-colour inline SVG icons; row / bar / strip data). Generic names, no project strings. */
+export const ICON_NAMES = z.enum(['reactor', 'chip-ai', 'bolt', 'atom', 'data-center', 'shield', 'check', 'sun', 'cloud', 'moon', 'solar-panel', 'factory', 'card-ace', 'qr', 'play', 'globe', 'chat', 'money', 'clock', 'warning']);
+const TONE = z.enum(['info', 'warn', 'opinion', 'illustration', 'positive', 'negative', 'neutral']);
+const ROW = z.object({ badge: z.string().max(3).optional(), title: z.string().min(1).max(120), sub: z.string().max(120).optional(), right: z.string().max(40).optional(), rightSub: z.string().max(60).optional(), tone: TONE.optional() }).strict();
+const DAY_BAR = z.object({ label: z.string().min(1).max(80), fromH: z.number().min(0).max(24), toH: z.number().min(0).max(24), colour: optionalHex(), icon: ICON_NAMES.optional() }).strict();
+const H_BAR = z.object({ label: z.string().min(1).max(80), value: z.number().min(0), unit: z.string().max(12).optional(), tone: TONE.optional() }).strict();
 const shapeCommon = {
   size: z.number().min(10).max(2000).default(200), fill: optionalHex(), stroke: optionalHex(), strokeWidth: z.number().min(0).max(100).default(0),
   position: z.union([z.enum(['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right']), z.object({ x: z.number(), y: z.number() })]).default('center'),
@@ -105,6 +118,15 @@ export const shapes = define('shape', shapeCommon, [
   { name: 'pill', en: 'Pill', id: 'Kapsul', p: 'p1', tags: ['button', 'tombol', 'cta', 'badge'] },
   { name: 'check', en: 'Check', id: 'Centang', p: 'p1', tags: ['tick', 'done', 'list', 'centang'] },
   { name: 'chevron', en: 'Chevron', id: 'Panah kecil', p: 'p1', tags: ['bullet', 'list', 'next'] },
+  // ADR-039 (Reels infographics): data-driven shapes drawn with theme fonts; `fill` = panel / main colour, `accent` = second colour.
+  { name: 'icon', en: 'Icon', id: 'Ikon', p: 'p1', params: { icon: ICON_NAMES.default('bolt'), accent: optionalHex() }, tags: ['flat', 'pictogram', 'simbol', 'reels'] },
+  { name: 'rows', en: 'Rows', id: 'Baris', p: 'p1', preview: false, params: { rows: z.array(ROW).max(8).default([]), staggerMs: ms(120, 0, 2000), radiusU: z.number().min(0).max(200).default(28) }, tags: ['list', 'table', 'badge', 'daftar', 'reels'] },
+  { name: 'day-strip', en: 'Day strip', id: 'Garis hari', p: 'p1', preview: false, params: { hours: z.array(z.number().min(0).max(24)).max(25).default([0, 6, 12, 18, 24]), bars: z.array(DAY_BAR).max(8).default([]), note: z.string().max(120).optional() }, tags: ['timeline', 'hours', 'jam', 'siang', 'malam', 'reels'] },
+  { name: 'browser-card', en: 'Browser card', id: 'Kartu peramban', p: 'p1', params: { urlText: z.string().max(80).default('example.com'), title: z.string().max(120).default(''), fromLabel: z.string().max(40).default(''), toLabel: z.string().max(40).default(''), progress: unit(0.6), caption: z.string().max(120).default(''), inner: z.enum(['reactor-datacenter', 'none']).default('none') }, tags: ['window', 'web', 'progress', 'jendela', 'reels'] },
+  { name: 'typing-box', en: 'Typing box', id: 'Kotak ketik', p: 'p1', params: { text: z.string().max(200).default('Halo!'), prefixBadge: z.string().max(8).default('DM'), typing: z.boolean().default(true), sendAt: z.number().int().min(0).max(60_000).optional() }, tags: ['chat', 'message', 'dm', 'pesan', 'ketik', 'reels'] },
+  { name: 'tag', en: 'Tag', id: 'Label', p: 'p1', params: { text: z.string().max(120).default('INFO'), tone: TONE.default('info') }, tags: ['pill', 'label', 'opinion', 'opini', 'ilustrasi', 'reels'] },
+  { name: 'source-tag', en: 'Source tag', id: 'Label sumber', p: 'p1', params: { text: z.string().max(300).default('Sumber · 2026') }, tags: ['source', 'citation', 'sumber', 'rujukan', 'reels'] },
+  { name: 'bars-h', en: 'Horizontal bars', id: 'Batang mendatar', p: 'p1', preview: false, params: { bars: z.array(H_BAR).max(8).default([]), showValues: z.boolean().default(true), max: z.number().positive().optional() }, tags: ['chart', 'bar', 'compare', 'grafik', 'banding', 'reels'] },
 ]);
 
 export const easings = define('easing', {}, [
@@ -176,6 +198,10 @@ export const fonts = define('font', {}, [
   { name: 'plus-jakarta-sans', en: 'Plus Jakarta Sans', id: 'Plus Jakarta Sans', p: 'p0', data: { family: 'Plus Jakarta Sans', fileStem: 'fonts/plus-jakarta-sans-latin', weights: [400, 500, 600, 700, 800] }, preview: false },
   { name: 'archivo', en: 'Archivo', id: 'Archivo', p: 'p0', data: { family: 'Archivo', fileStem: 'fonts/archivo-latin', weights: [400, 500, 600, 700, 800] }, preview: false },
   { name: 'jetbrains-mono', en: 'JetBrains Mono', id: 'JetBrains Mono', p: 'p0', data: { family: 'JetBrains Mono', fileStem: 'fonts/jetbrains-mono-latin', weights: [400, 500, 600, 700, 800] }, preview: false },
+  // ADR-039: Poppins (OFL 1.1), upright 500–900 only, shipped as TTF (no woff2 converter on the build host; `format` tells the loader).
+  // Files from github.com/google/fonts at commit 8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5 (ofl/poppins), licence packages/engine/public/fonts/LICENSE-poppins.txt.
+  { name: 'poppins', en: 'Poppins', id: 'Poppins', p: 'p0', data: { family: 'Poppins', fileStem: 'fonts/poppins', weights: [500, 600, 700, 800, 900], styles: ['normal'], format: 'truetype', ext: 'ttf',
+    licence: 'OFL-1.1', source: 'https://github.com/google/fonts/tree/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/poppins', copyright: 'Copyright 2020 The Poppins Project Authors (https://github.com/itfoundry/Poppins)' }, preview: false },
 ]);
 
 // Book §4.4 palettes: background, text, accent 1, accent 2 (contrast-checked in the book).
@@ -188,6 +214,8 @@ export const palettes = define('palette', {}, [
   // ADR-034: editorial data-journalism palette (reference video of QA 2026-10-28); extra roles read by the scene composer.
   { name: 'editorial-teal', en: 'Editorial teal', id: 'Editorial toska', p: 'p0', data: { bg: '#0F1A1F', text: '#FFFFFF', accent: '#5DCAA5', accent2: '#EF9F27', negative: '#F0997B', muted: '#9FB3B8', neutral: '#888780', pill: '#1D9E75' }, preview: false },
   { name: 'corporate-blue', en: 'Corporate blue', id: 'Korporat biru', p: 'p0', data: { bg: '#0D2A4A', text: '#F2F7FC', accent: '#4DA3FF', accent2: '#FFB020' }, preview: false },
+  // ADR-039: Reels explainer palette (dark navy, yellow + cyan highlights); extra roles read by the composer and the infographic shapes.
+  { name: 'reels-navy', en: 'Reels navy', id: 'Navy Reels', p: 'p0', data: { bg: '#0B1526', bg2: '#121F38', text: '#F4F6FB', accent: '#FFD43B', accent2: '#4DD4C4', negative: '#FF5C5C', warn: '#FFA94D', muted: '#8A97B3' }, preview: false, tags: ['reels', 'dark', 'navy', 'explainer', 'gelap'] },
 ]);
 
 export const fontPairs = define('fontpair', {}, [
@@ -195,6 +223,7 @@ export const fontPairs = define('fontpair', {}, [
   { name: 'archivo-inter', en: 'Archivo + Inter', id: 'Archivo + Inter', p: 'p0', data: { heading: 'preset:font.archivo', body: 'preset:font.inter' }, preview: false },
   { name: 'inter-mono', en: 'Inter + Mono', id: 'Inter + Mono', p: 'p0', data: { heading: 'preset:font.inter', body: 'preset:font.jetbrains-mono' }, preview: false },
   { name: 'inter-inter', en: 'Inter only', id: 'Inter saja', p: 'p0', data: { heading: 'preset:font.inter', body: 'preset:font.inter' }, preview: false },
+  { name: 'poppins-inter', en: 'Poppins + Inter', id: 'Poppins + Inter', p: 'p0', data: { heading: 'preset:font.poppins', body: 'preset:font.inter' }, preview: false, tags: ['reels', 'bold', 'tebal'] },   // ADR-039
 ]);
 
 export const ALL_PRESETS: readonly PresetDef[] = Object.freeze([

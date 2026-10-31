@@ -64,4 +64,41 @@ DROP TABLE voice_keys;
 ALTER TABLE voice_keys_new RENAME TO voice_keys;
 `,
   },
+  {
+    version: 24,
+    name: 's2_footage_prep',
+    // FR-285 … FR-289 (Reels production pipeline): the footage prep generator (`kind = 'prep'`, a job that may stop at
+    // `needs-input` for the rotation confirmation) and the stored FootageAnalysis per project. SQLite cannot alter a CHECK, so
+    // generator_jobs is rebuilt (rows kept).
+    sql: `
+CREATE TABLE generator_jobs_new (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind           TEXT NOT NULL CHECK(kind IN ('voice','music','thumbnail','captions','hashtags','prep')),
+  input_json     TEXT NOT NULL CHECK(json_valid(input_json)),
+  model_key      TEXT,
+  status         TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled','needs-input')),
+  progress       REAL NOT NULL DEFAULT 0,
+  result_asset_id TEXT REFERENCES assets(id),
+  result_json    TEXT CHECK(result_json IS NULL OR json_valid(result_json)),
+  error_code     TEXT,
+  created_at     TEXT NOT NULL, started_at TEXT, finished_at TEXT
+);
+INSERT INTO generator_jobs_new (id, project_id, kind, input_json, model_key, status, progress, result_asset_id, result_json, error_code, created_at, started_at, finished_at)
+  SELECT id, project_id, kind, input_json, model_key, status, progress, result_asset_id, result_json, error_code, created_at, started_at, finished_at FROM generator_jobs;
+DROP TABLE generator_jobs;
+ALTER TABLE generator_jobs_new RENAME TO generator_jobs;
+CREATE INDEX IF NOT EXISTS idx_generator_jobs_project ON generator_jobs(project_id, created_at);
+CREATE TABLE IF NOT EXISTS footage_analyses (               -- FootageAnalysis JSON (packages/models analysis types) per prep job
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  voice_asset_id TEXT NOT NULL REFERENCES assets(id),
+  camera_asset_id TEXT REFERENCES assets(id),
+  master_asset_id TEXT REFERENCES assets(id),
+  json           TEXT NOT NULL CHECK(json_valid(json)),
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_footage_analyses_project ON footage_analyses(project_id, created_at);
+`,
+  },
 ];

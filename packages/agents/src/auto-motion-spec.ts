@@ -75,9 +75,66 @@ export type SpecBarT = z.infer<typeof SpecBar>;
 
 export const SCENE_ROLES = ['hook', 'title', 'body', 'list', 'stat', 'stat-compare', 'bar-chart', 'hbar-compare', 'question', 'quote', 'cta', 'cta-handle', 'split',
   /** FR-261 (the Creator's own footage): full-frame footage with overlays in the thirds; footage on one half + text; footage window + text. */
-  'footage', 'footage-split', 'footage-pip'] as const;
+  'footage', 'footage-split', 'footage-pip',
+  /** ADR-039 (Reels talking-head mode, needs `talkingHead`): on-camera cut full screen; designed graphics + speaker bubble; silent card; silent hold; poster end card. */
+  'talk', 'explain', 'card', 'hold', 'poster'] as const;
 export type SceneRole = (typeof SCENE_ROLES)[number];
 export const FOOTAGE_ROLES: readonly SceneRole[] = ['footage', 'footage-split', 'footage-pip'];
+/** ADR-039: roles of the talking-head mode (auto-motion-reels.ts); `talk` / `explain` / `hold` need `talkingHead` cuts. */
+export const TALKING_HEAD_ROLES: readonly SceneRole[] = ['talk', 'explain', 'card', 'hold', 'poster'];
+export const SPEECH_ROLES: readonly SceneRole[] = ['talk', 'explain'];
+
+/** ADR-039: procedural sound effects (packages/models analysis/sfx.ts `synthSfx`); the Service registers them as audio assets (`ctx.sfxAssets`). */
+export const SFX_KINDS = ['whoosh', 'pop', 'click', 'tick', 'ding', 'rise'] as const;
+export type SfxKind = (typeof SFX_KINDS)[number];
+export const BLOCK_KINDS = ['heading', 'chip', 'tag', 'source', 'icon', 'rows', 'bars', 'day-strip', 'browser-card', 'typing-box', 'note', 'stat', 'text'] as const;
+export type BlockKind = (typeof BLOCK_KINDS)[number];
+export const ICON_NAMES = ['reactor', 'chip-ai', 'bolt', 'atom', 'data-center', 'shield', 'check', 'sun', 'cloud', 'moon', 'solar-panel', 'factory', 'card-ace', 'qr', 'play', 'globe', 'chat', 'money', 'clock', 'warning'] as const;
+export const TAG_TONES = ['info', 'warn', 'opinion', 'illustration'] as const;
+const short = (max: number) => z.string().min(1).max(max);
+/**
+ * ADR-039: one graphic of a talking-head scene. `at` = when it appears ({say: "spoken words"} resolved fuzzily inside the scene's
+ * cut, {ms} / {frames} scene-relative); without `at` the block appears at `fallbackMs` or its index × 600 ms. `sfx` overrides the
+ * kind's default sound (chip / icon pop, rows rise + pops, progress / typing ticks + ding, tag click).
+ */
+export const SpecBlock = z.object({
+  kind: z.enum(BLOCK_KINDS),
+  text: short(300).optional(), sub: short(200).optional(), tone: z.enum([...SpecTone.options, ...TAG_TONES]).optional(),
+  at: SpecAnchor.optional(), fallbackMs: ms.optional(), sfx: z.enum(SFX_KINDS).optional(),
+  /** icon / chip: an icon name (preset:shape.icon params.icon); accent colour for 2-colour icons. */
+  icon: z.enum(ICON_NAMES).optional(), accent: SpecHex.optional(), color: SpecHex.optional(),
+  /** rows: panel rows with a letter badge; bars: horizontal bars; day-strip: a 24 h strip with coloured bars. */
+  rows: z.array(z.object({ badge: short(3).optional(), title: short(80), sub: short(80).optional(), right: short(24).optional(), rightSub: short(40).optional(), tone: z.enum([...SpecTone.options, ...TAG_TONES]).optional() }).strict()).min(1).max(6).optional(),
+  bars: z.array(z.object({ label: short(40), value: z.number().min(0), unit: short(12).optional(), tone: SpecTone.optional() }).strict()).min(1).max(8).optional(),
+  hours: z.array(z.number().min(0).max(24)).max(9).optional(),
+  strip: z.array(z.object({ label: short(40), fromH: z.number().min(0).max(24), toH: z.number().min(0).max(24), color: SpecHex.optional(), icon: z.enum(ICON_NAMES).optional() }).strict()).min(1).max(8).optional(),
+  note: short(160).optional(),
+  /** browser-card: a drawn "source clip" card (never claims to be real footage); typing-box: a DM / comment box that types itself. */
+  urlText: short(80).optional(), title: short(120).optional(), fromLabel: short(40).optional(), toLabel: short(40).optional(), progress: z.number().min(0).max(1).optional(), caption: short(120).optional(),
+  inner: z.enum(['reactor-datacenter', 'none']).optional(), prefixBadge: short(6).optional(), typing: z.boolean().optional(), sendAt: ms.optional(),
+  /** stat: the figure as shown ("24 jam"), its label and unit. */
+  value: short(40).optional(), label: short(80).optional(), unit: short(30).optional(),
+}).strict().superRefine((b, c) => {
+  const need = (k: keyof typeof b, when: readonly string[]) => { if (when.includes(b.kind) && b[k] === undefined) c.addIssue({ code: 'custom', message: `${b.kind} block needs ${String(k)}`, path: [k] }); };
+  need('text', ['heading', 'chip', 'tag', 'source', 'note', 'text', 'typing-box']);
+  need('icon', ['icon']); need('rows', ['rows']); need('bars', ['bars']); need('strip', ['day-strip']); need('value', ['stat']);
+});
+export type SpecBlockT = z.infer<typeof SpecBlock>;
+/** ADR-039: a cut of the footage analysis (recording time = master time, ms); the Service fills `talkingHead.cuts` or the composer reads PlanContext. */
+export const SpecCut = z.object({
+  id: short(40), lineIndex: z.number().int().min(0).optional(), startMs: ms, endMs: ms, text: z.string().max(2000),
+  words: z.array(z.object({ text: short(80), fromMs: ms, toMs: ms, conf: z.number().optional() }).strict()).max(400).default([]),
+}).strict();
+export type SpecCutT = z.infer<typeof SpecCut>;
+/** ADR-039: the cover still (POST /projects/:id/cover via plan step `cover.render`): hook word, kicker, line, pills, icons, source, handle. */
+export const SpecCover = z.object({
+  cutId: short(40).optional(), atMs: ms.optional(),
+  /** Which frame of the cut: 'end-of-line' (default; right after the last word — mouth closed, eyes on the camera), 'start' (600 ms in), or a master time in ms. */
+  frame: z.union([z.enum(['end-of-line', 'start']), ms]).optional(), hookWord: short(40), kicker: short(60).optional(), line: short(120), subline: short(160).optional(),
+  pills: z.array(z.object({ text: short(40), tone: z.enum([...SpecTone.options, ...TAG_TONES]).optional() }).strict()).max(5).optional(),
+  icons: z.array(z.enum(ICON_NAMES)).max(5).optional(), source: short(160).optional(), handle: short(60),
+}).strict();
+export type SpecCoverT = z.infer<typeof SpecCover>;
 /**
  * FR-261: which part of a video asset a footage scene plays. fromMs / toMs are SOURCE times (the trim); absent = from the start /
  * to the end (the composer keeps the scene inside the asset). volume: the clip's own sound (default 1, 0.2 under a voice-over).
@@ -121,8 +178,23 @@ export const SpecScene = z.object({
   source: SpecText.optional(),
   /** Explicit top of the content block in px from the safe-area top (e.g. 280 for "sekitar 280px dari atas area aman"). */
   topPx: px(0, 3000).optional(),
+  /** ADR-039 talking-head roles: the cut id (talk / explain), punch-in zoom and spoken-word pops (talk), the speaker bubble (explain), graphics blocks. */
+  cut: z.string().min(1).max(40).optional(),
+  zoom: z.object({ from: z.number().min(1).max(3), to: z.number().min(1).max(3) }).strict().optional(),
+  pops: z.array(z.object({ say: z.string().min(1).max(80), amount: z.number().min(0).max(1).optional() }).strict()).max(8).optional(),
+  bubble: z.object({ sizeU: px(120, 600).optional(), ringColour: SpecHex.optional(), ringWidthU: px(0, 40).optional(), topU: px(0, 1900).optional(), focus: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), zoom: z.number().min(0.2).max(3) }).strict().optional() }).strict().optional(),
+  heading: SpecText.optional(), blocks: z.array(SpecBlock).max(10).optional(),
+  /** card: music lift over the silent card (default music.liftOverSilent); tag under the card ("ilustrasi · bukan cuplikan asli"). */
+  musicLift: z.number().min(1).max(3).optional(), tag: SpecText.optional(),
+  /** poster: the Creator's image asset shown unchanged at `scale` of the frame width with `handle` under it. */
+  imageAssetId: z.string().min(1).max(80).optional(), scale: z.number().min(0.3).max(1).optional(),
 }).strict();
 export type SpecSceneT = z.infer<typeof SpecScene>;
+/** ADR-039: the footage source of the talking-head mode; the composer also reads the analysis from its context (`footageAnalysis`). */
+export const SpecTalkingHead = z.object({
+  masterAssetId: z.string().min(1).max(80).optional(), voiceAssetId: z.string().min(1).max(80).optional(), analysisId: z.string().min(1).max(80).optional(),
+  offsetMs: z.number().int().min(-600_000).max(600_000).optional(), cuts: z.array(SpecCut).max(60).optional(),
+}).strict();
 
 export const SpecVoiceClip = z.object({
   id: z.string().min(1).max(40),
@@ -164,14 +236,27 @@ export const VideoSpec = z.object({
     /** Voice-over steps for clips without an asset (default true): one tts.generate step per clip. */
     generate: z.boolean().optional(), voiceId: z.string().min(1).max(64).optional(), speed: z.number().min(0.8).max(1.2).optional(),
   }).strict().optional(),
-  /** Captions from the voice-over (default false: on-screen texts are already there). */
-  captions: z.boolean().optional(),
+  /** Captions from the voice-over (default false: on-screen texts are already there). ADR-039: an object = karaoke pages from the analysis words. */
+  captions: z.union([z.boolean(), z.object({
+    from: z.literal('analysis').optional(), keywords: z.array(z.object({ words: z.array(z.string().min(1).max(40)).min(1).max(20), colour: SpecHex }).strict()).max(8).optional(),
+    yU: px(0, 1900).optional(), fontSizeU: px(34, 140).optional(), maxWords: z.number().int().min(1).max(6).optional(),
+  }).strict()]).optional(),
   /** FR-261: caption look for those captions (default preset:caption.karaoke on footage). */
   captionStyle: z.string().regex(/^preset:caption\.[a-z0-9-]+$/).optional(),
-  /** FR-266: a background music bed from the CC0 library, best fit for the mood / words, ducked under speech. */
-  music: z.object({ mood: z.string().min(1).max(40).optional(), prompt: z.string().min(1).max(200).optional(), volume: z.number().min(0.02).max(1).optional() }).strict().optional(),
+  /** FR-266: a background music bed from the CC0 library, best fit for the mood / words, ducked under speech. ADR-039: `trackId` / `assetId`, lift over silent scenes, fades. */
+  music: z.object({ mood: z.string().min(1).max(40).optional(), prompt: z.string().min(1).max(200).optional(), volume: z.number().min(0.02).max(1).optional(),
+    trackId: z.string().min(1).max(80).optional(), assetId: z.string().min(1).max(80).optional(), liftOverSilent: z.number().min(1).max(3).optional(), fadeInMs: ms.optional(), fadeOutMs: ms.optional() }).strict().optional(),
+  /** ADR-039 talking-head mode: the footage, the cover still, the sound effects and where the source tags sit; `credits` lines go to the render's CREDITS.txt. */
+  talkingHead: SpecTalkingHead.optional(),
+  cover: SpecCover.optional(),
+  sfx: z.object({ enabled: z.boolean().optional(), level: z.number().min(0).max(1).optional() }).strict().optional(),
+  sourceTagYU: px(0, 1900).optional(),
+  credits: z.array(z.string().min(1).max(300)).max(40).optional(),
   scenes: z.array(SpecScene).min(1).max(20),
-}).strict();
+}).strict().superRefine((s, c) => {
+  if (!s.talkingHead) s.scenes.forEach((x, i) => { if (SPEECH_ROLES.includes(x.role) || x.role === 'hold') c.addIssue({ code: 'custom', message: `role ${x.role} needs talkingHead (the footage analysis) at the spec top`, path: ['scenes', i, 'role'] }); });
+  else s.scenes.forEach((x, i) => { if (SPEECH_ROLES.includes(x.role) && !x.cut) c.addIssue({ code: 'custom', message: `${x.role} scene needs cut (a cut id of the analysis)`, path: ['scenes', i, 'cut'] }); });
+});
 export type VideoSpecT = z.infer<typeof VideoSpec>;
 /** Alias used in AI_WORKFLOW §8 and the prompts. */
 export const SceneSpec = VideoSpec;
@@ -185,6 +270,16 @@ export const SCENE_COMPOSE_SIGNATURE =
   'kicker?, headline?, sub?, bullets?: [], stats?: [{value: "+17,2%", from?: "+0,0%", countMs|countFrames?, easing?, prefix?: "US$", unit?: "miliar", label?, note?, tone?: positive|negative|warning|neutral, sizePx?, weight?, color?, at?}], ' +
   'bars?: [{label, value?, display?: "25,96", heightPx? (vertical) | widthPct? (horizontal 0..1), style?: solid|dashed, tone?|color?, caption?, at?, growMs|growFrames?, easing?}], barGapPx?, note?, noteTone?, quote?, attribution?, handle?, action?, button?, keywords?, assetId?, source?, topPx?}]}. ' +
   'A text is "string" or {text, sizePx?, weight?, color?, lineHeight?, at?, fadeMs|fadeFrames?, risePx?}; at = {clip: "v2", edge?: start|end, pct?: 0..1, offsetMs?} | {ms} | {frames} | {footageMs} (source time of the scene footage) | {say: "phrase"} (when the footage speaker says it); easing = name or [x1,y1,x2,y2]. Never invent numbers or sources.';
+
+/** ADR-039: appended to `capabilities.sceneCompose` when the project has a footage analysis (talking-head Reels mode). */
+export const TALKING_HEAD_SIGNATURE =
+  'TALKING-HEAD MODE (the project has a footage analysis: envelope.footageAnalysis lists the cuts): set talkingHead: {} (the app fills the master and the cuts) and use ONE scene per cut, in cut order, with roles ' +
+  'talk {cut: "<cut id>", zoom?: {from, to}, pops?: [{say, amount?}], blocks?} (the speaker full screen with a slow punch-in; chips pop on spoken words), ' +
+  'explain {cut, heading, blocks: Block[], source?, bubble?: {sizeU, ringColour, ringWidthU, topU, focus}} (full-page graphics, the speaker in a round bubble at the bottom), ' +
+  'card {durationMs: 3000, heading?, blocks, tag?: "ilustrasi · bukan cuplikan asli", musicLift?} (silent drawn card for a source clip you do not have), hold {durationMs: 1200} (silent continuation of the previous graphics), ' +
+  'poster {imageAssetId, scale?: 0.78, handle, durationMs: 3500} (last). Block = {kind: heading|chip|tag|source|icon|rows|bars|day-strip|browser-card|typing-box|note|stat|text, text?, icon?, tone?, rows?: [{badge?, title, sub?, right?, rightSub?, tone?}], bars?: [{label, value, display?, unit?}], strip?: [{label, fromH, toH}], hours?, urlText?, title?, progress?, caption?, prefixBadge?, sendAt?, value?, label?, unit?, at?: {say: "words of the cut"} | {ms}, sfx?: whoosh|pop|click|tick|ding|rise}. ' +
+  'Also: cover {cutId, frame?: "end-of-line" (default: the frame right after the last word) | "start" | ms, hookWord, kicker?, line, subline?, pills?: [{text, tone}], icons?, source?, handle}, captions: {from: "analysis", keywords: [{words, colour}], yU?: 1455, fontSizeU?: 68, maxWords?: 3}, music: {trackId?, volume?: 0.3, liftOverSilent?: 1.5, fadeInMs?: 500, fadeOutMs?: 2500}, sfx: {enabled: true, level: 0.55}, sourceTagYU?: 1285, credits?: ["source lines for CREDITS.txt"]. ' +
+  'Facts, figures and sources only from the approved PRD; every number carries a source block or scene.source.';
 
 /**
  * Deterministic repair of unambiguous slips a model makes in a VideoSpec (numbers sent as strings, "frames" spelled as
@@ -200,7 +295,7 @@ export function normalizeVideoSpec(raw: unknown): { value: unknown; fixes: strin
     video: 'footage', broll: 'footage', 'b-roll': 'footage', 'talking-head': 'footage', clip: 'footage', 'full-footage': 'footage', 'footage-full': 'footage', 'footage-overlay': 'footage',
     pip: 'footage-pip', 'picture-in-picture': 'footage-pip', 'footage-window': 'footage-pip', 'split-footage': 'footage-split', 'footage-text': 'footage-split', 'video-split': 'footage-split',
     intro: 'hook', opening: 'hook', closing: 'cta', outro: 'cta', handle: 'cta-handle', follow: 'cta-handle', bullet: 'list', bullets: 'list', tips: 'list', text: 'body', content: 'body', 'image-text': 'split', image: 'split' };
-  const numKeys = /^(sizePx|weight|lineHeight|fadeMs|fadeFrames|risePx|countMs|countFrames|heightPx|widthPct|borderPx|growMs|growFrames|durationMs|holdMs|gapMs|tailMs|barGapPx|barWidthPx|barHeightPx|topPx|ms|frames|offsetMs|pct|value|left|right|top|bottom|sourceBottomPx|padXPx|padYPx|radiusPx|fps|speed|maxDurationMs|fromMs|toMs|footageMs|volume)$/;
+  const numKeys = /^(sizePx|weight|lineHeight|fadeMs|fadeFrames|risePx|countMs|countFrames|heightPx|widthPct|borderPx|growMs|growFrames|durationMs|holdMs|gapMs|tailMs|barGapPx|barWidthPx|barHeightPx|topPx|ms|frames|offsetMs|pct|value|left|right|top|bottom|sourceBottomPx|padXPx|padYPx|radiusPx|fps|speed|maxDurationMs|fromMs|toMs|footageMs|volume|sizeU|ringWidthU|topU|yU|fontSizeU|maxWords|liftOverSilent|scale|musicLift|amount|progress|sendAt|fromH|toH|startMs|endMs|level|lineIndex|sourceTagYU|fallbackMs)$/;
   const walk = (v: unknown, path: string, key: string): unknown => {
     if (Array.isArray(v)) return v.map((x, i) => walk(x, `${path}[${i}]`, key));
     if (isObj(v)) {
@@ -208,7 +303,7 @@ export function normalizeVideoSpec(raw: unknown): { value: unknown; fixes: strin
       for (const [k, x] of Object.entries(v)) {
         let kk = k;
         if (k === 'durationFrames' && path.endsWith('transition')) kk = 'frames';
-        if (k === 'colour') kk = 'color';
+        if (k === 'colour' && !path.includes('.keywords[')) kk = 'color';            // ADR-039: caption keyword groups keep `colour` (the caption preset's param name)
         if (kk !== k) fixes.push(`${path}.${k} → ${kk}`);
         out[kk] = walk(x, `${path}.${kk}`, kk);
       }
@@ -220,7 +315,9 @@ export function normalizeVideoSpec(raw: unknown): { value: unknown; fixes: strin
       return out;
     }
     if (typeof v === 'string') {
-      if (numKeys.test(key) && key !== 'value' && /^-?\d+(\.\d+)?$/.test(v.trim())) { fixes.push(`${path}: "${v}" → ${Number(v)}`); return Number(v); }
+      // ADR-039: inside a rows block `right` is a label ("2030"), not the crop fraction — never coerce text fields of rows / pills
+      const labelField = /\.(rows|pills|strip|bars)\[\d+\]$/.test(path.slice(0, path.length - key.length - 1)) && /^(right|rightSub|badge|title|sub|label|text|unit)$/.test(key);
+      if (numKeys.test(key) && key !== 'value' && !labelField && /^-?\d+(\.\d+)?$/.test(v.trim())) { fixes.push(`${path}: "${v}" → ${Number(v)}`); return Number(v); }
       if (key === 'value' && path.includes('.bars[') && /^-?\d+([.,]\d+)?$/.test(v.trim())) { const n = Number(v.replace(',', '.')); fixes.push(`${path}: "${v}" → ${n}`); return n; }
       if (/(^|\.)(color|background|accent|pill|text|muted|positive|negative|warning|neutral)$/.test(path) && /^[0-9a-fA-F]{6}$/.test(v)) { fixes.push(`${path}: ${v} → #${v}`); return `#${v}`; }
       if (key === 'easing') {

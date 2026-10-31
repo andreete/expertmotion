@@ -33,7 +33,7 @@ export function coveredZonesU(ratio: CompositionModelT['settings']['ratio']): { 
   if (ratio === '9:16') return { top: 96, right: 72, bottom: 260, left: 48 };
   return { top: 36, right: 36, bottom: 36, left: 36 };
 }
-type Item = { id: string; kind: 'text' | 'shape' | 'image'; from: number; to: number; box: BoxU; el: TextLayerT | OverlayElementT };
+type Item = { id: string; kind: 'text' | 'shape' | 'image' | 'video'; from: number; to: number; box: BoxU; el: TextLayerT | OverlayElementT };
 const BUNDLED = new Set(listPresets({ category: 'font' }).map((p) => String(p.data?.['family'])));
 const hexOk = (c: unknown): c is string => typeof c === 'string' && /^#[0-9A-Fa-f]{6}$/.test(c);
 function luminance(hex: string): number {
@@ -99,7 +99,7 @@ export function qualityCheck(m: CompositionModelT, opts: QualityOptions = {}): Q
   const safe = opts.safeArea ?? coveredZonesU(m.settings.ratio);
   const all = items(m);
   const push = (code: QualityCode, severity: QualityIssue['severity'], ids: string[], atMs: number, en: string, id: string, fixable: boolean) => out.push({ code, severity, ids, atMs, message: { en, id }, fixable });
-  const label = (x: Item) => (x.kind === 'text' ? `"${(x.el as TextLayerT).text.slice(0, 28)}"` : x.kind === 'shape' ? `shape ${(x.el as OverlayElementT & { presetId: string }).presetId.replace('preset:shape.', '')}` : 'image');
+  const label = (x: Item) => (x.kind === 'text' ? `"${(x.el as TextLayerT).text.slice(0, 28)}"` : x.kind === 'shape' ? `shape ${(x.el as OverlayElementT & { presetId: string }).presetId.replace('preset:shape.', '')}` : x.kind === 'video' ? 'video bubble' : 'image');
 
   // overlap: two elements on screen together for > 600 ms (crossfades between scenes are shorter) whose painted boxes intersect;
   // a shape that holds a text / another shape (pill behind a label, ring around a number, bar under its value) is intended.

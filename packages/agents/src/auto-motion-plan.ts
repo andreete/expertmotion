@@ -10,11 +10,16 @@
 import { applyOperations, autoFixOps, conflictsWithLocked, frameInUnits, propertyKeysOf, qualityCheck, qualityChecklist, type ApplyContext, type AssetFacts, type CompositionModelT, type OperationT, type QualityIssue, type Tier } from '@expertmotion/composition-model';
 import { issue, type Issue } from '@expertmotion/shared';
 import { composeScenes } from './auto-motion.js';
+import type { FootageAnalysisLike, SfxAssets } from './reels-types.js';
 import type { EditPlanT } from './schemas.js';
 
 export const SCENE_COMPOSE_TOOL = 'scene.compose';
 export const SCENE_COMPOSE_OP = 'op:scene.compose';
-export interface ComposeStepContext { model: CompositionModelT; assets: readonly AssetFacts[]; tier: Tier; lockedKeys: readonly string[]; language?: 'id' | 'en' }
+/** ADR-039: the plan step that renders the cover still (POST /projects/:id/cover) from the VideoSpec `cover`. */
+export const COVER_RENDER_TOOL = 'cover.render';
+export interface ComposeStepContext { model: CompositionModelT; assets: readonly AssetFacts[]; tier: Tier; lockedKeys: readonly string[]; language?: 'id' | 'en';
+  /** ADR-039: the footage analysis and SFX asset ids for the talking-head mode (PlanContext passes them through). */
+  footageAnalysis?: FootageAnalysisLike; sfxAssets?: SfxAssets }
 type Step = EditPlanT['steps'][number];
 type Risk = EditPlanT['risks'][number];
 
@@ -27,6 +32,7 @@ export function expandSceneCompose(plan: EditPlanT, ctx: ComposeStepContext): { 
   const addRisk = (r: Risk) => { if (!risks.some((x) => x.code === r.code && x.message === r.message)) risks.push(r); };
   let nextN = Math.max(0, ...plan.steps.map((s) => s.n)) + 1;
   const steps: Step[] = [];
+  const generatedNs = new Set<number>();
   plan.steps.forEach((s, i) => {
     const composeArgs = s.tool === SCENE_COMPOSE_TOOL ? [s.args] : s.ops.filter((o) => o.op === SCENE_COMPOSE_OP).map((o) => o.args);
     if (!composeArgs.length) { steps.push(s); return; }
@@ -35,12 +41,20 @@ export function expandSceneCompose(plan: EditPlanT, ctx: ComposeStepContext): { 
     let summary = '';
     let composed: unknown;                                                       // FR-224: kept for the voice-first Execute
     const expandOne = (args: unknown) => {
-      const r = composeScenes(args, { model: ctx.model, assets: ctx.assets, tier: ctx.tier, lockedKeys: ctx.lockedKeys, ...(ctx.language ? { language: ctx.language } : {}) });
+      const r = composeScenes(args, { model: ctx.model, assets: ctx.assets, tier: ctx.tier, lockedKeys: ctx.lockedKeys, ...(ctx.language ? { language: ctx.language } : {}), ...(ctx.footageAnalysis ? { footageAnalysis: ctx.footageAnalysis } : {}), ...(ctx.sfxAssets ? { sfxAssets: ctx.sfxAssets } : {}) });
       if (!r.ok) { issues.push(issue('EM-2102', `Step ${s.n} (scene.compose): ${r.problem} Expected args: a VideoSpec (see capabilities.stepTools['scene.compose']).`, 'block', `steps[${i}].args`)); return []; }
       for (const x of r.risks) addRisk({ code: x.code, message: x.message, severity: x.severity });
       composed = r.spec;
       const secs = ((r.totalMs - (r.scenes[0]?.startMs ?? 0)) / 1000).toFixed(1);
       summary = id ? `${r.scenes.length} adegan bergerak (±${secs.replace('.', ',')} dtk) dengan transisi dan animasi otomatis` : `${r.scenes.length} animated scenes (~${secs} s) with automatic transitions and motion`;
+      // ADR-039 talking-head mode: the speech, captions and SFX are already ops; only the music bed (picked at Execute) and the cover still are steps.
+      if (r.reels) {
+        const rl = r.reels;
+        summary = id ? `${rl.speechScenes} potongan bicara + ${rl.silentScenes} kartu / poster (±${secs.replace('.', ',')} dtk), ${rl.captionPages} halaman caption, ${rl.sfx.length} efek suara` : `${rl.speechScenes} spoken cuts + ${rl.silentScenes} cards / poster (~${secs} s), ${rl.captionPages} caption pages, ${rl.sfx.length} sound effects`;
+        if (rl.music) generated.push({ n: nextN++, tool: 'music.generate', ops: [], args: { prompt: rl.music.prompt.slice(0, 200), durationMs: Math.max(1000, r.totalMs), volume: rl.music.volume, ...(rl.music.trackId ? { trackId: rl.music.trackId } : {}), ...(rl.music.assetId ? { assetId: rl.music.assetId } : {}), fadeInMs: rl.music.fadeInMs, fadeOutMs: rl.music.fadeOutMs, ...(rl.music.gain.length ? { gain: rl.music.gain } : {}) }, expectedDiff: id ? 'Musik latar (CC0), diredam saat bicara, naik di kartu' : 'Background music (CC0), ducked under speech, lifted over the cards', dependsOn: [s.n] });
+        if (rl.cover) { const { atMs, ...coverSpec } = rl.cover; generated.push({ n: nextN++, tool: COVER_RENDER_TOOL, ops: [], args: { spec: { ...coverSpec, atMs }, ...(rl.masterAssetId ? { masterAssetId: rl.masterAssetId } : {}) }, expectedDiff: id ? 'Cover (JPG 1080x1920)' : 'Cover still (JPG 1080x1920)', dependsOn: [s.n] }); }
+        return r.ops;
+      }
       // voice clips that do not exist yet: one tts.generate step each, placed where the composer timed them
       if (r.spec.voice?.generate !== false) {
         const pending = r.voice.filter((v) => !v.assetId);
@@ -69,10 +83,28 @@ export function expandSceneCompose(plan: EditPlanT, ctx: ComposeStepContext): { 
     else for (const o of s.ops) { if (o.op === SCENE_COMPOSE_OP) ops.push(...expandOne(o.args)); else ops.push(o); }
     // FR-224 (voice-first Execute, workflow.ts): the VideoSpec stays on the step so Execute can generate the voice clips first, measure
     // them and compose again with the real durations (the expanded ops use estimated timing until then).
-    steps.push({ n: s.n, tool: 'composition.applyOps', ops, args: composed && s.tool === SCENE_COMPOSE_TOOL ? { sceneCompose: composed } : {}, expectedDiff: (s.expectedDiff || summary).slice(0, 200), dependsOn: s.dependsOn });
+    const credits = (composed as { credits?: string[] } | undefined)?.credits;
+    steps.push({ n: s.n, tool: 'composition.applyOps', ops, args: composed && s.tool === SCENE_COMPOSE_TOOL ? { sceneCompose: composed, ...(credits?.length ? { credits } : {}) } : {}, expectedDiff: (s.expectedDiff || summary).slice(0, 200), dependsOn: s.dependsOn });
+    for (const g of generated) generatedNs.add(g.n);
     steps.push(...generated);
   });
-  return { plan: { ...plan, steps, risks }, issues };
+  // ADR-039: a model that also wrote explicit music.generate / cover.render steps beside a VideoSpec with music / cover would get
+  // two beds / two covers: the explicit step is merged into the generated one (explicit trackId / assetId / volume / fades / prompt
+  // and cover fields win), dropped, and every dependsOn that named it points at the kept step.
+  let out: Step[] = steps;
+  for (const tool of ['music.generate', COVER_RENDER_TOOL]) {
+    const kept = out.find((s) => s.tool === tool && generatedNs.has(s.n));
+    const dupes = out.filter((s) => s.tool === tool && !generatedNs.has(s.n));
+    if (!kept || !dupes.length) continue;
+    for (const d of dupes) {
+      if (tool === 'music.generate') { const keys = ['trackId', 'assetId', 'volume', 'fadeInMs', 'fadeOutMs', 'prompt']; for (const k of keys) if (d.args[k] !== undefined) kept.args[k] = d.args[k]; }
+      else { const spec = d.args['spec']; if (spec && typeof spec === 'object') kept.args['spec'] = { ...((kept.args['spec'] as object | undefined) ?? {}), ...(spec as object) }; }
+    }
+    const dropped = new Set(dupes.map((d) => d.n));
+    out = out.filter((s) => !dropped.has(s.n)).map((s) => ({ ...s, dependsOn: [...new Set(s.dependsOn.map((n) => (dropped.has(n) ? kept.n : n)))].filter((n) => n !== s.n) }));
+    addRisk({ code: 'step-merged', severity: 'info', message: id ? `Langkah ${tool} yang ditulis terpisah digabung ke langkah dari VideoSpec (${dupes.map((d) => d.n).join(', ')} → ${kept.n}).` : `The separate ${tool} step(s) were merged into the one from the VideoSpec (${dupes.map((d) => d.n).join(', ')} → ${kept.n}).` });
+  }
+  return { plan: { ...plan, steps: out, risks }, issues };
 }
 
 /**

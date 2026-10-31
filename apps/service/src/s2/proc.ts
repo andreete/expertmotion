@@ -14,6 +14,8 @@ export interface ToolRun {
   /** Raw stdout chunks (e.g. PCM for waveforms). When absent stdout is collected (capped). */
   onStdout?: (chunk: Buffer) => void;
   onStdoutLine?: (line: string) => void;
+  /** Every stderr line (FR-287: the loudnorm measurement JSON is printed on stderr and longer than the tail). */
+  onStderrLine?: (line: string) => void;
   maxCollectBytes?: number;
 }
 export interface ToolResult { code: number; stdout: string; stderrTail: string[] }
@@ -52,7 +54,7 @@ export function runTool(spec: ToolRun): Promise<ToolResult> {
       child = spawn(spec.exe, [...spec.args], { cwd: spec.cwd, env: toolEnv(spec.exe, spec.cwd), stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true });
     } catch (e) { reject(new ToolError('spawn', e instanceof Error ? e.message : String(e))); return; }
     const max = spec.maxCollectBytes ?? 4 * 1024 * 1024;
-    const out: Buffer[] = []; let outBytes = 0; let errTail = ''; let partial = '';
+    const out: Buffer[] = []; let outBytes = 0; let errTail = ''; let partial = ''; let errPartial = '';
     let killedFor: 'timeout' | 'cancelled' | null = null; let settled = false;
     const done = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); spec.signal?.removeEventListener('abort', onAbort); fn(); };
     const kill = (why: 'timeout' | 'cancelled') => { if (killedFor) return; killedFor = why; killTree(child); };
@@ -64,10 +66,14 @@ export function runTool(spec: ToolRun): Promise<ToolResult> {
       else if (outBytes < max) { out.push(c); outBytes += c.length; }
       if (spec.onStdoutLine) { const parts = (partial + c.toString('utf8')).split(/\r?\n/); partial = parts.pop() ?? ''; for (const l of parts) spec.onStdoutLine(l); }
     });
-    child.stderr!.on('data', (c: Buffer) => { errTail = (errTail + c.toString('utf8')).slice(-8192); });
+    child.stderr!.on('data', (c: Buffer) => {
+      errTail = (errTail + c.toString('utf8')).slice(-8192);
+      if (spec.onStderrLine) { const parts = (errPartial + c.toString('utf8')).split(/\r?\n/); errPartial = parts.pop() ?? ''; for (const l of parts) spec.onStderrLine(l); }
+    });
     const tail = () => errTail.split(/\r?\n/).filter((l) => l.trim()).slice(-10);
     child.once('error', (e) => done(() => reject(new ToolError(killedFor ?? 'spawn', e.message))));
     child.once('close', (code) => done(() => {
+      if (spec.onStderrLine && errPartial) spec.onStderrLine(errPartial);
       if (killedFor || code !== 0) engineLog?.warn({ exe: path.basename(spec.exe), reason: killedFor ?? 'exit', exitCode: code, stderrTail: tail() }, 'engine binary failed');
       if (killedFor) reject(new ToolError(killedFor, killedFor === 'timeout' ? `timed out after ${spec.timeoutMs} ms` : 'cancelled', code, tail()));
       else if (code === 0) resolve({ code: 0, stdout: Buffer.concat(out).toString('utf8'), stderrTail: tail() });

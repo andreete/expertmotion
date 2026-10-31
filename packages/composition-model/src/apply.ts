@@ -3,7 +3,7 @@
 import { getPreset, validateParams, type Category } from '@expertmotion/catalogue';
 import { fail, issue, ok, type Issue, type Result } from '@expertmotion/shared';
 import { OPERATIONS, isOpName, type OperationT } from './operations.js';
-import { CompositionModel, IDENTITY_TRANSFORM, type AssetFacts, type AudioLayerT, type CaptionPageT, type ClipT, type ClipTransformT, type CompositionModelT, type MotionT, type OverlayElementT, type PositionT, type TextLayerT, type Tier } from './schema.js';
+import { CompositionModel, IDENTITY_TRANSFORM, type AssetFacts, type AudioLayerT, type CaptionPageT, type ClipT, type ClipTransformT, type ClipZoomT, type CompositionModelT, type GainSegmentT, type MotionT, type OverlayElementT, type OverlayVideoT, type PositionT, type TextLayerT, type Tier } from './schema.js';
 import { deriveTiming } from './timing.js';
 import { frameInUnits } from './units.js';
 import { detectRatio } from './ratio.js';
@@ -87,14 +87,27 @@ function addVisual(m: CompositionModelT, item: VisualItem, layer: number | undef
   if (layer !== undefined) placeVisual(visualItems(m), item, layer);
 }
 /** op:audio.addLayer (round 2: trimBeforeMs / durationMs / loop / ducking so Duplicate and Paste rebuild a layer exactly). */
-function audioLayerFrom(a: { role: 'voice' | 'sfx'; atMs: number; volume: number; fadeInMs?: number; fadeOutMs?: number; trimBeforeMs?: number; durationMs?: number; loop?: boolean; ducking?: { presetId: string; params?: Record<string, unknown> } },
+function audioLayerFrom(a: { role: 'voice' | 'sfx'; atMs: number; volume: number; fadeInMs?: number; fadeOutMs?: number; trimBeforeMs?: number; durationMs?: number; loop?: boolean; ducking?: { presetId: string; params?: Record<string, unknown> }; gain?: GainSegmentT[] },
   as: AssetFacts, id: string, ctx: ApplyContext, path: string, warnings: Issue[]): AudioLayerT {
   const trim = a.trimBeforeMs ?? 0;
   if (as.durationMs !== undefined && trim >= as.durationMs) stop('EM-2306', `The audio starts ${trim} ms into a ${as.durationMs} ms file.`, `${path}.args.trimBeforeMs`);
-  const len = a.durationMs ?? (as.durationMs ? (a.trimBeforeMs === undefined ? as.durationMs : Math.max(100, as.durationMs - trim)) : undefined);
+  // a layer lasts at least the schema minimum (100 ms): a 15 ms click (ADR-039 SFX) plays fully and the rest of the layer is silence
+  const len = a.durationMs ?? (as.durationMs ? Math.max(100, a.trimBeforeMs === undefined ? as.durationMs : as.durationMs - trim) : undefined);
   if (a.ducking && a.ducking.presetId !== 'preset:audio.duck-voice') stop('EM-2101', `${a.ducking.presetId} is not a ducking preset.`, `${path}.args.ducking.presetId`);
   return { id, assetId: as.id, role: a.role, atMs: a.atMs, ...(len !== undefined ? { durationMs: len } : {}), lane: 0, trimBeforeMs: trim, volume: a.volume, loop: a.loop ?? false, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0,
-    ducking: a.ducking ? { presetId: a.ducking.presetId, params: preset(a.ducking.presetId, 'audio', a.ducking.params ?? {}, ctx, `${path}.args.ducking`, warnings) } : null };
+    ducking: a.ducking ? { presetId: a.ducking.presetId, params: preset(a.ducking.presetId, 'audio', a.ducking.params ?? {}, ctx, `${path}.args.ducking`, warnings) } : null,
+    ...(a.gain && a.gain.length ? { gain: gainSegments(a.gain) } : {}) };
+}
+/** ADR-039: gain segments stored sorted by start, numbers rounded (4 digits), an absent `rampMs` left absent. */
+function gainSegments(segments: readonly GainSegmentT[]): GainSegmentT[] {
+  return [...segments].sort((x, y) => x.atMs - y.atMs).map((g) => ({ atMs: g.atMs, durationMs: g.durationMs, mul: round(g.mul, 4), ...(g.rampMs !== undefined ? { rampMs: g.rampMs } : {}) }));
+}
+/** ADR-039: a clip zoom stored rounded; undefined at the identity (1 → 1 without pops) so a reset restores the earlier hash. */
+function clipZoom(z: ClipZoomT): ClipZoomT | undefined {
+  const pops = (z.pops ?? []).filter((p) => p.amount !== 0).sort((x, y) => x.atMs - y.atMs).map((p) => ({ atMs: p.atMs, amount: round(p.amount, 4), ...(p.durationMs !== undefined ? { durationMs: p.durationMs } : {}) }));
+  const from = round(z.from, 4), to = round(z.to, 4);
+  if (from === 1 && to === 1 && pops.length === 0) return undefined;
+  return { from, to, ...(pops.length ? { pops } : {}) };
 }
 function addAudio(m: CompositionModelT, layer: AudioLayerT): void {
   m.tracks.audio.push(layer);
@@ -143,6 +156,8 @@ function motionFrom(presetId: string, values: Record<string, unknown>): MotionT 
 /** ADR-034: automatic entrance + exit for shapes and images when the op names none (preset:motion.none = static). */
 export const DEFAULT_SHAPE_MOTION: Readonly<Record<string, string>> = Object.freeze({ 'preset:shape.line': 'preset:motion.wipe-reveal', 'preset:shape.ring': 'preset:motion.draw-on', 'preset:shape.check': 'preset:motion.draw-on', 'preset:shape.chevron': 'preset:motion.draw-on' });
 export const DEFAULT_SHAPE_MOTION_ID = 'preset:motion.pop', DEFAULT_IMAGE_MOTION_ID = 'preset:motion.scale-in';
+/** ADR-039: a video overlay (face bubble) enters like an image unless the op names a motion (preset:motion.none = static). */
+export const DEFAULT_VIDEO_OVERLAY_MOTION_ID = 'preset:motion.scale-in';
 type MotionArgT = { presetId: string; durationMs?: number; delayMs?: number; easingId?: string; exit?: boolean; params?: Record<string, unknown> };
 /** A motion from an op's `motion` object (validated against the motion preset) or the fallback preset id with its defaults. */
 function motionOf(arg: MotionArgT | undefined, fallbackId: string | undefined, ctx: ApplyContext, path: string, warnings: Issue[]): MotionT | null {
@@ -207,8 +222,10 @@ const overlayZoom = (a: { scale?: number; rotation?: number }): { scale?: number
   return { ...(s !== 1 ? { scale: s } : {}), ...(r !== 0 ? { rotation: r } : {}) };
 };
 const isIdentity = (t: ClipTransformT) => t.x === 0 && t.y === 0 && t.scale === 1 && t.rotation === 0;
+/** ADR-039: a video overlay focus stored rounded (4 digits). */
+const focusOf = (f: { x: number; y: number; zoom: number }) => ({ x: round(f.x, 4), y: round(f.y, 4), zoom: round(f.zoom, 4) });
 type ClipLookArgsT = { volume?: number; muted?: boolean; fadeInMs?: number; fadeOutMs?: number; objectFit?: 'cover' | 'contain'; crop?: { left: number; right: number; top: number; bottom: number };
-  transform?: { x?: number; y?: number; scale?: number; rotation?: number }; playbackRate?: number; motion?: MotionArgT; effects?: Array<{ presetId: string; params?: Record<string, unknown> }> };
+  transform?: { x?: number; y?: number; scale?: number; rotation?: number }; playbackRate?: number; motion?: MotionArgT; effects?: Array<{ presetId: string; params?: Record<string, unknown> }>; zoom?: ClipZoomT };
 /**
  * FR-261 + round 2 (QA 2026-10-29): the look of a clip given with op:clip.insert / op:scene.add (Duplicate and Paste carry every
  * field of the source clip): sound, fades, fit / crop, frame transform, playback rate, motion and effects. Absent = the defaults.
@@ -229,6 +246,7 @@ function applyClipLook(clip: ClipT, a: ClipLookArgsT, opName: string, ctx: Apply
     if (!isIdentity(t)) clip.transform = t;
   }
   if (a.motion) clip.motion = motionOf(a.motion, undefined, ctx, path, warnings);
+  if (a.zoom) { const z = clipZoom(a.zoom); if (z) clip.zoom = z; else delete clip.zoom; }   // ADR-039
   for (const e of a.effects ?? []) {
     const { motion, ...rest } = preset(e.presetId, 'effect', e.params, ctx, `${path}.args.effects`, warnings);
     const existing = clip.effects.find((x) => x.presetId === e.presetId);
@@ -310,8 +328,15 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       v.splice(a.toIndex, 0, clip!);                         // FR-068: the cut count is unchanged, so transitions stay on their cut positions (re-attached to the new neighbours)
       return;
     }
-    case 'op:clip.setTrim': case 'op:clip.setPlaybackRate': case 'op:clip.setVolume': case 'op:clip.setFit': {
+    case 'op:clip.setTrim': case 'op:clip.setPlaybackRate': case 'op:clip.setVolume': case 'op:clip.setFit': case 'op:clip.setZoom': {
       const c = v[findIndex(v, needTarget(op, path).id, 'clip', path)]!;
+      // ADR-039: pops beyond the clip's end are kept (they never fire) but reported; the identity removes the field.
+      if (op.op === 'op:clip.setZoom') {
+        const late = (a.pops ?? []).filter((p: { atMs: number }) => p.atMs >= c.durationMs).length;
+        if (late) warnings.push(issue('EM-2102', `${late} zoom pop(s) start after the clip ends (${c.durationMs} ms) and will not show.`, 'warn', `${path}.args.pops`));
+        const z = clipZoom(a as ClipZoomT); if (z) c.zoom = z; else delete c.zoom;
+        return;
+      }
       // ADR-030: a scene clip has no source media: a trim only sets its length, a rate changes nothing that needs checking.
       if (op.op === 'op:clip.setTrim') { c.trimBeforeMs = c.scene ? 0 : a.trimBeforeMs; c.durationMs = a.durationMs; if (c.assetId) checkSource(c, asset(ctx, c.assetId, ['video', 'image'], path), `${path}.args`); }
       if (op.op === 'op:clip.setPlaybackRate') { c.playbackRate = a.rate; if (c.assetId) checkSource(c, asset(ctx, c.assetId, ['video', 'image'], path), `${path}.args.rate`); }
@@ -469,15 +494,42 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       addVisual(m, { kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, layer: 0, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, ...overlayZoom(a), motion: motionOf(a.motion, DEFAULT_IMAGE_MOTION_ID, ctx, path, warnings), effects: [] }, a.layer);
       return;
     }
+    case 'op:overlay.addVideo': {
+      // ADR-039: a face bubble / picture-in-picture: the asset must be a video; the trimmed span must exist in the source.
+      const as = asset(ctx, a.assetId, ['video'], path);
+      const trimBeforeMs: number = a.trimBeforeMs ?? 0;
+      if (as.durationMs !== undefined && trimBeforeMs >= as.durationMs) stop('EM-2306', `The overlay starts ${trimBeforeMs} ms into a ${as.durationMs} ms video.`, `${path}.args.trimBeforeMs`);
+      const durationMs: number = a.durationMs ?? Math.max(100, (as.durationMs ?? IMAGE_DEFAULT_MS) - trimBeforeMs);
+      if (as.durationMs !== undefined && trimBeforeMs + durationMs > as.durationMs + 1) stop('EM-2306', `The overlay needs ${trimBeforeMs + durationMs} ms of ${as.durationMs} ms source video.`, `${path}.args.durationMs`);
+      const shape: 'rect' | 'circle' = a.shape ?? 'rect';
+      const w = Number(a.size ?? 480);
+      const h = shape === 'circle' ? w : a.height !== undefined ? Number(a.height) : as.width && as.height ? Math.round((w * as.height) / as.width) : w;
+      const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
+      const el: OverlayVideoT = { kind: 'video', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs }, layer: 0, position: pos, size: { w, h }, trimBeforeMs, muted: a.muted ?? true, shape,
+        ...(a.radius !== undefined && shape === 'rect' ? { radius: a.radius } : {}), ...(a.ring ? { ring: a.ring } : {}), ...(a.focus ? { focus: focusOf(a.focus) } : {}), ...(a.opacity !== undefined ? { opacity: a.opacity } : {}),
+        ...overlayZoom(a), motion: motionOf(a.motion, DEFAULT_VIDEO_OVERLAY_MOTION_ID, ctx, path, warnings) };
+      addVisual(m, el, a.layer);
+      return;
+    }
+    case 'op:overlay.setShape': {
+      // ADR-039: omitted fields keep theirs; null removes the ring / focus / radius; a circle has no corner radius.
+      if (a.shape === undefined && a.radius === undefined && a.ring === undefined && a.focus === undefined) stop('EM-2102', 'op:overlay.setShape needs at least one of shape, radius, ring or focus.', `${path}.args`);
+      const el = visualTarget(m, op, path) as OverlayVideoT;
+      if (a.shape !== undefined) { el.shape = a.shape; if (a.shape === 'circle') { delete el.radius; el.size = { w: el.size.w, h: el.size.w }; } }
+      if (a.radius !== undefined) { if (a.radius === null || el.shape === 'circle') delete el.radius; else el.radius = a.radius; }
+      if (a.ring !== undefined) { if (a.ring === null) delete el.ring; else el.ring = { colour: a.ring.colour, widthU: a.ring.widthU }; }
+      if (a.focus !== undefined) { if (a.focus === null) delete el.focus; else el.focus = focusOf(a.focus); }
+      return;
+    }
     case 'op:overlay.remove': {
-      const id = needTarget(op, path).id;
-      const i = m.tracks.overlay.findIndex((o) => o.kind === 'image' && o.id === id);
-      if (i < 0) stop('EM-2203', `The image ${id ?? '(none)'} no longer exists.`, `${path}.target`);
+      const tg = needTarget(op, path);
+      const i = m.tracks.overlay.findIndex((o) => o.kind === tg.kind && o.id === tg.id);
+      if (i < 0) stop('EM-2203', `The ${tg.kind} ${tg.id ?? '(none)'} no longer exists.`, `${path}.target`);
       m.tracks.overlay.splice(i, 1); return;
     }
     case 'op:overlay.setOpacity': {
       const tg = needTarget(op, path);
-      const el = m.tracks.overlay.find((o) => o.id === tg.id && o.kind === (tg.kind === 'shape' ? 'shape' : 'image'));
+      const el = m.tracks.overlay.find((o) => o.id === tg.id && o.kind === tg.kind);
       if (!el) stop('EM-2203', `The ${tg.kind} ${tg.id ?? '(none)'} no longer exists.`, `${path}.target`);
       el!.opacity = a.opacity; return;
     }
@@ -496,8 +548,15 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
         placeAudio(m.tracks.audio, l, a.layer ?? l.lane);
         return;
       }
-      if (a.trimBeforeMs !== undefined) stop('EM-2102', 'trimBeforeMs applies to audio layers only.', `${path}.args.trimBeforeMs`);
       const el = visualTarget(m, op, path);
+      if (a.trimBeforeMs !== undefined) {
+        if (!('kind' in el) || el.kind !== 'video') stop('EM-2102', 'trimBeforeMs applies to audio layers and video overlays only.', `${path}.args.trimBeforeMs`);
+        (el as OverlayVideoT).trimBeforeMs = a.trimBeforeMs;
+      }
+      if ('kind' in el && el.kind === 'video') {
+        const src = ctx.assets.find((x) => x.id === el.assetId)?.durationMs;
+        if (src !== undefined && el.trimBeforeMs + a.durationMs > src + 1) stop('EM-2306', `The video overlay needs ${el.trimBeforeMs + a.durationMs} ms of ${src} ms source video.`, `${path}.args`);
+      }
       el.timing = { atMs: a.atMs, durationMs: a.durationMs };
       placeVisual(visualItems(m), el, a.layer ?? el.layer);
       return;
@@ -554,6 +613,7 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const el = visualTarget(m, op, path);
       const d = check(el.timing.atMs, el.timing.durationMs);
       const second = { ...structuredClone(el), id: ctx.newId(), timing: { atMs: el.timing.atMs + d, durationMs: el.timing.durationMs - d }, motion: null } as typeof el;
+      if ('kind' in second && second.kind === 'video') second.trimBeforeMs += d;   // ADR-039: the second part continues the source
       el.timing = { atMs: el.timing.atMs, durationMs: d }; el.motion = splitMotion(el.motion);
       if ('kind' in second) m.tracks.overlay.splice(m.tracks.overlay.indexOf(el as OverlayElementT) + 1, 0, second);
       else m.tracks.text.splice(m.tracks.text.indexOf(el as TextLayerT) + 1, 0, second);
@@ -586,17 +646,21 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       return;
     }
     case 'op:audio.addBed': case 'op:audio.addLayer': {
-      const as = asset(ctx, a.assetId, ['audio'], path);
+      // ADR-039: a voice layer may take its sound from a video asset (the synced master of a talking-head Reel); beds stay audio-only.
+      const as = asset(ctx, a.assetId, op.op === 'op:audio.addBed' ? ['audio'] : ['audio', 'video'], path);
+      if (as.kind === 'video' && as.hasAudio === false) stop('EM-2102', `Asset ${as.id} has no audio track.`, `${path}.args.assetId`);
       const layer: AudioLayerT = op.op === 'op:audio.addBed'
         ? { id: ctx.newId(), assetId: as.id, role: 'bed', atMs: 0, lane: 0, trimBeforeMs: 0, volume: a.volume, loop: a.loop, fadeInMs: a.fadeInMs ?? 0, fadeOutMs: a.fadeOutMs ?? 0, ducking: a.duckingPresetId ? { presetId: a.duckingPresetId, params: preset(a.duckingPresetId, 'audio', a.duckingParams ?? {}, ctx, path, warnings) } : null }
         : audioLayerFrom(a as Parameters<typeof audioLayerFrom>[0], as, ctx.newId(), ctx, path, warnings);
       addAudio(m, layer);
       return;
     }
-    case 'op:audio.setDucking': case 'op:audio.setFades': case 'op:audio.remove': {
+    case 'op:audio.setDucking': case 'op:audio.setFades': case 'op:audio.remove': case 'op:audio.setVolume': case 'op:audio.setGain': {
       const i = findIndex(m.tracks.audio, needTarget(op, path).id, 'audio', path);
       const l = m.tracks.audio[i]!;
       if (op.op === 'op:audio.remove') { m.tracks.audio.splice(i, 1); return; }
+      if (op.op === 'op:audio.setVolume') { l.volume = a.volume; return; }                              // ADR-039
+      if (op.op === 'op:audio.setGain') { if (a.segments.length) l.gain = gainSegments(a.segments); else delete l.gain; return; }
       if (op.op === 'op:audio.setDucking') { if (a.presetId !== 'preset:audio.duck-voice') stop('EM-2101', `${a.presetId} is not a ducking preset.`, `${path}.args.presetId`); l.ducking = { presetId: a.presetId, params: preset(a.presetId, 'audio', a.params, ctx, path, warnings) }; return; }
       const span = l.durationMs ?? Infinity;
       for (const f of ['fadeInMs', 'fadeOutMs'] as const) if (a[f] !== undefined) { if (a[f] > span / 2) stop('EM-2102', `${f} is longer than half the audio layer.`, `${path}.args.${f}`); l[f] = a[f]; }
