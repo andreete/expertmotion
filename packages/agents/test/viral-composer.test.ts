@@ -238,6 +238,11 @@ describe('normaliser: the Editor\'s likely slips in a viral spec', () => {
 
 describe('picture geometry (auto-motion-image.ts)', () => {
   const area = { x0: 88, y0: 300, x1: 920, y1: 1480 };
+  it('phone: the box follows a wide picture, so chips and marks sit on the picture (E2E run 10)', () => {
+    const area = { x0: 100, y0: 200, x1: 980, y1: 1400 };
+    const [{ box }] = pictureBoxes('phone', [16 / 9], area, 1080) as [{ box: { x0: number; y0: number; x1: number; y1: number } }];
+    expect((box.x1 - box.x0) / (box.y1 - box.y0)).toBeCloseTo(16 / 9, 1);
+  });
   it('single: 86 % wide in the upper 60 %; stack: cascaded, tilted, inside the area; phone: 46 % of the frame; side-by-side: two columns', () => {
     const one = pictureBoxes('single', [1], area, 1080);
     expect(one).toHaveLength(1); expect(one[0]!.box.x1 - one[0]!.box.x0).toBeCloseTo((920 - 88) * 0.86, 5); expect(one[0]!.rotation).toBe(0);

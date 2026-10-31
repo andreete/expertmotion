@@ -1016,7 +1016,7 @@ class SceneLayout {
       let size = this.sz(34), m = this.measure(o.text.toUpperCase(), size, 800, avail * 2);
       if (m.w + padX * 2 + PILL_SLACK > avail) { size = Math.max(26, Math.floor((size * (avail - padX * 2 - PILL_SLACK)) / m.w)); m = this.measure(o.text.toUpperCase(), size, 800, avail * 2); }
       const w = Math.min(avail, m.w + padX * 2 + PILL_SLACK), h = m.h + padY * 2;
-      const b = chipBox(ch.position ?? corners[k % 4], pic, w, h, this.sz(20));
+      const b = chipBox(ch.position ?? corners[k % 4], boxes.length === 2 && s.layout === 'side-by-side' ? boxes[String(ch.position ?? corners[k % 4] ?? 'top-left').endsWith('right') ? 1 : 0]!.box : pic, w, h, this.sz(20));
       const col = chipColours(ch.tone, o.text);
       this.text({ ...o, text: o.text.toUpperCase() }, { size, weight: 800, color: col.text, align: 'center', box: { colour: col.fill, padX, padY, radius: this.sz(10) } }, b.x0, b.y0, w, this.at(o.at, from + 350 + k * 250), { presetId: 'preset:motion.pop', ms: 400, params: { damping: 12 } }, undefined, 'chip');
     });

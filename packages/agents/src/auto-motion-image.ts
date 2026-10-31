@@ -50,7 +50,8 @@ export function pictureBoxes(layout: ImageLayout | undefined, aspects: readonly 
   }
   if (lay === 'phone') {
     // a tall screenshot: 46 % of the frame width, as tall as its aspect says, never taller than the area
-    const b = fitBox(frameW * 0.46, Math.min(asp(0), 0.75), ah * 0.96, cx, area.y0 + ah * 0.02);
+    // the box follows the picture's real aspect: the Engine sizes it from the asset, and chips / marks are placed on this box (E2E run 10: a wide picture left its chip floating)
+    const b = fitBox(frameW * 0.46, asp(0), ah * 0.96, cx, area.y0 + ah * 0.02);
     return [{ box: clampBox(b, area), rotation: 0 }];
   }
   if (lay === 'side-by-side') {

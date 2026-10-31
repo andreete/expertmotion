@@ -134,7 +134,7 @@ try {
   for (let i = 0; i < 300; i++) { gjobs = (await api(`/projects/${pid}/generator-jobs`)).body.items ?? []; if (!gjobs.some((g) => ['queued', 'running'].includes(g.status))) break; await sleep(1000); }
   const head = (await api(`/projects/${pid}/composition?model=true`)).body.head; const m = head.model;
   fs.writeFileSync(path.join(out, 'model.json'), JSON.stringify(m, null, 1));
-  const total = m.tracks.video.reduce((s, c) => s + (c.durationMs ?? c.timing?.durationMs ?? 0), 0) - (m.tracks.transition ?? []).reduce((s, t) => s + (t.durationMs ?? 0), 0);
+  const total = m.tracks.video.reduce((s, c) => s + (c.durationMs ?? c.timing?.durationMs ?? 0), 0) - (m.transitions ?? []).reduce((s, t) => s + (t.durationMs ?? 0), 0);
   const overlays = m.tracks.overlay; const imgs = overlays.filter((o) => o.kind === 'image'); const shapes = overlays.filter((o) => o.kind === 'shape');
   const byPreset = (re) => shapes.filter((s) => re.test(s.presetId));
   check('V1', 'ratio 9:16, under 60 s', m.settings.ratio === '9:16' && total > 20_000 && total <= 60_000, { ratio: m.settings.ratio, totalMs: total });
