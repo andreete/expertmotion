@@ -28,7 +28,8 @@ export interface AgentPlanExtras { selection?: ElementRefT[] | undefined; playhe
   /** FR-189 pointed targets (chat chips); FR-190 run phases. */
   targets?: PointedTarget[] | undefined; onProgress?: ((p: RunProgress) => void) | undefined;
   /** FR-216: web sources the Editor used (the S3 chat stores them under its reply). */ onSources?: ((s: { sources: Array<{ url: string; title?: string }>; images: unknown[] }) => void) | undefined;
-  /** FR-286: the Creator's channel profile for the envelope (default: the `channelProfile` setting). */ channelProfile?: string | undefined }
+  /** FR-286: the Creator's channel profile for the envelope (default: the `channelProfile` setting). */ channelProfile?: string | undefined;
+  /** FR-311: false = the model cannot see pictures (composition.frames returns its textual summary only). */ toolImages?: boolean | undefined }
 
 type Reason = 'created' | 'superseded' | 'restored' | 'removed' | 'cleared' | 'compiled' | 'executed' | 'rejected';
 export interface ExecutionResultT {
@@ -473,7 +474,7 @@ export class Workflow {
         const research = researchToolsFor(this.ctx, 'editor', projectId, ac.signal, message ?? '');
         const r = await runEditorAgent(env, provider, { model: head.model, baseVersion: head.hash, assets, tier, lockedKeys, newId: this.ctx.newId, planId, projectId, language: head.model.settings.language, ...(toolModels ? { toolModels } : {}), ...this.reels(projectId) },
           { signal: ac.signal, budgetCheck: () => this.ctx.hooks.budgetCheck(projectId), tools: { ...brainstormTools(this.ctx, projectId, head.model.settings.language), ...research.handlers }, research: research.cfg, ...(progress ? { onProgress: progress } : {}),
-            ...(onDelta ? { onDelta: (d: string) => { if (!ac.signal.aborted) onDelta(d); } } : {}), ...(extras.images?.length ? { images: extras.images } : {}) }).finally(() => own?.flush());
+            ...(onDelta ? { onDelta: (d: string) => { if (!ac.signal.aborted) onDelta(d); } } : {}), ...(extras.images?.length ? { images: extras.images } : {}), ...(extras.toolImages !== undefined ? { toolImages: extras.toolImages } : {}) }).finally(() => own?.flush());
         usage = r.usage;
         if (r.ok && (r.sources?.length || research.images.length)) { try { extras.onSources?.({ sources: r.sources ?? [], images: research.images }); } catch { /* chat hint only */ } }
         // Usage is recorded under the run that made the request (the S3 chat's run when external, FR-074).

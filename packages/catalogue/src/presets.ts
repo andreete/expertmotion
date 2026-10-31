@@ -45,6 +45,7 @@ export const captions = define('caption', captionCommon, [
   { name: 'box', en: 'Box', id: 'Kotak', p: 'p0', tags: ['readable', 'terbaca'] },
   { name: 'pop', en: 'Pop', id: 'Pop', p: 'p1', tags: ['energetic', 'bouncy'] },
   { name: 'moving-pill', en: 'Moving pill', id: 'Pil bergerak', p: 'p1' },
+  { name: 'emphasis', en: 'Emphasis', id: 'Penekanan', p: 'p0', tags: ['kinetic', 'serif', 'uppercase', 'viral', 'penekanan'], params: { emphasisColour: optionalHex(), emphasisFont: z.string().max(60).default('Playfair Display') } },   // ADR-041
   { name: 'none', en: 'No captions', id: 'Tanpa caption', p: 'p0', preview: false },
 ]);
 
@@ -58,7 +59,8 @@ export const backgrounds = define('background', bgCommon, [
   { name: 'moving-gradient', en: 'Moving gradient', id: 'Gradasi bergerak', p: 'p1', params: { angle: z.number().min(0).max(360).default(160) } },
   { name: 'noise-clouds', en: 'Clouds', id: 'Awan', p: 'p1', tags: ['organic', 'calm'] },
   { name: 'video-dim', en: 'Dim video', id: 'Video redup', p: 'p0', params: { strength: unit(0.78) }, tags: ['readable', 'overlay', 'terbaca'] },
-  { name: 'paper', en: 'Paper', id: 'Kertas', p: 'p2', flags: ['gpu'], tags: ['texture'] },
+  { name: 'paper', en: 'Paper', id: 'Kertas', p: 'p0', tags: ['texture', 'kertas', 'viral'], params: { grain: unit(0.35), warm: unit(0.5) } },   // ADR-041: CSS / noise paper, no GPU
+  { name: 'blurred-image', en: 'Blurred picture', id: 'Gambar diburamkan', p: 'p0', tags: ['viral', 'screenshot', 'blur', 'buram'], params: { assetId: z.string().min(1).optional(), blurPx: z.number().min(0).max(200).default(48), dim: unit(0.45), zoom: z.number().min(1).max(3).default(1.25) } },   // ADR-041
   { name: 'none', en: 'None', id: 'Tanpa latar', p: 'p0', tags: ['transparent', 'alpha'] },
 ]);
 
@@ -118,6 +120,8 @@ export const shapes = define('shape', shapeCommon, [
   { name: 'pill', en: 'Pill', id: 'Kapsul', p: 'p1', tags: ['button', 'tombol', 'cta', 'badge'] },
   { name: 'check', en: 'Check', id: 'Centang', p: 'p1', tags: ['tick', 'done', 'list', 'centang'] },
   { name: 'chevron', en: 'Chevron', id: 'Panah kecil', p: 'p1', tags: ['bullet', 'list', 'next'] },
+  { name: 'x-mark', en: 'X mark', id: 'Tanda silang', p: 'p1', tags: ['annotation', 'wrong', 'cancel', 'anotasi', 'viral'], params: { strokeU: z.number().min(2).max(80).default(18) } },   // ADR-041
+  { name: 'highlight-box', en: 'Highlight box', id: 'Kotak sorot', p: 'p1', tags: ['annotation', 'frame', 'anotasi', 'viral'], params: { strokeU: z.number().min(2).max(60).default(8), radiusU: z.number().min(0).max(200).default(12), pulse: z.boolean().default(true) } },   // ADR-041
   // ADR-039 (Reels infographics): data-driven shapes drawn with theme fonts; `fill` = panel / main colour, `accent` = second colour.
   { name: 'icon', en: 'Icon', id: 'Ikon', p: 'p1', params: { icon: ICON_NAMES.default('bolt'), accent: optionalHex() }, tags: ['flat', 'pictogram', 'simbol', 'reels'] },
   { name: 'rows', en: 'Rows', id: 'Baris', p: 'p1', preview: false, params: { rows: z.array(ROW).max(8).default([]), staggerMs: ms(120, 0, 2000), radiusU: z.number().min(0).max(200).default(28) }, tags: ['list', 'table', 'badge', 'daftar', 'reels'] },
@@ -191,6 +195,7 @@ export const textEffects = define('texteffect', { colour: optionalHex() }, [
   { name: 'counter', en: 'Number counter', id: 'Angka berjalan', p: 'p1', tags: ['number', 'angka'],
     params: { from: z.number().optional(), durationMs: z.number().int().min(100).max(20_000).optional(), delayMs: z.number().int().min(0).max(60_000).optional(), easingId: easingRef(), bezier: bezierTuple.optional() } },
   { name: 'keyword', en: 'Keyword colour', id: 'Warna kata kunci', p: 'p1', tags: ['emphasis', 'accent', 'kata kunci'], params: { words: z.array(z.string().min(1).max(40)).max(8).default([]) } },
+  { name: 'boxed', en: 'Boxed words', id: 'Kata berkotak', p: 'p0', tags: ['viral', 'highlight', 'kotak', 'judul'], params: { words: z.array(z.string().min(1).max(40)).max(12).default([]), boxColour: optionalHex(), textColour: optionalHex(), padU: z.number().min(0).max(80).default(14), radiusU: z.number().min(0).max(80).default(8) } },   // ADR-041
 ]);
 
 export const fonts = define('font', {}, [
@@ -202,6 +207,10 @@ export const fonts = define('font', {}, [
   // Files from github.com/google/fonts at commit 8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5 (ofl/poppins), licence packages/engine/public/fonts/LICENSE-poppins.txt.
   { name: 'poppins', en: 'Poppins', id: 'Poppins', p: 'p0', data: { family: 'Poppins', fileStem: 'fonts/poppins', weights: [500, 600, 700, 800, 900], styles: ['normal'], format: 'truetype', ext: 'ttf',
     licence: 'OFL-1.1', source: 'https://github.com/google/fonts/tree/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/poppins', copyright: 'Copyright 2020 The Poppins Project Authors (https://github.com/itfoundry/Poppins)' }, preview: false },
+  // ADR-041: Playfair Display ships as the upstream VARIABLE fonts (one file per style, wght axis 400–900: `variable: true`,
+  // `weightRange`); `weights` stays the catalogue's information about the weights the Creator can pick.
+  { name: 'playfair-display', en: 'Playfair Display', id: 'Playfair Display', p: 'p0', data: { family: 'Playfair Display', fileStem: 'fonts/playfair-display', weights: [400, 700, 900], styles: ['normal', 'italic'], format: 'truetype', ext: 'ttf', variable: true, weightRange: [400, 900],
+    licence: 'OFL-1.1', source: 'https://github.com/google/fonts/tree/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/playfairdisplay', copyright: 'Copyright 2017 The Playfair Display Project Authors (https://github.com/clauseggers/Playfair-Display)' }, preview: false, tags: ['serif', 'italic', 'viral', 'penekanan'] },   // ADR-041
 ]);
 
 // Book §4.4 palettes: background, text, accent 1, accent 2 (contrast-checked in the book).

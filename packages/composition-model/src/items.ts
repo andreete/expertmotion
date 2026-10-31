@@ -157,6 +157,7 @@ const IMAGE_FIELDS: Fields<ImageT> = {
   objectFit: (v) => ({ objectFit: v }), opacity: (v) => ({ opacity: v }), scale: (v) => opt('scale', v), rotation: (v) => opt('rotation', v),
   motion: (v) => motionArg(v),
   effects: () => ({}),                                         // no op adds effects to an image: always [] (op:overlay.addImage)
+  radius: (v) => opt('radius', v), shadow: (v) => opt('shadow', v), border: (v) => opt('border', v),   // ADR-041 look
 };
 const SHAPE_FIELDS: Fields<ShapeT> = {
   kind: () => ({}), presetId: (v) => ({ presetId: v }), position: (v) => ({ position: { x: v.x, y: v.y } }),

@@ -13,7 +13,8 @@ export interface CompactComposition {
   /** `layer`: stacking order shared by texts and overlays, higher = in front (ADR-027). */
   text: Array<{ id: string; variant: string; text: string; atMs: number; durationMs: number; layer: number }>;
   /** `x` / `y`: centre as a fraction of the frame (0 = centre, ADR-028 units); `scale` / `rotation` only when set. */
-  overlay: Array<{ id: string; kind: string; preset: string | null; asset: string | null; atMs: number; durationMs: number; layer: number; x: number; y: number; scale?: number; rotation?: number }>;
+  overlay: Array<{ id: string; kind: string; preset: string | null; asset: string | null; atMs: number; durationMs: number; layer: number; x: number; y: number; scale?: number; rotation?: number;
+    /** ADR-041 picture look, only when set: corner radius (u), a drop shadow, a border (colour, u). */ radius?: number; shadow?: true; border?: { colour: string; widthU: number } }>;
   /** ADR-033: `list` = the caption pages (i = 0-based pageIndex, start / end ms, text ≤ 80 chars) so one page can be fixed
    *  with op:caption.replaceText / op:caption.editPage; at most CAPTION_LIST_MAX pages, halved first when over budget. */
   captions: { style: string | null; pages: number; list: Array<{ i: number; startMs: number; endMs: number; text: string }> };
@@ -38,7 +39,8 @@ export function summarizeForAgent(model: CompositionModelT, assets: readonly Ass
     cuts: model.tracks.video.slice(1).map((_, i) => { const tr = model.transitions.find((x) => x.cutIndex === i); return { index: i, transition: tr?.presetId ?? null, durationMs: tr?.durationMs ?? null }; }),
     text: model.tracks.text.map((x) => ({ id: x.id, variant: x.variantId, text: x.text.length > 120 ? `${x.text.slice(0, 117)}…` : x.text, atMs: x.timing.atMs, durationMs: x.timing.durationMs, layer: x.layer })),
     overlay: model.tracks.overlay.map((o) => ({ id: o.id, kind: o.kind, preset: o.kind === 'shape' ? o.presetId : null, asset: o.kind === 'image' || o.kind === 'video' ? names.get(o.assetId) ?? o.assetId : null, atMs: o.timing.atMs, durationMs: o.timing.durationMs, layer: o.layer,
-      x: frac(o.position.x, f.w), y: frac(o.position.y, f.h), ...(o.scale !== undefined ? { scale: o.scale } : {}), ...(o.rotation !== undefined ? { rotation: o.rotation } : {}) })),
+      x: frac(o.position.x, f.w), y: frac(o.position.y, f.h), ...(o.scale !== undefined ? { scale: o.scale } : {}), ...(o.rotation !== undefined ? { rotation: o.rotation } : {}),
+      ...(o.kind === 'image' && o.radius !== undefined ? { radius: o.radius } : {}), ...(o.kind === 'image' && o.shadow ? { shadow: true as const } : {}), ...(o.kind === 'image' && o.border ? { border: o.border } : {}) })),
     captions: { style: model.tracks.caption.styleId, pages: model.tracks.caption.pages.length,
       list: model.tracks.caption.pages.slice(0, CAPTION_LIST_MAX).map((p, i) => { const x = p.text.trim(); return { i, startMs: p.startMs, endMs: p.startMs + p.durationMs, text: x.length > 80 ? `${x.slice(0, 79)}…` : x }; }) },
     audio: model.tracks.audio.map((a) => ({ id: a.id, role: a.role, asset: names.get(a.assetId) ?? a.assetId, atMs: a.atMs, durationMs: a.durationMs ?? null, lane: a.lane })),

@@ -8,7 +8,7 @@ import type {
   ChatDocumentDto, ConversationDto, DesignPickInput, DiskUsageDto, ElementDiff, ExecutionResult, GeneratorCardDto, GeneratorJobDto, GeneratorKind, HardwareProfileDto, HardwareTickDto, HealthDto, Id,
   IntentCreateResponse, IntentQueueDto, LicenseDto, MediaGrantDto, MediaVariant, MessageDto, ModelRegistrySource, ModelStateDto, OpenProjectResponse, OutputDto, Page, PlanDto,
   ProbeResultDto, ProjectCreateInput, ProjectDto, ProjectSettingsExtras, ProjectUiState, ProviderKind, ProviderKindInfo, RecentCodeDto, RecoverySummaryDto, RenderCreateInput, RenderEstimate, RenderJobDto, SettingsDto, VersionDto, VoiceListDto, MusicTrackDto, TranscriptCueDto,
-  CoverInput, FootageAnalysisDto, PrepInput, Rotation,
+  CoverInput, FootageAnalysisDto, PrepInput, Rotation, ImageSource, ResearchKeysDto,
 } from './types.js';
 
 export interface Bootstrap { baseUrl: string; token: string }
@@ -284,9 +284,13 @@ export class ApiClient {
     return this.request<{ document: ChatDocumentDto }>('POST', `/projects/${id}/chat-documents`, { raw: f, headers: { 'Content-Type': 'application/octet-stream', 'X-Expertmotion-Filename': encodeURIComponent(f.name) } });
   }
   /** R-089 (FR-217): import an openly licensed picture the Creator confirmed (attribution stored with the asset). */
-  importResearchImage(id: Id, body: { messageId: Id; source: 'openverse' | 'wikimedia'; id: string }): Promise<{ assetId: Id; attribution: string | null; duplicate: boolean }> {
+  importResearchImage(id: Id, body: { messageId: Id; source: ImageSource; id: string }): Promise<{ assetId: Id; attribution: string | null; duplicate: boolean }> {
     return this.post(`/projects/${id}/research/images/import`, body);
   }
+  // R-089a … R-089c (FR-301): the Pexels API key (hint only comes back)
+  getResearchKeys(): Promise<ResearchKeysDto> { return this.get('/research-keys'); }
+  setPexelsKey(key: string): Promise<{ provider: 'pexels'; secretHint: string; status: 'valid' }> { return this.put('/research-keys/pexels', { key }); }
+  deletePexelsKey(): Promise<void> { return this.del('/research-keys/pexels'); }
   clearConversation(id: Id, agent: AgentKind): Promise<void> { return this.del(`/projects/${id}/conversations/${agent}`); } // R-083
   getAgentRun(runId: Id): Promise<AgentRunDto> { return this.get(`/agent-runs/${runId}`); }                                // R-084
   cancelAgentRun(runId: Id): Promise<AgentRunDto> { return this.post(`/agent-runs/${runId}/cancel`); }                     // R-085

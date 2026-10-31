@@ -5,18 +5,17 @@ import { EFFECTS, EFFECTS_NOT_IN_PINNED_REMOTION } from './effects.js';
 import { SHAPES } from './shapes.js';
 
 const handledInline: Record<string, readonly string[]> = {
-  background: ['solid', 'gradient', 'spotlight', 'grid', 'dots', 'moving-gradient', 'noise-clouds', 'video-dim', 'none'],
+  background: ['solid', 'gradient', 'spotlight', 'grid', 'dots', 'moving-gradient', 'noise-clouds', 'video-dim', 'paper', 'blurred-image', 'none'],   // ADR-041: paper (CSS + noise), blurred-image
   motion: ['fade-in', 'rise', 'pop', 'slide-in', 'zoom-drift', 'spin-in', 'bounce', 'typewriter', 'word-stagger', 'blur-in', 'scale-in', 'wipe-reveal', 'draw-on', 'grow', 'none'],
-  caption: ['editorial', 'karaoke', 'box', 'pop', 'moving-pill', 'none'],
+  caption: ['editorial', 'karaoke', 'box', 'pop', 'moving-pill', 'emphasis', 'none'],
   text: ['title', 'subtitle', 'lower-third', 'callout', 'quote'],
-  texteffect: ['highlight', 'underline', 'circle', 'kinetic', 'counter', 'keyword'],
+  texteffect: ['highlight', 'underline', 'circle', 'kinetic', 'counter', 'keyword', 'boxed'],
   easing: ['out-quad', 'out-cubic', 'in-quad', 'in-out-cubic', 'back', 'bounce', 'linear', 'spring-soft', 'spring-bouncy', 'snappy', 'spring-light'],
   audio: ['bed-soft', 'duck-voice', 'fade-in-out', 'sfx-hit'],
 };
 /** Presets with a known reason for having no implementation yet (documented in process.md / REMOTION_CAPABILITY_MAP). */
 export const NOT_IMPLEMENTED: Readonly<Record<string, string>> = {
   ...Object.fromEntries(EFFECTS_NOT_IN_PINNED_REMOTION.map((id) => [id, 'not exported by the pinned Remotion 4.0.535 (P2)'])),
-  'preset:background.paper': 'P2: needs the @remotion/effects paper generator on a <Solid>; not wired yet',
   'preset:audio.visualizer-bars': 'P2: no operation places a visualizer yet (ADR-020)',
 };
 export function isImplemented(id: string): boolean {

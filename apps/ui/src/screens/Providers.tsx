@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Eye, EyeOff, Loader, Trash2 } from 'lucide-react';
 import { useStore } from '../state/store.js';
-import type { AgentKind, AssignmentDto, CapabilityRow, ConnectionDto, ProbeResultDto, ProviderKind, ProviderKindInfo } from '../api/types.js';
+import type { AgentKind, AssignmentDto, CapabilityRow, ConnectionDto, ProbeResultDto, ProviderKind, ProviderKindInfo, ResearchKeysDto } from '../api/types.js';
 import { Badge, Button, ErrorBox, Field, IconButton, Modal, cx, inputCls } from '../components/ui.js';
 import { formatMoney, formatNumber, formatTokens } from '../i18n/index.js';
 import { EmError, recommendedFor } from '@expertmotion/shared';
@@ -629,6 +629,53 @@ export function breachedConnection(budget: Budget | null, projectId: string | nu
   return budget.projects.find((p) => p.projectId === projectId && p.connectionId && over(p.spentUsd, p.limitUsd))?.connectionId ?? undefined;
 }
 
+/**
+ * FR-301 (ADR-041): Settings ▸ Riset internet — the research switch (same setting as the chat header) and the Creator's own
+ * Pexels API key (checked by the Service, stored sealed, shown as a hint only). Stock photos / videos in the chat need it.
+ */
+export function ResearchSettings() {
+  const { state, actions, runtime, t } = useStore();
+  const [keys, setKeys] = useState<ResearchKeysDto | null>(null);
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const load = () => runtime.api.getResearchKeys().then(setKeys).catch(() => setKeys({ pexels: { hint: null } }));
+  useEffect(() => { void load(); }, [runtime]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const priv = !!state.settings?.privateMode;
+  const on = !priv && state.settings?.webResearch !== false;
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try { await runtime.api.setPexelsKey(normalizeKey(key)); setKey(''); await load(); actions.toast('success', 'ui.scr.providers.research.pexels.saved'); }
+    catch (e) { setErr(e instanceof EmError ? e.code : 'EM-9001'); actions.error(e); }
+    finally { setBusy(false); }
+  };
+  const remove = async () => { setBusy(true); try { await runtime.api.deletePexelsKey(); await load(); } catch (e) { actions.error(e); } finally { setBusy(false); } };
+  const hint = keys?.pexels.hint ?? null;
+  return (
+    <section data-el="scr.providers.research" aria-label={t('ui.scr.providers.research.title')} className="flex flex-col gap-2 rounded-[8px] border border-em-line p-3">
+      <h3 className="text-[13px] font-semibold text-em-text">{t('ui.scr.providers.research.title')}</h3>
+      <label className="flex items-center gap-2 text-[12px]">
+        <input data-el="scr.providers.research.toggle" type="checkbox" checked={on} disabled={priv} onChange={() => { if (!priv) void actions.putSettings({ webResearch: !on }); }} />
+        <span>{t('ui.agent.research.toggle')}</span>
+        {priv && <span className="text-em-private">{t('ui.agent.research.toggle.private')}</span>}
+      </label>
+      <div data-el="scr.providers.research.pexels" data-connected={hint ? 'true' : 'false'} className="flex flex-col gap-1 text-[12px]">
+        <Field label={t('ui.scr.providers.research.pexels.label')} htmlFor="em-pexels-key"
+          hint={hint ? <span data-el="scr.providers.research.pexels.status">{t('ui.scr.providers.research.pexels.connected', { hint })}</span> : <span data-el="scr.providers.research.pexels.status">{t('ui.scr.providers.research.pexels.note')} <ExternalLink el="scr.providers.research.pexels.link" url="https://www.pexels.com/api/" label="pexels.com/api" action={t('ui.scr.providers.research.pexels.getkey')} /></span>}>
+          <div className="flex items-center gap-2">
+            <input id="em-pexels-key" data-el="scr.providers.research.pexels.key" type="password" autoComplete="off" spellCheck={false} aria-label={t('ui.scr.providers.research.pexels.label')} placeholder={hint ? t('ui.scr.providers.research.pexels.replace') : t('ui.scr.providers.research.pexels.placeholder')} className={cx(inputCls, 'flex-1')} value={key}
+              onChange={(e) => setKey(e.target.value)} onPaste={(e) => { const v = e.clipboardData.getData('text'); if (v) { e.preventDefault(); setKey(normalizeKey(v)); } }} />
+            <Button el="scr.providers.research.pexels.save" size={32} loading={busy} disabledReason={normalizeKey(key).length < 20 ? t('ui.scr.providers.research.pexels.short') : priv ? t('err.EM-8202.title') : null} onClick={() => void save()}>{t('ui.common.save')}</Button>
+            {hint && <IconButton el="scr.providers.research.pexels.remove" label={t('ui.common.remove')} icon={<Trash2 size={14} />} size={32} onClick={() => void remove()} />}
+          </div>
+        </Field>
+        {err && <p data-el="scr.providers.research.pexels.error" data-code={err} role="alert" className="text-em-warn">{t(`err.${err}.title`)} <span className="t-mono text-em-muted">{err}</span></p>}
+        <p className="text-em-muted">{t('ui.scr.providers.research.pexels.licence')}</p>
+      </div>
+    </section>
+  );
+}
+
 export function ProvidersScreen({ onClose, focus }: { onClose: () => void; focus?: BudgetFocus }) {
   const { state, actions, t } = useStore();
   const [adding, setAdding] = useState(false);
@@ -646,6 +693,7 @@ export function ProvidersScreen({ onClose, focus }: { onClose: () => void; focus
         {showAdd ? <AddConnectionForm onDone={() => { setAdding(false); reloadBudget(); }} />
           : <div><Button el="scr.providers.add.open" onClick={() => setAdding(true)}>{t('ui.scr.providers.add')}</Button></div>}
         {state.connections.length > 0 && !adding && <AssignForm key={focusConn ?? 'default'} collapseModels {...(focusConn ? { connectionId: focusConn } : {})} {...(focus ? { focusField: focus.field } : {})} onSaved={() => { reloadBudget(); actions.toast('success', 'ui.scr.providers.saved'); }} />}
+        <SectionBoundary section="research"><ResearchSettings /></SectionBoundary>
       </div>
     </Modal>
   );

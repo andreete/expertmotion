@@ -39,6 +39,7 @@ export type MediaVariant = 'original' | 'playable' | 'proxy' | 'thumb' | 'filmst
 export interface AssetDto {
   id: Id; projectId: Id; kind: AssetKind; name: string; bytes: number; sha256: string; status: 'ingesting' | 'ready' | 'failed'; progress: number;
   errorCode: string | null; durationMs: number | null; width: number | null; height: number | null; fps: number | null; hasAudio: boolean | null;
+  /** FR-303: credit (author / site / URL) and licence text of a picture, clip or screenshot imported from the internet. */ credit?: string; licence?: string;
   sequenceBadge: number | null;
   /** FR-043 codec label ("H.264"); FR-048 the stored original is missing on disk. Optional: older services omit them. */
   codec?: string | null; missing?: boolean;
@@ -163,7 +164,12 @@ export type MessageBlock =
   /** FR-219: a Brainstorm draft handed to the Editor; the state follows the Editor run. */
   | { type: 'handoff'; draftTitle: string; editorMessageId?: Id; editorRunId?: Id; state: 'sent' | 'planning' | 'ready' | 'applied' | 'failed'; scenes?: number };
 export interface WebSourceDto { url: string; title?: string; citedText?: string; pageAge?: string; cited?: boolean }
-export interface ImageCandidateDto { source: 'openverse' | 'wikimedia'; id: string; title: string; creator: string | null; license: string; licenseVersion: string | null; licenseUrl: string | null; landingUrl: string | null; width: number | null; height: number | null; provider: string | null; importedAssetId?: Id }
+/** FR-217 / FR-300 … FR-304 (ADR-041): `pexels` / `pexels-video` = Pexels License (the Creator's own key); `page` = a picture of a web page (the owner's copyright, quotation / commentary only). */
+export type ImageSource = 'openverse' | 'wikimedia' | 'pexels' | 'pexels-video' | 'page';
+export interface ImageCandidateDto { source: ImageSource; id: string; /** absent on older messages = image */ kind?: 'image' | 'video'; title: string; creator: string | null; license: string; licenseVersion: string | null; licenseUrl: string | null; landingUrl: string | null; width: number | null; height: number | null; provider: string | null;
+  /** human licence text when it is not a CC code ("Pexels License", "Hak cipta pemilik — kutipan/komentar") */ licence?: string; thumbUrl?: string | null; durationS?: number | null; importedAssetId?: Id }
+/** R-089a: hints of the research keys (FR-301). */
+export interface ResearchKeysDto { pexels: { hint: string | null } }
 export interface ChatDocumentDto { id: Id; name: string; kind: 'pdf' | 'docx' | 'text'; chars: number; truncated: boolean; pages?: number; warnings: string[] }
 /** QA 2026-10-26 #6 (pointing): an asset or Timeline element the Creator pointed the assistant at ("@Klip 2"). */
 export type ChatTargetKind = 'asset' | 'clip' | 'text' | 'image' | 'shape' | 'audio' | 'cut' | 'caption';

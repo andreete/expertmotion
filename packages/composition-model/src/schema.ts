@@ -102,9 +102,17 @@ export const TextLayer = z.object({
   motion: Motion.nullable(),
 });
 
+/**
+ * ADR-041 (viral explainer pictures), all optional, absent = the picture before: `radius` rounds the corners (u), `shadow` draws a
+ * drop shadow under the picture (`true` = the default 24 u blur at 0.45; or its own `blurU` / `opacity`), `border` a solid frame
+ * of `widthU` u in `colour` inside the rounded box.
+ */
+export const OverlayShadow = z.object({ blurU: z.number().min(0).max(400), opacity: z.number().min(0).max(1) });
+export const OverlayBorder = z.object({ colour: Hex, widthU: z.number().min(0).max(200) });
 export const OverlayImage = z.object({
   kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size,
   objectFit: z.enum(['cover', 'contain']), opacity: z.number(), scale: OverlayScale, rotation: OverlayRotation, motion: Motion.nullable(), effects: z.array(EffectInstance).max(3),
+  radius: z.number().min(0).max(2000).optional(), shadow: z.union([z.literal(true), OverlayShadow]).optional(), border: OverlayBorder.optional(),
 });
 export const OverlayShape = z.object({
   kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, layer: Lane, position: Position, size: Size,

@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (P0 set frozen; P1/P2 entries may gain params) |
 | Owner | Engine lead + UI/UX lead |
-| Last updated | 2026-10-31 (ADR-039: Reels infographic shapes, caption keyword params, Poppins, reels-navy) |
+| Last updated | 2026-10-31 (ADR-039: Reels infographic shapes, caption keyword params, Poppins, reels-navy; ADR-041: viral explainer presets, Playfair Display variable fonts) |
 | Depends on | GLOSSARY.md, PRD.md (PRD-013), REMOTION_CAPABILITY_MAP.md, PERFORMANCE.md, ASSESSMENT.md §3 (book) |
 | Used by | AI_WORKFLOW.md (Compile table), SYSTEM_PROMPT.md, UI_UX_SPECIFICATION.md, FRD.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md |
 | Owner of | every `preset:` id, its parameters, defaults, property class, hardware/licence flags, preview asset path |
@@ -56,6 +56,7 @@ Mapping: `@remotion/captions` (`createTikTokStyleCaptions`, `parseSrt`, `parseVt
 | `preset:caption.editorial` | Editorial / Editorial | clean text, active word in accent colour | P0 | |
 | `preset:caption.karaoke` | Karaoke / Karaoke | words fill left-to-right as spoken | P0 | |
 | `preset:caption.box` | Box / Kotak | dark rounded box, white text, active word accent | P0 | |
+| `preset:caption.emphasis` | Emphasis / Penekanan | centred kinetic caption: small upper-case sans words, the page's keyword words in a large italic serif (`emphasisFont`, default Playfair Display) in `emphasisColour` (theme accent); one page = one breath group; centred (`position: top` / `yU` place it higher), small words ~34 u (`fontSizeU`) with 0.08 em letter-spacing, keyword words 92/34 × that, both shrunk together by the shared estimator until the page fits the safe width and half the frame height (ADR-041) | P0 | |
 | `preset:caption.pop` | Pop / Pop | active word scales with spring | P1 | |
 | `preset:caption.moving-pill` | Moving pill / Pil bergerak | pill slides under active word (Elements) | P1 | |
 | `preset:caption.none` | No captions / Tanpa caption | — | P0 | |
@@ -78,7 +79,8 @@ Mapping: CSS backgrounds on an `AbsoluteFill` behind the video track (book §4.6
 | `preset:background.moving-gradient` | Moving gradient / Gradasi bergerak | angle interpolated by frame | P1 | |
 | `preset:background.noise-clouds` | Clouds / Awan | `@remotion/noise` | P1 | |
 | `preset:background.video-dim` | Dim video / Video redup | gradient layer rendered **above** the video track (an overlay, listed here because the Creator picks it from Backgrounds; book §6.3) | P0 | |
-| `preset:background.paper` | Paper / Kertas | effects texture generator | P2 | gpu |
+| `preset:background.paper` | Paper / Kertas | warm paper: light base, soft folds (gradients) + `@remotion/noise` grain (`grain`, `warm`); CSS only, no GPU (ADR-041) | P0 | |
+| `preset:background.blurred-image` | Blurred picture / Gambar diburamkan | the scene's image (`assetId`, else the first image overlay of the scene) enlarged `zoom`×, blurred `blurPx` (px at the 1080 u reference, scaled with u), dimmed `dim` (black layer) — the "screenshot on a blurred copy of itself" look of viral news Reels; solid `colourA` (black) when the scene has no picture (ADR-041) | P0 | |
 | `preset:background.none` | None / Tanpa latar | transparent (alpha export) | P0 | |
 
 ## 5. Motion presets (`motion`) — exclusive-group per element (enter+exit pair)
@@ -127,6 +129,8 @@ Mapping: `@remotion/shapes` components; params: `size` (u), `fill` (theme accent
 | `preset:shape.pill` | Pill / Kapsul | `makeRect` w × h, radius h / 2 (button, badge) | P1 |
 | `preset:shape.check` | Check / Centang | stroked tick path (list) | P1 |
 | `preset:shape.chevron` | Chevron / Panah kecil | stroked chevron path (bullet) | P1 |
+| `preset:shape.x-mark` | X mark / Tanda silang | two stroked diagonals (`strokeU`), drawn on; the red "cancelled" cross over a picture (ADR-041) | P1 |
+| `preset:shape.highlight-box` | Highlight box / Kotak sorot | stroke-only rounded rectangle (`strokeU`, `radiusU`) that `pulse`s; frames a detail of a screenshot (ADR-041) | P1 |
 | `preset:shape.icon` | Icon / Ikon | flat two-colour inline SVG pictogram: `icon` (reactor, chip-ai, bolt, atom, data-center, shield, check, sun, cloud, moon, solar-panel, factory, card-ace, qr, play, globe, chat, money, clock, warning; default bolt), colours `fill` + `accent` (default theme accent2) (ADR-039) | P1 |
 | `preset:shape.rows` | Rows / Baris | stacked rounded row panels with a letter `badge`, `title`, `sub`, `right` value, `rightSub`, `tone`; `rows` (≤ 8), `staggerMs` (120), `radiusU` (28); spring stagger entrance; `fill` = panel colour (theme bg2 when left at the accent) (ADR-039; no preview loop: data-driven) | P1 |
 | `preset:shape.day-strip` | Day strip / Garis hari | 0–24 h axis with tick labels `hours` ([0,6,12,18,24]) and rounded `bars` (`label`, `fromH`, `toH`, `colour`, `icon`) growing from their start, optional `note` under the axis (ADR-039; no preview loop) | P1 |
@@ -223,8 +227,9 @@ Text effects (`op:text.setEffect`, exclusive):
 | `preset:texteffect.kinetic` | Kinetic words / Kata bergerak | `KineticText` spring per word | P0 |
 | `preset:texteffect.counter` | Number counter / Angka berjalan | `AnimatedNumber` (ported, `packages/engine/src/format-number.ts`): the first number in the text counts from `from` (0) over `durationMs` (1200) after `delayMs` with `easingId` / `bezier`, written like the text (sign, Indonesian separators, decimals: "+17,2%", "US$ 25,96", "1.200"); never wraps | P1 |
 | `preset:texteffect.keyword` | Keyword colour / Warna kata kunci | the `words` (≤ 8) in the accent colour (or `colour`) with a small spring pop (ADR-034) | P1 |
+| `preset:texteffect.boxed` | Boxed words / Kata berkotak | the `words` (≤ 12) drawn on a solid `boxColour` box (theme accent) in `textColour` (theme bg), `padU` padding, `radiusU` corners — the yellow-block headline of viral Reels (ADR-041) | P0 |
 
-Fonts (bundled, OFL): `preset:font.inter` (Inter), `preset:font.plus-jakarta-sans` (Plus Jakarta Sans), `preset:font.archivo` (Archivo), `preset:font.jetbrains-mono` (JetBrains Mono) as woff2 (latin subset, 400–800, normal + italic, from `@fontsource`); `preset:font.poppins` (Poppins, ADR-039) as **TTF**, upright weights 500 / 600 / 700 / 800 / 900 only (no italics), files `packages/engine/public/fonts/poppins-<weight>-normal.ttf` taken unmodified from github.com/google/fonts at commit `8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5` (`ofl/poppins`, "Copyright 2020 The Poppins Project Authors", SIL Open Font License 1.1, `LICENSE-poppins.txt` beside the files; no woff2 converter is installed on the build host, so the loader uses `format("truetype")` from the preset's `format` data). Google Fonts are not used at runtime (offline rule).
+Fonts (bundled, OFL): `preset:font.inter` (Inter), `preset:font.plus-jakarta-sans` (Plus Jakarta Sans), `preset:font.archivo` (Archivo), `preset:font.jetbrains-mono` (JetBrains Mono) as woff2 (latin subset, 400–800, normal + italic, from `@fontsource`); `preset:font.poppins` (Poppins, ADR-039) as **TTF**, upright weights 500 / 600 / 700 / 800 / 900 only (no italics), files `packages/engine/public/fonts/poppins-<weight>-normal.ttf` taken unmodified from github.com/google/fonts at commit `8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5` (`ofl/poppins`, "Copyright 2020 The Poppins Project Authors", SIL Open Font License 1.1, `LICENSE-poppins.txt` beside the files; no woff2 converter is installed on the build host, so the loader uses `format("truetype")` from the preset's `format` data). Google Fonts are not used at runtime (offline rule). `preset:font.playfair-display` (ADR-041): Playfair Display, the italic serif of the `caption.emphasis` style, shipped as the upstream **variable** TTFs from `ofl/playfairdisplay` at the same commit — one file per style, `packages/engine/public/fonts/playfair-display-var-normal.ttf` and `playfair-display-var-italic.ttf` (wght axis 400–900; preset data `variable: true`, `weightRange: [400, 900]`; `weights: [400, 700, 900]` names the weights offered to the Creator), each declared as one FontFace with the weight range `"400 900"` instead of one file per weight (OFL 1.1, "Copyright 2017 The Playfair Display Project Authors", `LICENSE-playfair-display.txt`).
 
 ## 11. Themes (`theme`) — scalar
 
@@ -232,7 +237,7 @@ Palettes from the book §4.4 (contrast-checked): `preset:palette.editorial-dark`
 
 ## 12. P0 summary (must exist for v1.0; PRD-013)
 
-Transitions 6 (+none) · Captions 3 (+none) · Backgrounds 5 (+video-dim, none) · Motion 5 (+none) · Shapes 4 · Easing 5 · Effects 6 · Audio 3 · Text variants 4 · Text effects 2 · Palettes 8 · Font pairs 5.
+Transitions 6 (+none) · Captions 4 (+none; ADR-041 adds emphasis) · Backgrounds 7 (+video-dim, none; ADR-041 adds paper and blurred-image) · Motion 5 (+none) · Shapes 4 · Easing 5 · Effects 6 · Audio 3 · Text variants 4 · Text effects 3 (ADR-041 adds boxed) · Palettes 8 · Font pairs 5.
 
 ## 13. Catalogue search tags
 

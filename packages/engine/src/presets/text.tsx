@@ -31,7 +31,7 @@ export const TextElement: React.FC<{ layer: TextLayerT; layout: Layout; duration
     : v['box'] ? { background: 'rgba(0,0,0,0.72)', padding: `${0.3 * fs}px ${0.5 * fs}px`, borderRadius: 0.3 * fs } : {};
   const bar: React.CSSProperties = v['bar'] ? { borderLeft: `${0.18 * fs}px solid ${t.accent}`, paddingLeft: 0.4 * fs, background: 'rgba(0,0,0,0.55)', paddingTop: 0.15 * fs, paddingBottom: 0.15 * fs, paddingRight: 0.4 * fs } : {};
   const counter = layer.effect?.presetId === 'preset:texteffect.counter';
-  const content = renderContent(layer, frame, fps, t.accent, t.defaultEasingId, lineTexts);
+  const content = renderContent(layer, frame, fps, t.accent, t.defaultEasingId, lineTexts, { u, bg: t.bg });
   return (
     <div data-em-text={layer.id} style={{ position: 'absolute', left: boxLeft, top: anchor.top, width: boxW, transform: layer.valign === 'top' ? 'translate(-50%, 0)' : 'translate(-50%, -50%)', textAlign: align }}>
       <div style={motionCss(mf)}>
@@ -78,7 +78,18 @@ export function isKeywordWord(word: string, keywords: readonly string[]): boolea
   if (!w) return false;
   return keywords.some((k) => k.split(/\s+/).map(clean).filter(Boolean).some((kw) => w === kw || (kw.length >= 4 && w.startsWith(kw))));
 }
-function renderContent(layer: TextLayerT, frame: number, fps: number, accent: string, defaultEasingId: string, lineTexts?: readonly string[]): React.ReactNode {
+/**
+ * ADR-041 `preset:texteffect.boxed` (the yellow-block headline of viral Reels, Sample 1 "BOIKOT!"): each listed word sits on a solid
+ * `boxColour` box (theme accent) in `textColour` (theme bg) with `padU` padding and `radiusU` corners; the box pops in with its word
+ * (spring, in word order, 0.12 s apart after the layer's motion delay). Pure CSS of one boxed word at a frame.
+ */
+export function boxedWordStyle(p: Record<string, unknown>, u: number, theme: { accent: string; bg: string }, frame: number, fps: number, index: number, delayFrames: number): React.CSSProperties {
+  const pad = Number(p['padU'] ?? 14) * u, radius = Number(p['radiusU'] ?? 8) * u;
+  const s = spring({ frame: frame - delayFrames - index * Math.round(0.12 * fps), fps, config: { damping: 12 } });
+  return { display: 'inline-block', background: String(p['boxColour'] ?? theme.accent), color: String(p['textColour'] ?? theme.bg), padding: `${Math.round(pad * 0.3 * 100) / 100}px ${Math.round(pad * 100) / 100}px`, borderRadius: `${Math.round(radius * 100) / 100}px`,
+    lineHeight: 1.05, scale: `${Math.round(Math.min(1.08, s) * 1000) / 1000}`, opacity: Math.min(1, s * 2), transformOrigin: '50% 50%' };
+}
+function renderContent(layer: TextLayerT, frame: number, fps: number, accent: string, defaultEasingId: string, lineTexts?: readonly string[], ctx: { u: number; bg: string } = { u: 1, bg: '#000000' }): React.ReactNode {
   const fx = layer.effect?.presetId;
   if (fx === 'preset:texteffect.counter') return counterValue(layer, frame, fps, defaultEasingId);
   // Round 2: the lines chosen by the shared estimator (balanced, bound groups such as "Jan–Agu 2026" / "(miliar US$)" glued with
@@ -91,8 +102,15 @@ function renderContent(layer: TextLayerT, frame: number, fps: number, accent: st
     return text.slice(0, shown);
   }
   const keyColour = String(layer.effect?.params['colour'] ?? accent);
-  const keywords = fx === 'preset:texteffect.keyword' ? ((layer.effect?.params['words'] as string[] | undefined) ?? []).map((w) => w.toLowerCase()) : [];
+  const keywords = fx === 'preset:texteffect.keyword' || fx === 'preset:texteffect.boxed' ? ((layer.effect?.params['words'] as string[] | undefined) ?? []).map((w) => w.toLowerCase()) : [];
   const isKey = (w: string) => w.split('\u00A0').some((part) => isKeywordWord(part, keywords));   // a glued group is one span
+  if (fx === 'preset:texteffect.boxed') {
+    const p = layer.effect?.params ?? {}, delay = Math.round(((layer.motion?.delayMs ?? 0) / 1000) * fps);
+    let bi = 0;
+    return words.map((w, i) => (/^[^\S\u00A0]+$/.test(w) ? <span key={i}>{w}</span>
+      : isKey(w) ? <span key={i} data-em-boxed style={boxedWordStyle(p, ctx.u, { accent, bg: ctx.bg }, frame, fps, bi++, delay)}>{symbolRuns(w, `b${i}`)}</span>
+      : <span key={i}>{symbolRuns(w, `w${i}`)}</span>));
+  }
   if (layer.motion?.presetId === 'preset:motion.word-stagger' || fx === 'preset:texteffect.kinetic' || fx === 'preset:texteffect.keyword') {
     const stagger = layer.motion?.presetId === 'preset:motion.word-stagger' || fx === 'preset:texteffect.kinetic' ? Number(layer.motion?.params['staggerFrames'] ?? 4) : 0;
     const start = Math.round(((layer.motion?.delayMs ?? 0) / 1000) * fps);

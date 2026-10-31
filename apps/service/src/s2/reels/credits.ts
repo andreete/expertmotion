@@ -1,6 +1,7 @@
 // CREDITS file beside a finished render (FR-288, ADR-039): the CC0 music track (title, artist, licence proof), the self-made SFX,
-// poster / picture Assets (with their stored attribution), every `source` string in the composition (`preset:shape.source-tag`
-// texts) and the plan's `credits` lines (R-111 `credits?: string[]`). Pure text; never fails a render.
+// poster / picture Assets (with their stored attribution), pictures / clips / screenshots imported from the internet with their
+// `credit` + `licence` (FR-303, ADR-041), every `source` string in the composition (`preset:shape.source-tag` texts) and the
+// plan's `credits` lines (R-111 `credits?: string[]`). Pure text; never fails a render.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CompositionModelT } from '@expertmotion/composition-model';
@@ -39,15 +40,30 @@ export function buildCredits(ctx: ServiceContext, projectId: string, model: Comp
   if (music.length) lines.push('Music:', ...[...new Set(music)].map((l) => `  - ${l}`), '');
   if (sfx.size) lines.push('Sound effects:', ...[...sfx].map((k) => `  - ${k}${k in analysis.SFX_LIBRARY ? ` (${analysis.SFX_LIBRARY[k as analysis.SfxKind].licence})` : ''}`), '');
   if (voices.length) lines.push('Voice:', ...[...new Set(voices)].map((l) => `  - ${l}`), '');
-  const pictures: string[] = [];
-  for (const el of model.tracks.overlay as Array<{ assetId?: string }>) {
-    if (!el.assetId) continue;
-    const row = getAsset(ctx, el.assetId, projectId); if (!row || row.kind !== 'image') continue;
+  // FR-288 pictures / poster overlays + FR-303 (ADR-041): every picture, clip or screenshot imported from the internet anywhere in
+  // the composition (overlay, scene background, clip) with its stored credit + licence; the open catalogues' attribution as before.
+  const pictures: string[] = []; const clips: string[] = []; const listed = new Set<string>();
+  const assetIds: string[] = [];
+  const collect = (v: unknown): void => {
+    if (!v || typeof v !== 'object') return;
+    if (Array.isArray(v)) { v.forEach(collect); return; }
+    const o = v as Record<string, unknown>;
+    if (typeof o['assetId'] === 'string') assetIds.push(o['assetId']);
+    for (const k of Object.keys(o)) collect(o[k]);
+  };
+  collect(model.tracks);
+  for (const id of assetIds) {
+    if (listed.has(id)) continue; listed.add(id);
+    const row = getAsset(ctx, id, projectId); if (!row || (row.kind !== 'image' && row.kind !== 'video')) continue;
+    const isOverlay = (model.tracks.overlay as Array<{ assetId?: string }>).some((el) => el.assetId === id);
     let attribution: string | null = null;
     try { attribution = (ctx.db.prepare('SELECT attribution FROM asset_attributions WHERE asset_id = ?').get(row.id) as { attribution: string } | undefined)?.attribution ?? null; } catch { /* table missing in old DBs */ }
-    pictures.push(attribution ? `${row.name} — ${attribution}` : row.name);
+    const credit = row.credit ? `${row.credit}${row.licence ? ` · ${row.licence}` : ''}` : attribution;
+    if (row.kind === 'image' && (isOverlay || credit)) pictures.push(credit ? `${row.name} — ${credit}` : row.name);
+    else if (row.kind === 'video' && credit) clips.push(`${row.name} — ${credit}`);
   }
   if (pictures.length) lines.push('Pictures / poster:', ...[...new Set(pictures)].map((l) => `  - ${l}`), '');
+  if (clips.length) lines.push('Clips:', ...[...new Set(clips)].map((l) => `  - ${l}`), '');
   const sources = [...textsOfPreset(model, 'preset:shape.source-tag'), ...(o.extra ?? []).map((s) => s.trim()).filter(Boolean)];
   if (sources.length) lines.push('Sources:', ...[...new Set(sources)].map((l) => `  - ${l}`), '');
   return `${lines.join('\n').trimEnd()}\n`;

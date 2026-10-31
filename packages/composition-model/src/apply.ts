@@ -491,7 +491,12 @@ function applyOne(m: CompositionModelT, op: OperationT, ctx: ApplyContext, path:
       const w = Number(a.size ?? 480);
       const h = as.width && as.height ? Math.round((w * as.height) / as.width) : w;
       const pos: PositionT = a.position === undefined ? { x: 0, y: 0 } : typeof a.position === 'string' ? namedPosition(m, a.position) : a.position;
-      addVisual(m, { kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, layer: 0, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, ...overlayZoom(a), motion: motionOf(a.motion, DEFAULT_IMAGE_MOTION_ID, ctx, path, warnings), effects: [] }, a.layer);
+      // ADR-041 look: a radius wider than half the shorter side is a pill (clamped); `shadow: false` and a 0 u border store nothing.
+      const radius = a.radius === undefined || a.radius <= 0 ? undefined : Math.min(a.radius, Math.round(Math.min(w, h) / 2));
+      const shadow = a.shadow === true ? true : a.shadow && typeof a.shadow === 'object' ? { blurU: a.shadow.blurU, opacity: a.shadow.opacity } : undefined;
+      const border = a.border && a.border.widthU > 0 ? { colour: a.border.colour, widthU: a.border.widthU } : undefined;
+      addVisual(m, { kind: 'image', id: ctx.newId(), assetId: as.id, timing: { atMs: a.atMs, durationMs: a.durationMs ?? IMAGE_DEFAULT_MS }, layer: 0, position: pos, size: { w, h }, objectFit: a.objectFit ?? 'contain', opacity: a.opacity ?? 1, ...overlayZoom(a), motion: motionOf(a.motion, DEFAULT_IMAGE_MOTION_ID, ctx, path, warnings), effects: [],
+        ...(radius !== undefined ? { radius } : {}), ...(shadow !== undefined ? { shadow } : {}), ...(border ? { border } : {}) }, a.layer);
       return;
     }
     case 'op:overlay.addVideo': {

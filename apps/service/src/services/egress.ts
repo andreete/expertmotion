@@ -13,7 +13,7 @@
 //                   (web.images import): any public https host — never an IP literal, localhost / .local / .internal, and the
 //                   host must not resolve to a private, loopback, link-local or CGNAT address (checked per hop); only when the
 //                   setting "Izinkan riset internet" is on (the caller checks it) and never in Private Mode
-//   research-api    the open-licence image catalogues (Openverse API, Wikimedia Commons API)
+//   research-api    the picture catalogues (Openverse API, Wikimedia Commons API) and Pexels (api / images / videos.pexels.com, FR-301)
 // Private Mode refuses before any DNS lookup (EM-8202); a host off the purpose's list is EM-8203; HTTPS only. Redirects are never
 // followed by the platform (`redirect: 'manual'`): provider calls follow at most 3 hops here, re-checking every hop against the
 // same list; model downloads follow hops in packages/models (download.ts), each hop again through this module.
@@ -34,7 +34,9 @@ export const TTS_HOSTS = ['api.openai.com', 'generativelanguage.googleapis.com',
 export const TTS_MAX_BODY_BYTES = 40 * 1024 * 1024;
 export const TTS_TOTAL_TIMEOUT_MS = 120_000;
 export const UPDATE_HOSTS = [] as const;
-export const RESEARCH_API_HOSTS = ['api.openverse.org', 'commons.wikimedia.org'] as const;
+// FR-301 (ADR-041): + Pexels (search API, photo files, video files) with the Creator's own key; Pexels video links on other hosts
+// (older `player.vimeo.com` files) are refused by the import, so nothing else is listed here.
+export const RESEARCH_API_HOSTS = ['api.openverse.org', 'commons.wikimedia.org', 'api.pexels.com', 'images.pexels.com', 'videos.pexels.com'] as const;
 /** SEC-140 bounds of a research fetch: page / PDF 4 MB, picture 15 MB, 20 s, 5 redirect hops. */
 export const RESEARCH_MAX_BYTES = 4 * 1024 * 1024;
 export const RESEARCH_IMAGE_MAX_BYTES = 15 * 1024 * 1024;

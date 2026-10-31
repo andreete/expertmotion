@@ -22,8 +22,11 @@ import { Agent, emit, Id, ProjectParams, requireProject, type AgentT } from '../
 import { cachedModels, runUsage } from '../s3/usage-store.js';
 import { s3, track } from '../s3/state.js';
 import { getAssignment, researchFor } from './providers.js';
-import { attributionText, creatorUrls, researchHandlers, resolveImage, type ImageCandidate } from '../s3/research.js';
-import { RESEARCH_IMAGE_MAX_BYTES } from '../services/egress.js';
+import { PEXELS_VIDEO_MAX_BYTES, SCREENSHOT_LICENCE_TEXT, attributionText, creatorUrls, creditText, hostOf, licenceText, researchHandlers, resolveImage, resolvePageImage, resolvePexels, type ImageCandidate, type ScreenshotViewport } from '../s3/research.js';
+import { researchKeysOf } from '../s3/research-keys.js';
+import { screenshotPage } from '../s3/screenshot.js';
+import { previewFramesTool } from '../s3/preview-frames.js';
+import { RESEARCH_IMAGE_MAX_BYTES, researchUrlProblem } from '../services/egress.js';
 import { ingestOf, inspectSource } from '../s2/ingest.js';
 import os from 'node:os';
 import { canonicalImportPath, removableMediaRoots, win32ImportPolicy } from './assets.js';
@@ -54,7 +57,33 @@ interface MsgRow { id: string; conversation_id: string; role: 'user' | 'assistan
 interface RunRow { id: string; project_id: string; agent: AgentT; connection_id: string | null; model_id: string; status: 'running' | 'done' | 'failed' | 'cancelled'; error_code: string | null; started_at: string; finished_at: string | null; plan_id: string | null }
 
 /** FR-212: blocks as stored, made safe to read (a proposal stored without `params` by an older build crashed the chat on every open). */
-const blocksOf = (json: string): Block[] => normalizeMessageBlocks(json) as Block[];
+const IMAGE_SOURCES: readonly ImageCandidate['source'][] = ['openverse', 'wikimedia', 'pexels', 'pexels-video', 'page'];
+/**
+ * ADR-041: the shared normaliser (packages/shared chat-blocks.ts) knows only the open catalogues and drops `kind`, `licence`, `url`
+ * … of a candidate; picture blocks are therefore re-read here from the stored JSON so Pexels / page candidates survive a reload
+ * and R-089 finds them. Everything else stays as the shared normaliser returns it.
+ */
+export function candidateItems(raw: unknown): ImageCandidate[] {
+  const sn = (v: unknown): string | null => (typeof v === 'string' ? v.slice(0, 2000) : null); const n = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return (Array.isArray(raw) ? raw : []).flatMap((x): ImageCandidate[] => {
+    if (!x || typeof x !== 'object') return [];
+    const o = x as Record<string, unknown>;
+    if (!IMAGE_SOURCES.includes(o['source'] as ImageCandidate['source']) || typeof o['id'] !== 'string') return [];
+    return [{ source: o['source'] as ImageCandidate['source'], id: o['id'], kind: o['kind'] === 'video' ? 'video' : 'image', title: sn(o['title']) ?? 'Untitled', creator: sn(o['creator']), license: (sn(o['license']) ?? 'owner') as ImageCandidate['license'], licenseVersion: sn(o['licenseVersion']), licenseUrl: sn(o['licenseUrl']), landingUrl: sn(o['landingUrl']), width: n(o['width']), height: n(o['height']), provider: sn(o['provider']),
+      ...(typeof o['licence'] === 'string' ? { licence: o['licence'].slice(0, 300) } : {}), ...(typeof o['thumbUrl'] === 'string' ? { thumbUrl: o['thumbUrl'].slice(0, 2000) } : {}), ...(typeof o['url'] === 'string' ? { url: o['url'].slice(0, 2000) } : {}),
+      ...(n(o['durationS']) !== null ? { durationS: n(o['durationS']) } : {}), ...(typeof o['importedAssetId'] === 'string' ? { importedAssetId: o['importedAssetId'] } : {}) } as ImageCandidate];
+  }).slice(0, 24);
+}
+const blocksOf = (json: string): Block[] => {
+  const norm = normalizeMessageBlocks(json) as Block[];
+  let raw: unknown; try { raw = JSON.parse(json); } catch { return norm; }
+  const rawImages = (Array.isArray(raw) ? raw : []).filter((b): b is { type: 'image_candidates'; items?: unknown } => !!b && typeof b === 'object' && (b as { type?: unknown }).type === 'image_candidates');
+  if (!rawImages.length) return norm;
+  const mine = rawImages.map((b) => ({ type: 'image_candidates' as const, items: candidateItems(b.items) })).filter((b) => b.items.length);
+  const at = norm.findIndex((b) => b.type === 'image_candidates');
+  const rest = norm.filter((b) => b.type !== 'image_candidates');
+  return at < 0 ? [...rest, ...mine] : [...rest.slice(0, at), ...mine, ...rest.slice(at)];
+};
 const msgDto = (m: MsgRow) => ({ id: m.id, role: m.role, blocks: blocksOf(m.blocks_json), agentRunId: m.agent_run_id, createdAt: m.created_at });
 const contextLengthOf = (ctx: ServiceContext, connId: string | null, modelId: string): number | null => (connId ? cachedModels(ctx, connId)?.find((m) => m.modelId === modelId)?.contextLength ?? null : null);
 
@@ -225,6 +254,7 @@ export function mediaTools(ctx: ServiceContext, projectId: string): Record<strin
 export function brainstormTools(ctx: ServiceContext, projectId: string, language: 'id' | 'en'): ToolHandlers {
   return {
     ...(mediaTools(ctx, projectId) as ToolHandlers),   // FR-285: media.analyze / media.frames / media.analysis.get (names declared in packages/agents tools.ts)
+    'composition.frames': previewFramesTool(ctx, projectId),   // FR-310 … FR-312: stills of the head model (the Player picture); one render per (version, times) in this run
     'composition.get': () => { try { const h = ctx.hooks.composition(projectId); return summarizeForAgent(h.model, ctx.hooks.assetFacts(projectId), 2000); } catch { return null; } },
     'assets.list': () => ctx.hooks.assetFacts(projectId).filter((a) => a.status === 'ready').slice(0, 100)
       .map((a) => ({ id: a.id, kind: a.kind, name: a.name ?? a.id, ...(a.durationMs !== undefined ? { durationMs: a.durationMs } : {}), ...(a.width ? { width: a.width, height: a.height } : {}), ...(a.hasAudio !== undefined ? { hasAudio: a.hasAudio } : {}) })),
@@ -279,8 +309,37 @@ export function researchToolsFor(ctx: ServiceContext, agent: AgentT, projectId: 
   const r = researchFor(ctx, agent);
   const images: ImageCandidate[] = [];
   const handlers = researchHandlers({ cfg: r.cfg, fetchPage: ctx.egress.for('research'), fetchApi: ctx.egress.for('research-api'),
-    allowedUrls: () => [...conversationUrls(ctx, projectId), ...creatorUrls([extraText])], ...(r.search ? { search: (q: string) => r.search!(q, signal) } : {}), onImages: (c) => images.push(...c) });
+    allowedUrls: () => [...conversationUrls(ctx, projectId), ...creatorUrls([extraText])], ...(r.search ? { search: (q: string) => r.search!(q, signal) } : {}), onImages: (c) => images.push(...c),
+    pexelsKey: () => researchKeysOf(ctx).key('pexels'), screenshot: (url, viewport) => importScreenshot(ctx, projectId, url, viewport) });
   return { cfg: r.cfg, handlers, images };
+}
+/**
+ * FR-305: web.screenshot → PNG through the bundled Chrome (s3/screenshot.ts) → image asset "Tangkapan layar · <host>" with
+ * `credit` = the URL and `licence` "Hak cipta pemilik — kutipan". Refused in Private Mode and when research is off (the egress
+ * is not used, but the page load is internet use all the same).
+ */
+export async function importScreenshot(ctx: ServiceContext, projectId: string, url: string, viewport: ScreenshotViewport): Promise<{ assetId: string; title: string; host: string; width: number; height: number }> {
+  if (ctx.egress.isPrivate()) throw new EmError('EM-8202', 'Private Mode is on, so the page was not opened.');
+  if (ctx.settings.get().webResearch === false) throw new EmError('EM-4405', 'Internet research is turned off, so the page was not captured.', { status: 409 });
+  const target = /^http:\/\//i.test(url) ? `https://${url.slice(7)}` : url;
+  const why = researchUrlProblem(target);
+  if (why) throw new EmError('EM-4409', `The page could not be captured (${why}).`, { details: { url } });
+  const project = requireProject(ctx, projectId);
+  const shot = await screenshotPage(ctx, target, viewport);
+  const host = hostOf(target);
+  const dir = path.join(ctx.paths.tmp, 'research'); fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${ctx.newId()}.png`);
+  fs.writeFileSync(file, shot.png);
+  const title = `Tangkapan layar · ${host}`;
+  const ingest = ingestOf(ctx);
+  try {
+    const st = await inspectSource(file, `${title}.png`);
+    await ingest.checkCapacity(project.id, st.bytes);
+    const row = ingest.importFile({ projectId: project.id, source: file, name: `${title.replace(/[\\/:*?"<>|]+/g, ' ')}.png`, kind: st.kind, bytes: st.bytes, ext: st.ext, move: true });
+    ctx.db.prepare('UPDATE assets SET credit = ?, licence = ? WHERE id = ?').run(target.slice(0, 2000), SCREENSHOT_LICENCE_TEXT, row.id);
+    ctx.log.info({ projectId: project.id, assetId: row.id, host, viewport, width: shot.width, height: shot.height }, 'web.screenshot imported');
+    return { assetId: row.id, title, host, width: shot.width, height: shot.height };
+  } catch (e) { fs.rm(file, { force: true }, () => undefined); throw e; }
 }
 /** The research blocks of an answer: sources, picture candidates, and a notice when research could not run. */
 export function researchBlocks(sources: ReadonlyArray<{ url: string; title?: string; citedText?: string; pageAge?: string; cited?: boolean }>, queries: readonly string[], images: readonly ImageCandidate[], notice?: { code: string; reason: string }): Block[] {
@@ -396,7 +455,9 @@ interface EditorTurn { messageId: string; text: string; target?: ElementRefT | u
 async function executeEditor(ctx: ServiceContext, run: RunRow, convId: string, projectId: string, turn: EditorTurn, signal: AbortSignal) {
   const deltas = deltaEmitter(ctx, projectId, run.id, 'editor');
   let found: { sources: Array<{ url: string; title?: string }>; images: unknown[] } | null = null;
-  const ask = (images: ChatImage[]) => ctx.hooks.createPlan(projectId, { instruction: turn.text, mode: 'agent', signal, runId: run.id, chat: { messageId: turn.messageId, ...(turn.target ? { target: turn.target } : {}) },
+  // FR-311: the composition.frames contact sheet reaches the model as an image unless its Capability Table row says imageInput false
+  const cap = run.connection_id ? cachedModels(ctx, run.connection_id)?.find((m) => m.modelId === run.model_id) : undefined;
+  const ask = (images: ChatImage[]) => ctx.hooks.createPlan(projectId, { instruction: turn.text, mode: 'agent', signal, runId: run.id, chat: { messageId: turn.messageId, ...(turn.target ? { target: turn.target } : {}) }, toolImages: cap?.imageInput !== false,
     ...(turn.selection?.length || turn.target ? { selection: turn.target ? [turn.target, ...(turn.selection ?? [])] : turn.selection! } : {}), ...(turn.playheadMs !== undefined ? { playheadMs: turn.playheadMs } : {}),
     ...(turn.attachments.length ? { attachments: turn.attachments } : {}), ...(images.length ? { images } : {}), onDelta: (d) => { if (!signal.aborted) deltas.push(d); },
     ...(turn.targets.length ? { targets: turn.targets } : {}), onProgress: progressEmitter(ctx, projectId, run.id, 'editor'), onSources: (x: { sources: Array<{ url: string; title?: string }>; images: unknown[] }) => { found = x; } }) as Promise<Awaited<ReturnType<ServiceContext['hooks']['createPlan']>> & { runId?: string }>;
@@ -464,7 +525,7 @@ export function documentsContext(docs: readonly DocPart[], max = DOC_CONTEXT_CHA
   }).join('');
 }
 const DOC_EXT = /\.(pdf|docx|txt|text|md|markdown|mdown|srt|vtt|csv|tsv|json|fountain|fdx|rtf|log|yaml|yml|xml|html?)$/i;
-const ImageImportBody = z.object({ messageId: Id, source: z.enum(['openverse', 'wikimedia']), id: z.string().min(1).max(64) }).strict();
+const ImageImportBody = z.object({ messageId: Id, source: z.enum(['openverse', 'wikimedia', 'pexels', 'pexels-video', 'page']), id: z.string().min(1).max(64) }).strict();
 const HandoffBody = z.object({ messageId: Id, intentIds: z.array(Id).max(12).optional(), baseVersion: z.string().min(1).max(128) }).strict();
 
 /** FR-219: the Editor request for a Brainstorm draft: the answer, its proposed changes and the "do it, don't ask back" rule. */
@@ -685,11 +746,25 @@ export const agentsModule: ServiceModule = {
       if (!m || !block) throw new EmError('EM-9003', 'This picture suggestion is no longer available.', { path: 'body.id' });
       const item = block.items.find((x) => x.source === body.source && x.id === body.id)!;
       if ((item as { importedAssetId?: string }).importedAssetId) return { assetId: (item as { importedAssetId?: string }).importedAssetId, attribution: null, duplicate: true };
-      const { candidate, downloadUrl } = await resolveImage(ctx.egress.for('research-api'), body.source, body.id);
-      const imageHeaders = { Accept: 'image/*', 'x-em-max-bytes': String(RESEARCH_IMAGE_MAX_BYTES) };
-      let res = await ctx.egress.for('research')(downloadUrl, { headers: imageHeaders });
+      // FR-301 / FR-304: Pexels records are looked up again by id with the Creator's key; a page picture has no catalogue, so its
+      // stored address (never one from the request) is re-validated; the open catalogues as before.
+      let resolved: { candidate: ImageCandidate; downloadUrl: string };
+      if (body.source === 'pexels' || body.source === 'pexels-video') {
+        const key = researchKeysOf(ctx).key('pexels');
+        if (!key) throw new EmError('EM-4410', 'Add your Pexels API key (Settings ▸ Riset internet) to import stock photos and videos.', { status: 409 });
+        resolved = await resolvePexels(ctx.egress.for('research-api'), key, body.source, body.id);
+      } else if (body.source === 'page') resolved = resolvePageImage(item);
+      else resolved = await resolveImage(ctx.egress.for('research-api'), body.source, body.id);
+      const { candidate, downloadUrl } = resolved;
+      const video = body.source === 'pexels-video';
+      const imageHeaders = video ? { Accept: 'video/mp4,video/*', 'x-em-max-bytes': String(PEXELS_VIDEO_MAX_BYTES) } : { Accept: 'image/*', 'x-em-max-bytes': String(RESEARCH_IMAGE_MAX_BYTES) };
+      // Pexels files live on the Pexels hosts (research-api list); page pictures and the open catalogues' files on any public host (research)
+      const fileFetch = ctx.egress.for(body.source === 'pexels' || body.source === 'pexels-video' ? 'research-api' : 'research');
+      let res: Response;
+      try { res = await fileFetch(downloadUrl, { headers: imageHeaders }); }
+      catch (e) { if (e instanceof EmError && e.code === 'EM-4103') throw new EmError('EM-4407', `The ${video ? 'clip' : 'picture'} is larger than ${video ? '60' : '15'} MB, so it was not downloaded.`, { details: { source: body.source, limitBytes: video ? PEXELS_VIDEO_MAX_BYTES : RESEARCH_IMAGE_MAX_BYTES } }); throw e; }
       let type = (res.headers.get('content-type') ?? '').toLowerCase();
-      const isImage = (t: string) => /^image\/(png|jpe?g|webp|gif)/.test(t);
+      const isImage = (t: string) => (video ? /^video\/(mp4|quicktime)|^application\/octet-stream/.test(t) : /^image\/(png|jpe?g|webp|gif)/.test(t));
       // QA 2026-10-30 (EM-4407 "HTTP 400"): the provider's original file (Flickr & co. behind Openverse) refuses hotlinks or
       // moved; Openverse serves a thumbnail of every row itself, so fall back to it before giving up (Wikimedia already uses thumburl).
       if ((!res.ok || !isImage(type)) && body.source === 'openverse') {
@@ -699,11 +774,14 @@ export const agentsModule: ServiceModule = {
         type = (res.headers.get('content-type') ?? '').toLowerCase();
         ctx.log.info({ projectId: project.id, source: body.source, failed, fallbackOk: res.ok && isImage(type) }, 'research picture: original refused, Openverse thumbnail used');
       }
-      if (!res.ok || !isImage(type)) { void res.body?.cancel().catch(() => undefined); throw new EmError('EM-4407', `The picture could not be downloaded (${res.ok ? type || 'unknown type' : `HTTP ${res.status}`}).`, { details: { source: body.source, host: new URL(res.url || downloadUrl).hostname, status: res.status, type } }); }
-      const ext = type.includes('png') ? '.png' : type.includes('webp') ? '.webp' : type.includes('gif') ? '.gif' : '.jpg';
+      if (!res.ok || !isImage(type)) { void res.body?.cancel().catch(() => undefined); throw new EmError('EM-4407', `The ${video ? 'clip' : 'picture'} could not be downloaded (${res.ok ? type || 'unknown type' : `HTTP ${res.status}`}).`, { details: { source: body.source, host: new URL(res.url || downloadUrl).hostname, status: res.status, type } }); }
+      const ext = video ? '.mp4' : type.includes('png') ? '.png' : type.includes('webp') ? '.webp' : type.includes('gif') ? '.gif' : '.jpg';
       const dir = path.join(ctx.paths.tmp, 'research'); fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${ctx.newId()}${ext}`);
-      fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+      let bytes: Buffer;
+      try { bytes = Buffer.from(await res.arrayBuffer()); }
+      catch (e) { throw new EmError('EM-4407', `The ${video ? 'clip' : 'picture'} is larger than ${video ? '60' : '15'} MB, so it was not downloaded.`, { details: { source: body.source, limitBytes: video ? PEXELS_VIDEO_MAX_BYTES : RESEARCH_IMAGE_MAX_BYTES }, cause: e }); }
+      fs.writeFileSync(file, bytes);
       const name = `${candidate.title.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 80) || 'picture'}${ext}`;
       const ingest = ingestOf(ctx);
       try {
@@ -711,7 +789,9 @@ export const agentsModule: ServiceModule = {
         await ingest.checkCapacity(project.id, st.bytes);
         const row = ingest.importFile({ projectId: project.id, source: file, name, kind: st.kind, bytes: st.bytes, ext: st.ext, move: true });
         const attribution = attributionText(candidate);
-        ctx.db.prepare('INSERT OR REPLACE INTO asset_attributions(asset_id, project_id, source, source_id, title, creator, license, license_version, license_url, landing_url, attribution, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+        // FR-303: credit + licence on the asset row (CREDITS.txt); the structured CC record only for the open catalogues (migration 33 CHECK list)
+        ctx.db.prepare('UPDATE assets SET credit = ?, licence = ? WHERE id = ?').run(creditText(candidate).slice(0, 2000), licenceText(candidate).slice(0, 300), row.id);
+        if (candidate.source === 'openverse' || candidate.source === 'wikimedia') ctx.db.prepare('INSERT OR REPLACE INTO asset_attributions(asset_id, project_id, source, source_id, title, creator, license, license_version, license_url, landing_url, attribution, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
           .run(row.id, project.id, candidate.source, candidate.id, candidate.title, candidate.creator, candidate.license, candidate.licenseVersion, candidate.licenseUrl, candidate.landingUrl, attribution, ctx.now());
         (item as { importedAssetId?: string }).importedAssetId = row.id;
         ctx.db.prepare('UPDATE messages SET blocks_json = ? WHERE id = ?').run(JSON.stringify(blocks), m.id);
@@ -719,6 +799,11 @@ export const agentsModule: ServiceModule = {
         return { assetId: row.id, attribution, duplicate: false };
       } catch (e) { fs.rm(file, { force: true }, () => undefined); throw e; }
     };
+
+    // R-089a … R-089c (FR-301): the Creator's Pexels API key — hint only out, checked before it is stored, sealed at rest.
+    route(router, 'get', '/research-keys', {}, () => researchKeysOf(ctx).status());
+    route(router, 'put', '/research-keys/pexels', { body: z.object({ key: z.string().min(10).max(400) }).strict() }, ({ body }) => researchKeysOf(ctx).setPexelsKey(body.key));
+    route(router, 'delete', '/research-keys/pexels', {}, () => { researchKeysOf(ctx).remove('pexels'); return undefined; });
 
     route(router, 'delete', '/projects/:id/conversations/:agent', { params: AgentParams }, ({ params }) => {
       requireProject(ctx, params.id);

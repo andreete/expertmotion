@@ -2,7 +2,7 @@
 // Brainstorming Agent, "Edit" = Editor Agent): CMP-13 bubbles tagged with their agent, the thread, the composer with the
 // mode switch, and the header with "Model: <label> ▾" (per mode), status and compact usage.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AtSign, CircleHelp, Clapperboard, Clock, Copy, ExternalLink as ExternalIcon, FileText, Globe, ImagePlus, Info, Lightbulb, Loader, Maximize2, Minimize2, Music, Paperclip, Scissors, SendHorizontal, ShieldCheck, Square, TriangleAlert, X } from 'lucide-react';
+import { AtSign, CircleHelp, Clapperboard, Clock, Copy, ExternalLink as ExternalIcon, FileText, Globe, Film, ImagePlus, Info, Lightbulb, Loader, Maximize2, Minimize2, Music, Paperclip, Scissors, SendHorizontal, ShieldCheck, Square, TriangleAlert, X } from 'lucide-react';
 import { errCode, useStore } from '../state/store.js';
 import type { AgentKind, CapabilityRow, ChatDocumentDto, ChatTarget, ImageCandidateDto, MessageDto, WebSourceDto } from '../api/types.js';
 import { useOpenSource } from '../components/ExternalLink.js';
@@ -192,8 +192,9 @@ export function useAgentErrorVars(agent: AgentKind): Record<string, string> {
 const TOOL_PROGRESS: Record<string, string> = {
   'catalogue.search': 'ui.agent.progress.tool.catalogue', 'composition.get': 'ui.agent.progress.reading', 'assets.list': 'ui.agent.progress.tool.assets', 'assets.probe': 'ui.agent.progress.tool.probe',
   'hardware.profile': 'ui.agent.progress.tool.hardware', 'project.settings.get': 'ui.agent.progress.tool.settings', 'render.estimate': 'ui.agent.progress.tool.estimate', 'composition.validateOps': 'ui.agent.progress.tool.validate',
-  'web.search': 'ui.agent.progress.tool.web.search', 'web.fetch': 'ui.agent.progress.tool.web.fetch', 'web.images': 'ui.agent.progress.tool.web.images',
-  'footage.read': 'ui.agent.progress.tool.footage',                                   // FR-262: transcribing the Creator's footage first
+  'web.search': 'ui.agent.progress.tool.web.search', 'web.fetch': 'ui.agent.progress.tool.web.fetch', 'web.images': 'ui.agent.progress.tool.web.images', 'web.screenshot': 'ui.agent.progress.tool.web.screenshot',
+  'footage.read': 'ui.agent.progress.tool.footage',
+  'composition.frames': 'ui.agent.progress.tool.frames',                             // FR-310: the agent looks at the preview frames                                   // FR-262: transcribing the Creator's footage first
 };
 const hostOf = (u: string | undefined): string => { try { return u ? new URL(u).hostname.replace(/^www\./, '') : ''; } catch { return ''; } };
 /** QA 2026-10-26 #5 / FR-214: what the running agent is doing (agent.run.progress), in the Creator's words, per agent. */
@@ -211,7 +212,8 @@ export function progressText(p: { phase?: string | undefined; attempt?: number |
     case 'tool':
       // FR-216: "Mencari di internet: <query>…" / "Membaca halaman: <host>…"
       if (p.tool === 'web.search' || p.tool === 'web.images') return p.query ? t(`${TOOL_PROGRESS[p.tool]!}.q`, { query: p.query.length > 70 ? `${p.query.slice(0, 69)}…` : p.query }) : t(TOOL_PROGRESS[p.tool]!);
-      if (p.tool === 'web.fetch') return p.url ? t('ui.agent.progress.tool.web.fetch.q', { host: hostOf(p.url) }) : t(TOOL_PROGRESS[p.tool]!);
+      if (p.tool === 'composition.frames') { const at = (p as { at?: string }).at; return at ? t('ui.agent.progress.tool.frames.at', { at }) : t('ui.agent.progress.tool.frames'); }
+      if (p.tool === 'web.fetch' || p.tool === 'web.screenshot') return p.url ? t(`${TOOL_PROGRESS[p.tool]!}.q`, { host: hostOf(p.url) }) : t(TOOL_PROGRESS[p.tool]!);
       return p.tool && TOOL_PROGRESS[p.tool] ? t(TOOL_PROGRESS[p.tool]!) : t('ui.agent.progress.tool', { tool: p.tool ?? '…' });
     default: return t(b ? 'ui.agent.progress.brainstorm.planning' : 'ui.agent.progress.planning');
   }
@@ -251,24 +253,41 @@ export function SourcesList({ items, queries }: { items: readonly WebSourceDto[]
     </div>
   );
 }
+/** The licence line of a candidate: CC codes in words, otherwise the text the Service sent (Pexels License, owner's copyright). */
+export function candidateLicence(x: ImageCandidateDto, t: (k: string, v?: Record<string, string | number>) => string): string {
+  if (x.license === 'owner' || x.source === 'page') return t('ui.agent.research.image.owner');
+  if (x.licence) return x.licence;
+  if (x.license === 'pexels') return 'Pexels License';
+  return x.license === 'cc0' ? 'CC0' : x.license === 'pdm' ? t('ui.agent.research.image.pd') : `CC ${x.license.toUpperCase()}${x.licenseVersion ? ` ${x.licenseVersion}` : ''}`;
+}
+/** FR-217 / FR-300 … FR-304: picture / clip candidates with kind, licence line, author; page pictures carry the owner's-copyright notice. */
 export function ImageCandidates({ m, items }: { m: MessageDto; items: readonly ImageCandidateDto[] }) {
   const { t, actions } = useStore();
   const openExternal = useOpenSource();
   const [busy, setBusy] = useState<string | null>(null);
-  const licence = (x: ImageCandidateDto) => (x.license === 'cc0' ? 'CC0' : x.license === 'pdm' ? t('ui.agent.research.image.pd') : `CC ${x.license.toUpperCase()}${x.licenseVersion ? ` ${x.licenseVersion}` : ''}`);
+  const page = items.filter((x) => x.source === 'page'); const stock = items.filter((x) => x.source === 'pexels' || x.source === 'pexels-video');
+  const heading = page.length === items.length ? t('ui.agent.research.images.page', { n: items.length, host: hostOf(page[0]?.landingUrl ?? undefined) || '…' })
+    : stock.length === items.length ? t('ui.agent.research.images.stock', { n: items.length }) : t('ui.agent.research.images', { n: items.length });
   return (
-    <div data-el="agent.chat.message.images" className="flex max-w-[92%] flex-col gap-1 rounded-[6px] border border-em-line px-2 py-1 text-[11px]">
-      <span className="font-semibold text-em-text-2">{t('ui.agent.research.images', { n: items.length })}</span>
-      {items.map((x) => (
-        <div key={`${x.source}:${x.id}`} data-el="agent.chat.message.image" data-imported={x.importedAssetId ? 'true' : undefined} className="flex min-w-0 items-center gap-1.5">
-          <ImagePlus size={12} className="shrink-0 text-em-muted" aria-hidden />
-          <span className="min-w-0 flex-1 truncate" title={`${x.title}${x.creator ? ` — ${x.creator}` : ''}`}>{x.title}{x.creator ? <span className="text-em-muted"> · {x.creator}</span> : null}</span>
-          <span className="shrink-0 rounded-[4px] border border-em-line px-1 text-em-muted">{licence(x)}</span>
-          {x.landingUrl && <button type="button" aria-label={t('ui.agent.research.image.source')} title={x.landingUrl} className="shrink-0 text-em-muted hover:text-em-text" onClick={() => openExternal(x.landingUrl!)}><ExternalIcon size={11} /></button>}
-          {x.importedAssetId ? <span className="shrink-0 text-em-success">{t('ui.agent.research.image.inlibrary')}</span>
-            : <Button el="agent.chat.message.image.import" size={28} variant="secondary" loading={busy === x.id} onClick={() => { setBusy(x.id); void actions.importResearchImage(m, x.source, x.id).finally(() => setBusy(null)); }}>{t('ui.agent.research.image.import')}</Button>}
-        </div>))}
-      <span className="text-[10px] text-em-muted">{t('ui.agent.research.images.note')}</span>
+    <div data-el="agent.chat.message.images" data-source={page.length === items.length ? 'page' : stock.length === items.length ? 'stock' : 'open'} className="flex max-w-[92%] flex-col gap-1 rounded-[6px] border border-em-line px-2 py-1 text-[11px]">
+      <span className="font-semibold text-em-text-2">{heading}</span>
+      {items.map((x) => {
+        const video = x.kind === 'video';
+        return (
+          <div key={`${x.source}:${x.id}`} data-el="agent.chat.message.image" data-source={x.source} data-kind={video ? 'video' : 'image'} data-imported={x.importedAssetId ? 'true' : undefined} className="flex min-w-0 flex-col gap-0.5">
+            <div className="flex min-w-0 items-center gap-1.5">
+              {video ? <Film size={12} className="shrink-0 text-em-muted" aria-hidden /> : <ImagePlus size={12} className="shrink-0 text-em-muted" aria-hidden />}
+              <span className="min-w-0 flex-1 truncate" title={`${x.title}${x.creator ? ` — ${x.creator}` : ''}`}>{x.title}{x.creator ? <span className="text-em-muted"> · {x.creator}</span> : null}</span>
+              {video && <span data-el="agent.chat.message.image.kind" className="shrink-0 rounded-[4px] bg-em-panel-2 px-1 font-semibold text-em-text-2">{x.durationS ? t('ui.agent.research.image.video.s', { s: Math.round(x.durationS) }) : t('ui.agent.research.image.video')}</span>}
+              {x.landingUrl && <button type="button" aria-label={t('ui.agent.research.image.source')} title={x.landingUrl} className="shrink-0 text-em-muted hover:text-em-text" onClick={() => openExternal(x.landingUrl!)}><ExternalIcon size={11} /></button>}
+              {x.importedAssetId ? <span className="shrink-0 text-em-success">{t('ui.agent.research.image.inlibrary')}</span>
+                : <Button el="agent.chat.message.image.import" size={28} variant="secondary" loading={busy === x.id} title={video ? t('ui.agent.research.image.import.video.tip') : undefined} onClick={() => { setBusy(x.id); void actions.importResearchImage(m, x.source, x.id).finally(() => setBusy(null)); }}>{t('ui.agent.research.image.import')}</Button>}
+            </div>
+            <span data-el="agent.chat.message.image.licence" className="truncate pl-[18px] text-[10px] text-em-muted">{candidateLicence(x, t)}{x.width && x.height ? ` · ${x.width}×${x.height}` : ''}{x.source === 'page' && x.landingUrl ? ` · ${hostOf(x.landingUrl)}` : ''}</span>
+          </div>);
+      })}
+      {page.length > 0 && <span data-el="agent.chat.message.images.owner" role="note" className="text-[10px] text-em-warn">{t('ui.agent.research.images.owner')}</span>}
+      <span className="text-[10px] text-em-muted">{t(page.length === items.length ? 'ui.agent.research.images.note.page' : stock.length === items.length ? 'ui.agent.research.images.note.stock' : 'ui.agent.research.images.note')}</span>
     </div>
   );
 }

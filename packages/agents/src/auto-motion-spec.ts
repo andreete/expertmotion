@@ -77,7 +77,9 @@ export const SCENE_ROLES = ['hook', 'title', 'body', 'list', 'stat', 'stat-compa
   /** FR-261 (the Creator's own footage): full-frame footage with overlays in the thirds; footage on one half + text; footage window + text. */
   'footage', 'footage-split', 'footage-pip',
   /** ADR-039 (Reels talking-head mode, needs `talkingHead`): on-camera cut full screen; designed graphics + speaker bubble; silent card; silent hold; poster end card. */
-  'talk', 'explain', 'card', 'hold', 'poster'] as const;
+  'talk', 'explain', 'card', 'hold', 'poster',
+  /** ADR-041 (viral explainer from internet assets): one picture or a tilted stack from the Library with arrows / boxes / X marks / chips. */
+  'image'] as const;
 export type SceneRole = (typeof SCENE_ROLES)[number];
 export const FOOTAGE_ROLES: readonly SceneRole[] = ['footage', 'footage-split', 'footage-pip'];
 /** ADR-039: roles of the talking-head mode (auto-motion-reels.ts); `talk` / `explain` / `hold` need `talkingHead` cuts. */
@@ -87,11 +89,39 @@ export const SPEECH_ROLES: readonly SceneRole[] = ['talk', 'explain'];
 /** ADR-039: procedural sound effects (packages/models analysis/sfx.ts `synthSfx`); the Service registers them as audio assets (`ctx.sfxAssets`). */
 export const SFX_KINDS = ['whoosh', 'pop', 'click', 'tick', 'ding', 'rise'] as const;
 export type SfxKind = (typeof SFX_KINDS)[number];
-export const BLOCK_KINDS = ['heading', 'chip', 'tag', 'source', 'icon', 'rows', 'bars', 'day-strip', 'browser-card', 'typing-box', 'note', 'stat', 'text'] as const;
+export const BLOCK_KINDS = ['heading', 'chip', 'tag', 'source', 'icon', 'rows', 'bars', 'day-strip', 'browser-card', 'typing-box', 'note', 'stat', 'text',
+  /** ADR-041: full-frame cutaways over the speaker (a Library picture with annotations; a muted video clip). */
+  'image', 'video'] as const;
+/** ADR-041: blocks that become a full-frame cutaway over the speaker (the bubble is not placed while one is on). */
+export const CUTAWAY_KINDS: readonly string[] = ['image', 'video'];
 export type BlockKind = (typeof BLOCK_KINDS)[number];
 export const ICON_NAMES = ['reactor', 'chip-ai', 'bolt', 'atom', 'data-center', 'shield', 'check', 'sun', 'cloud', 'moon', 'solar-panel', 'factory', 'card-ace', 'qr', 'play', 'globe', 'chat', 'money', 'clock', 'warning'] as const;
 export const TAG_TONES = ['info', 'warn', 'opinion', 'illustration'] as const;
 const short = (max: number) => z.string().min(1).max(max);
+const frac = z.number().min(0).max(1);
+/** ADR-041: the annotation kinds drawn over a picture (red #E53935 by default; `label` = a small pill text). */
+export const ANNOTATION_KINDS = ['arrow', 'box', 'circle', 'x', 'label'] as const;
+/**
+ * ADR-041: one mark over a picture. x / y (fractions of the PICTURE box) = the point an arrow points at, the centre of a box /
+ * circle / X / label; w / h = the box size (fractions of the picture; default 0.3 × 0.2). `at` = when it appears (scene anchor).
+ */
+export const SpecAnnotation = z.object({
+  kind: z.enum(ANNOTATION_KINDS), x: frac, y: frac, w: frac.optional(), h: frac.optional(),
+  text: SpecText.optional(), color: SpecHex.optional(), at: SpecAnchor.optional(),
+}).strict();
+export type SpecAnnotationT = z.infer<typeof SpecAnnotation>;
+export const CHIP_TONES = ['before', 'after', 'warning', 'neutral', 'accent'] as const;
+export const CHIP_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+/** ADR-041: a pill in a picture corner ("BEFORE" green, "AFTER" red, a warning amber). */
+export const SpecChip = z.object({ text: SpecText, tone: z.enum(CHIP_TONES).optional(), position: z.enum(CHIP_POSITIONS).optional() }).strict();
+export type SpecChipT = z.infer<typeof SpecChip>;
+/** ADR-041: one picture of an `image` scene (a Library image asset, usually imported from the internet). */
+export const SpecImage = z.object({ assetId: z.string().min(1).max(80), label: SpecText.optional(), rotationDeg: z.number().min(-15).max(15).optional(), source: SpecText.optional() }).strict();
+export type SpecImageT = z.infer<typeof SpecImage>;
+export const IMAGE_LAYOUTS = ['single', 'stack', 'phone', 'side-by-side'] as const;
+export const IMAGE_BGS = ['blur', 'paper', 'dark', 'white', 'theme'] as const;
+export const IMAGE_PANS = ['zoom-in', 'zoom-out', 'left', 'right', 'none'] as const;
+export const FOOTAGE_GRADES = ['none', 'dark-grain', 'warm', 'cold'] as const;
 /**
  * ADR-039: one graphic of a talking-head scene. `at` = when it appears ({say: "spoken words"} resolved fuzzily inside the scene's
  * cut, {ms} / {frames} scene-relative); without `at` the block appears at `fallbackMs` or its index × 600 ms. `sfx` overrides the
@@ -114,10 +144,14 @@ export const SpecBlock = z.object({
   inner: z.enum(['reactor-datacenter', 'none']).optional(), prefixBadge: short(6).optional(), typing: z.boolean().optional(), sendAt: ms.optional(),
   /** stat: the figure as shown ("24 jam"), its label and unit. */
   value: short(40).optional(), label: short(80).optional(), unit: short(30).optional(),
+  /** ADR-041 image / video cutaway: the Library asset, marks over a picture, its background / slow pan, the clip's source trim; `ms` = how long (default: until the next block or the cut end). */
+  assetId: z.string().min(1).max(80).optional(), annotations: z.array(SpecAnnotation).max(8).optional(), bg: z.enum(IMAGE_BGS).optional(), pan: z.enum(IMAGE_PANS).optional(),
+  fromMs: ms.optional(), toMs: ms.optional(), ms: z.number().int().min(300).max(60_000).optional(),
 }).strict().superRefine((b, c) => {
   const need = (k: keyof typeof b, when: readonly string[]) => { if (when.includes(b.kind) && b[k] === undefined) c.addIssue({ code: 'custom', message: `${b.kind} block needs ${String(k)}`, path: [k] }); };
   need('text', ['heading', 'chip', 'tag', 'source', 'note', 'text', 'typing-box']);
   need('icon', ['icon']); need('rows', ['rows']); need('bars', ['bars']); need('strip', ['day-strip']); need('value', ['stat']);
+  need('assetId', ['image', 'video']);
 });
 export type SpecBlockT = z.infer<typeof SpecBlock>;
 /** ADR-039: a cut of the footage analysis (recording time = master time, ms); the Service fills `talkingHead.cuts` or the composer reads PlanContext. */
@@ -144,11 +178,14 @@ export const SpecFootage = z.object({
   assetId: z.string().min(1).max(80), fromMs: ms.optional(), toMs: ms.optional(),
   volume: z.number().min(0).max(1).optional(), muted: z.boolean().optional(), fit: z.enum(['cover', 'contain']).optional(),
   focus: z.enum(['center', 'left', 'right', 'top', 'bottom']).optional(),
+  /** ADR-041: the look of the footage — dark-grain = dimmed 0.5 + vignette + film grain 0.3 (the Satu-Persen look); warm / cold = a colour grade. */
+  grade: z.enum(FOOTAGE_GRADES).optional(),
 }).strict();
 export type SpecFootageT = z.infer<typeof SpecFootage>;
 /** FR-261: a lower-third (name + role / place) over footage, shown for `ms` (default 4 s) from `at`. */
 export const SpecLowerThird = z.object({ name: SpecText, title: SpecText.optional(), at: SpecAnchor.optional(), ms: z.number().int().min(1000).max(12_000).optional() }).strict();
-export const MOODS = ['editorial', 'energetic', 'calm', 'serious', 'playful', 'tech', 'luxury', 'friendly', 'dramatic'] as const;
+/** ADR-041 `viral`: near-black, yellow #FFD400 accent, white text, Poppins + Inter, white captions with a dark box in the lower third, sfx on. */
+export const MOODS = ['editorial', 'energetic', 'calm', 'serious', 'playful', 'tech', 'luxury', 'friendly', 'dramatic', 'viral'] as const;
 
 export const SpecScene = z.object({
   role: z.enum(SCENE_ROLES),
@@ -188,8 +225,17 @@ export const SpecScene = z.object({
   musicLift: z.number().min(1).max(3).optional(), tag: SpecText.optional(),
   /** poster: the Creator's image asset shown unchanged at `scale` of the frame width with `handle` under it. */
   imageAssetId: z.string().min(1).max(80).optional(), scale: z.number().min(0.3).max(1).optional(),
-}).strict();
+  /** ADR-041 `image` role: 1 picture (single / phone) or 2–4 (stack / side-by-side), its background, slow pan, marks, corner chips and a one-line caption (shown only when captions are off). */
+  images: z.array(SpecImage).min(1).max(4).optional(), layout: z.enum(IMAGE_LAYOUTS).optional(), bg: z.enum(IMAGE_BGS).optional(), pan: z.enum(IMAGE_PANS).optional(),
+  annotations: z.array(SpecAnnotation).max(8).optional(), chips: z.array(SpecChip).max(4).optional(), caption: SpecText.optional(),
+}).strict().superRefine((s, c) => {
+  if (s.role === 'image' && !s.images?.length) c.addIssue({ code: 'custom', message: 'image scene needs images: [{assetId}] (1–4 Library pictures)', path: ['images'] });
+});
 export type SpecSceneT = z.infer<typeof SpecScene>;
+/** ADR-041: a channel logo over the whole video (default top-center, 220 u wide, opacity 0.9). */
+export const SpecWatermark = z.object({ assetId: z.string().min(1).max(80), position: z.enum(['top-center', 'top-left', 'top-right', 'bottom-right']).optional(), widthU: z.number().min(120).max(600).optional(), opacity: z.number().min(0.3).max(1).optional() }).strict();
+export type SpecWatermarkT = z.infer<typeof SpecWatermark>;
+export const TITLE_STYLES = ['boxed', 'highlight', 'plain'] as const;
 /** ADR-039: the footage source of the talking-head mode; the composer also reads the analysis from its context (`footageAnalysis`). */
 export const SpecTalkingHead = z.object({
   masterAssetId: z.string().min(1).max(80).optional(), voiceAssetId: z.string().min(1).max(80).optional(), analysisId: z.string().min(1).max(80).optional(),
@@ -252,6 +298,8 @@ export const VideoSpec = z.object({
   sfx: z.object({ enabled: z.boolean().optional(), level: z.number().min(0).max(1).optional() }).strict().optional(),
   sourceTagYU: px(0, 1900).optional(),
   credits: z.array(z.string().min(1).max(300)).max(40).optional(),
+  /** ADR-041: a channel logo over the whole video; the look of hook / title headlines (boxed = solid boxes behind the scene keywords, the default for mood viral). */
+  watermark: SpecWatermark.optional(), titleStyle: z.enum(TITLE_STYLES).optional(),
   scenes: z.array(SpecScene).min(1).max(20),
 }).strict().superRefine((s, c) => {
   if (!s.talkingHead) s.scenes.forEach((x, i) => { if (SPEECH_ROLES.includes(x.role) || x.role === 'hold') c.addIssue({ code: 'custom', message: `role ${x.role} needs talkingHead (the footage analysis) at the spec top`, path: ['scenes', i, 'role'] }); });
@@ -264,9 +312,12 @@ export type SceneSpecT = VideoSpecT;
 
 /** Compact signature shown to the Editor Agent (capabilities.stepTools['scene.compose']). Keep in sync with the schema above. */
 export const SCENE_COMPOSE_SIGNATURE =
-  'args = VideoSpec {title?, ratio?, mood?: editorial|energetic|calm|serious|playful|tech|luxury|friendly|dramatic, style?: {background?: #hex, fontFamily?: Inter|…, colors?: {text, muted, positive, negative, warning, neutral, accent, pill}, safeArea?: {left, right, top, bottom} px, sourceBottomPx?, transition?: {type: auto|crossfade-rise|cut|preset id, ms|frames, risePx, easing}}, ' +
-  'voice?: {clips: [{id, text (spoken words), assetId?, durationMs?}], gapMs?, tailMs?}, captions?: bool, captionStyle?: preset:caption.*, music?: {mood?: calm|upbeat|corporate|cinematic|…, prompt?, volume?}, scenes: [{role: hook|title|body|list|stat|stat-compare|bar-chart|hbar-compare|question|quote|cta|cta-handle|split|footage|footage-split|footage-pip, clips?: [clip ids], durationMs?, holdMs?, narration?, ' +
-  'footage?: {assetId (a VIDEO asset), fromMs?, toMs? (source trim), volume?, muted?, fit?: cover|contain, focus?: center|left|right|top|bottom} (roles footage|footage-split|footage-pip), lowerThird?: {name, title?, at?, ms?}, overlay?: auto|lower-third|top|callout|none, side?: left|right|top|bottom, ' +
+  'args = VideoSpec {title?, ratio?, mood?: editorial|energetic|calm|serious|playful|tech|luxury|friendly|dramatic|viral, titleStyle?: boxed|highlight|plain, style?: {background?: #hex, fontFamily?: Inter|…, colors?: {text, muted, positive, negative, warning, neutral, accent, pill}, safeArea?: {left, right, top, bottom} px, sourceBottomPx?, transition?: {type: auto|crossfade-rise|cut|preset id, ms|frames, risePx, easing}}, ' +
+  'voice?: {clips: [{id, text (spoken words), assetId?, durationMs?}], gapMs?, tailMs?}, captions?: bool, captionStyle?: preset:caption.* (preset:caption.emphasis = centred kinetic words, the scene keywords large italic serif), music?: {mood?: calm|upbeat|corporate|cinematic|…, prompt?, volume?}, watermark?: {assetId (an IMAGE asset, the channel logo), position?: top-center|top-left|top-right|bottom-right, widthU?: 120..600, opacity?}, ' +
+  'scenes: [{role: hook|title|body|list|stat|stat-compare|bar-chart|hbar-compare|question|quote|cta|cta-handle|split|footage|footage-split|footage-pip|image, clips?: [clip ids], durationMs?, holdMs?, narration?, ' +
+  'footage?: {assetId (a VIDEO asset), fromMs?, toMs? (source trim), volume?, muted?, fit?: cover|contain, focus?: center|left|right|top|bottom, grade?: none|dark-grain|warm|cold} (roles footage|footage-split|footage-pip), lowerThird?: {name, title?, at?, ms?}, overlay?: auto|lower-third|top|callout|none, side?: left|right|top|bottom, ' +
+  'images?: [{assetId (an IMAGE asset from the Library), label?, rotationDeg?: -15..15, source?}] (role image: 1 = single, 2–4 = stack), layout?: single|stack|phone|side-by-side, bg?: blur|paper|dark|white|theme, pan?: zoom-in|zoom-out|left|right|none, ' +
+  'annotations?: [{kind: arrow|box|circle|x|label, x, y (0..1 fractions of the picture box; an arrow points at x,y), w?, h?, text?, color?: #hex (default red), at?}], chips?: [{text, tone?: before|after|warning|neutral|accent, position?: top-left|top-right|bottom-left|bottom-right}], caption? (one white line under the picture, shown when captions are off), ' +
   'kicker?, headline?, sub?, bullets?: [], stats?: [{value: "+17,2%", from?: "+0,0%", countMs|countFrames?, easing?, prefix?: "US$", unit?: "miliar", label?, note?, tone?: positive|negative|warning|neutral, sizePx?, weight?, color?, at?}], ' +
   'bars?: [{label, value?, display?: "25,96", heightPx? (vertical) | widthPct? (horizontal 0..1), style?: solid|dashed, tone?|color?, caption?, at?, growMs|growFrames?, easing?}], barGapPx?, note?, noteTone?, quote?, attribution?, handle?, action?, button?, keywords?, assetId?, source?, topPx?}]}. ' +
   'A text is "string" or {text, sizePx?, weight?, color?, lineHeight?, at?, fadeMs|fadeFrames?, risePx?}; at = {clip: "v2", edge?: start|end, pct?: 0..1, offsetMs?} | {ms} | {frames} | {footageMs} (source time of the scene footage) | {say: "phrase"} (when the footage speaker says it); easing = name or [x1,y1,x2,y2]. Never invent numbers or sources.';
@@ -277,7 +328,8 @@ export const TALKING_HEAD_SIGNATURE =
   'talk {cut: "<cut id>", zoom?: {from, to}, pops?: [{say, amount?}], blocks?} (the speaker full screen with a slow punch-in; chips pop on spoken words), ' +
   'explain {cut, heading, blocks: Block[], source?, bubble?: {sizeU, ringColour, ringWidthU, topU, focus}} (full-page graphics, the speaker in a round bubble at the bottom), ' +
   'card {durationMs: 3000, heading?, blocks, tag?: "ilustrasi · bukan cuplikan asli", musicLift?} (silent drawn card for a source clip you do not have), hold {durationMs: 1200} (silent continuation of the previous graphics), ' +
-  'poster {imageAssetId, scale?: 0.78, handle, durationMs: 3500} (last). Block = {kind: heading|chip|tag|source|icon|rows|bars|day-strip|browser-card|typing-box|note|stat|text, text?, icon?, tone?, rows?: [{badge?, title, sub?, right?, rightSub?, tone?}], bars?: [{label, value, display?, unit?}], strip?: [{label, fromH, toH}], hours?, urlText?, title?, progress?, caption?, prefixBadge?, sendAt?, value?, label?, unit?, at?: {say: "words of the cut"} | {ms}, sfx?: whoosh|pop|click|tick|ding|rise}. ' +
+  'poster {imageAssetId, scale?: 0.78, handle, durationMs: 3500} (last). Block = {kind: heading|chip|tag|source|icon|rows|bars|day-strip|browser-card|typing-box|note|stat|text|image|video, text?, icon?, tone?, rows?: [{badge?, title, sub?, right?, rightSub?, tone?}], bars?: [{label, value, display?, unit?}], strip?: [{label, fromH, toH}], hours?, urlText?, title?, progress?, caption?, prefixBadge?, sendAt?, value?, label?, unit?, at?: {say: "words of the cut"} | {ms}, sfx?: whoosh|pop|click|tick|ding|rise}. ' +
+  'CUTAWAYS (ADR-041): a block {kind: "image", assetId (a Library picture, e.g. an imported article picture or screenshot), annotations?: [{kind: arrow|box|circle|x|label, x, y, w?, h?, text?}], bg?: blur|paper|dark, pan?, at, ms?} or {kind: "video", assetId (a Library clip), fromMs?, toMs?, at, ms?} covers the whole frame over the speaker from its anchor for ms (default: until the next block or the cut end); the speaker keeps talking, the bubble is hidden under it. ' +
   'Also: cover {cutId, frame?: "end-of-line" (default: inside the last word, eyes still on the camera) | "start" | ms, hookWord, kicker?, line, subline?, pills?: [{text, tone}], icons?, source?, handle}, captions: {from: "analysis", keywords: [{words, colour}], yU?: 1455, fontSizeU?: 68, maxWords?: 3}, music: {trackId?, volume?: 0.3, liftOverSilent?: 1.5, fadeInMs?: 500, fadeOutMs?: 2500}, sfx: {enabled: true, level: 0.55}, sourceTagYU?: 1285, credits?: ["source lines for CREDITS.txt"]. ' +
   'Facts, figures and sources only from the approved PRD; every number carries a source block or scene.source.';
 
@@ -294,8 +346,23 @@ export function normalizeVideoSpec(raw: unknown): { value: unknown; fixes: strin
     chart: 'bar-chart', bars: 'bar-chart', 'bar': 'bar-chart', 'vertical-bars': 'bar-chart', 'hbar': 'hbar-compare', 'horizontal-bars': 'hbar-compare', 'bar-compare': 'hbar-compare',
     video: 'footage', broll: 'footage', 'b-roll': 'footage', 'talking-head': 'footage', clip: 'footage', 'full-footage': 'footage', 'footage-full': 'footage', 'footage-overlay': 'footage',
     pip: 'footage-pip', 'picture-in-picture': 'footage-pip', 'footage-window': 'footage-pip', 'split-footage': 'footage-split', 'footage-text': 'footage-split', 'video-split': 'footage-split',
-    intro: 'hook', opening: 'hook', closing: 'cta', outro: 'cta', handle: 'cta-handle', follow: 'cta-handle', bullet: 'list', bullets: 'list', tips: 'list', text: 'body', content: 'body', 'image-text': 'split', image: 'split' };
-  const numKeys = /^(sizePx|weight|lineHeight|fadeMs|fadeFrames|risePx|countMs|countFrames|heightPx|widthPct|borderPx|growMs|growFrames|durationMs|holdMs|gapMs|tailMs|barGapPx|barWidthPx|barHeightPx|topPx|ms|frames|offsetMs|pct|value|left|right|top|bottom|sourceBottomPx|padXPx|padYPx|radiusPx|fps|speed|maxDurationMs|fromMs|toMs|footageMs|volume|sizeU|ringWidthU|topU|yU|fontSizeU|maxWords|liftOverSilent|scale|musicLift|amount|progress|sendAt|fromH|toH|startMs|endMs|level|lineIndex|sourceTagYU|fallbackMs)$/;
+    intro: 'hook', opening: 'hook', closing: 'cta', outro: 'cta', handle: 'cta-handle', follow: 'cta-handle', bullet: 'list', bullets: 'list', tips: 'list', text: 'body', content: 'body', 'image-text': 'split',
+    // ADR-041: `image` is its own role now (a picture / stack with annotations); a picture WITH texts beside it is still `split`
+    picture: 'image', pictures: 'image', photo: 'image', foto: 'image', gambar: 'image', screenshot: 'image', 'tangkapan-layar': 'image', collage: 'image', stack: 'image', images: 'image', 'image-stack': 'image' };
+  // ADR-041: annotation kinds, chip tones, layouts, backgrounds, pans, grades and watermark positions a model is likely to spell differently
+  const kindAlias: Record<string, string> = { arrow: 'arrow', pointer: 'arrow', panah: 'arrow', box: 'box', rect: 'box', rectangle: 'box', frame: 'box', highlight: 'box', 'highlight-box': 'box', kotak: 'box', circle: 'circle', ring: 'circle', oval: 'circle', lingkaran: 'circle', x: 'x', 'x-mark': 'x', cross: 'x', wrong: 'x', cancel: 'x', silang: 'x', label: 'label', text: 'label', pill: 'label', tag: 'label', chip: 'label' };
+  const toneAlias: Record<string, string> = { before: 'before', sebelum: 'before', dulu: 'before', green: 'before', positive: 'before', after: 'after', sesudah: 'after', sekarang: 'after', red: 'after', negative: 'after', warning: 'warning', warn: 'warning', amber: 'warning', yellow: 'warning', peringatan: 'warning', neutral: 'neutral', grey: 'neutral', gray: 'neutral', muted: 'neutral', accent: 'accent', opinion: 'accent', info: 'neutral' };
+  const layoutAlias: Record<string, string> = { single: 'single', one: 'single', satu: 'single', stack: 'stack', stacked: 'stack', collage: 'stack', tilted: 'stack', pile: 'stack', tumpuk: 'stack', phone: 'phone', mobile: 'phone', screenshot: 'phone', hp: 'phone', 'side-by-side': 'side-by-side', 'side by side': 'side-by-side', two: 'side-by-side', pair: 'side-by-side', columns: 'side-by-side', 'two-columns': 'side-by-side', berdampingan: 'side-by-side' };
+  const bgAlias: Record<string, string> = { blur: 'blur', blurred: 'blur', 'blurred-image': 'blur', 'blur-image': 'blur', buram: 'blur', paper: 'paper', kertas: 'paper', crumpled: 'paper', dark: 'dark', black: 'dark', gelap: 'dark', hitam: 'dark', white: 'white', light: 'white', putih: 'white', theme: 'theme', tema: 'theme', solid: 'theme' };
+  const panAlias: Record<string, string> = { 'zoom-in': 'zoom-in', zoomin: 'zoom-in', zoom: 'zoom-in', in: 'zoom-in', 'ken-burns': 'zoom-in', 'zoom-out': 'zoom-out', zoomout: 'zoom-out', out: 'zoom-out', left: 'left', 'pan-left': 'left', kiri: 'left', right: 'right', 'pan-right': 'right', kanan: 'right', none: 'none', static: 'none', still: 'none', diam: 'none' };
+  const gradeAlias: Record<string, string> = { none: 'none', 'dark-grain': 'dark-grain', dark: 'dark-grain', grain: 'dark-grain', darkgrain: 'dark-grain', 'dark-grainy': 'dark-grain', gelap: 'dark-grain', cinematic: 'dark-grain', warm: 'warm', hangat: 'warm', cold: 'cold', cool: 'cold', dingin: 'cold' };
+  const wmAlias: Record<string, string> = { 'top-center': 'top-center', 'top-centre': 'top-center', top: 'top-center', 'center-top': 'top-center', 'top-left': 'top-left', 'top-right': 'top-right', 'bottom-right': 'bottom-right', 'bottom-left': 'bottom-right', bottom: 'bottom-right' };
+  const enumFix = (out: Record<string, unknown>, key: string, map: Record<string, string>, path: string) => {
+    const v = out[key]; if (typeof v !== 'string') return;
+    const n = v.trim().toLowerCase().replace(/[\s_]+/g, '-'), to = map[n] ?? map[n.replace(/-/g, ' ')];
+    if (to && to !== v) { fixes.push(`${path}.${key} ${v} → ${to}`); out[key] = to; }
+  };
+  const numKeys = /^(sizePx|weight|lineHeight|fadeMs|fadeFrames|risePx|countMs|countFrames|heightPx|widthPct|borderPx|growMs|growFrames|durationMs|holdMs|gapMs|tailMs|barGapPx|barWidthPx|barHeightPx|topPx|ms|frames|offsetMs|pct|value|left|right|top|bottom|sourceBottomPx|padXPx|padYPx|radiusPx|fps|speed|maxDurationMs|fromMs|toMs|footageMs|volume|sizeU|ringWidthU|topU|yU|fontSizeU|maxWords|liftOverSilent|scale|musicLift|amount|progress|sendAt|fromH|toH|startMs|endMs|level|lineIndex|sourceTagYU|fallbackMs|rotationDeg|x|y|w|h|widthU|opacity)$/;
   const walk = (v: unknown, path: string, key: string): unknown => {
     if (Array.isArray(v)) return v.map((x, i) => walk(x, `${path}[${i}]`, key));
     if (isObj(v)) {
@@ -304,6 +371,9 @@ export function normalizeVideoSpec(raw: unknown): { value: unknown; fixes: strin
         let kk = k;
         if (k === 'durationFrames' && path.endsWith('transition')) kk = 'frames';
         if (k === 'colour' && !path.includes('.keywords[')) kk = 'color';            // ADR-039: caption keyword groups keep `colour` (the caption preset's param name)
+        if (/\.(annotations)\[\d+\]$/.test(path) && (k === 'type' || k === 'shape')) kk = 'kind';   // ADR-041: {type: "arrow"} → {kind: "arrow"}
+        if (/\.(images)\[\d+\]$/.test(path) && (k === 'rotation' || k === 'rotate' || k === 'tilt')) kk = 'rotationDeg';
+        if (/\.(images)\[\d+\]$/.test(path) && (k === 'id' || k === 'asset' || k === 'imageAssetId')) kk = 'assetId';
         if (kk !== k) fixes.push(`${path}.${k} → ${kk}`);
         out[kk] = walk(x, `${path}.${kk}`, kk);
       }
@@ -312,12 +382,31 @@ export function normalizeVideoSpec(raw: unknown): { value: unknown; fixes: strin
         const to = roleAlias[r] ?? r;
         if (to !== out['role']) { fixes.push(`${path}.role ${String(out['role'])} → ${to}`); out['role'] = to; }
       }
+      // ADR-041: an image scene written with one assetId (or images as a list of ids) instead of images: [{assetId}]
+      if (out['role'] === 'image') {
+        if (Array.isArray(out['images'])) { const list = out['images'] as unknown[]; const imgs = list.map((x) => (typeof x === 'string' ? { assetId: x } : x)); if (imgs.some((x, i) => x !== list[i])) fixes.push(`${path}.images: ids → [{assetId}]`); out['images'] = imgs; }
+        else if (typeof out['assetId'] === 'string' || typeof out['imageAssetId'] === 'string') { out['images'] = [{ assetId: out['assetId'] ?? out['imageAssetId'] }]; delete out['assetId']; delete out['imageAssetId']; fixes.push(`${path}.assetId → images[0].assetId`); }
+        enumFix(out, 'layout', layoutAlias, path); enumFix(out, 'bg', bgAlias, path); enumFix(out, 'pan', panAlias, path);
+      }
+      if (/\.annotations\[\d+\]$/.test(path)) {
+        enumFix(out, 'kind', kindAlias, path);
+        // fractions written as percentages ("45" / "45%") → 0.45
+        for (const k of ['x', 'y', 'w', 'h']) { const n = out[k]; if (typeof n === 'number' && n > 1 && n <= 100) { fixes.push(`${path}.${k}: ${n} → ${n / 100}`); out[k] = n / 100; } }
+      }
+      if (/\.chips\[\d+\]$/.test(path)) {
+        enumFix(out, 'tone', toneAlias, path);
+        if (out['tone'] === undefined) { const t = typeof out['text'] === 'string' ? out['text'] : isObj(out['text']) ? String(out['text']['text'] ?? '') : ''; const g = /^\s*(before|sebelum|dulu)\b/i.test(t) ? 'before' : /^\s*(after|sesudah|sekarang|kini)\b/i.test(t) ? 'after' : /^\s*(awas|hati-hati|warning|peringatan|hoaks|hoax)\b/i.test(t) ? 'warning' : null; if (g) { fixes.push(`${path}.tone (missing) → ${g}`); out['tone'] = g; } }
+      }
+      if (path.endsWith('.footage')) enumFix(out, 'grade', gradeAlias, path);
+      if (path.endsWith('.watermark')) enumFix(out, 'position', wmAlias, path);
+      if (/\.blocks\[\d+\]$/.test(path) && (out['kind'] === 'image' || out['kind'] === 'video')) { enumFix(out, 'bg', bgAlias, path); enumFix(out, 'pan', panAlias, path); if (typeof out['imageAssetId'] === 'string' && out['assetId'] === undefined) { out['assetId'] = out['imageAssetId']; delete out['imageAssetId']; fixes.push(`${path}.imageAssetId → assetId`); } }
       return out;
     }
     if (typeof v === 'string') {
       // ADR-039: inside a rows block `right` is a label ("2030"), not the crop fraction — never coerce text fields of rows / pills
-      const labelField = /\.(rows|pills|strip|bars)\[\d+\]$/.test(path.slice(0, path.length - key.length - 1)) && /^(right|rightSub|badge|title|sub|label|text|unit)$/.test(key);
-      if (numKeys.test(key) && key !== 'value' && !labelField && /^-?\d+(\.\d+)?$/.test(v.trim())) { fixes.push(`${path}: "${v}" → ${Number(v)}`); return Number(v); }
+      // ADR-041: the same for images (label, source), chips (text) and annotations (text): "2026" stays a label
+      const labelField = /\.(rows|pills|strip|bars|images|chips|annotations)\[\d+\]$/.test(path.slice(0, path.length - key.length - 1)) && /^(right|rightSub|badge|title|sub|label|text|unit|source)$/.test(key);
+      if (numKeys.test(key) && key !== 'value' && !labelField && /^-?\d+(\.\d+)?%?$/.test(v.trim())) { const pct = v.trim().endsWith('%'); const n = Number(v.trim().replace('%', '')); const val = pct ? n / 100 : n; fixes.push(`${path}: "${v}" → ${val}`); return val; }
       if (key === 'value' && path.includes('.bars[') && /^-?\d+([.,]\d+)?$/.test(v.trim())) { const n = Number(v.replace(',', '.')); fixes.push(`${path}: "${v}" → ${n}`); return n; }
       if (/(^|\.)(color|background|accent|pill|text|muted|positive|negative|warning|neutral)$/.test(path) && /^[0-9a-fA-F]{6}$/.test(v)) { fixes.push(`${path}: ${v} → #${v}`); return `#${v}`; }
       if (key === 'easing') {

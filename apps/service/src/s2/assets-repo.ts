@@ -13,6 +13,9 @@ export interface AssetRow {
   deleted_at?: string | null;
   /** FR-041 path-import identity digest (migration 21). */
   source_key?: string | null;
+  /** FR-300 … FR-307 (migration 35): credit (author / site / URL) and licence text of a picture, clip or screenshot imported from the internet. */
+  credit?: string | null;
+  licence?: string | null;
 }
 export const VARIANTS = ['original', 'playable', 'proxy', 'thumb', 'filmstrip', 'waveform'] as const;
 export type Variant = (typeof VARIANTS)[number];
@@ -53,7 +56,7 @@ export function toAssetDto(r: AssetRow, progress: number | undefined, withProbe 
     progress: r.status === 'ready' ? 1 : (progress ?? 0), errorCode: r.error_code, durationMs: r.duration_ms, width: r.width, height: r.height, fps: r.fps,
     hasAudio: r.has_audio === null ? null : r.has_audio === 1, sequenceBadge: r.sequence_badge, codec: codecOf(r.probe_json), missing,
     media: { original: true, playable: !!r.playable_path, proxy: !!r.proxy_path, thumb: !!r.thumb_path, filmstrip: !!r.filmstrip_path, waveform: !!r.waveform_path },
-    ...(probe === undefined ? {} : { probe }), createdAt: r.created_at, updatedAt: r.updated_at,
+    ...(probe === undefined ? {} : { probe }), ...(r.credit ? { credit: r.credit } : {}), ...(r.licence ? { licence: r.licence } : {}), createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
 

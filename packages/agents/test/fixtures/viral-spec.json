@@ -1,0 +1,44 @@
+{
+  "title": "Netizen boikot brand dan acara",
+  "ratio": "9:16",
+  "fps": 30,
+  "language": "id",
+  "mood": "viral",
+  "titleStyle": "boxed",
+  "captions": true,
+  "maxDurationMs": 60000,
+  "watermark": { "assetId": "LOGO", "position": "top-center", "widthU": 220, "opacity": 0.9 },
+  "music": { "mood": "tense", "volume": 0.2 },
+  "sfx": { "enabled": true, "level": 0.55 },
+  "voice": {
+    "clips": [
+      { "id": "v1", "text": "Netizen ramai-ramai memboikot sebuah acara besar. Kenapa bisa begitu?" },
+      { "id": "v2", "text": "Posternya sudah beredar, tapi para penyanyi satu per satu mundur." },
+      { "id": "v3", "text": "Pengumuman pembatalan ini dibagikan puluhan ribu kali dalam semalam." },
+      { "id": "v4", "text": "Dan sponsornya ikut jadi sasaran, sampai harus mengeluarkan klarifikasi." },
+      { "id": "v5", "text": "Di kolom komentar, warganet menyebut merek lain yang justru turun tangan." },
+      { "id": "v6", "text": "Dua puluh ribu komentar hanya dalam satu hari." },
+      { "id": "v7", "text": "Follow untuk kelanjutannya." }
+    ]
+  },
+  "scenes": [
+    { "role": "hook", "clips": ["v1"], "kicker": "NETIZEN", "headline": "BOIKOT! Brand dan acara dibatalkan", "keywords": ["BOIKOT!"] },
+    { "role": "image", "clips": ["v2"], "images": [{ "assetId": "IMG-poster", "source": "infokotayogya · Instagram" }],
+      "annotations": [{ "kind": "box", "x": 0.5, "y": 0.72, "w": 0.7, "h": 0.14, "text": "31 Okt – 1 Nov", "at": { "clip": "v2", "pct": 0.4 } }],
+      "source": "Sumber: infokotayogya (Instagram)" },
+    { "role": "image", "clips": ["v3"], "layout": "phone", "images": [{ "assetId": "IMG-post" }],
+      "annotations": [{ "kind": "x", "x": 0.5, "y": 0.45, "w": 0.6, "at": { "clip": "v3", "pct": 0.5 } }],
+      "chips": [{ "text": "DIBATALKAN", "tone": "after", "position": "top-right" }],
+      "caption": "semua penyanyi di sana itu cabut",
+      "source": "Sumber: akun penyelenggara (Instagram)" },
+    { "role": "image", "clips": ["v4"], "layout": "stack", "images": [{ "assetId": "IMG-news", "source": "KOMPAS.com" }, { "assetId": "IMG-photo", "source": "KOMPAS.com/Rhd" }],
+      "annotations": [{ "kind": "arrow", "x": 0.78, "y": 0.3, "at": { "clip": "v4", "pct": 0.3 } }, { "kind": "label", "x": 0.3, "y": 0.9, "text": "sponsor utama" }],
+      "source": "Sumber: KOMPAS.com, 1 Nov 2026" },
+    { "role": "image", "clips": ["v5"], "bg": "paper", "layout": "side-by-side", "images": [{ "assetId": "IMG-comment" }, { "assetId": "IMG-photo" }],
+      "annotations": [{ "kind": "circle", "x": 0.25, "y": 0.5, "w": 0.3 }],
+      "chips": [{ "text": "SEBELUM", "position": "top-left" }, { "text": "SESUDAH", "position": "top-right" }],
+      "source": "Sumber: kolom komentar (Instagram)" },
+    { "role": "stat", "clips": ["v6"], "kicker": "Komentar dalam satu hari", "stats": [{ "value": "20.000", "label": "komentar", "tone": "warning" }], "source": "Sumber: hitungan komentar di unggahan penyelenggara, 1 Nov 2026" },
+    { "role": "cta-handle", "clips": ["v7"], "handle": "@kanal.kamu", "action": "Follow untuk kelanjutannya" }
+  ]
+}

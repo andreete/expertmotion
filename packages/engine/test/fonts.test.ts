@@ -3,6 +3,8 @@
 // blocks app:// in the packaged Editor → "TypeError: Failed to fetch" at fetchFontData); a failing font is reported once and
 // skipped, the load never rejects (no unhandled rejection) and always releases the render.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { bundledFontFiles, ensureFontsLoaded, loadFontFace, resetFontsForTests } from '../src/fonts.js';
 
 type FakeFace = { family: string; source: string; desc: Record<string, unknown>; load: () => Promise<FakeFace> };
@@ -23,17 +25,29 @@ describe('bundled fonts (FR-203)', () => {
     const fetchSpy = vi.fn(); vi.stubGlobal('fetch', fetchSpy);
     const files = bundledFontFiles((p) => `app://expertmotion/${p}`);
     expect(files.length).toBeGreaterThanOrEqual(45);
-    expect(files.every((f) => /^app:\/\/expertmotion\/fonts\/[a-z0-9-]+-\d00-(normal|italic)\.(woff2|ttf)$/.test(f.url))).toBe(true);
-    expect(files.filter((f) => f.format === 'truetype').map((f) => `${f.weight}${f.style[0]}`)).toEqual(['500n', '600n', '700n', '800n', '900n']);   // Poppins: upright only, no italics
-    expect(files.filter((f) => f.family === 'Poppins').every((f) => f.url.endsWith('.ttf'))).toBe(true);
+    expect(files.every((f) => /^app:\/\/expertmotion\/fonts\/[a-z0-9-]+-(\d00|var)-(normal|italic)\.(woff2|ttf)$/.test(f.url))).toBe(true);
+    expect(files.filter((f) => f.family === 'Poppins').map((f) => `${f.weight}${f.style[0]}`)).toEqual(['500n', '600n', '700n', '800n', '900n']);   // Poppins: upright only, no italics
+    expect(files.filter((f) => f.format === 'truetype').every((f) => f.url.endsWith('.ttf'))).toBe(true);
+    // ADR-041: Playfair Display = two VARIABLE files, one FontFace per style with the weight RANGE (not one file per weight)
+    expect(files.filter((f) => f.family === 'Playfair Display').map((f) => ({ w: f.weight, s: f.style, u: f.url.replace('app://expertmotion/', '') })))
+      .toEqual([{ w: '400 900', s: 'normal', u: 'fonts/playfair-display-var-normal.ttf' }, { w: '400 900', s: 'italic', u: 'fonts/playfair-display-var-italic.ttf' }]);
     const r = await ensureFontsLoaded();
     expect(r.failed).toEqual([]);
     expect(r.loaded).toBe(files.length);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(made[0]!.source).toMatch(/^url\(".+\.woff2"\) format\("woff2"\)$/);
     expect(made.find((f) => f.family === 'Poppins')!.source).toMatch(/^url\(".*\/fonts\/poppins-500-normal\.ttf"\) format\("truetype"\)$/);
+    expect(made.find((f) => f.family === 'Playfair Display')!.desc).toMatchObject({ weight: '400 900', style: 'normal' });
     expect(added.length).toBe(files.length);
     vi.unstubAllGlobals();
+  });
+  it('every declared font file exists in packages/engine/public/fonts with its licence beside it (offline rule)', () => {
+    const pub = ['packages/engine/public', 'public'].map((d) => path.resolve(d)).find((d) => fs.existsSync(path.join(d, 'fonts')))!;   // jsdom: import.meta.url is http://, so resolve from the cwd (repo root or packages/engine)
+    expect(pub).toBeDefined();
+    for (const f of bundledFontFiles((p) => p)) expect(fs.existsSync(path.join(pub, f.url)), f.url).toBe(true);
+    for (const lic of ['LICENSE-inter.txt', 'LICENSE-poppins.txt', 'LICENSE-playfair-display.txt']) expect(fs.existsSync(path.join(pub, 'fonts', lic)), lic).toBe(true);
+    expect(fs.readFileSync(path.join(pub, 'fonts/LICENSE-playfair-display.txt'), 'utf8')).toContain('SIL Open Font License, Version 1.1');
+    expect(fs.statSync(path.join(pub, 'fonts/playfair-display-var-italic.ttf')).size).toBeGreaterThan(100_000);
   });
   it('a font that cannot load is skipped with one EM-8014 warning; the promise resolves (no unhandled rejection)', async () => {
     failFamily = 'Inter';

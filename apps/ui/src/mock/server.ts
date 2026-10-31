@@ -792,7 +792,8 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   });
   r('POST', '/projects/:id/backup', (m, b) => {
     const p = proj(m[1]!), jobId = newId(), body = obj(b);
-    [25, 60, 100].forEach((percent, i) => later(250 * (i + 1), () => emit('service.notice', { projectId: p.dto.id, kind: 'backup', jobId, percent, ...(percent === 100 ? { done: true, path: `${String(body['folder'] ?? settings.outputFolder)}\\${p.dto.name}.emproj` } : {}) })));
+    // FR-314: the notices must arrive after the 202 reached the Editor (which only then knows the jobId) — a microtask is too early.
+    [25, 60, 100].forEach((percent, i) => setTimeout(() => emit('service.notice', { projectId: p.dto.id, kind: 'backup', jobId, percent, ...(percent === 100 ? { done: true, path: `${String(body['folder'] ?? settings.outputFolder)}\\${p.dto.name}.emproj` } : {}) }), delays ? 250 * (i + 1) : 10 * (i + 1)));
     return accepted({ jobId });
   });
   r('POST', '/projects/restore', (_m, b) => {
@@ -1150,11 +1151,13 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
     return { document: { id: newId(), name: 'naskah.txt', kind: 'text', chars: text.length || 120, truncated: false, warnings: [] } };
   });
   // R-089 (FR-217) mock: the picture becomes an image asset with its credit line.
-  r('POST', '/projects/:id/research/images/import', (m) => {
-    const p = proj(m[1]!);
-    const a = { ...(p.assets[0] ?? {}), id: newId(), name: 'Nickel ore.png', kind: 'image', status: 'ready' } as (typeof p.assets)[number];
+  r('POST', '/projects/:id/research/images/import', (m, b) => {
+    const p = proj(m[1]!); const src = String(obj(b)['source'] ?? 'openverse');
+    const video = src === 'pexels-video';
+    const a = { ...(p.assets[0] ?? {}), id: newId(), name: video ? 'Pexels video.mp4' : src === 'page' ? 'Page picture.jpg' : 'Nickel ore.png', kind: video ? 'video' : 'image', status: 'ready',
+      ...(src === 'pexels' || video ? { credit: 'Stub Videographer / Pexels', licence: 'Pexels License' } : src === 'page' ? { credit: 'kompas.com — https://www.kompas.com/berita/1', licence: 'Hak cipta pemilik — kutipan/komentar' } : {}) } as (typeof p.assets)[number];
     p.assets.push(a);
-    return { assetId: a.id, attribution: '"Nickel ore" by Stub Photographer, CC BY 4.0, via Openverse', duplicate: false };
+    return { assetId: a.id, attribution: video ? 'Video by Stub Videographer on Pexels (Pexels License)' : '"Nickel ore" by Stub Photographer, CC BY 4.0, via Openverse', duplicate: false };
   });
   r('DELETE', '/projects/:id/conversations/:agent', (m) => { proj(m[1]!).messages[m[2] as AgentKind] = []; return undefined; });
   r('GET', '/agent-runs/:rid', (m) => ({ id: m[1], status: 'done' }));
@@ -1420,6 +1423,11 @@ export function createMockServer(opts: MockOptions = {}): MockServer {
   r('GET', '/voices/:vid/preview', () => silentWav());
   r('PUT', '/voice-keys/elevenlabs', (_m, b) => { if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.'); const k = String(obj(b)['key'] ?? ''); elevenKey = `…${k.slice(-4)}`; return { provider: 'elevenlabs', secretHint: elevenKey, status: 'valid' }; });
   r('DELETE', '/voice-keys/elevenlabs', () => { elevenKey = null; return undefined; });
+  // FR-301 (R-089a … R-089c): the Pexels key — hint only; a key containing "bad" is refused like the Service does (EM-4410)
+  let pexelsKey: string | null = null;
+  r('GET', '/research-keys', () => ({ pexels: { hint: pexelsKey } }));
+  r('PUT', '/research-keys/pexels', (_m, b) => { if (settings.privateMode) throw new HttpError(423, 'EM-8202', 'Private Mode is on.'); const k = String(obj(b)['key'] ?? ''); if (/bad/i.test(k)) throw new HttpError(422, 'EM-4410', 'Pexels did not accept this API key.'); pexelsKey = `…${k.slice(-4)}`; return { provider: 'pexels', secretHint: pexelsKey, status: 'valid' }; });
+  r('DELETE', '/research-keys/pexels', () => { pexelsKey = null; return undefined; });
   const mockTracks = [
     { id: 'infinite-peace', title: 'Infinite Peace', artist: 'Kevin MacLeod', mood: 'calm', genre: 'Ambient', bpm: 83, durationS: 76, bytes: 2_436_321 },
     { id: 'windy-old-weather', title: 'Windy Old Weather', artist: 'Kevin MacLeod', mood: 'upbeat', genre: 'Jazz', bpm: 97, durationS: 120, bytes: 2_916_300 },

@@ -4,16 +4,18 @@
 // shapes placed relative to text bounds, staggered / audio-anchored timing, narration-aware scene lengths, transitions chosen by
 // mood (varied, seeded by scene index) or the explicit crossfade-rise of an editorial spec, then the quality gate (qualityCheck +
 // autoFixOps). No LLM, no randomness, no invented figures: numbers and sources are rendered only when the spec contains them.
-import { getPreset } from '@expertmotion/catalogue';
+import { getPreset, validateParams } from '@expertmotion/catalogue';
 import { applyOperations, autoFixOps, textWidthEm, deriveFrameTiming, framesOf, frameInUnits, qualityCheck, qualityChecklist, safeAreaU, textGeometry, type AssetFacts, type BoxU, type CompositionModelT, type OperationT, type QualityIssue, type Ratio, type TextLayerT, type Tier } from '@expertmotion/composition-model';
-import { normalizeVideoSpec, VideoSpec, type SceneRole, type SpecAnchorT, type SpecBarT, type SpecEasingT, type SpecSceneT, type SpecStatT, type SpecTextT, type VideoSpecT } from './auto-motion-spec.js';
+import { normalizeVideoSpec, VideoSpec, type SceneRole, type SfxKind, type SpecAnchorT, type SpecBarT, type SpecEasingT, type SpecSceneT, type SpecStatT, type SpecTextT, type VideoSpecT } from './auto-motion-spec.js';
 
 import { findSaid, footageClipArgs, footageSceneMs, footageWindow, isFootageRole, pipBox, splitSide, type FootageWindow } from './auto-motion-footage.js';
+import { ANNOTATION_RED, annotationMark, aspectOf, chipBox, chipColours, PHONE_RADIUS_U, PICTURE_RADIUS_U, pictureBoxes, unionBox } from './auto-motion-image.js';
 import { composeReels, type ReelsSummary } from './auto-motion-reels.js';
 import type { FootageAnalysisLike, SfxAssets } from './reels-types.js';
 
 export * from './auto-motion-spec.js';
 export * from './auto-motion-footage.js';
+export * from './auto-motion-image.js';
 export * from './auto-motion-reels.js';
 export * from './reels-types.js';
 
@@ -53,9 +55,14 @@ export const narrationMs = (text: string | undefined, wpm = WORDS_PER_MINUTE_ID)
 const PALETTE_BY_MOOD: Record<string, string> = {
   editorial: 'preset:palette.editorial-teal', energetic: 'preset:palette.neon-tech', calm: 'preset:palette.pastel-friendly', serious: 'preset:palette.corporate-blue',
   playful: 'preset:palette.pastel-friendly', tech: 'preset:palette.neon-tech', luxury: 'preset:palette.editorial-dark', friendly: 'preset:palette.paper-light', dramatic: 'preset:palette.high-contrast',
+  viral: 'preset:palette.high-contrast',
 };
+/** ADR-041 mood `viral` (the reference Reels): near-black, yellow accent, white text, red marks, Poppins headings + Inter. */
+export const VIRAL = Object.freeze({ bg: '#0E0E10', accent: '#FFD400', accent2: '#E53935', text: '#FFFFFF', muted: '#C9C9CF', positive: '#2E7D32', negative: '#E53935', warning: '#F59E0B', neutral: '#374151', pill: '#FFD400',
+  font: 'Poppins', fontPreset: 'preset:font.poppins', fontPair: 'preset:fontpair.poppins-inter', captionStyle: 'preset:caption.editorial', sfxLevel: 0.55, watermarkWidthU: 220, watermarkOpacity: 0.9 });
 const DATA_ROLES: readonly SceneRole[] = ['stat', 'stat-compare', 'bar-chart', 'hbar-compare'];
 const TRANSITIONS_BY_MOOD: Record<string, string[]> = {
+  viral: ['preset:transition.push-cut', 'preset:transition.fade', 'preset:transition.slide', 'preset:transition.zoom-in-out'],
   energetic: ['preset:transition.slide', 'preset:transition.push-cut', 'preset:transition.wipe', 'preset:transition.zoom-in-out'],
   playful: ['preset:transition.slide', 'preset:transition.clock-wipe', 'preset:transition.iris', 'preset:transition.zoom-in-out'],
   tech: ['preset:transition.wipe', 'preset:transition.slide', 'preset:transition.push-cut', 'preset:transition.iris'],
@@ -90,6 +97,8 @@ interface Style {
   mood: string; editorial: boolean; align: 'left' | 'center'; palette: string; font: string; bg: string;
   c: { text: string; muted: string; positive: string; negative: string; warning: string; neutral: string; accent: string; accent2: string; pill: string };
   safe: Safe; sourceBottom: number; transition: { type: string; ms: number; rise: number; easing: Ease }; k: number;
+  /** ADR-041: mood viral and the hook / title headline look (boxed words = solid boxes behind the keywords). */
+  viral: boolean; titleStyle: 'boxed' | 'highlight' | 'plain';
 }
 type Ease = { easingId?: string; bezier?: number[] };
 function easeOf(e: SpecEasingT | undefined, fallback: Ease): Ease {
@@ -127,9 +136,10 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
   // style
   const hasData = spec.scenes.some((s) => DATA_ROLES.includes(s.role));
   const mood = spec.mood ?? (hasData || spec.style?.background ? 'editorial' : 'energetic');
-  const editorial = mood === 'editorial';
+  const editorial = mood === 'editorial', viral = mood === 'viral';
   const palette = PALETTE_BY_MOOD[mood] ?? 'preset:palette.editorial-teal';
-  const pd = (getPreset(palette)?.data ?? {}) as Record<string, string>;
+  // ADR-041: the viral look overrides the high-contrast palette's data (yellow #FFD400, red marks, near-black)
+  const pd = { ...((getPreset(palette)?.data ?? {}) as Record<string, string>), ...(viral ? { bg: VIRAL.bg, accent: VIRAL.accent, accent2: VIRAL.accent2, text: VIRAL.text, muted: VIRAL.muted, positive: VIRAL.positive, negative: VIRAL.negative, warning: VIRAL.warning, neutral: VIRAL.neutral, pill: VIRAL.pill } : {}) };
   const sc = spec.style?.colors ?? {};
   const c = {
     text: hex6(sc.text) ?? pd['text'] ?? '#FFFFFF', muted: hex6(sc.muted) ?? pd['muted'] ?? pd['text'] ?? '#FFFFFF', positive: hex6(sc.positive) ?? pd['positive'] ?? pd['accent'] ?? '#5DCAA5',
@@ -137,6 +147,7 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     accent: hex6(sc.accent) ?? pd['accent'] ?? '#5DCAA5', accent2: pd['accent2'] ?? '#EF9F27', pill: hex6(sc.pill) ?? pd['pill'] ?? pd['accent'] ?? '#1D9E75',
   };
   const mutedOpacity = pd['muted'] || sc.muted ? undefined : 0.72;
+  const viralFont = viral && !spec.style?.fontFamily && getPreset(VIRAL.fontPreset) ? VIRAL.font : null;
   const ds = defaultSafeArea(ratio), ss = spec.style?.safeArea ?? {};
   const safe: Safe = { left: ss.left ?? ds.left, right: ss.right ?? ds.right, top: ss.top ?? ds.top, bottom: ss.bottom ?? ds.bottom };
   const tr = spec.style?.transition ?? {};
@@ -144,10 +155,11 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
   const crossfade = trType === 'crossfade-rise' || (trType === 'auto' && editorial);
   const style: Style = {
     mood, editorial, align: spec.style?.align ?? (editorial ? 'left' : 'center'), palette,
-    font: spec.style?.fontFamily ?? (editorial ? 'Inter' : String(getPreset(String(getPreset(base.theme.fontPairId)?.data?.['heading']))?.data?.['family'] ?? 'Plus Jakarta Sans')),
+    font: spec.style?.fontFamily ?? viralFont ?? (editorial ? 'Inter' : String(getPreset(String(getPreset(base.theme.fontPairId)?.data?.['heading']))?.data?.['family'] ?? 'Plus Jakarta Sans')),
     bg: hex6(spec.style?.background) ?? pd['bg'] ?? '#0F1A1F', c, safe, sourceBottom: spec.style?.sourceBottomPx ?? safe.bottom,
     transition: { type: crossfade ? 'crossfade-rise' : trType, ms: tr.ms ?? (tr.frames !== undefined ? toMs(tr.frames) : crossfade ? toMs(14) : 600), rise: tr.risePx ?? (crossfade ? 56 : 40), easing: easeOf(tr.easing, { easingId: 'preset:easing.out-cubic' }) },
     k: portrait ? 1 : f.h / f.w < 0.7 ? 0.8 : 0.9,
+    viral, titleStyle: spec.titleStyle ?? (viral ? 'boxed' : 'highlight'),
   };
   const W = f.w - safe.left - safe.right;                  // content width (u)
   const X0 = safe.left;
@@ -158,8 +170,13 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
   const themeArgs: Record<string, unknown> = {};
   if (!locked.has('theme.paletteId') && base.theme.paletteId !== palette) themeArgs['paletteId'] = palette;
   if (editorial && style.font === 'Inter' && !locked.has('theme.fontPairId') && base.theme.fontPairId !== 'preset:fontpair.inter-inter') themeArgs['fontPairId'] = 'preset:fontpair.inter-inter';
+  if (viralFont && getPreset(VIRAL.fontPair) && !locked.has('theme.fontPairId') && base.theme.fontPairId !== VIRAL.fontPair) themeArgs['fontPairId'] = VIRAL.fontPair;
   if (Object.keys(themeArgs).length) add('op:theme.set', themeArgs, { kind: 'project' });
   if (!locked.has('project.background')) add('op:background.set', { presetId: 'preset:background.solid', params: { colourA: style.bg } }, { kind: 'project' });
+  // ADR-041: sound effects in the viral look (whoosh per scene, pop per annotation) when the Service registered the SFX assets
+  const sfxOn = spec.sfx?.enabled ?? viral, sfxLevel = spec.sfx?.level ?? VIRAL.sfxLevel, sfxAssets: SfxAssets = ctx.sfxAssets ?? {};
+  const missingSfx = new Set<string>();
+  const sfx = (kind: SfxKind, atMs: number) => { if (!sfxOn) return; const a = sfxAssets[kind]; if (!a) { missingSfx.add(kind); return; } add('op:audio.addLayer', { assetId: a, atMs: Math.max(0, atMs), volume: sfxLevel, role: 'sfx' }); };
 
   // ───── timing: voice clips → scene lengths ─────
   const clipFacts = new Map<string, { text: string; durationMs: number; assetId?: string; measured: boolean }>();
@@ -250,15 +267,26 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     if (i === 0 && existing && trIn) cursorF -= fr(tIn);      // the first scene overlaps the existing last clip by its transition
     const tOut = hasOut && trType !== 'cut' ? cutMsIn(i + 1) : 0;
     const clipDur = toMs(fr(t.len) + fr(tOut));
-    const bgId = editorial ? 'preset:background.solid' : (BACKGROUND_BY_ROLE[s.role] ?? 'preset:background.gradient');
-    const bgParams: Record<string, unknown> = editorial ? { colourA: style.bg } : { colourA: style.bg, colourB: i % 2 ? c.accent2 : c.accent, intensity: 0.55, ...(bgId === 'preset:background.gradient' ? { angle: 140 + ((seed + i * 40) % 80), animate: true } : {}) };
+    let bgId = editorial || viral ? 'preset:background.solid' : (BACKGROUND_BY_ROLE[s.role] ?? 'preset:background.gradient');
+    let bgParams: Record<string, unknown> = editorial || viral ? { colourA: style.bg } : { colourA: style.bg, colourB: i % 2 ? c.accent2 : c.accent, intensity: 0.55, ...(bgId === 'preset:background.gradient' ? { angle: 140 + ((seed + i * 40) % 80), animate: true } : {}) };
+    if (viral && DATA_ROLES.includes(s.role)) { bgId = 'preset:background.spotlight'; bgParams = { colourA: style.bg, colourB: c.accent, intensity: 0.35 }; }
+    if (s.role === 'image') {                                                   // ADR-041: the picture's own blurred copy, paper, or a solid
+      const firstImg = (s.images ?? []).map((im) => ctx.assets.find((a) => a.id === im.assetId && a.kind === 'image' && a.status === 'ready')).find(Boolean);
+      const bg = s.bg ?? 'blur';
+      if (bg === 'blur' && firstImg) { bgId = 'preset:background.blurred-image'; bgParams = { assetId: firstImg.id, blurPx: 48, dim: 0.45, zoom: 1.25 }; }
+      else if (bg === 'paper') { bgId = 'preset:background.paper'; bgParams = { grain: 0.35, warm: 0.5 }; }
+      else { bgId = 'preset:background.solid'; bgParams = { colourA: bg === 'white' ? '#FFFFFF' : bg === 'dark' ? '#0E0E10' : style.bg }; }
+    }
     const fwin = footageWins[i];
     if (fwin) {                                                                 // FR-261: the Creator's footage is the base of this scene
       const args = footageClipArgs(s.role, fwin, clipDur, f, safe, portrait, s.side, { underVoice, last: i === last });
+      const fx = gradeEffects(s.footage?.grade);                                 // ADR-041: dark-grain = dim 0.5 (a full-frame shape in the layout) + vignette + film grain 0.3; ≤ 2 gpu effects (T0 rule)
+      if (fx.length) args['effects'] = fx;
       add('op:clip.insert', args, { kind: 'sequence' });
       footagePlaced.push({ scene: i, assetId: fwin.assetId, hasAudio: fwin.hasAudio, volume: Number(args['volume']) });
     } else add('op:scene.add', { durationMs: clipDur, background: bgId, backgroundParams: bgParams }, { kind: 'sequence' });
     scenes.push({ role: s.role, startMs: toMs(cursorF), durationMs: t.len, clipDurationMs: clipDur, narrationMs: t.narr, ...(trIn ? { transitionIn: trIn.presetId } : {}) });
+    sfx('whoosh', toMs(cursorF));
     cursorF += fr(t.len);
   });
   for (const x of transitions) add('op:transition.set', { presetId: x.presetId, durationMs: x.ms, timing: 'linear', params: x.params }, { kind: 'cut', index: x.cut });
@@ -278,13 +306,14 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
 
   // ───── layouts ─────
   const elements: ComposedElement[] = [];
+  const captionsOn = spec.captions === true || (typeof spec.captions === 'object' && spec.captions !== null);
   spec.scenes.forEach((s, i) => {
     const sc = scenes[i]!, t = sceneTiming[i]!;
     const tOut = scenes[i]!.clipDurationMs - scenes[i]!.durationMs;          // the same overlap the clip got (C5)
     const exitMs = style.transition.type === 'crossfade-rise' ? tOut : Math.min(350, tOut || 350);
     const end = i < last ? sc.startMs + sc.durationMs + (style.transition.type === 'crossfade-rise' ? tOut : Math.round(tOut * 0.5)) : sc.startMs + sc.durationMs;
     const enterDelay = style.transition.type === 'crossfade-rise' || i === 0 ? 0 : Math.round(T * 0.5);
-    const L = new SceneLayout({ i, scene: s, start: sc.startMs + enterDelay, end, exitMs: i < last ? exitMs : 0, style, frame: f, W, X0, toMs, offsets: t.offsets, risks, id, ops, elements, mutedOpacity, portrait, seed, footage: footageWins[i] ?? null, clipStart: sc.startMs, captions: spec.captions === true });
+    const L = new SceneLayout({ i, scene: s, start: sc.startMs + enterDelay, end, exitMs: i < last ? exitMs : 0, style, frame: f, W, X0, toMs, offsets: t.offsets, risks, id, ops, elements, mutedOpacity, portrait, seed, footage: footageWins[i] ?? null, clipStart: sc.startMs, captions: captionsOn, assets: ctx.assets, sfx });
     // lay the scene out; when the content runs into the source line / safe bottom, lay it out again smaller (max 5 tries)
     const ops0 = ops.length, els0 = elements.length, risks0 = risks.length;
     for (let attempt = 0; ; attempt++) {
@@ -296,6 +325,36 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     }
     L.finish();
   });
+
+  // ───── ADR-041: watermark (the channel logo over the whole video) and the caption look of the viral mood ─────
+  let outSpec = spec;
+  if (spec.watermark) {
+    const wm = spec.watermark, img = ctx.assets.find((a) => a.id === wm.assetId && a.kind === 'image' && a.status === 'ready');
+    if (!img) risks.push({ code: 'watermark-missing', severity: 'warn', message: id ? `Watermark: gambar ${wm.assetId} tidak ada di proyek; dilewati.` : `Watermark: image ${wm.assetId} is not in the project; skipped.` });
+    else {
+      const w = wm.widthU ?? VIRAL.watermarkWidthU, h = w / aspectOf(img), pad = 24;
+      const pos = wm.position ?? 'top-center';
+      const cx = pos === 'top-left' ? safe.left + w / 2 : pos === 'top-right' || pos === 'bottom-right' ? f.w - safe.right - w / 2 : f.w / 2;
+      const cy = pos === 'bottom-right' ? f.h - safe.bottom - h / 2 : Math.max(pad + h / 2, safe.top * 0.6);      // in the top band above the content, never under the status bar
+      const at = startBase;
+      add('op:overlay.addImage', { assetId: img.id, atMs: at, durationMs: Math.max(100, totalMs - at), position: { x: round1(cx - f.w / 2), y: round1(cy - f.h / 2) }, size: Math.round(w), objectFit: 'contain', opacity: wm.opacity ?? VIRAL.watermarkOpacity, layer: 900, motion: { presetId: 'preset:motion.fade-in', durationMs: 400, exit: false } });
+      elements.push({ key: 'watermark', scene: -1, kind: 'image', box: { x0: cx - w / 2, y0: cy - h / 2, x1: cx + w / 2, y1: cy + h / 2 }, fromMs: at, toMs: totalMs, hasEntrance: true });
+    }
+  }
+  if (captionsOn && (viral || spec.captionStyle)) {
+    // the caption look travels with the plan's captions.generate step (presetId) and as an op (params): white on a dark box in
+    // the lower third (editorial), or the Satu-Persen emphasis — centred upper-case words, the scene keywords large italic serif
+    const styleId = spec.captionStyle ?? VIRAL.captionStyle;
+    const kwWords = [...new Set([...(typeof spec.captions === 'object' ? (spec.captions.keywords ?? []).flatMap((k) => k.words) : []), ...spec.scenes.flatMap((s) => s.keywords ?? [])])];
+    const kwColour = typeof spec.captions === 'object' && spec.captions.keywords?.[0]?.colour ? spec.captions.keywords[0].colour : c.accent;
+    const want: Record<string, unknown> = { position: 'bottom', fontSize: 56, fontFamily: style.font, weight: 800, ...(kwWords.length ? { keywords: [{ words: kwWords.slice(0, 40), colour: kwColour }] } : {}),
+      ...(styleId === 'preset:caption.emphasis' ? { emphasisColour: c.accent } : {}) };
+    const v = validateParams(styleId, want);
+    if (!v.ok) risks.push({ code: 'preset-missing', severity: 'info', message: id ? `Gaya caption ${styleId}: ${v.issues[0]?.message ?? 'parameter'}; parameter bawaan dipakai.` : `Caption style ${styleId}: ${v.issues[0]?.message ?? 'params'}; defaults used.` });
+    if (!locked.has('project.captionStyle')) add('op:caption.setStyle', { presetId: styleId, params: v.ok ? want : { position: 'bottom', fontSize: 56 } }, { kind: 'project' });
+    outSpec = { ...spec, captionStyle: styleId };
+  }
+  if (missingSfx.size) risks.push({ code: 'sfx-unavailable', severity: 'info', message: id ? `Efek suara ${[...missingSfx].join(', ')} belum tersedia di proyek; video dibuat tanpanya.` : `Sound effects ${[...missingSfx].join(', ')} are not available in the project; the video is made without them.` });
 
   // ───── quality gate: dry run, check, auto-fix, check again ─────
   let n = 0;
@@ -318,7 +377,21 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
   for (const line of qualityChecklist(remaining.filter((q) => q.severity === 'warn'), lang === 'en' ? 'en' : 'id')) risks.push({ code: 'quality', severity: 'warn', message: line });
   for (const s of spec.scenes) if (DATA_ROLES.includes(s.role) && !s.source) { risks.push({ code: 'no-source', severity: 'warn', message: id ? `Adegan data "${textOf(s.headline) ?? textOf(s.kicker) ?? s.role}" belum punya sumber.` : `Data scene "${textOf(s.headline) ?? textOf(s.kicker) ?? s.role}" has no source.` }); break; }
   for (const [i, sc] of spec.scenes.entries()) if (isFootageRole(sc.role) && (sc.stats ?? []).length && !sc.source) { risks.push({ code: 'no-source', severity: 'warn', message: id ? `Angka di adegan footage ${i + 1} belum punya sumber.` : `The figure in footage scene ${i + 1} has no source.` }); break; }
-  return { ok: true, spec, ops, scenes, elements, voice, totalMs, narrationEstimateMs, frame: f, safeArea: safe, risks, quality: { fixed, remaining }, fixes, footage: footagePlaced };
+  return { ok: true, spec: outSpec, ops, scenes, elements, voice, totalMs, narrationEstimateMs, frame: f, safeArea: safe, risks, quality: { fixed, remaining }, fixes, footage: footagePlaced };
+}
+
+/**
+ * ADR-041 footage grades as clip effects (≤ 2, both gpu-flagged, so a T0 machine stays inside its two-effects rule):
+ * dark-grain = vignette 0.55 + film grain 0.3 (the 0.5 dim is a full-frame shape added by the layout, because the clip has no id
+ * yet and `preset:background.video-dim` needs op:scene.setBackground on one); warm / cold = a colour grade + vignette.
+ */
+export function gradeEffects(grade: string | undefined): Array<{ presetId: string; params: Record<string, unknown> }> {
+  switch (grade) {
+    case 'dark-grain': return [{ presetId: 'preset:effect.vignette', params: { intensity: 0.55 } }, { presetId: 'preset:effect.film-grain', params: { intensity: 0.3 } }];
+    case 'warm': return [{ presetId: 'preset:effect.colour-grade', params: { saturation: 0.2, contrast: 0.05, brightness: 0.02 } }, { presetId: 'preset:effect.vignette', params: { intensity: 0.35 } }];
+    case 'cold': return [{ presetId: 'preset:effect.colour-grade', params: { saturation: -0.3, contrast: 0.08, brightness: -0.04 } }, { presetId: 'preset:effect.vignette', params: { intensity: 0.35 } }];
+    default: return [];
+  }
 }
 
 /**
@@ -356,6 +429,8 @@ interface LayoutInput {
   mutedOpacity: number | undefined; portrait: boolean; seed: number;
   /** FR-261: the scene's footage window (footage roles), where its clip starts, and whether captions will be on screen. */
   footage?: FootageWindow | null; clipStart?: number; captions?: boolean;
+  /** ADR-041: the project's assets (picture sizes of image scenes) and the sound-effect hook (pop on annotations). */
+  assets?: readonly AssetFacts[]; sfx?: (kind: SfxKind, atMs: number) => void;
 }
 type TextDefaults = { size: number; weight: number; color: string; lineHeight?: number; opacity?: number; align?: 'left' | 'center' | 'right'; variant?: string; box?: { colour: string; padX: number; padY: number; radius: number } };
 type Entrance = { presetId?: string; ms?: number; rise?: number; ease?: Ease; params?: Record<string, unknown> };
@@ -454,7 +529,13 @@ class SceneLayout {
   }
   private headline(size: number, weight: number, gap: number, lineHeight?: number): BoxU | null {
     if (!this.s.headline) return null;
-    const st = this.st, kw = this.s.keywords?.length ? { presetId: 'preset:texteffect.keyword', params: { words: this.s.keywords, colour: st.c.accent } } : undefined;
+    const st = this.st, words = this.s.keywords ?? [];
+    // ADR-041 titleStyle: boxed (solid accent boxes behind the keywords on hook / title / image headlines; the viral default),
+    // highlight (keyword colour), plain (nothing)
+    const boxedRole = ['hook', 'title', 'image', 'question'].includes(this.s.role);
+    const kw = !words.length || st.titleStyle === 'plain' ? undefined
+      : st.titleStyle === 'boxed' && boxedRole ? { presetId: 'preset:texteffect.boxed', params: { words, boxColour: st.c.accent, textColour: st.viral ? '#111111' : st.bg, padU: 14, radiusU: 8 } }
+      : { presetId: 'preset:texteffect.keyword', params: { words, colour: st.c.accent } };
     const e: Entrance = st.editorial ? {} : { presetId: 'preset:motion.word-stagger', params: { staggerFrames: 4 } };
     const b = this.text(this.s.headline, { size: this.sz(size), weight, color: st.c.text, variant: 'preset:text.title', ...(lineHeight ? { lineHeight } : {}) }, this.p.X0, this.y, this.p.W, this.p.start, e, kw, 'headline');
     if (!st.editorial) {
@@ -660,9 +741,16 @@ class SceneLayout {
     return Math.max(this.p.start, Math.min(Math.round(t), this.p.end - 400));
   }
   private footageScene(): void {
-    const s = this.s, fw = this.p.footage;
+    const s = this.s, fw = this.p.footage, f = this.p.frame;
     this.limitY = null; this.sourceDone = false;
     if (!fw) { this.kicker(); this.headline(96, 800, 40); this.sub(); return; }       // no usable footage: a plain title scene (risk already given)
+    // ADR-041 dark-grain: the 0.5 dim of the footage (the vignette + grain ride on the clip insert as effects) — a full-frame
+    // black shape at 0.5 behind every text of the scene; it starts with the clip and has no entrance
+    if (s.footage?.grade === 'dark-grain') {
+      const from = this.p.clipStart ?? this.p.start;
+      this.p.ops.push({ op: 'op:shape.add', args: { presetId: 'preset:shape.rect', atMs: from, durationMs: Math.max(100, this.p.end - from), position: { x: 0, y: 0 }, size: f.w, height: f.h, fill: '#000000', opacity: 0.5, motion: { presetId: 'preset:motion.none' }, params: { cornerRadius: 0 } } });
+      this.p.elements.push({ key: `${this.p.i}:dim`, scene: this.p.i, kind: 'shape', box: { x0: 0, y0: 0, x1: f.w, y1: f.h }, fromMs: from, toMs: this.p.end, hasEntrance: false, holds: 'footage' });
+    }
     if (s.role === 'footage-split') { this.footageSplit(); return; }
     if (s.role === 'footage-pip') { this.footagePip(); return; }
     this.footageOverlays();
@@ -824,6 +912,120 @@ class SceneLayout {
     if (s.source && !this.sourceDone && !(s.stats ?? []).length) void 0;          // a source without a figure: shown by finish() as usual
     void y0;
   }
+  // ───────────── ADR-041: image scenes (internet pictures with marks) ─────────────
+  /**
+   * One picture or a stack from the Library on its blurred copy / paper / a solid: kicker + headline on top (boxed keywords),
+   * the pictures in the upper 60 % of the remaining area (rounded 24 u, shadow, tilted when stacked, a slow zoom / drift),
+   * annotation marks inside the picture box at their anchors, chips in the corners, a one-line caption above the caption band
+   * (only when captions are off) and the source tag at the bottom. Everything stays inside the safe area; marks never leave the
+   * picture (clamped, reported as an info risk).
+   */
+  private imageScene(): void {
+    const s = this.s, st = this.st, f = this.p.frame;
+    const imgs = s.images ?? [];
+    const assets = this.p.assets ?? [];
+    this.limitY = null; this.sourceDone = false;
+    this.y = st.safe.top + (s.topPx ?? this.sz(32));
+    this.kicker();
+    if (s.headline) this.headline(this.p.portrait ? 76 : 64, 800, this.sz(28));
+    if (s.sub) this.sub(48, this.sz(24));
+    // the area under the texts, above the caption line / source tag / caption band
+    const bottomLimit = f.h - st.safe.bottom;
+    const cap = !this.p.captions && s.caption ? asObj(s.caption) : null;
+    const capSize = cap?.sizePx !== undefined ? this.ex(cap.sizePx) : this.sz(48), capPad = this.sz(12);
+    const capH = cap ? this.measure(cap.text, capSize, 700, this.p.W - this.sz(48)).h + capPad * 2 : 0;
+    const srcText = textOf(s.source) ?? textOf(imgs[0]?.source);
+    const srcH = srcText ? this.sz(52) : 0;
+    const area: BoxU = { x0: this.p.X0, y0: this.y, x1: this.p.X0 + this.p.W, y1: bottomLimit - (srcH ? srcH + this.sz(16) : 0) - (capH ? capH + this.sz(24) : 0) };
+    const found = imgs.map((im) => assets.find((a) => a.id === im.assetId && a.kind === 'image' && a.status === 'ready'));
+    found.forEach((a, k) => { if (!a) this.p.risks.push({ code: 'image-missing', severity: 'warn', message: this.p.id ? `Adegan ${this.p.i + 1}: gambar ${imgs[k]!.assetId} tidak ada atau belum siap di proyek; dilewati.` : `Scene ${this.p.i + 1}: image ${imgs[k]!.assetId} is missing or not ready in the project; skipped.` }); });
+    const shown = imgs.map((im, k) => ({ im, a: found[k] })).filter((x): x is { im: typeof imgs[number]; a: AssetFacts } => !!x.a);
+    if (!shown.length) { this.y = area.y0; return; }
+    const boxes = pictureBoxes(s.layout, shown.map((x) => aspectOf(x.a)), area, f.w);
+    const pic = unionBox(boxes.map((b) => b.box));
+    const from = this.p.start, len = Math.max(1000, this.p.end - from);
+    const stack = boxes.length > 1 && (s.layout ?? 'stack') === 'stack';
+    const pan = s.pan ?? 'zoom-in';
+    const panMotion = (): Entrance => {
+      const ms = Math.min(10_000, len);
+      if (stack) return { presetId: 'preset:motion.scale-in', ms: 500, params: { fromScale: 0.85 } };
+      switch (pan) {
+        case 'none': return { presetId: 'preset:motion.scale-in', ms: 600, params: { fromScale: 0.92 } };
+        case 'zoom-out': return { presetId: 'preset:motion.scale-in', ms, params: { fromScale: 1.1 }, ease: { easingId: 'preset:easing.linear' } };
+        case 'left': case 'right': return { presetId: 'preset:motion.zoom-drift', ms, params: { toScale: 1.06 }, ease: { easingId: 'preset:easing.linear' } };
+        default: return { presetId: 'preset:motion.zoom-drift', ms, params: { toScale: 1.08 }, ease: { easingId: 'preset:easing.linear' } };
+      }
+    };
+    boxes.forEach((pb, k) => {
+      const { im, a } = shown[k]!, b = pb.box;
+      const w = b.x1 - b.x0, h = b.y1 - b.y0;
+      // left / right pans: no transform keyframes in the Composition Model today — the picture starts offset toward the other side so the drift reads as a pan
+      const dx = !stack && pan === 'left' ? w * 0.03 : !stack && pan === 'right' ? -w * 0.03 : 0;
+      const cx = (b.x0 + b.x1) / 2 + dx, cy = (b.y0 + b.y1) / 2;
+      const rotation = im.rotationDeg ?? pb.rotation;
+      const at = from + k * 180;
+      this.p.ops.push({ op: 'op:overlay.addImage', args: { assetId: a.id, atMs: at, durationMs: Math.max(100, this.p.end - at), position: { x: round1(cx - f.w / 2), y: round1(cy - f.h / 2) }, size: Math.round(w), objectFit: 'contain',
+        radius: s.layout === 'phone' ? PHONE_RADIUS_U : PICTURE_RADIUS_U, shadow: true, ...(rotation ? { rotation } : {}), motion: this.motion(panMotion()) } });
+      this.p.elements.push({ key: `${this.p.i}:image:${k}`, scene: this.p.i, kind: 'image', box: { x0: cx - w / 2, y0: cy - h / 2, x1: cx + w / 2, y1: cy + h / 2 }, fromMs: at, toMs: this.p.end, hasEntrance: true });
+      // the picture's own label (a small white pill at its bottom-left, e.g. an account name)
+      if (im.label) {
+        const lo = asObj(im.label), ls = this.sz(32), m = this.measure(lo.text, ls, 700, w - this.sz(40));
+        const pw = Math.min(w - this.sz(40), m.w + this.sz(28) + PILL_SLACK), ph = m.h + this.sz(14);
+        this.text(im.label, { size: ls, weight: 700, color: '#FFFFFF', align: 'center', box: { colour: '#111111', padX: this.sz(14), padY: this.sz(7), radius: 999 } }, b.x0 + this.sz(20), b.y1 - this.sz(20) - ph, pw, at + 300, { presetId: 'preset:motion.rise', rise: this.sz(16), ms: 400 }, undefined, 'image-label');
+      }
+    });
+    // annotations: arrows point at (x, y) from the nearest free side; boxes / rings / X marks centred; labels as pills — all inside the picture
+    let clamped = 0;
+    (s.annotations ?? []).forEach((an, k) => {
+      const at = this.at(an.at, from + 500 + k * 400);
+      const labelText = an.text ? asObj(an.text) : null;
+      const ls = this.sz(36), lm = labelText ? this.measure(labelText.text, ls, 800, pic.x1 - pic.x0 - this.sz(40)) : null;
+      const labelSize = lm ? { w: Math.min(pic.x1 - pic.x0, lm.w + this.sz(32) + PILL_SLACK), h: lm.h + this.sz(16) } : undefined;
+      const m = annotationMark(an, pic, ANNOTATION_RED, labelSize);
+      if (m.clamped) clamped++;
+      const e: Entrance = m.motion === 'draw-on' ? { presetId: 'preset:motion.draw-on', ms: 500 } : { presetId: 'preset:motion.pop', ms: 450, params: { damping: 12 } };
+      if (m.kind === 'label') {
+        this.text(labelText ?? { text: '•' }, { size: ls, weight: 800, color: '#FFFFFF', align: 'center', box: { colour: m.colour, padX: this.sz(16), padY: this.sz(8), radius: 999 } }, m.cx - m.w / 2, m.cy - m.h / 2, m.w, at, e, undefined, 'annotation-label');
+      } else {
+        const outline = m.kind === 'box' || m.kind === 'circle';
+        this.shape(m.presetId, m.cx, m.cy, m.w, m.h, m.colour, at, e, { params: m.params, ...(m.rotation ? { rotation: m.rotation } : {}), ...(outline ? { stroke: m.colour, strokeWidth: m.kind === 'box' ? 8 : 10 } : {}) }, 'picture');
+        // a text on an arrow / box / X: a pill just under the mark, inside the picture
+        if (labelText && labelSize) {
+          const ly = Math.min(pic.y1 - labelSize.h, m.cy + m.h / 2 + this.sz(8)), lx = Math.min(Math.max(m.cx - labelSize.w / 2, pic.x0), pic.x1 - labelSize.w);
+          this.text(labelText, { size: ls, weight: 800, color: '#FFFFFF', align: 'center', box: { colour: m.colour, padX: this.sz(16), padY: this.sz(8), radius: 999 } }, lx, ly, labelSize.w, at + 150, { presetId: 'preset:motion.pop', ms: 400 }, undefined, 'annotation-label');
+        }
+      }
+      this.p.sfx?.('pop', at);
+    });
+    if (clamped) this.p.risks.push({ code: 'annotation-clamped', severity: 'info', message: this.p.id ? `Adegan ${this.p.i + 1}: ${clamped} tanda digeser agar tetap di dalam gambar.` : `Scene ${this.p.i + 1}: ${clamped} mark(s) moved to stay inside the picture.` });
+    // chips in the picture corners (BEFORE green, AFTER red, warning amber)
+    const corners = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+    (s.chips ?? []).forEach((ch, k) => {
+      // a chip is one line: the text shrinks (≥ 26 u) until it fits 60 % of the picture width, the pill gets a little slack
+      const o = asObj(ch.text), padX = this.sz(18), padY = this.sz(9), avail = (pic.x1 - pic.x0) * 0.6;
+      let size = this.sz(34), m = this.measure(o.text.toUpperCase(), size, 800, avail * 2);
+      if (m.w + padX * 2 + PILL_SLACK > avail) { size = Math.max(26, Math.floor((size * (avail - padX * 2 - PILL_SLACK)) / m.w)); m = this.measure(o.text.toUpperCase(), size, 800, avail * 2); }
+      const w = Math.min(avail, m.w + padX * 2 + PILL_SLACK), h = m.h + padY * 2;
+      const b = chipBox(ch.position ?? corners[k % 4], pic, w, h, this.sz(20));
+      const col = chipColours(ch.tone, o.text);
+      this.text({ ...o, text: o.text.toUpperCase() }, { size, weight: 800, color: col.text, align: 'center', box: { colour: col.fill, padX, padY, radius: this.sz(10) } }, b.x0, b.y0, w, this.at(o.at, from + 350 + k * 250), { presetId: 'preset:motion.pop', ms: 400, params: { damping: 12 } }, undefined, 'chip');
+    });
+    // caption line (white on a dark box) above the caption band, then the source tag
+    let y = area.y1;
+    if (cap) {
+      y = bottomLimit - (srcH ? srcH + this.sz(16) : 0) - capH;
+      this.text(cap, { size: capSize, weight: 700, color: '#FFFFFF', align: 'center', box: { colour: '#111111', padX: this.sz(24), padY: capPad, radius: this.sz(14) } }, this.p.X0, y + capPad, this.p.W, this.at(cap.at, from + 300), { presetId: 'preset:motion.rise', rise: this.sz(20), ms: 450 }, undefined, 'caption');
+    }
+    if (srcText) {
+      const sp = getPreset('preset:shape.source-tag') ? 'preset:shape.source-tag' : 'preset:shape.rect';
+      const m = this.measure(srcText, 32, 500, this.p.W - 40), w = Math.min(this.p.W, m.w + 44);
+      this.shape(sp, this.p.X0 + w / 2, bottomLimit - srcH / 2, w, srcH, st.viral ? '#1A1A1E' : st.bg, from + 200, { presetId: 'preset:motion.fade-in', ms: 300 }, { opacity: 0.92, params: sp === 'preset:shape.source-tag' ? { text: srcText.slice(0, 200) } : { cornerRadius: 24 } }, 'source');
+      this.sourceDone = true;
+    }
+    void y;
+    this.y = area.y0;                                                             // nothing flows: everything above was placed inside the area (overflow() stays negative)
+  }
+
   build(withSource = true): void {
     const s = this.s, st = this.st, f = this.p.frame;
     const centreVertically = !st.editorial && ['hook', 'title', 'question', 'quote', 'stat', 'body', 'list', 'cta', 'split'].includes(s.role) && s.topPx === undefined;
@@ -861,6 +1063,7 @@ class SceneLayout {
       case 'cta': case 'cta-handle': this.cta(); break;
       case 'split': this.split(); break;
       case 'footage': case 'footage-split': case 'footage-pip': this.footageScene(); break;
+      case 'image': this.imageScene(); break;
     }
     if (centreVertically) {
       // centre the whole block in the content area: shift every op of this scene by the same dy
@@ -877,6 +1080,8 @@ class SceneLayout {
   finish(): void { this.source(); }
 }
 const round1 = (v: number) => Math.round(v * 10) / 10;
+/** ADR-041: extra width (u) of a pill text over its measured label, so the estimator never wraps / overflows inside its own box. */
+const PILL_SLACK = 20;
 function ratioOf(f: { w: number; h: number }): Ratio {
   const a = f.w / f.h;
   return Math.abs(a - 9 / 16) < 0.01 ? '9:16' : Math.abs(a - 16 / 9) < 0.01 ? '16:9' : Math.abs(a - 1) < 0.01 ? '1:1' : Math.abs(a - 0.8) < 0.01 ? '4:5' : 'custom';

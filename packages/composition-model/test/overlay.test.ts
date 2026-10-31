@@ -15,6 +15,29 @@ describe('op:overlay.addImage / op:overlay.remove (ADR-020 addition)', () => {
     expect(rm.ok && rm.value.model.tracks.overlay).toEqual([]);
     expect(propertyKeysOf({ op: 'op:overlay.remove', target: { kind: 'image', id: o.id }, args: {} })).toEqual([`image:${o.id}`]);
   });
+  it('ADR-041: radius / shadow / border are stored when given (radius clamped to half the shorter side, shadow false and a 0 u border dropped) and copied by duplicate', async () => {
+    const { duplicationSteps } = await import('../src/index.js');
+    const add = (args: Record<string, unknown>) => applyOperations(createEmptyModel('p'), [{ op: 'op:clip.insert', args: { assetId: 'v' } }, { op: 'op:overlay.addImage', args: { assetId: 'logo', atMs: 0, size: 400, ...args } }], { assets: ASSETS, tier: 'T1', newId });
+    const r = add({ radius: 24, shadow: true, border: { colour: '#FFFFFF', widthU: 6 } });
+    expect(r.ok).toBe(true); if (!r.ok) return;
+    const o = r.value.model.tracks.overlay[0]!;
+    expect(o).toMatchObject({ kind: 'image', size: { w: 400, h: 200 }, radius: 24, shadow: true, border: { colour: '#FFFFFF', widthU: 6 } });
+    expect(validate(r.value.model, { assets: ASSETS, tier: 'T1' }).filter((i) => i.severity === 'block')).toEqual([]);
+    const custom = add({ radius: 500, shadow: { blurU: 40, opacity: 0.6 }, border: { colour: '#000000', widthU: 0 } });
+    expect(custom.ok && custom.value.model.tracks.overlay[0]).toMatchObject({ radius: 100, shadow: { blurU: 40, opacity: 0.6 } });   // 400 × 200 → radius ≤ 100
+    expect(custom.ok && 'border' in custom.value.model.tracks.overlay[0]!).toBe(false);
+    const plain = add({ shadow: false });
+    expect(plain.ok && Object.keys(plain.value.model.tracks.overlay[0]!)).not.toContain('shadow');
+    expect(add({ border: { colour: 'white', widthU: 6 } }).ok).toBe(false);                 // EM-2102: colour must be #RRGGBB
+    expect(add({ shadow: { blurU: 40 } }).ok).toBe(false);                                 // strict: opacity required
+    // Duplicate carries the look (C1: every field)
+    const dup = applyOperations(r.value.model, duplicationSteps(r.value.model, [{ kind: 'image', id: o.id }]).map((s) => s.op), { assets: ASSETS, tier: 'T1', newId });
+    expect(dup.ok).toBe(true); if (!dup.ok) return;
+    const copy = dup.value.model.tracks.overlay.find((x) => x.id !== o.id)!;
+    expect(copy).toMatchObject({ kind: 'image', radius: 24, shadow: true, border: { colour: '#FFFFFF', widthU: 6 } });
+    const { summarizeForAgent } = await import('../src/index.js');
+    expect(summarizeForAgent(dup.value.model, ASSETS).overlay[0]).toMatchObject({ kind: 'image', radius: 24, shadow: true, border: { colour: '#FFFFFF', widthU: 6 } });
+  });
   it('refuses a non-image asset and a missing overlay', () => {
     expect(applyOperations(createEmptyModel('p'), [{ op: 'op:overlay.addImage', args: { assetId: 'v', atMs: 0 } }], { assets: ASSETS, tier: 'T1', newId }).ok).toBe(false);
     const r = applyOperations(createEmptyModel('p'), [{ op: 'op:overlay.remove', target: { kind: 'image', id: 'nope' }, args: {} }], { assets: ASSETS, tier: 'T1', newId });

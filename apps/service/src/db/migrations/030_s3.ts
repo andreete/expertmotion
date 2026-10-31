@@ -94,4 +94,18 @@ CREATE TABLE IF NOT EXISTS chat_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_docs_project ON chat_documents(project_id, created_at);
 ` },
+  // FR-300 … FR-307 (ADR-041, internet assets): every imported picture / clip / screenshot carries its credit (author, site or URL)
+  // and licence text on the asset row (CREDITS.txt reads them; `asset_attributions` keeps the structured CC record of the open
+  // catalogues). `research_keys`: the Creator's own Pexels API key, sealed like the voice keys (label 'research-secrets', AAD
+  // `research_keys:pexels`); only the hint is ever returned.
+  { version: 35, name: 's3_asset_credit_research_keys', sql: `
+ALTER TABLE assets ADD COLUMN credit TEXT;
+ALTER TABLE assets ADD COLUMN licence TEXT;
+CREATE TABLE IF NOT EXISTS research_keys (
+  provider     TEXT PRIMARY KEY CHECK(provider IN ('pexels')),
+  secret_enc   BLOB NOT NULL,
+  secret_hint  TEXT NOT NULL,
+  created_at   TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+` },
 ];

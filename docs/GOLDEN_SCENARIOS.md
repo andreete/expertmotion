@@ -103,8 +103,10 @@ Masih layak di 2026? Kita lihat.
 | GS-21 | "taruh judul di atas logo": stacking order by the Editor Agent, then a Timeline drag across lanes and Alt+↓ (ADR-027) | P1 (FR-068) | Editor Agent + Compile | ID |
 | GS-22 | "potong klip pertama di detik 3, perbesar 120% dan geser ke kiri": split and framing by the Editor Agent, then S and a Player drag (ADR-028) | P1 (FR-179, FR-180) | Editor Agent + Compile | ID |
 | GS-23 | "Buat video faceless 30 detik tentang tips hemat listrik": a complete video from a prompt with zero assets — scene clips, texts, transitions, voice-over and captions steps (ADR-030) | P0 (FR-188) | Editor Agent + generators | ID |
+| GS-24 | "berita viral dari internet": a news commentary Reel whose every picture came from the internet — research → page pictures / screenshots the Creator confirms → narration → image scenes with red marks, boxed title, watermark, captions (ADR-041) | P0 (FR-300 … FR-312) | Brainstorming + Editor Agent + generators | ID |
+| GS-25 | "footage stok + caption penekanan": stock b-roll with the dark-grain grade and the centred emphasis caption (the Satu-Persen look), logo watermark (ADR-041) | P1 (FR-300 … FR-312) | Editor Agent + generators | ID |
 
-Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS-12, GS-16, GS-17, GS-18, GS-21, GS-22, GS-23 (13 scenarios); English in GS-20; the rest are UI-only.
+Indonesian Creator input appears in GS-05, GS-07, GS-08, GS-09, GS-10, GS-11, GS-12, GS-16, GS-17, GS-18, GS-21, GS-22, GS-23, GS-24, GS-25 (15 scenarios); English in GS-20; the rest are UI-only.
 
 ## 3. Scenarios
 
@@ -1040,6 +1042,38 @@ Rewrite envelope (step 1): `capabilities.ops` contains `op:element.split` and `o
 
 **Harness**: `packages/agents/test/golden/faceless.test.ts` (b), `packages/engine/test/faceless.test.tsx`, `apps/service/test/s3/faceless-pointing.test.ts`, `apps/service/test/s2/render-smoke.test.ts`.
 
+### GS-24 "berita viral dari internet": a news commentary Reel from internet pictures (ADR-041)
+
+| Field | Value |
+|---|---|
+| Priority | P0 (ADR-041, FR-300 … FR-312; the Operator's five reference Reels, `scratchpad/expect/*-sheet.png`) |
+| Preconditions | New 9:16 project, Library empty or only the channel logo `LOGO`; research allowed (setting on, Private Mode off, a provider with search); optional Pexels key. |
+
+**Creator actions**
+
+1. Diskusi: "Buatin video kayak netizen boikot acara X, semua gambarnya cari di internet" → the Brainstorming Agent runs the VIRAL EXPLAINER FLOW (P-1 v1.5.0): `web.search` (1–3), 4–8 sources, `web.images {source: "page", url}` on them, `web.screenshot` for a headline / post, `web.images {source: "stock"}` for b-roll when a key exists; it lists the candidates with source and licence and asks which to import; it never claims a page picture as the Creator's own.
+2. The Creator confirms 4–6 pictures (R-089 import; `credit` / `licence` stored; page pictures labelled "Hak cipta pemilik — kutipan/komentar") → the agent writes the narration (≤ 60 s, a tension hook) and the scene draft (hook with boxed keywords, one image scene per picture with what the arrow / X / box marks and the source, a footage scene for b-roll, a stat scene only for a sourced figure, cta-handle) → "Kerjakan di video".
+3. Editor: ONE `scene.compose` step (P-2 v1.8.0 VIRAL EXPLAINER; fixture `packages/agents/test/fixtures/viral-spec.json`: mood `viral`, `titleStyle: boxed`, 4 image scenes — single with a red box + label, phone with a red X and an AFTER chip, a tilted stack with an arrow + label pill, side-by-side on paper with a ring + BEFORE / AFTER chips — a stat with its source, cta-handle, `watermark`, `captions: true`, 7 voice clips) → Plan Card → Jalankan → Export.
+
+**Expected composition** (automated: `packages/agents/test/viral-composer.test.ts`): theme `preset:palette.high-contrast` + `preset:fontpair.poppins-inter`, background #0E0E10; the hook headline carries `preset:texteffect.boxed {words: ["BOIKOT!"], boxColour: #FFD400}`; image scenes = `op:scene.add` with `preset:background.blurred-image {assetId: images[0]}` (paper for `bg: paper`) + one `op:overlay.addImage` per picture (`radius` 24 / 40 for phone, `shadow: true`, `objectFit: contain`, `preset:motion.zoom-drift` 1.08, stack `rotation` −6° / +5°; single = 86 % of the content width, phone = 46 % of the frame width, side-by-side = two 45 % columns), red (#E53935) `preset:shape.highlight-box` / `x-mark` / `arrow` / `ring` inside the picture box at their anchors (`draw-on` / `pop`), label and chip pills (AFTER #C62828 top-right, SEBELUM green / SESUDAH red guessed from the text), `preset:shape.source-tag` under every picture, `op:caption.setStyle preset:caption.editorial` (white 800, the keywords in #FFD400), one logo overlay 220 u at opacity 0.9 over the whole video, a whoosh per scene and a pop per annotation (when the SFX assets exist), one `tts.generate` per clip + `captions.generate {source: voice}` + `music.generate`; no `warn` quality issue remains; total ≤ 60 s; nothing under the caption band.
+
+**Edge handling**: a missing picture / logo → risks `image-missing` / `watermark-missing`, the scene is composed without it; a mark outside the picture is pulled inside (`annotation-clamped`); no SFX assets → `sfx-unavailable` (info); the Editor's slips (numbers as strings, "45%", missing chip tones, `type` for `kind`, `images: ["id"]`, role `screenshot`) are repaired by `normalizeVideoSpec`.
+
+**Harness**: `packages/agents/test/viral-composer.test.ts` (a + b), the Service / UI tests of the service agent (web.images sources, web.screenshot, R-089 credits), E2E reproduction by the lead (process.md Entry 40).
+
+### GS-25 "footage stok + caption penekanan": the Satu-Persen look (ADR-041)
+
+| Field | Value |
+|---|---|
+| Priority | P1 (ADR-041; reference `Sampel_4-sheet.png`) |
+| Preconditions | Three stock clips in the Library (Pexels imports or the Creator's own), the channel logo `LOGO`; the voice model installed. |
+
+**Creator actions**: Edit: "Bikin video gaya Satu Persen dari tiga klip ini, narasinya: …, logo di atas" → ONE `scene.compose` step (fixture `packages/agents/test/fixtures/satu-persen-spec.json`: mood `viral`, three `footage` scenes with `footage.grade: "dark-grain"`, a short headline + `keywords` each, `captions: true`, `captionStyle: "preset:caption.emphasis"`, `watermark`, 3 voice clips) → Jalankan.
+
+**Expected composition** (automated: `viral-composer.test.ts` GS-25): three `op:clip.insert` each with `effects: [preset:effect.vignette 0.55, preset:effect.film-grain 0.3]` (two gpu effects, also on T0) and a full-frame black `preset:shape.rect` at opacity 0.5 (the dim; `preset:background.video-dim` cannot be set on a clip that has no id yet); `op:caption.setStyle preset:caption.emphasis {emphasisColour: #FFD400, keywords: [{words: ["bayangin", "elit-elit", "Diekspor"], colour: #FFD400}]}` so the caption pages show small upper-case words with the keywords large italic serif yellow; the logo overlay on top; `captions.generate {presetId: preset:caption.emphasis}` after the voice steps; no `warn` quality issue remains.
+
+**Harness**: `packages/agents/test/viral-composer.test.ts`; engine golden frames of `preset:caption.emphasis` / `preset:background.paper` / `preset:texteffect.boxed` (engine agent).
+
 ## 4. How the scenarios are executed
 
 Three harnesses share the same scenario files and the same assertions (AI_WORKFLOW §13).
@@ -1179,4 +1213,5 @@ All codes are owned by ERROR_CATALOGUE.md (159 codes, final); every row below ex
 | FR-068 (ADR-027 lanes, drag, trim) | GS-21 |
 | FR-179, FR-180 (ADR-028 split, canvas transform) | GS-22 |
 | FR-188 (ADR-030 videos without media), FR-189 (pointing) | GS-23 |
+| FR-300 … FR-312 (ADR-041 viral explainer from internet assets) | GS-24, GS-25 |
 | UX-013, UX-033, UX-042, UX-053 | GS-04, GS-12, GS-08/09, GS-05 |

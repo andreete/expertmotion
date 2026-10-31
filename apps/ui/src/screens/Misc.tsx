@@ -164,6 +164,11 @@ export function BackupDialog({ mode, onClose }: { mode: 'backup' | 'restore'; on
   // FR-017: Creator-chosen location (defaults to the output folder) and a size estimate from R-026 (originals + JSON, Outputs optional).
   const [folder, setFolder] = useState(state.settings?.outputFolder ?? '');
   const [usage, setUsage] = useState<DiskUsageDto | null>(null);
+  // FR-314 (QA 2026-10-31 "saya tidak tau tersimpan dimana"): the Service reports no backup default of its own — the folder field starts
+  // at the app's output folder (R-002), which is the only default known here; the result row shows the real path the Service wrote.
+  const defaultFolder = state.settings?.outputFolder?.trim() || null;
+  const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
+  const [copied, setCopied] = useState(false);
   const pid = state.project?.id;
   useEffect(() => { if (mode === 'backup' && pid) runtime.api.diskUsage(pid).then(setUsage).catch(() => setUsage(null)); }, [mode, pid, runtime]);
   const est = usage?.items[0] ? usage.items[0].backupBytes + (includeOutputs ? usage.items[0].backupOutputsBytes : 0) : null;
@@ -202,6 +207,7 @@ export function BackupDialog({ mode, onClose }: { mode: 'backup' | 'restore'; on
             <div className="flex gap-2"><input id="em-bk-folder" data-el="scr.backup.backup.folder" className={inputCls} value={folder} onChange={(e) => setFolder(e.target.value)} />
               <Button onClick={() => void window.expertmotion?.pickFolder?.(folder ? { defaultPath: folder } : {}).then((f) => { if (f) setFolder(f); })}>{t('ui.scr.project.open.browse')}</Button></div>
           </Field>
+          {defaultFolder && <p data-el="scr.backup.backup.folder.default" className="text-[12px] text-em-muted">{t('ui.scr.backup.folder.default', { path: defaultFolder })}</p>}
           {est !== null && usage && <p data-el="scr.backup.backup.estimate" className={tooBig ? 'text-[12px] text-em-danger' : 'text-[12px] text-em-muted'}>{t(tooBig ? 'ui.scr.backup.estimate.toobig' : 'ui.scr.backup.estimate', { size: formatBytes(est, lang), free: formatBytes(usage.freeBytes, lang) })}</p>}
         </div>
       ) : (
@@ -215,6 +221,17 @@ export function BackupDialog({ mode, onClose }: { mode: 'backup' | 'restore'; on
         </div>
       )}
       {job && <div data-el="scr.backup.progress" className="mt-2 flex flex-col gap-1"><Progress value={job.percent / 100} label={t('ui.scr.backup.progress')} /><span className="text-[12px] text-em-muted">{job.done ? (job.path ? t('ui.scr.backup.done', { path: job.path }) : t('ui.scr.restore.done')) : `${job.percent} %`}</span></div>}
+      {job?.done && job.mode === 'backup' && job.path && (
+        // FR-314: the full path, copyable, with Open folder (Shell bridge only) and Copy path — the toast above stays.
+        <div data-el="scr.backup.result" role="status" className="mt-2 flex flex-col gap-1 rounded-[6px] border-l-2 border-em-info bg-em-panel-2 px-2 py-1.5 text-[12px]">
+          <span className="font-semibold">{t('ui.scr.backup.result.title')}</span>
+          <code data-el="scr.backup.result.path" className="t-mono select-all break-all text-[11px] text-em-text-2">{job.path}</code>
+          <div className="flex gap-2">
+            {shell?.openFolder && <Button el="scr.backup.result.open" size={28} onClick={() => void shell.openFolder?.(job.path!)}>{t('ui.scr.export.openfolder')}</Button>}
+            <Button el="scr.backup.result.copy" size={28} icon={<Copy size={14} />} onClick={() => void copyText(job.path!).then((ok) => { if (ok) setCopied(true); })}>{copied ? t('ui.common.copied') : t('ui.scr.backup.result.copy')}</Button>
+          </div>
+        </div>
+      )}
       {job?.done && job.mode === 'restore' && job.code === 'EM-6303' && (
         // FR-018: a project with the same identity exists, so the backup became a renamed copy; nothing was overwritten.
         <div data-el="scr.backup.restore.renamed" data-code="EM-6303" role="status" className="mt-2 flex flex-col gap-1 rounded-[6px] border-l-2 border-em-info bg-em-panel-2 px-2 py-1.5 text-[12px]">

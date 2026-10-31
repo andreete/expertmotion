@@ -83,6 +83,10 @@ The Providers screen never refuses a model for its capabilities (Operator decisi
 | hardware.profile, project.settings.get | yes | yes | yes | yes |
 | media.analyze (ADR-039) | yes (starts the prep job; a progress card) | yes (same; reports "being prepared" with a needs-input risk) | — | "Siapkan rekaman" action |
 | media.frames (ADR-039) | yes (contact sheet for the vision model) | — | — | cover picker |
+| web.search, web.fetch (ADR-033) | yes, when research is allowed | yes, same condition | — | source links under the answer |
+| web.images (ADR-041: source open \| stock \| page) | yes (candidates; the Creator confirms each import, R-089) | yes | — | picture candidate cards with licence / "Hak cipta pemilik" notice |
+| web.screenshot (ADR-041) | yes (a page picture → Library image asset, credited with its URL) | yes (then referenced by assetId in an image scene / cutaway) | — | Library |
+| composition.frames (FR-310 … FR-312) | yes (stills of the Player picture at the asked times, as a contact sheet + on-screen summary; "SEE BEFORE YOU ANSWER ABOUT THE PICTURE") | yes (looks before describing / fixing a visual detail; the goal may offer "Minta saya cek hasilnya") | — | progress "Melihat pratinjau: m:ss…" |
 | media.analysis.get | yes | yes | yes | yes |
 | cover.render | — | as an Edit Plan step only (added by the composer from the VideoSpec `cover`) | after Execute, by the Local Service (POST /projects/:id/cover) | cover picker |
 

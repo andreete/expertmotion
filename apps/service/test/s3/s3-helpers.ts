@@ -9,7 +9,7 @@ export type FakeRoute = (call: FakeCall) => Response | Promise<Response> | undef
 export const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 /** Installs a fake fetch behind the real egress guard (Private Mode and the host allow-list still apply). */
-export function fakeEgress(s: TestService, routes: FakeRoute[]): FakeCall[] {
+export function fakeEgress(s: TestService, routes: FakeRoute[], opts: { /** SEC-140 DNS check of `research` hosts: inject public addresses so no real lookup runs */ lookup?: (host: string) => Promise<string[]> } = {}): FakeCall[] {
   const calls: FakeCall[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -25,7 +25,7 @@ export function fakeEgress(s: TestService, routes: FakeRoute[]): FakeCall[] {
     if (signal.aborted) throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
     return Promise.race([answer, new Promise<Response>((_r, rej) => signal.addEventListener('abort', () => rej(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })), { once: true }))]);
   }) as typeof fetch;
-  s.ctx.egress = createEgress({ isPrivate: () => s.ctx.settings.get().privateMode, impl });
+  s.ctx.egress = createEgress({ isPrivate: () => s.ctx.settings.get().privateMode, impl, ...(opts.lookup ? { lookup: opts.lookup } : {}) });
   return calls;
 }
 

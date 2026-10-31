@@ -14,9 +14,10 @@ describe('registry matches docs/DESIGN_CATALOGUE.md exactly', () => {
   it('documented P0 counts (§12)', () => {
     const p0 = (c: Category) => listPresets({ category: c, priority: ['p0'] }).filter((p) => !p.id.endsWith('.none')).length;
     expect({ transition: p0('transition'), caption: p0('caption'), motion: p0('motion'), shape: p0('shape'), easing: p0('easing'), effect: p0('effect'), audio: p0('audio'), text: p0('text'), texteffect: p0('texteffect'), palette: p0('palette'), fontpair: p0('fontpair') })
-      .toEqual({ transition: 6, caption: 3, motion: 5, shape: 4, easing: 5, effect: 6, audio: 3, text: 4, texteffect: 2, palette: 8, fontpair: 5 });   // ADR-039: reels-navy, poppins-inter
-    // backgrounds: 5 + video-dim + none
-    expect(listPresets({ category: 'background', priority: ['p0'] }).length).toBe(7);
+      .toEqual({ transition: 6, caption: 4, motion: 5, shape: 4, easing: 5, effect: 6, audio: 3, text: 4, texteffect: 3, palette: 8, fontpair: 5 });   // ADR-039: reels-navy, poppins-inter; ADR-041: caption.emphasis, texteffect.boxed
+    // backgrounds: 7 + video-dim + none (ADR-041: paper, blurred-image)
+    expect(listPresets({ category: 'background', priority: ['p0'] }).length).toBe(9);
+    expect(getPreset('preset:background.paper')!.flags).toEqual([]);                      // ADR-041: CSS + noise, no gpu flag
   });
   it('priority and gpu/webgpu flags agree with the doc rows', () => {
     for (const p of ALL_PRESETS) {

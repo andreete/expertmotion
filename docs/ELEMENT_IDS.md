@@ -71,8 +71,10 @@ Every requirement, test step, tour step and interaction spec refers to UI elemen
 | `hdr.menu.file.recent` | (added per brief) | Recent projects submenu. |
 | `hdr.menu.file.save` | Save | Save Project. |
 | `hdr.menu.file.saveas` | Save as | Save As dialog. |
+| `hdr.menu.file.backup` | (added 2026-10-31, FR-315) | "Back up project to zip…": opens the Backup dialog (`scr.backup`), the same as `hdr.action.backup`; disabled without a project. |
 | `hdr.menu.file.import` | Import | Opens OS file picker into the Asset Panel. |
 | `hdr.menu.file.export` | Export | Opens Export dialog (`scr.export`). |
+| `hdr.menu.file.openexports` | (added 2026-10-31, FR-315) | "Open exports folder": reveals the newest Output of the open project in the OS file manager (Shell `openFolder`), else the project's / the app's output folder; an info toast when nothing was exported yet. Disabled (reason "Only in the desktop app") without the Shell bridge. |
 | `hdr.menu.file.settings` | Setting: Frame, FPS, Duration | Project Settings dialog (`scr.project.settings`). |
 | `hdr.menu.file.recover` | (added per brief) | Recovery dialog listing checkpoints (`scr.project.recover`). A badge on this item shows when a checkpoint newer than the saved state exists. |
 | `hdr.menu.home` | Home | Switches Library Panel to Home mode (`lib.text.*`). |
@@ -381,6 +383,9 @@ State variants (UI implementation rule): a superseded queue row uses `agent.edit
 | `scr.project.recover.hash` | Recovery row version hash | First 6 characters of the checkpoint's version hash (FR-016); the row also shows the file size. |
 | `scr.backup.backup.folder` | Backup location | Folder field + Browse; defaults to the output folder (FR-017). |
 | `scr.backup.backup.estimate` | Backup size estimate | Originals + versions (+ Outputs when included) against free space (R-026). |
+| `scr.backup.backup.folder.default` | "Usually in {path}" | Hint under the folder field with the app's output folder (R-002) when known — the Service reports no backup-specific default (FR-314). |
+| `scr.backup.result` | Backup result row | After a successful backup (`service.notice` kind backup, done, path): `.path` (the full path, selectable `<code>`), `.open` ("Open folder", Shell `openFolder`; absent without the bridge), `.copy` ("Copy path" → "Copied"). The toast `ui.scr.backup.done` stays (FR-314). |
+| `scr.project.saveas.storage` | Save As storage note | `role=note`: the copy is kept inside the app database, not as a file; the shareable file is the backup zip (FR-313). Contains `.backup` ("Back up to zip…"), which opens `scr.backup` in place of this dialog. |
 | `scr.unsaved` | Unsaved changes prompt | `.save`, `.discard` ("Don't save"), `.cancel`; shown before New, Open, Recent and window close when the title / layout state is dirty; states that the composition is already stored (FR-174). |
 | `scr.close.render` | Close during an export | `.cancel` ("Cancel render and close"), `.keep` ("Keep rendering"); EM-8304 (FR-002). |
 
@@ -578,6 +583,9 @@ The startup and crash ids (`sys.splash.*`, `sys.crash.*`, `sys.fatal.retry`) are
 | `agent.chat.example` | one example chip (`data-key`) | Fills the Editor composer with the prompt (never sends); the footage chip shows only with an imported video. |
 | `scr.generate.voice.recommended` | "Disarankan" badge | FR-268: the one recommended voice (default choice). |
 | `scr.generate.voice.azure` | Azure AI Speech key | FR-269: `.key`, `.region`, `.save`, `.remove`; hint + region only. |
+| `scr.generate.voice.group.free` / `scr.generate.voice.group.paid` | Voice list group headers | Operator 2026-10-31: free offline voices are listed first under "Gratis · luring", cloud voices under "Berbayar oleh penyedianya · kunci milikmu sendiri"; rows carry `data-free`. |
+| `scr.generate.voice.connect` | Connect (cloud voice without a key) | Opens the provider's key field below (ElevenLabs / Azure / Google) or the Providers screen (OpenAI / Gemini). |
+| `scr.generate.voice.keys` | Paid-voice keys section | Titled "Suara berbayar (opsional): tambahkan kunci milikmu" with the note that every offline voice is free; contains `scr.generate.voice.el`, `.azure`, `.google`. |
 | `scr.generate.voice.google` | Google Cloud TTS key | FR-269: `.key`, `.save`, `.remove`; hint only. |
 
 ## Assumptions where the mockup does not define behaviour
@@ -628,6 +636,18 @@ The startup and crash ids (`sys.splash.*`, `sys.crash.*`, `sys.fatal.retry`) are
 | `lib.assets.prep` | "Siapkan rekaman" in the Asset Panel | Shown when the project has at least one ready video and one ready audio Asset; starts the prep job. |
 | `scr.export.codec.jpg` / `scr.export.done.credits` | "Cover (JPG)" format · "CREDITS.txt ditulis di samping video" | Export: a JPEG still (`format:'jpg'`, same still-time field as PNG); after a video render the note that the Service wrote `<name>-CREDITS.txt`. |
 | `scr.project.new.ratio.channel` | "Dari profil kanal" under the ratio select | New project: the ratio came from the channel profile (Reels / Shorts / TikTok / 9:16 → 9:16). |
+
+## Additions for internet assets (FR-300 … FR-307, ADR-041, 2026-10-31)
+
+| Element ID | Mockup / label | Purpose |
+|---|---|---|
+| `agent.chat.message.images` | "Gambar dari kompas.com (5)" / "Foto dan video stok (8)" / "Gambar berlisensi terbuka (n)" | The candidate block of one answer; `data-source` = `page` / `stock` / `open`. |
+| `agent.chat.message.image` | one candidate row | `data-source` (openverse / wikimedia / pexels / pexels-video / page), `data-kind` (image / video), `data-imported` after Import. |
+| `agent.chat.message.image.kind` | "Video · 12 dtk" badge | Shown on video candidates (Pexels clips) with the duration when known (FR-306). |
+| `agent.chat.message.image.licence` | "Pexels License · 1080×1920" / "Hak cipta pemilik — kutipan/komentar · 1200×800 · kompas.com" | The licence line of a candidate: CC code, Pexels License or the owner's-copyright text, size, host (FR-306). |
+| `agent.chat.message.images.owner` | "Hak cipta pemilik — pakai untuk kutipan/komentar, cantumkan sumber." | Notice under a block that contains page pictures (FR-304, FR-307); `role=note`. |
+| `scr.providers.research` | "Riset internet" section of the AI providers screen | The research switch mirror (`scr.providers.research.toggle`, same setting as `agent.chat.research`) and the Pexels key (FR-301). |
+| `scr.providers.research.pexels` / `.key` / `.save` / `.remove` / `.status` / `.error` / `.link` | "Kunci API Pexels (opsional)" | `data-connected` true / false on the group; the key input (password), Save (R-089b), remove (R-089c), the status line ("Pexels terhubung (…abcd)" or the note with the pexels.com/api link), the EM-4410 line (`data-code`) after a refused key. |
 
 ## Retired ids
 

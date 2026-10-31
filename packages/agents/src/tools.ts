@@ -6,14 +6,19 @@ import { Operation } from '@expertmotion/composition-model';
 import { parseToolMarkup, stripToolMarkup } from '@expertmotion/shared';
 import type { ChatImage, ChatMessage, ToolSpec } from './providers.js';
 
-/** FR-216 / FR-217: internet research tools (read-only; offered only when research is allowed and the Service supplies the handler). */
-export const WEB_TOOL_NAMES = ['web.search', 'web.fetch', 'web.images'] as const;
+/** FR-216 / FR-217: internet research tools (read-only; offered only when research is allowed and the Service supplies the handler). ADR-041: `web.screenshot` (a page picture into the Library) for both agents. */
+export const WEB_TOOL_NAMES = ['web.search', 'web.fetch', 'web.images', 'web.screenshot'] as const;
+/** ADR-041 `web.images` sources: openly licensed (Openverse + Wikimedia), Pexels stock (the Creator's key), or the pictures of a named page (quoted with their source). */
+export const WEB_IMAGE_SOURCES = ['open', 'stock', 'page'] as const;
 /** ADR-039 (Reels pipeline): footage prep + analysis reads; `media.analyze` / `media.frames` are Brainstorm (PRD) tools, `media.analysis.get` both agents'. */
 export const MEDIA_TOOL_NAMES = ['media.analyze', 'media.frames', 'media.analysis.get'] as const;
-export const BRAINSTORM_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate', ...WEB_TOOL_NAMES, ...MEDIA_TOOL_NAMES] as const;
+/** FR-310 … FR-312 (ADR-041 addendum): `composition.frames` — stills of the CURRENT head Composition Model (what the Player shows) as one contact sheet; both agents. */
+export const PREVIEW_TOOL_NAME = 'composition.frames' as const;
+export const PREVIEW_FRAMES_MAX = 6;
+export const BRAINSTORM_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate', ...WEB_TOOL_NAMES, ...MEDIA_TOOL_NAMES, PREVIEW_TOOL_NAME] as const;
 export type BrainstormToolName = (typeof BRAINSTORM_TOOL_NAMES)[number];
 /** FR-080 / AI_WORKFLOW §8: the Editor Agent's read-only set = the Brainstorm set (without the prep tools) + the dry run `composition.validateOps` + `assets.probe`. */
-export const EDITOR_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate', ...WEB_TOOL_NAMES, 'media.analysis.get', 'media.analyze', 'composition.validateOps', 'assets.probe'] as const;
+export const EDITOR_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate', ...WEB_TOOL_NAMES, 'media.analysis.get', 'media.analyze', 'composition.validateOps', 'assets.probe', PREVIEW_TOOL_NAME] as const;
 export type ToolName = (typeof EDITOR_TOOL_NAMES)[number] | BrainstormToolName;
 export const ALL_TOOL_NAMES: readonly ToolName[] = [...new Set<ToolName>([...BRAINSTORM_TOOL_NAMES, ...EDITOR_TOOL_NAMES])];
 
@@ -23,6 +28,7 @@ export const BRAINSTORM_TOOL_INPUTS: Record<ToolName, z.ZodType> = {
   'media.frames': z.object({ atMs: z.array(z.number().int().min(0)).min(1).max(12).optional(), cutIds: z.array(z.string().min(1).max(40)).min(1).max(12).optional(), rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional() }).strict()
     .refine((v) => !!(v.atMs?.length || v.cutIds?.length), { message: 'give atMs or cutIds' }),
   'media.analysis.get': z.object({}).strict(),
+  'composition.frames': z.object({ atMs: z.array(z.number().int().min(0)).min(1).max(PREVIEW_FRAMES_MAX).optional(), scenes: z.boolean().optional() }).strict(),
   'composition.validateOps': z.object({ baseVersion: z.string().max(128).optional(), ops: z.array(Operation).max(200) }).strict(),
   'composition.get': z.object({}).strict(),
   'assets.list': z.object({}).strict(),
@@ -33,7 +39,9 @@ export const BRAINSTORM_TOOL_INPUTS: Record<ToolName, z.ZodType> = {
   'render.estimate': z.object({ resolution: z.enum(['720p', '1080p', '2k', '2160p']).optional(), performanceProfile: z.enum(['standard', 'accelerated', 'turbo']).optional() }).strict(),
   'web.search': z.object({ query: z.string().trim().min(2).max(300) }).strict(),
   'web.fetch': z.object({ url: z.string().trim().min(8).max(2000) }).strict(),
-  'web.images': z.object({ query: z.string().trim().min(2).max(200) }).strict(),
+  'web.images': z.object({ query: z.string().trim().min(2).max(200), source: z.enum(WEB_IMAGE_SOURCES).optional(), url: z.string().trim().min(8).max(2000).optional() }).strict()
+    .refine((v) => v.source !== 'page' || !!v.url, { message: 'source "page" needs url (the page whose pictures you want)' }),
+  'web.screenshot': z.object({ url: z.string().trim().min(8).max(2000), viewport: z.enum(['phone', 'desktop']).optional() }).strict(),
 };
 
 export type ToolHandlers = Partial<Record<ToolName, (input: Record<string, unknown>) => unknown>>;
@@ -65,13 +73,17 @@ export const TOOL_DEFINITIONS: Record<ToolName, { description: string; inputSche
     inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'Search words, e.g. "ekspor nikel Indonesia 2026 ESDM"' } }, required: ['query'], additionalProperties: false } },
   'web.fetch': { description: 'Read one web page or PDF by its URL (a URL the Creator gave or a search returned). Returns its title and text (truncated).',
     inputSchema: { type: 'object', properties: { url: { type: 'string', description: 'https:// URL' } }, required: ['url'], additionalProperties: false } },
-  'web.images': { description: 'Find openly licensed pictures (CC0 / CC BY / CC BY-SA, Openverse and Wikimedia Commons) for a topic. Returns candidates with licence and author; the Creator confirms before any picture is downloaded into the Library.',
-    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'What the picture should show (English works best)' } }, required: ['query'], additionalProperties: false } },
+  'web.images': { description: 'Find pictures for a topic: source "open" (default; CC0 / CC BY Openverse + Wikimedia), "stock" (Pexels photos and clips, needs the Creator\'s key) or "page" (the pictures of the page at url, quoted with their source and copyright notice). Returns candidates with licence and author; the Creator confirms before any download into the Library.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'What the picture should show (English works best); for "page" a short label of what you need' }, source: { type: 'string', enum: [...WEB_IMAGE_SOURCES], description: 'open (default) | stock | page' }, url: { type: 'string', description: 'For source "page": the https:// URL of the article / post whose pictures you want' } }, required: ['query'], additionalProperties: false } },
+  'web.screenshot': { description: 'Take a picture of the top of a web page (phone 1080x1920 or desktop) and import it into the Library as an image asset named "Tangkapan layar · <host>" with the URL as its credit. Use it for article headlines, posts and tables to show in image scenes or cutaways. Returns assetId, title, host, width, height.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string', description: 'https:// URL from the conversation or a search result' }, viewport: { type: 'string', enum: ['phone', 'desktop'], description: 'phone (default, tall) or desktop' } }, required: ['url'], additionalProperties: false } },
   'media.analyze': { description: 'Prepare the Creator\'s talking-head footage: sync the separate voice recording with the camera video, build the master, find the spoken phrases, listen (speech to text), pick the kept takes per script line and time the words. Returns offset, phrase count, the cut table (ids, recording times, spoken text), the dropped takes with reasons, loudness, warnings — or {status: "running", jobId} when it takes longer; call again later. Call it first when footage was uploaded.',
     inputSchema: { type: 'object', properties: { voiceAssetId: { type: 'string', description: 'The voice recording (audio asset id); or the video itself when it carries the speech' }, cameraAssetId: { type: 'string', description: 'The camera video asset id (optional)' }, script: { type: 'string', description: 'The script the Creator read (optional; lines are matched to takes)' }, rotation: { type: 'integer', enum: [0, 90, 180, 270], description: 'Rotate the camera picture (degrees clockwise) when it was stored sideways' } }, required: ['voiceAssetId'], additionalProperties: false } },
   'media.frames': { description: 'Look at the footage: a contact sheet of frames at the given master times or cuts (small JPEG grid; returned as an image when this model can see images, else the grid metadata). Use it to check the picture, the rotation and to pick the cover frame.',
     inputSchema: { type: 'object', properties: { atMs: { type: 'array', items: { type: 'integer' }, description: 'Master times in ms (1–12)' }, cutIds: { type: 'array', items: { type: 'string' }, description: 'Cut ids of the analysis (1–12); one frame per cut' }, rotation: { type: 'integer', enum: [0, 90, 180, 270] } }, additionalProperties: false } },
   'media.analysis.get': { description: 'The stored footage analysis of this project: master asset, offset, cuts (id, recording times, spoken words), dropped takes, loudness, warnings. Read-only; use the cut ids in a talking-head VideoSpec.', inputSchema: NO_INPUT },
+  'composition.frames': { description: 'See the preview: stills of the current video (what the Creator sees in the Player) at the given times, default the middle of every scene, as one small contact sheet (an image when this model can see pictures) plus what is on screen at each time (texts, pictures, shapes, caption). Read-only.',
+    inputSchema: { type: 'object', properties: { atMs: { type: 'array', items: { type: 'integer' }, description: `Composition times in ms (1–${PREVIEW_FRAMES_MAX}); omit for the middle of every scene` }, scenes: { type: 'boolean', description: 'true: add the middle of every scene' } }, additionalProperties: false } },
 };
 /** Provider-safe tool name: providers accept [A-Za-z0-9_-] only, so `catalogue.search` is offered as `catalogue_search`. */
 export const wireToolName = (name: string): string => name.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -97,10 +109,12 @@ export function toolsPromptBlock(names: readonly ToolName[], finalReply = 'reply
       `Use them only when they help. At most ${MAX_TOOL_ROUNDS} rounds of tool calls per answer; then ${finalReply}. Tools never change the project.`,
       'Never write tool calls, XML tags or tool JSON into your answer text: the Creator reads it.'].join('\n');
   }
-  const sig = (n: ToolName) => (n === 'catalogue.search' ? '{"query": string, "category"?: string}' : n === 'web.search' || n === 'web.images' ? '{"query": string}' : n === 'web.fetch' ? '{"url": string}' : n === 'render.estimate' ? '{"resolution"?: "720p"|"1080p"|"2k"|"2160p", "performanceProfile"?: "standard"|"accelerated"|"turbo"}'
+  const sig = (n: ToolName) => (n === 'catalogue.search' ? '{"query": string, "category"?: string}' : n === 'web.search' ? '{"query": string}' : n === 'web.images' ? '{"query": string, "source"?: "open"|"stock"|"page", "url"?: string (for "page")}' : n === 'web.fetch' ? '{"url": string}'
+    : n === 'web.screenshot' ? '{"url": string, "viewport"?: "phone"|"desktop"} (page picture → Library image asset {assetId, title, host, width, height})' : n === 'render.estimate' ? '{"resolution"?: "720p"|"1080p"|"2k"|"2160p", "performanceProfile"?: "standard"|"accelerated"|"turbo"}'
     : n === 'assets.probe' ? '{"assetId": string} (fps, codecs, audio channels and sample rate, duration)' : n === 'composition.validateOps' ? '{"ops": Operation[]} (dry run against baseVersion: ok, issues, predictedDiff, predictedDurationMs)'
     : n === 'media.analyze' ? '{"voiceAssetId": string, "cameraAssetId"?: string, "script"?: string, "rotation"?: 0|90|180|270} (footage prep: sync, master, phrases, takes, word timing; may return {status: "running", jobId})'
-    : n === 'media.frames' ? '{"atMs"?: number[], "cutIds"?: string[], "rotation"?: 0|90|180|270} (contact sheet of the footage)' : n === 'media.analysis.get' ? '{} (the stored footage analysis: cuts with ids and spoken words)' : '{}');
+    : n === 'media.frames' ? '{"atMs"?: number[], "cutIds"?: string[], "rotation"?: 0|90|180|270} (contact sheet of the footage)' : n === 'media.analysis.get' ? '{} (the stored footage analysis: cuts with ids and spoken words)'
+    : n === 'composition.frames' ? `{"atMs"?: number[] (≤ ${PREVIEW_FRAMES_MAX}), "scenes"?: boolean} (stills of the current video as seen in the Player: contact sheet + what is on screen at each time)` : '{}');
   const lines = names.map((n) => `- ${n} ${sig(n)}`);
   return ['', '## Read-only tools', 'Before answering you may look things up. To call a tool, reply with only this JSON and nothing else:',
     '{"tool": "<name>", "input": { ... }}', `You will receive {"toolResult": ...}. At most ${MAX_TOOL_ROUNDS} tool calls per answer; then ${finalReply}. Tools never change the project.`,
@@ -141,7 +155,7 @@ export async function runTool(name: string, input: unknown, handlers: ToolHandle
     // ADR-039 media.frames: a picture in the result travels as an image part (never as 1.5 MB of base64 text in the tool result).
     if (output && typeof output === 'object' && typeof (output as { imageBase64?: unknown }).imageBase64 === 'string') {
       const { imageBase64, ...rest } = output as { imageBase64: string; mediaType?: string };
-      return { name, input: parsed.data, output: { ...rest, image: 'attached as a picture of this message' }, ok: true, image: { mediaType: (output as { mediaType?: string }).mediaType ?? 'image/jpeg', data: imageBase64, name: 'contact-sheet.jpg' } };
+      return { name, input: parsed.data, output: { ...rest, image: 'attached as a picture of this message' }, ok: true, image: { mediaType: (output as { mediaType?: string }).mediaType ?? 'image/jpeg', data: imageBase64, name: name === 'composition.frames' ? 'preview-frames.jpg' : 'contact-sheet.jpg' } };
     }
     return { name, input: parsed.data, output, ok: true };
   } catch (e) {

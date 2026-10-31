@@ -86,6 +86,13 @@ export function NewProjectDialog({ onClose, saveAs }: { onClose: () => void; sav
       footer={<><Button variant="ghost" onClick={onClose}>{t('ui.common.cancel')}</Button><Button el={saveAs ? 'scr.project.saveas.create' : 'scr.project.new.create'} variant="primary" disabledReason={reason} onClick={() => void create()}>{saveAs ? t('ui.scr.project.saveas.create') : t('ui.scr.project.new.create')}</Button></>}>
       <Field label={t('ui.scr.project.name')} htmlFor="em-new-name"><input id="em-new-name" data-el="scr.project.new.name" className={inputCls} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void create(); }} /></Field>
       {saveAs && <p className="text-[12px] text-em-muted">{t('ui.scr.project.saveas.note')}</p>}
+      {saveAs && (
+        // FR-313 (QA 2026-10-31 "saya tidak tau tersimpan dimana"): the copy lives inside the app database, not as a file; the shareable file is the backup zip.
+        <p data-el="scr.project.saveas.storage" role="note" className="rounded-[6px] border-l-2 border-em-info bg-em-panel-2 px-2 py-1.5 text-[12px] text-em-text-2">
+          {t('ui.scr.project.saveas.storage')}{' '}
+          <button type="button" data-el="scr.project.saveas.backup" className="underline hover:text-em-text" onClick={() => actions.setScreen({ kind: 'backup' })}>{t('ui.scr.project.saveas.backup')}</button>
+        </p>
+      )}
       {!saveAs && <>
         <Field label={t('ui.scr.project.fps')} htmlFor="em-new-fps"><select id="em-new-fps" data-el="scr.project.new.fps" className={inputCls} value={fps} onChange={(e) => setFps(Number(e.target.value) as Fps)}>{FPS_VALUES.map((f) => <option key={f} value={f}>{f} fps</option>)}</select></Field>
         <div className="grid grid-cols-2 gap-2">

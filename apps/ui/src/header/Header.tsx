@@ -10,6 +10,7 @@ import { Button, IconButton, MenuItem, Popover, Progress, cx } from '../componen
 import { HardwarePopover } from '../screens/Hardware.js';
 import { AppMark } from '../components/AppMark.js';
 import type { LibMode } from '../state/reducer.js';
+import type { ProjectSettingsExtras } from '../api/types.js';
 import { formatDuration, translate } from '../i18n/index.js';
 import { guardUnsaved } from '../screens/Lifecycle.js';
 import { withoutScratch } from '../startup/scratch.js';
@@ -23,7 +24,7 @@ export function sampleTitle(name: string, language: 'en' | 'id'): { marker: stri
 export const requestImport = (accept?: string) => window.dispatchEvent(new CustomEvent('em:import', { detail: { accept } }));
 
 export function Header() {
-  const { state, actions, t, prefs, setPrefs } = useStore();
+  const { state, actions, runtime, t, prefs, setPrefs } = useStore();
   const [menu, setMenu] = useState<'file' | 'help' | 'recent' | 'hardware' | 'license' | null>(null);
   // FR-128: the low-disk banner's "Open Hardware Monitor" action opens the popover.
   useEffect(() => { const open = () => setMenu('hardware'); window.addEventListener(OPEN_HARDWARE_EVENT, open); return () => window.removeEventListener(OPEN_HARDWARE_EVENT, open); }, []);
@@ -60,6 +61,22 @@ export function Header() {
     if (e.key === 'Escape') { e.stopPropagation(); setEditing(false); setTitleError(false); }
   };
   const percent = rendering ? Math.round(rendering.progress * 100) : 0;
+  // FR-315 (QA 2026-10-31 "saya tidak tau tersimpan dimana"): File ▸ "Open exports folder" reveals the newest Output of the open
+  // project (the Shell selects the file in its folder), else the project's / the app's output folder (R-017 / R-002). Without a
+  // known folder nothing exists yet: the Service creates `<Videos>/Expertmotion` with the first export, so an info toast says so.
+  const shell = typeof window !== 'undefined' ? window.expertmotion : undefined;
+  const openExportsReason = shell?.openFolder ? null : t('ui.hdr.menu.file.openexports.desktop');
+  const openExports = async () => {
+    if (!shell?.openFolder) return;
+    try {
+      const newest = p ? [...state.outputs].filter((o) => o.projectId === p.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] : undefined;
+      if (newest) { await shell.openFolder((await runtime.api.revealOutput(newest.id)).path); return; }
+      const projectFolder = p ? ((await runtime.api.getProjectSettings(p.id)) as ProjectSettingsExtras).outputFolder : null;
+      const folder = projectFolder?.trim() || state.settings?.outputFolder?.trim();
+      if (folder) await shell.openFolder(folder);
+      else actions.toast('info', 'ui.hdr.menu.file.openexports.none');
+    } catch (e) { actions.error(e); }
+  };
 
   return (
     <header className="relative z-20 flex h-12 shrink-0 items-center gap-1 border-b border-em-line bg-em-panel px-2">
@@ -79,8 +96,10 @@ export function Header() {
             <MenuItem el="hdr.menu.file.close" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); guardUnsaved({ state, actions }, () => { void actions.closeProject(); }, { closing: true }); }}>{t('ui.hdr.menu.file.close')}</MenuItem>
             <MenuItem el="hdr.menu.file.save" shortcut="Ctrl+S" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); void actions.save(); }}>{t('ui.hdr.menu.file.save')}</MenuItem>
             <MenuItem el="hdr.menu.file.saveas" shortcut="Ctrl+Shift+S" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); actions.setScreen({ kind: 'project.new', saveAs: true }); }}>{t('ui.hdr.menu.file.saveas')}</MenuItem>
+            <MenuItem el="hdr.menu.file.backup" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); actions.setScreen({ kind: 'backup' }); }}>{t('ui.hdr.menu.file.backup')}</MenuItem>
             <MenuItem el="hdr.menu.file.import" shortcut="Ctrl+I" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); requestImport(); }}>{t('ui.hdr.menu.file.import')}</MenuItem>
             <MenuItem el="hdr.menu.file.export" shortcut="Ctrl+E" disabledReason={exportReason} onClick={() => { close(); actions.setScreen({ kind: 'export' }); }}>{t('ui.hdr.menu.file.export')}</MenuItem>
+            <MenuItem el="hdr.menu.file.openexports" disabledReason={openExportsReason} onClick={() => { close(); void openExports(); }}>{t('ui.hdr.menu.file.openexports')}</MenuItem>
             <MenuItem el="hdr.menu.file.settings" disabledReason={p ? null : t('ui.common.noproject')} onClick={() => { close(); actions.setScreen({ kind: 'project.settings' }); }}>{t('ui.hdr.menu.file.settings')}</MenuItem>
             <div className="my-1 border-t border-em-line" />
             <MenuItem el="hdr.menu.file.recover" disabledReason={p ? null : t('ui.common.noproject')} badge={state.checkpointBadge ? <span className="h-2 w-2 rounded-full bg-em-accent" aria-label={t('ui.hdr.menu.file.recover.badge')} /> : undefined}

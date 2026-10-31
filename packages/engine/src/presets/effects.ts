@@ -41,6 +41,42 @@ export const EFFECTS: Record<string, Make> = {
 /** WebGPU effects listed in DESIGN_CATALOGUE (P2) that the pinned Remotion 4.0.535 does not export. */
 export const EFFECTS_NOT_IN_PINNED_REMOTION = ['preset:effect.cylinder', 'preset:effect.sphere', 'preset:effect.page-turn'] as const;
 
+/**
+ * QA 2026-10-31 (Windows shell log "Error: HTML in Canvas is unavailable. Enable Canvas Draw Element at chrome://flags/", black
+ * Player): Remotion paints an element with `effects` through HTML-in-canvas (`CanvasRenderingContext2D.drawElementImage`), which a
+ * Chromium build may lack or keep behind a flag. The Desktop Shell now enables the feature (`CanvasDrawElement`); when it is still
+ * missing, the Player must not crash: the effects are dropped and the closest CSS `filter` stands in (preview only — the render runs
+ * in Remotion's own Chrome, which has the feature). `true` outside a browser (tests, the renderer).
+ */
+let htmlInCanvasCache: boolean | null = null;
+export function htmlInCanvasSupported(): boolean {
+  if (typeof document === 'undefined') return true;
+  if (htmlInCanvasCache !== null) return htmlInCanvasCache;
+  try {
+    const ctx = document.createElement('canvas').getContext('2d') as unknown as { drawElementImage?: unknown } | null;
+    htmlInCanvasCache = typeof ctx?.drawElementImage === 'function';
+  } catch { htmlInCanvasCache = false; }
+  return htmlInCanvasCache;
+}
+/** Tests only. */
+export const resetHtmlInCanvasCache = (): void => { htmlInCanvasCache = null; };
+/** The CSS `filter` that approximates the effect list when effects cannot be painted (undefined = nothing to approximate). */
+export function cssFilterFallback(list: readonly EffectInstanceT[]): string | undefined {
+  const parts: string[] = [];
+  for (const e of list) {
+    const p = e.params as Record<string, unknown>;
+    switch (e.presetId) {
+      case 'preset:effect.blur': parts.push(`blur(${n(p['radiusPx'], 8)}px)`); break;
+      case 'preset:effect.colour-grade': parts.push(`brightness(${1 + n(p['brightness'], 0) * 0.6}) contrast(${1 + n(p['contrast'], 0) * 0.6}) saturate(${1 + n(p['saturation'], 0)})`); break;
+      case 'preset:effect.duotone': parts.push('grayscale(1) sepia(0.35)'); break;
+      case 'preset:effect.thermal': parts.push('hue-rotate(200deg) saturate(2)'); break;
+      case 'preset:effect.vignette': parts.push(`brightness(${1 - 0.15 * n(p['intensity'], 0.4)})`); break;
+      case 'preset:effect.glow': parts.push(`brightness(${1 + 0.1 * n(p['intensity'], 0.5)})`); break;
+      default: break;
+    }
+  }
+  return parts.length ? parts.join(' ') : undefined;
+}
 export function effectsFor(list: readonly EffectInstanceT[], frame: number, durationInFrames: number, fps: number): EffectDescriptor<unknown>[] {
   const ramp = Math.max(1, Math.round(0.5 * fps));
   return list.flatMap((e) => {

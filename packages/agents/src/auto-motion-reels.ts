@@ -18,7 +18,8 @@ import { getPreset, validateParams } from '@expertmotion/catalogue';
 import { applyOperations, autoFixOps, createEmptyModel, frameInUnits, framesOf, qualityCheck, qualityChecklist, textGeometry, type AssetFacts, type BoxU, type CaptionPageT, type CompositionModelT, type OperationT, type QualityIssue, type Ratio, type TextLayerT } from '@expertmotion/composition-model';
 import type { ComposeContext, ComposeOk, ComposedElement, ComposedScene, ComposeRisk, VoicePlacement } from './auto-motion.js';
 import { findSaidIndex } from './auto-motion-footage.js';
-import { SPEECH_ROLES, type SceneRole, type SfxKind, type SpecAnchorT, type SpecBlockT, type SpecCoverT, type SpecSceneT, type SpecTextT, type VideoSpecT } from './auto-motion-spec.js';
+import { ANNOTATION_RED, annotationMark, aspectOf, PICTURE_RADIUS_U } from './auto-motion-image.js';
+import { CUTAWAY_KINDS, SPEECH_ROLES, type SceneRole, type SfxKind, type SpecAnchorT, type SpecBlockT, type SpecCoverT, type SpecSceneT, type SpecTextT, type VideoSpecT } from './auto-motion-spec.js';
 import type { AnalysisCut, FootageAnalysisLike, SfxAssets, TimedWord } from './reels-types.js';
 
 type Safe = { top: number; right: number; bottom: number; left: number };
@@ -395,6 +396,80 @@ export function composeReels(spec: VideoSpecT, ctx: ComposeContext, fixes: strin
     }
   };
 
+  // ── ADR-041 cutaways: image / video blocks cover the whole frame over the speaker from their anchor until the next block or the cut end ──
+  interface Cutaway { bk: SpecBlockT; fromRel: number; toRel: number }
+  /** The cutaway windows of a scene's blocks (scene-relative ms, ≥ 300 ms each, in block order; overlapping windows are trimmed). */
+  const cutawaysOf = (b: SceneBuild, blocks: readonly SpecBlockT[]): Cutaway[] => {
+    const rels = blocks.map((bk, idx) => anchorRel(b, bk.at, bk.fallbackMs ?? idx * REELS.blockStepMs, `${bk.kind} block`));
+    const out: Cutaway[] = [];
+    blocks.forEach((bk, idx) => {
+      if (!CUTAWAY_KINDS.includes(bk.kind)) return;
+      const fromRel = rels[idx]!;
+      const next = rels.slice(idx + 1).find((r) => r > fromRel + 300);
+      let toRel = bk.ms !== undefined ? fromRel + bk.ms : next ?? b.lenMs;
+      toRel = Math.min(b.lenMs, toRel);
+      const prev = out[out.length - 1];
+      if (prev && prev.toRel > fromRel) prev.toRel = fromRel;                          // two cutaways never overlap: the earlier one ends where the next starts
+      if (toRel - fromRel >= 300) out.push({ bk, fromRel, toRel });
+      else risks.push({ code: 'cutaway-short', severity: 'info', message: id ? `Adegan ${b.i + 1}: sisipan ${bk.kind} terlalu singkat (< 0,3 dtk); dilewati.` : `Scene ${b.i + 1}: the ${bk.kind} cutaway is shorter than 0.3 s; skipped.` });
+    });
+    return out;
+  };
+  /** The ops of one scene's cutaways: a full-frame backdrop + the picture (radius 24, shadow, annotations) or the muted clip (cover). */
+  const cutawayOps = (b: SceneBuild, list: readonly Cutaway[]) => {
+    for (const cw of list) {
+      const bk = cw.bk, atMs = b.startMs + cw.fromRel, dur = Math.max(100, cw.toRel - cw.fromRel);
+      const asset = ctx.assets.find((a) => a.id === bk.assetId && a.status === 'ready' && a.kind === (bk.kind === 'image' ? 'image' : 'video'));
+      if (!asset) { risks.push({ code: 'cutaway-missing', severity: 'warn', message: id ? `Adegan ${b.i + 1}: aset sisipan ${bk.assetId ?? '(kosong)'} tidak ada / bukan ${bk.kind === 'image' ? 'gambar' : 'video'} yang siap; sisipan dilewati.` : `Scene ${b.i + 1}: cutaway asset ${bk.assetId ?? '(none)'} is missing or not a ready ${bk.kind}; the cutaway is skipped.` }); continue; }
+      const fade = motion('preset:motion.fade-in', toMs(5));
+      if (bk.kind === 'video') {
+        const from = bk.fromMs ?? 0, avail = asset.durationMs !== undefined ? asset.durationMs - from : Infinity;
+        if (avail < 100) { risks.push({ code: 'cutaway-missing', severity: 'warn', message: id ? `Adegan ${b.i + 1}: video sisipan ${asset.id} lebih pendek dari potongannya; dilewati.` : `Scene ${b.i + 1}: cutaway video ${asset.id} is shorter than its trim; skipped.` }); continue; }
+        const d = Math.max(100, Math.min(dur, bk.toMs !== undefined ? bk.toMs - from : Infinity, avail));
+        const k = add('op:overlay.addVideo', { assetId: asset.id, atMs, durationMs: Math.round(d), trimBeforeMs: from, muted: true, shape: 'rect', size: f.w, height: f.h, position: { x: 0, y: 0 }, motion: fade });
+        elements.push({ key: `${b.i}:cutaway-video:${k}`, scene: b.i, kind: 'image', box: { x0: 0, y0: 0, x1: f.w, y1: f.h }, fromMs: atMs, toMs: atMs + Math.round(d), hasEntrance: true });
+        playSfx(b, 'whoosh', cw.fromRel, `cutaway ${asset.id}`);
+        continue;
+      }
+      // picture: a full-frame backdrop (dark / paper; a blurred copy needs the scene background, so `blur` falls back to dark here),
+      // the picture as wide as the frame, contained, centred in the graphics area so its labels stay above the captions
+      const bgCol = bk.bg === 'paper' ? '#EFE6D6' : bk.bg === 'white' ? '#FFFFFF' : c.bg;
+      shape(b, 'rect', f.w / 2, f.h / 2, f.w, f.h, bgCol, cw.fromRel, fade, { cornerRadius: 0 }, { opacity: 1 }, 'cutaway-bg', undefined, false);
+      const asp = aspectOf(asset), maxH = GB - safe.top;
+      let w = f.w, h = w / asp;
+      if (h > maxH) { h = maxH; w = h * asp; }
+      const cx = f.w / 2, cy = safe.top + maxH / 2;
+      const drift = bk.pan === 'none' ? motion('preset:motion.scale-in', 500, { fromScale: 0.94 }) : { presetId: 'preset:motion.zoom-drift', durationMs: Math.min(10_000, dur), easingId: 'preset:easing.linear', exit: false, params: { toScale: bk.pan === 'zoom-out' ? 1.02 : 1.08 } };
+      const k = add('op:overlay.addImage', { assetId: asset.id, atMs, durationMs: dur, position: { x: 0, y: round1(cy - f.h / 2) }, size: Math.round(w), objectFit: 'contain', radius: PICTURE_RADIUS_U, shadow: true, motion: drift });
+      const pic: BoxU = { x0: cx - w / 2, y0: cy - h / 2, x1: cx + w / 2, y1: cy + h / 2 };
+      elements.push({ key: `${b.i}:cutaway:${k}`, scene: b.i, kind: 'image', box: pic, fromMs: atMs, toMs: atMs + dur, hasEntrance: true });
+      playSfx(b, 'whoosh', cw.fromRel, `cutaway ${asset.id}`);
+      // annotations inside the picture, staggered after the picture appears (their own `at` wins), gone with the cutaway
+      (bk.annotations ?? []).forEach((an, j) => {
+        const rel = Math.min(cw.toRel - 100, an.at ? anchorRel(b, an.at, cw.fromRel + 400 + j * 350, 'annotation') : cw.fromRel + 400 + j * 350);
+        const lt = an.text ? textOf(an.text)! : null, ls = 34, lm = lt ? measure(lt, ls, 800, pic.x1 - pic.x0 - 40, 'Inter') : null;
+        const labelSize = lm ? { w: Math.min(pic.x1 - pic.x0, lm.w + 32 + 20), h: lm.h + 16 } : undefined;   // + 20 u slack so the pill never wraps its own label
+        const m = annotationMark(an, pic, ANNOTATION_RED, labelSize);
+        const end = atMs + dur, at2 = b.startMs + rel;
+        const mo = m.motion === 'draw-on' ? motion('preset:motion.draw-on', 500) : pop(450);
+        const pill = (x0: number, y0: number, w2: number, text: string, relMs: number) => {
+          const kk = add('op:text.add', { text, variant: 'preset:text.subtitle', atMs: b.startMs + relMs, durationMs: Math.max(100, end - (b.startMs + relMs)), position: { x: round1(x0 + w2 / 2 - f.w / 2), y: round1(y0 - f.h / 2) }, maxWidth: Math.round(w2), valign: 'top',
+            styleOverrides: { fontSize: ls, weight: 800, colour: '#FFFFFF', align: 'center', fontFamily: 'Inter', box: { colour: m.colour, padX: 16, padY: 8, radius: 999 } }, motion: pop(400) });
+          elements.push({ key: `${b.i}:annotation-label:${kk}`, scene: b.i, kind: 'text', box: { x0, y0, x1: x0 + w2, y1: y0 + (labelSize?.h ?? 50) }, fromMs: b.startMs + relMs, toMs: end, hasEntrance: true });
+        };
+        if (m.kind === 'label') { pill(m.cx - m.w / 2, m.cy - m.h / 2, m.w, lt ?? '•', rel); }
+        else {
+          const outline = m.kind === 'box' || m.kind === 'circle';
+          const kk = add('op:shape.add', { presetId: m.presetId, atMs: at2, durationMs: Math.max(100, end - at2), position: { x: round1(m.cx - f.w / 2), y: round1(m.cy - f.h / 2) }, size: Math.max(10, Math.round(m.w)), height: Math.max(1, Math.round(m.h)), fill: m.colour, motion: mo, params: m.params,
+            ...(m.rotation ? { rotation: m.rotation } : {}), ...(outline ? { stroke: m.colour, strokeWidth: m.kind === 'box' ? 8 : 10 } : {}) });
+          elements.push({ key: `${b.i}:annotation:${kk}`, scene: b.i, kind: 'shape', box: { x0: m.cx - m.w / 2, y0: m.cy - m.h / 2, x1: m.cx + m.w / 2, y1: m.cy + m.h / 2 }, fromMs: at2, toMs: end, hasEntrance: true, holds: 'picture' });
+          if (lt && labelSize) pill(Math.min(Math.max(m.cx - labelSize.w / 2, pic.x0), pic.x1 - labelSize.w), Math.min(pic.y1 - labelSize.h, m.cy + m.h / 2 + 8), labelSize.w, lt, rel + 150);
+        }
+        playSfx(b, 'pop', rel, `annotation ${m.kind}`);
+      });
+    }
+  };
+
   // ── scenes ──
   const voice: VoicePlacement[] = [];
   const footage: ComposeOk['footage'] = [];
@@ -419,33 +494,45 @@ export function composeReels(spec: VideoSpecT, ctx: ComposeContext, fixes: strin
         playSfx(b, 'whoosh', 0, 'scene start', Infinity);                             // lands 2 frames before the first spoken word
         // chips in the top band (away from the face), a typing box at the bottom of the graphics area
         const blocks = s.blocks ?? [];
-        const bottomKinds = blocks.filter((x) => x.kind === 'typing-box'), chips = blocks.filter((x) => x.kind === 'chip'), topKinds = blocks.filter((x) => x.kind !== 'typing-box' && x.kind !== 'chip');
+        const cutaways = cutawaysOf(b, blocks);                                        // ADR-041: full-frame cutaways over the speaker
+        const bottomKinds = blocks.filter((x) => x.kind === 'typing-box'), chips = blocks.filter((x) => x.kind === 'chip'), topKinds = blocks.filter((x) => x.kind !== 'typing-box' && x.kind !== 'chip' && !CUTAWAY_KINDS.includes(x.kind));
         let topY = safe.top + 20;
         if (s.heading ?? s.headline) { const hb = talkHeading(b, textOf(s.heading ?? s.headline)!, topY, 0); topY = hb.y1 + 28; }
         if (topKinds.length) flowFitted(b, topKinds, topY, Math.min(GB, f.h * 0.42));
         if (chips.length) flowFitted(b, chips, topY, bottomKinds.length ? GB - 230 - 40 : GB);
         if (bottomKinds.length) flowFitted(b, bottomKinds, GB - 230 - 20, GB);
+        if (cutaways.length) cutawayOps(b, cutaways);                                 // added last: in front of the chips / heading
         prevExplain = null;
       } else {
         // explain: a designed scene, the speaker in a round bubble at the bottom, graphics above
         add('op:scene.add', { durationMs: b.lenMs, background: 'preset:background.solid', backgroundParams: { colourA: bg } }, { kind: 'sequence' });
         clipIndex++;
         playSfx(b, 'whoosh', 0, 'scene start', Infinity);
+        const cutaways = cutawaysOf(b, s.blocks ?? []);                                // ADR-041: the bubble is not placed while a cutaway is on
         if (master) {
           const bb = s.bubble ?? {}, size = bb.sizeU ?? REELS.bubbleSizeU, top = bb.topU ?? REELS.bubbleTopU;
           // the bubble scales in once; when explain scenes follow each other it stays put (the same speaker continues)
-          const entrance = prevExplain === null;
-          bubbleOps.push(add('op:overlay.addVideo', { assetId: master, atMs: b.startMs, durationMs: b.lenMs, trimBeforeMs: cut.startMs, muted: true, shape: 'circle', size, position: { x: 0, y: round1(top + size / 2 - f.h / 2) },
-            ring: { colour: (bb.ringColour ?? REELS.ringColour).toUpperCase(), widthU: bb.ringWidthU ?? REELS.ringWidthU }, focus: bb.focus ?? { ...REELS.focus },
-            motion: entrance ? motion('preset:motion.scale-in', 450, { fromScale: 0.6 }) : { presetId: 'preset:motion.none' } }));
+          let entrance = prevExplain === null;
+          // the bubble's segments = the scene minus the cutaway windows (each ≥ 300 ms), every segment trimmed to its own moment of the cut
+          const gaps: Array<[number, number]> = [];
+          let cursor = 0;
+          for (const cw of cutaways) { if (cw.fromRel - cursor >= 300) gaps.push([cursor, cw.fromRel]); cursor = Math.max(cursor, cw.toRel); }
+          if (b.lenMs - cursor >= 300) gaps.push([cursor, b.lenMs]);
+          for (const [g0, g1] of gaps) {
+            bubbleOps.push(add('op:overlay.addVideo', { assetId: master, atMs: b.startMs + g0, durationMs: g1 - g0, trimBeforeMs: cut.startMs + g0, muted: true, shape: 'circle', size, position: { x: 0, y: round1(top + size / 2 - f.h / 2) },
+              ring: { colour: (bb.ringColour ?? REELS.ringColour).toUpperCase(), widthU: bb.ringWidthU ?? REELS.ringWidthU }, focus: bb.focus ?? { ...REELS.focus },
+              motion: entrance ? motion('preset:motion.scale-in', 450, { fromScale: 0.6 }) : { presetId: 'preset:motion.none' } }));
+            entrance = false;
+          }
         }
         const heading = textOf(s.heading ?? s.headline);
-        flowFitted(b, s.blocks ?? [], safe.top + 20, GB, (k) => {
+        flowFitted(b, (s.blocks ?? []).filter((x) => !CUTAWAY_KINDS.includes(x.kind)), safe.top + 20, GB, (k) => {
           if (!heading) return safe.top + 20;
           const bx = text(b, heading, { size: Math.round(84 * k), weight: 800, colour: c.text }, X0, safe.top + 20, W, 0, motion('preset:motion.word-stagger', 500, { staggerFrames: 3 }), 'heading');
           return bx.y1 + Math.round(36 * k);
         });
         if (s.source) sourceTag(b, textOf(s.source)!);
+        if (cutaways.length) cutawayOps(b, cutaways);                                 // in front of the graphics
         prevExplain = b;
       }
     } else {

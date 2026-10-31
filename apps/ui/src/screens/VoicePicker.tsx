@@ -4,7 +4,7 @@
 // connect the provider / Private Mode), the ElevenLabs / Azure / Google Cloud keys (FR-269), and a cost estimate for the current text.
 // FR-268: the Service sorts the list by naturalness for the language (what can run now first) and marks ONE recommended voice,
 // which is the default choice.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Pause, Play } from 'lucide-react';
 import { EmError } from '@expertmotion/shared';
 import { useStore } from '../state/store.js';
@@ -50,9 +50,19 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
   const selected = items.find((v) => v.id === value) ?? null;
   // FR-268: the recommended voice (most natural that can run now) is the default; older Services: the first that can run
   useEffect(() => { if (!value && items.length) onChange(items.find((v) => v.recommended) ?? items.find((v) => v.availability === 'ready') ?? items[0]!); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  // the Service order (naturalness) is kept; a search only moves better matches up
+  // Operator 2026-10-31 ("gratis model selalu di atas"): free offline voices come first, then cloud voices that can run now, then
+  // cloud voices still needing a key; inside a group the Service order (naturalness) is kept; a search only moves better matches up.
+  const group = (v: VoiceDto) => (!v.cloud ? 0 : v.availability === 'ready' ? 1 : 2);
   const shown = items.map((v, i) => ({ v, i })).filter(({ v }) => (filter === 'all' || (filter === 'local' ? !v.cloud : filter === 'cloud' ? v.cloud : v.gender === filter)))
-    .map((x) => ({ ...x, s: matchVoice(x.v, q) })).filter((x) => !q.trim() || x.s > 0).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.v);
+    .map((x) => ({ ...x, s: matchVoice(x.v, q) })).filter((x) => !q.trim() || x.s > 0).sort((a, b) => b.s - a.s || group(a.v) - group(b.v) || a.i - b.i).map((x) => x.v);
+  const firstPaid = shown.findIndex((v) => v.cloud);
+  // "Hubungkan" on a cloud voice without a key opens that provider's key field (voice-only keys here; chat providers on their screen)
+  const [openKey, setOpenKey] = useState<'elevenlabs' | 'azure' | 'google' | null>(null);
+  const keysRef = useRef<HTMLDivElement | null>(null);
+  const connect = (v: VoiceDto) => {
+    if (v.provider === 'elevenlabs' || v.provider === 'azure' || v.provider === 'google') { setOpenKey(v.provider); setTimeout(() => keysRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 0); }
+    else actions.setScreen({ kind: 'providers' });
+  };
   const play = async (v: VoiceDto) => {
     if (playing === v.id) { audio.current?.pause(); setPlaying(null); return; }
     setPreviewErr(null);
@@ -88,8 +98,10 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
         {loadErr && <li data-el="scr.generate.voice.error" role="alert" className="flex items-center gap-2 text-[12px] text-em-danger">{t(`err.${loadErr}.title`)} · {loadErr}
           <button type="button" className="font-semibold text-em-accent underline" onClick={() => { setList(null); void load(true); }}>{t('ui.lib.assets.error.retry')}</button></li>}
         {list && !loadErr && shown.length === 0 && <li className="text-[12px] text-em-muted">{t('ui.scr.generate.voice.none')}</li>}
-        {shown.map((v) => (
-          <li key={v.id} role="option" aria-selected={v.id === value} data-el="scr.generate.voice.row" data-voice-id={v.id}
+        {list && !loadErr && shown.length > 0 && !shown[0]!.cloud && <li data-el="scr.generate.voice.group.free" className="px-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-em-success">{t('ui.scr.generate.voice.group.free')}</li>}
+        {shown.map((v, idx) => (<Fragment key={v.id}>
+          {idx === firstPaid && firstPaid >= 0 && <li data-el="scr.generate.voice.group.paid" className="px-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-em-muted">{t('ui.scr.generate.voice.group.paid')}</li>}
+          <li role="option" aria-selected={v.id === value} data-el="scr.generate.voice.row" data-voice-id={v.id} data-free={!v.cloud}
             className={cx('flex items-center gap-2 rounded-[6px] border px-2 py-1', v.id === value ? 'border-em-accent' : 'border-em-line')}>
             <button type="button" data-el="scr.generate.voice.preview" aria-label={t('ui.scr.generate.voice.preview', { name: v.name })} title={status(v) ?? t('ui.scr.generate.voice.preview', { name: v.name })}
               disabled={v.availability !== 'ready'} onClick={() => void play(v)} className="text-em-text-2 disabled:opacity-40">
@@ -101,11 +113,12 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
               {previewErr?.id === v.id && <span className="text-[11px] text-em-danger">{t(`err.${previewErr.code}.title`)} · {previewErr.code}</span>}
             </button>
             {v.recommended && <Badge el="scr.generate.voice.recommended" tone="accent" title={t('ui.scr.generate.voice.recommended.tip')}>{t('ui.scr.generate.voice.recommended')}</Badge>}
-            <Badge tone={v.cloud ? 'info' : 'success'}>{v.cloud ? t(`ui.scr.generate.voice.provider.${v.provider}`) : t('ui.scr.generate.voice.offline')}</Badge>
+            <Badge tone={v.cloud ? 'warn' : 'success'} title={v.cloud ? t('ui.scr.generate.voice.group.paid') : t('ui.scr.generate.voice.group.free')}>{v.cloud ? `${t('ui.scr.generate.voice.paid')} · ${t(`ui.scr.generate.voice.provider.${v.provider}`)}` : t('ui.scr.generate.voice.free')}</Badge>
             {v.cloud && v.usdPer1kChars ? <span className="t-mono shrink-0 text-[11px] text-em-muted" title={t('ui.scr.generate.voice.cost.hint')}>${formatNumber(v.usdPer1kChars, lang, 3)}/1k</span> : null}
+            {v.cloud && v.availability === 'no-connection' && <Button el="scr.generate.voice.connect" size={28} title={t('ui.scr.generate.voice.connect.tip')} onClick={() => connect(v)}>{t('ui.scr.generate.voice.connect')}</Button>}
             {v.availability === 'model-missing' && <Button el="scr.generate.voice.install" size={28} icon={<Download size={12} />} loading={state.models.some((m) => m.key === v.modelKey && (m.status === 'downloading' || m.status === 'verifying'))} onClick={() => install(v)}>{t('ui.scr.generate.voice.install')}</Button>}
           </li>
-        ))}
+        </Fragment>))}
       </ul>
       {selected && (
         <div data-el="scr.generate.voice.selected" className="text-[12px] text-em-text-2">
@@ -114,7 +127,10 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
           {cost !== null && <span data-el="scr.generate.voice.cost"> · {t('ui.scr.generate.voice.cost', { usd: formatNumber(cost, lang, 4), chars })}</span>}
         </div>
       )}
-      <details data-el="scr.generate.voice.el" className="text-[12px]">
+      <div ref={keysRef} data-el="scr.generate.voice.keys" className="mt-1 flex flex-col gap-1 rounded-[6px] border border-em-line bg-em-panel-2 px-2 py-1.5">
+        <p className="text-[12px] font-semibold text-em-text">{t('ui.scr.generate.voice.keys.title')}</p>
+        <p className="text-[11px] text-em-muted">{t('ui.scr.generate.voice.keys.hint')}</p>
+      <details data-el="scr.generate.voice.el" className="text-[12px]" open={openKey === 'elevenlabs' || undefined}>
         <summary className="cursor-pointer text-em-text-2">{list?.elevenLabsKey ? t('ui.scr.generate.voice.el.connected', { hint: list.elevenLabsKey }) : t('ui.scr.generate.voice.el.add')}</summary>
         <div className="mt-1 flex items-center gap-2">
           <input type="password" autoComplete="off" aria-label={t('ui.scr.generate.voice.el.key')} placeholder={t('ui.scr.generate.voice.el.key')} className={cx(inputCls, '!h-7 flex-1')} value={elKey} onChange={(e) => setElKey(e.target.value)} />
@@ -123,17 +139,18 @@ export function VoicePicker({ language, value, onChange, chars }: { language: 'i
         </div>
         <p className="mt-1 text-em-muted">{t('ui.scr.generate.voice.el.note')}</p>
       </details>
-      <CloudKeyForm el="scr.generate.voice.azure" hint={list?.azureKey ?? null} detail={list?.azureRegion ?? null} region privateMode={list?.privateMode === true}
+      <CloudKeyForm el="scr.generate.voice.azure" hint={list?.azureKey ?? null} detail={list?.azureRegion ?? null} region privateMode={list?.privateMode === true} open={openKey === 'azure'}
         save={(k, r) => runtime.api.setAzureKey(k, r ?? '')} remove={() => runtime.api.deleteAzureKey()} done={() => load(true)} provider="azure" />
-      <CloudKeyForm el="scr.generate.voice.google" hint={list?.googleCloudKey ?? null} detail={null} privateMode={list?.privateMode === true}
+      <CloudKeyForm el="scr.generate.voice.google" hint={list?.googleCloudKey ?? null} detail={null} privateMode={list?.privateMode === true} open={openKey === 'google'}
         save={(k) => runtime.api.setGoogleCloudKey(k)} remove={() => runtime.api.deleteGoogleCloudKey()} done={() => load(true)} provider="google" />
+      </div>
     </div>
   );
 }
 
 /** FR-269: a voice-only key (Azure AI Speech key + region, Google Cloud Text-to-Speech key): checked by the Service, hint only. */
-function CloudKeyForm({ el, hint, detail, region, privateMode, save, remove, done, provider }: { el: string; hint: string | null; detail: string | null; region?: boolean; privateMode: boolean;
-  save: (key: string, region?: string) => Promise<unknown>; remove: () => Promise<void>; done: () => Promise<void>; provider: 'azure' | 'google' }) {
+function CloudKeyForm({ el, hint, detail, region, privateMode, save, remove, done, provider, open }: { el: string; hint: string | null; detail: string | null; region?: boolean; privateMode: boolean;
+  save: (key: string, region?: string) => Promise<unknown>; remove: () => Promise<void>; done: () => Promise<void>; provider: 'azure' | 'google'; open?: boolean }) {
   const prefix = `ui.scr.generate.voice.${provider}`;
   const { actions, t } = useStore();
   const [key, setKey] = useState(''); const [reg, setReg] = useState(detail ?? 'southeastasia'); const [busy, setBusy] = useState(false);
@@ -143,7 +160,7 @@ function CloudKeyForm({ el, hint, detail, region, privateMode, save, remove, don
   };
   const why = key.trim().length < 10 ? t(`${prefix}.key`) : region && !/^[a-z][a-z0-9]{2,30}$/.test(reg.trim().toLowerCase()) ? t(`${prefix}.region`) : privateMode ? t('err.EM-8202.title') : null;
   return (
-    <details data-el={el} className="text-[12px]">
+    <details data-el={el} className="text-[12px]" open={open || undefined}>
       <summary className="cursor-pointer text-em-text-2">{hint ? t(`${prefix}.connected`, { hint: detail ? `${hint} · ${detail}` : hint }) : t(`${prefix}.add`)}</summary>
       <div className="mt-1 flex flex-wrap items-center gap-2">
         <input type="password" autoComplete="off" data-el={`${el}.key`} aria-label={t(`${prefix}.key`)} placeholder={t(`${prefix}.key`)} className={cx(inputCls, '!h-7 min-w-[180px] flex-1')} value={key} onChange={(e) => setKey(e.target.value)} />

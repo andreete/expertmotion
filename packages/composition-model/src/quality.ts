@@ -46,6 +46,7 @@ export function contrastRatio(a: string, b: string): number {
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 }
 
+/** The painted box of an overlay: size × scale around its centre; ADR-041 a picture's border is drawn INSIDE the box, a shadow is soft and ignored. */
 function shapeBox(o: OverlayElementT, f: { w: number; h: number }): BoxU {
   const s = o.scale ?? 1, w = o.size.w * s, h = o.size.h * s, cx = f.w / 2 + o.position.x, cy = f.h / 2 + o.position.y;
   return { x0: cx - w / 2, y0: cy - h / 2, x1: cx + w / 2, y1: cy + h / 2 };

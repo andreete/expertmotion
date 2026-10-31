@@ -116,9 +116,12 @@ function demo(p) {
     case 'text': return apply(base(), [{ op: 'op:background.set', args: { presetId: 'preset:background.solid' } }, { op: d.op, args: { ...d.args, text: 'Harga Naik Lagi', atMs: 0, durationMs: 2000 } }, fixed]);
     case 'texteffect': case 'motion': {
       const m = apply(base(), [{ op: 'op:background.set', args: { presetId: 'preset:background.solid' } }, { op: 'op:text.add', args: { text: 'Harga Naik Lagi', variant: 'preset:text.title', atMs: 0, durationMs: 2000 } }, fixed]);
-      return apply(m, [{ op: d.op, target: { kind: 'text', id: m.tracks.text[0].id }, args: d.args }]);
+      // ADR-041: the boxed effect shows nothing without listed words; box the middle word of the demo title
+      const args = p.id === 'preset:texteffect.boxed' ? { ...d.args, params: { ...(d.args.params ?? {}), words: ['Naik'] } } : d.args;
+      return apply(m, [{ op: d.op, target: { kind: 'text', id: m.tracks.text[0].id }, args }]);
     }
-    case 'caption': return apply(base(), [{ op: 'op:background.set', args: { presetId: 'preset:background.solid' } }, { op: d.op, args: d.args },
+    // ADR-041: the emphasis style needs a keyword group to show its big italic word ("semua")
+    case 'caption': return apply(base(), [{ op: 'op:background.set', args: { presetId: 'preset:background.solid' } }, { op: d.op, args: p.id === 'preset:caption.emphasis' ? { ...d.args, params: { ...(d.args.params ?? {}), keywords: [{ words: ['semua'], colour: '#FFD43B' }] } } : d.args },
       { op: 'op:caption.setPages', args: { pages: [{ text: ' Halo semua kamu', startMs: 0, durationMs: 2000, tokens: [{ text: ' Halo', fromMs: 0, toMs: 650 }, { text: ' semua', fromMs: 650, toMs: 1300 }, { text: ' kamu', fromMs: 1300, toMs: 2000 }] }] } }, fixed]);
     default: return null;   // font, palette, fontpair, easing: generated swatches in the Editor; audio: no visual
   }

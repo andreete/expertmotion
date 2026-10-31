@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { applyOperations, createEmptyModel, deriveTiming, frameInUnits, hashModel, qualityCheck, textGeometry, validate, type AssetFacts, type CompositionModelT, type OperationT } from '@expertmotion/composition-model';
-import { BRAINSTORM_TOOL_NAMES, buildRewriteEnvelope, captionPagesFromWords, composeCover, composeScenes, COVER_BAND, COVER_BAND_OPACITY, COVER_FACE, coverAtMs, coverOps, cutWordsFor, EditPlan, EDITOR_TOOL_NAMES, finalProfile, findSaid, findSaidIndex, previewProfile, REELS, reelsSafeArea, runTool, TALKING_HEAD_CONSTRAINT, validatePlan, wordMatches, wordSimilarity, type AnalysisCut, type ComposeOk, type FootageAnalysisLike, type TimedWord, type VideoSpecT } from '../src/index.js';
+import { BRAINSTORM_TOOL_NAMES, buildRewriteEnvelope, captionPagesFromWords, composeCover, composeScenes, COVER_BAND, COVER_BAND_OPACITY, COVER_FACE, coverAtMs, coverOps, cutWordsFor, EditPlan, EDITOR_TOOL_NAMES, finalProfile, findSaid, findSaidIndex, previewProfile, REELS, reelsSafeArea, runTool, TALKING_HEAD_CONSTRAINT, TOOL_DEFINITIONS, BRAINSTORM_TOOL_INPUTS, toolSpecs, toolsPromptBlock, validatePlan, wordMatches, wordSimilarity, type AnalysisCut, type ComposeOk, type FootageAnalysisLike, type TimedWord, type VideoSpecT } from '../src/index.js';
 import { BRAINSTORM_SYSTEM, EDITOR_SYSTEM, PROMPT_SET_VERSION } from '../src/prompts.generated.js';
 
 const SPEC = JSON.parse(fs.readFileSync(new URL('./fixtures/talkinghead-spec.json', import.meta.url), 'utf8')) as VideoSpecT;
@@ -372,6 +372,23 @@ describe('media tools, envelope block and prompt set', () => {
     const denied = await runTool('media.frames', { cutIds: ['c1'] }, { 'media.frames': () => ({}) }, EDITOR_TOOL_NAMES);
     expect(denied.ok).toBe(false);
   });
+  it('composition.frames (FR-310 … FR-312) belongs to BOTH agents: atMs ≤ 6, scenes flag, the sheet becomes an image part, the summary stays in the result', async () => {
+    expect(BRAINSTORM_TOOL_NAMES).toContain('composition.frames'); expect(EDITOR_TOOL_NAMES).toContain('composition.frames');
+    expect(TOOL_DEFINITIONS['composition.frames'].description.split(/\s+/).length).toBeLessThanOrEqual(60);
+    expect(toolSpecs(['composition.frames'])[0]!.name).toBe('composition_frames');
+    expect(BRAINSTORM_TOOL_INPUTS['composition.frames'].safeParse({}).success).toBe(true);
+    expect(BRAINSTORM_TOOL_INPUTS['composition.frames'].safeParse({ atMs: [12_000, 13_000], scenes: true }).success).toBe(true);
+    expect(BRAINSTORM_TOOL_INPUTS['composition.frames'].safeParse({ atMs: [1, 2, 3, 4, 5, 6, 7] }).success).toBe(false);
+    expect(BRAINSTORM_TOOL_INPUTS['composition.frames'].safeParse({ atMs: [-5] }).success).toBe(false);
+    const handler = { 'composition.frames': () => ({ versionId: 'v7', cols: 2, rows: 1, cells: [{ atMs: 750, x: 0, y: 0, w: 360, h: 640 }], summary: ['0:01 — clip 1 (scene background.spotlight); texts: title \'Tagihan listrik bengkak?\''], mediaType: 'image/jpeg', imageBase64: 'QUJD' }) };
+    for (const allowed of [BRAINSTORM_TOOL_NAMES, EDITOR_TOOL_NAMES]) {
+      const rec = await runTool('composition.frames', { atMs: [750] }, handler, allowed);
+      expect(rec.ok).toBe(true); expect(rec.image).toEqual({ mediaType: 'image/jpeg', data: 'QUJD', name: 'preview-frames.jpg' });
+      expect(rec.output).toMatchObject({ versionId: 'v7', image: 'attached as a picture of this message' }); expect(JSON.stringify(rec.output)).not.toContain('QUJD');
+      expect((rec.output as { summary: string[] }).summary[0]).toContain('Tagihan listrik');
+    }
+    expect(toolsPromptBlock(['composition.frames'])).toContain('composition.frames {"atMs"?: number[] (≤ 6), "scenes"?: boolean}');
+  });
   it('the envelope carries the compact analysis, the talking-head constraint + signature and the channel profile', () => {
     const model = empty();
     const env = buildRewriteEnvelope({ model, baseVersion: 'v', assets: ASSETS, intents: [], lockedKeys: [], tier: 'T1', creatorMessage: 'buat reelnya', footageAnalysis: ANALYSIS, channelProfile: 'Reels 9:16, handle @kopi.cerita, nada santai' });
@@ -384,8 +401,10 @@ describe('media tools, envelope block and prompt set', () => {
     const plain = buildRewriteEnvelope({ model, baseVersion: 'v', assets: ASSETS, intents: [], lockedKeys: [], tier: 'T1' });
     expect(plain.footageAnalysis).toBeUndefined(); expect(plain.capabilities.sceneCompose).not.toContain('TALKING-HEAD MODE');
   });
-  it('prompt set v1.8.2: P-1 has the channel profile block and the PRD-first flow, P-2 the talking-head mode and cover.render', () => {
-    expect(PROMPT_SET_VERSION).toBe('1.8.2');
+  it('prompt set v1.9.1: P-1 has the channel profile block and the PRD-first flow, P-2 the talking-head mode and cover.render; both see the preview (FR-310)', () => {
+    expect(PROMPT_SET_VERSION).toBe('1.9.1');
+    for (const sys of [BRAINSTORM_SYSTEM, EDITOR_SYSTEM]) { expect(sys).toContain('SEE BEFORE YOU ANSWER ABOUT THE PICTURE'); expect(sys).toContain('composition.frames'); expect(sys).toMatch(/Never say you cannot see/); }
+    expect(EDITOR_SYSTEM).toContain('Minta saya cek hasilnya');
     expect(BRAINSTORM_SYSTEM).toContain('{{channel_profile}}');
     expect(BRAINSTORM_SYSTEM).toContain('media.analyze');
     expect(BRAINSTORM_SYSTEM).toContain('PRD siap');

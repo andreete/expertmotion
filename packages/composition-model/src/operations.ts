@@ -3,7 +3,7 @@
 // pipeline: video overlays, clip zoom keyframes, audio volume / gain segments).
 // test/operations.test.ts fails if this table and the document disagree.
 import { z } from 'zod';
-import { CaptionPage, ClipZoom, GainSegment, Hex, OverlayFocus, OverlayRing, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
+import { CaptionPage, ClipZoom, GainSegment, Hex, OverlayBorder, OverlayFocus, OverlayRing, OverlayShadow, PresetId, Position, RATIOS, RESOLUTIONS } from './schema.js';
 
 /** `video` (ADR-039) names a video OVERLAY (face bubble), never a Clip of the video Track (that is `clip`). */
 export const TARGET_KINDS = ['sequence', 'clip', 'cut', 'text', 'caption', 'audio', 'shape', 'image', 'video', 'background', 'effect', 'project', 'selection', 'playhead'] as const;
@@ -47,6 +47,8 @@ const ClipLookArgs = {
 };
 /** ADR-039 op:overlay.addVideo / op:overlay.setShape pieces (strict: the model sees an EM-2102 on a typo, not a silent ignore). */
 const FocusArg = OverlayFocus.strict(), RingArg = OverlayRing.strict(), GainArg = z.array(GainSegment.strict()).max(500);
+/** ADR-041 op:overlay.addImage look: rounded corners (u), drop shadow (`true` = default look, or blurU / opacity), solid border. */
+const ShadowArg = z.union([z.boolean(), OverlayShadow.strict()]), BorderArg = OverlayBorder.strict();
 
 export type PropertyClass = 'scalar' | 'list' | 'exclusive-group';
 export interface OpDef { args: z.ZodType; targets: readonly TargetKind[] | null; propertyClass: PropertyClass | null; destructive: boolean }
@@ -106,7 +108,10 @@ export const OPERATIONS = {
     height: z.number().min(1).max(4000).optional(), opacity: z.number().min(0).max(1).optional(), motion: MotionArg.optional(), scale: OverlayScaleArg.optional(), rotation: RotationArg.optional() }, null, 'list'),   // ADR-034: height (u) = a w × h box; motion object; scale / rotation as op:element.setTransform (Duplicate / Paste keep them)
   'op:shape.remove': def({}, ['shape'], null, true),
   // ADR-020 addition (Stage 3): image overlays (FR-029 "Insert Image", logo/product photo). size = width in u; height follows the image aspect.
-  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional(), layer: lane.optional(), motion: MotionArg.optional(), scale: OverlayScaleArg.optional(), rotation: RotationArg.optional() }, null, 'list'),
+  // ADR-041: `radius` (u), `shadow` (true | {blurU, opacity}; false = none) and `border` ({colour, widthU}) give the picture the
+  // "screenshot card" look of viral Reels; absent = the flat picture before.
+  'op:overlay.addImage': def({ assetId: z.string(), atMs: ms, durationMs: dur.optional(), position: z.union([Position, NamedPosition]).optional(), size: z.number().min(10).max(4000).optional(), objectFit: z.enum(['cover', 'contain']).optional(), opacity: z.number().min(0).max(1).optional(), layer: lane.optional(), motion: MotionArg.optional(), scale: OverlayScaleArg.optional(), rotation: RotationArg.optional(),
+    radius: z.number().min(0).max(2000).optional(), shadow: ShadowArg.optional(), border: BorderArg.optional() }, null, 'list'),
   // ADR-039 (Reels face bubble / picture-in-picture): a video asset on the overlay Track, muted by default, trimmed at
   // `trimBeforeMs`; `size` = width in u (height from the source aspect, or `height`; a circle uses `size` for both), masked
   // `rect` (`radius` u) or `circle`, ring outside the mask, `focus` = source point (fractions) at the box centre, zoomed.

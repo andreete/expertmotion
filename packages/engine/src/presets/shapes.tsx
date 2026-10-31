@@ -1,4 +1,5 @@
 import React from 'react';
+import { useCurrentFrame, useVideoConfig } from 'remotion';
 import { makeArrow, makeCallout, makeCircle, makeEllipse, makeHeart, makePie, makePolygon, makeRect, makeSpark, makeStar, makeTriangle } from '@remotion/shapes';
 import { evolvePath } from '@remotion/paths';
 import { INFOGRAPHICS } from './infographics.js';
@@ -31,6 +32,19 @@ const PathShape: React.FC<ShapeProps & { geo: Geo; strokeOnly?: boolean; dash?: 
 };
 const checkPath = (s: number): Geo => ({ path: `M ${0.1 * s} ${0.52 * s} L ${0.38 * s} ${0.8 * s} L ${0.9 * s} ${0.2 * s}`, width: s, height: s });
 const chevronPath = (s: number): Geo => ({ path: `M ${0.3 * s} ${0.12 * s} L ${0.72 * s} ${0.5 * s} L ${0.3 * s} ${0.88 * s}`, width: s, height: s });
+/** ADR-041: the two diagonals of a w × h box (inset by half the stroke so round caps stay inside); one path, so draw-on strokes both. */
+export const xMarkPath = (w: number, h: number, sw: number): Geo => { const i = sw / 2; return { path: `M ${i} ${i} L ${w - i} ${h - i} M ${w - i} ${i} L ${i} ${h - i}`, width: w, height: h }; };
+/** ADR-041 `pulse`: slow breathing 1 → 1.04 → 1 with a 2 s period (sine, frame-based, so preview = render). */
+export const pulseScale = (frame: number, fps: number, on: boolean): number => (on ? Math.round((1.02 - 0.02 * Math.cos((2 * Math.PI * frame) / (2 * fps))) * 10_000) / 10_000 : 1);
+/** `preset:shape.highlight-box`: stroke-only rounded rectangle in the stroke (else fill) colour that breathes when `pulse` is on. */
+const HighlightBox: React.FC<ShapeProps> = (p) => {
+  const frame = useCurrentFrame(); const { fps } = useVideoConfig();
+  const sw = p.strokeWidth ?? num(p.params['strokeU'], 8) * p.u;
+  const iw = Math.max(1, p.w - sw), ih = Math.max(1, p.h - sw);
+  const geo = makeRect({ width: iw, height: ih, cornerRadius: Math.min(num(p.params['radiusU'], 12) * p.u, ih / 2, iw / 2) });
+  const scale = pulseScale(frame, fps, p.params['pulse'] !== false);
+  return <div data-em-highlight-box data-em-pulse={scale} style={{ width: '100%', height: '100%', scale: `${scale}`, transformOrigin: '50% 50%' }}><PathShape {...p} fill={p.stroke ?? p.fill} strokeWidth={sw} geo={geo} strokeOnly linecap="butt" /></div>;
+};
 
 /** preset:shape.* → geometry from @remotion/shapes make* (DESIGN_CATALOGUE §6), drawn by one SVG path renderer. */
 export const SHAPES: Record<string, React.FC<ShapeProps>> = {
@@ -60,6 +74,10 @@ export const SHAPES: Record<string, React.FC<ShapeProps>> = {
   'preset:shape.pill': (p) => <PathShape {...p} geo={makeRect({ width: p.w, height: p.h, cornerRadius: Math.min(p.w, p.h) / 2 })} />,
   'preset:shape.check': (p) => <PathShape {...p} strokeWidth={p.strokeWidth ?? Math.min(p.w, p.h) * 0.13} geo={checkPath(Math.min(p.w, p.h))} strokeOnly />,
   'preset:shape.chevron': (p) => <PathShape {...p} strokeWidth={p.strokeWidth ?? Math.min(p.w, p.h) * 0.14} geo={chevronPath(Math.min(p.w, p.h))} strokeOnly />,
+  // ADR-041 annotations of viral explainers: the red X over a cancelled poster (two stroked diagonals, draw-on friendly) and the
+  // breathing outline that frames a detail of a screenshot. Colour = stroke, else fill (the composer passes red #E53935).
+  'preset:shape.x-mark': (p) => { const sw = p.strokeWidth ?? num(p.params['strokeU'], 18) * p.u; return <div data-em-x-mark style={{ width: '100%', height: '100%' }}><PathShape {...p} fill={p.stroke ?? p.fill} strokeWidth={sw} geo={xMarkPath(p.w, p.h, sw)} strokeOnly /></div>; },
+  'preset:shape.highlight-box': (p) => <HighlightBox {...p} />,
   // ADR-039 (Reels infographics): data-driven presets drawn with HTML + inline SVG and the theme fonts (presets/infographics.tsx)
   ...INFOGRAPHICS,
 };

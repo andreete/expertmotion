@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Database and security engineer |
-| Last updated | 2026-10-26 |
+| Last updated | 2026-10-31 (ADR-041: OverlayImage radius / shadow / border) |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 002, 006), ARCHITECTURE.md, AI_WORKFLOW.md, DESIGN_CATALOGUE.md, PERFORMANCE.md |
 | Used by | API_SPECIFICATION.md, BLUEPRINT.md, SECURITY.md, TEST_PLAN.md, GOLDEN_SCENARIOS.md |
 | Owner of | SQLite DDL, migrations policy, encryption/key wrapping, the Composition Model JSON Schema, checkpoint/backup formats |
@@ -386,7 +386,9 @@ export const TextLayer = z.object({
 // ADR-028 (op:element.setTransform): zoom of the box (1 = `size`; absent = 1) and rotation in degrees (absent = 0); x / y stay in `position`.
 const OverlayScale = z.number().min(0.05).max(20).optional(), OverlayRotation = z.number().min(-360).max(360).optional();
 export const OverlayElement = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size, objectFit: z.enum(['cover','contain']), opacity: z.number(), scale: OverlayScale, rotation: OverlayRotation, motion: Motion.nullable(), effects: z.array(EffectInstance).max(3) }),
+  // ADR-041 (op:overlay.addImage): optional picture look — `radius` corner radius (u), `shadow` drop shadow (`true` = 24 u blur at 0.45, or its own blurU / opacity), `border` solid frame inside the box; absent = the flat picture before.
+  z.object({ kind: z.literal('image'), id: z.string(), assetId: z.string(), timing: Timing, layer: Lane, position: Position, size: Size, objectFit: z.enum(['cover','contain']), opacity: z.number(), scale: OverlayScale, rotation: OverlayRotation, motion: Motion.nullable(), effects: z.array(EffectInstance).max(3),
+    radius: z.number().min(0).max(2000).optional(), shadow: z.union([z.literal(true), z.object({ blurU: z.number().min(0).max(400), opacity: z.number().min(0).max(1) })]).optional(), border: z.object({ colour: Hex, widthU: z.number().min(0).max(200) }).optional() }),
   z.object({ kind: z.literal('shape'), id: z.string(), presetId: PresetId, timing: Timing, layer: Lane, position: Position, size: Size, fill: Hex, stroke: Hex.optional(), strokeWidth: z.number().optional(), opacity: z.number().min(0).max(1).optional() /* op:overlay.setOpacity */, scale: OverlayScale, rotation: OverlayRotation, params: z.record(z.unknown()).default({}), motion: Motion.nullable() }),
   // ADR-039 (op:overlay.addVideo / setShape): a video on the overlay Track (face bubble, picture-in-picture); `position` = box centre (u);
   // `shape` rect (`radius` u corners) | circle; `ring` drawn outside the mask; `focus` = SOURCE point (fractions 0..1) at the box centre, zoomed. Target kind `video`.
@@ -472,6 +474,7 @@ Canonical JSON (sorted keys, no whitespace) → sha256 → `composition_versions
 | 32 | s3_license_states_no_trial | Trial Mode removed (Operator decision 2026-10-25, LICENSE_OPERATIONS §7): the one-row `license` table is rebuilt with `status IN ('licensed','unlicensed','invalid','revoked','machine-mismatch')`; existing rows map `active` → `licensed`, `trial` → `unlicensed`, `updates-expired` → `invalid` (`revoked`, `invalid` unchanged). The state is re-derived from the stored key at every start, so the mapping only has to satisfy the CHECK |
 | 33 | s3_asset_attributions | `asset_attributions(asset_id PK → assets ON DELETE CASCADE, project_id, source openverse/wikimedia, source_id, title, creator, license cc0/pdm/by/by-sa, license_version, license_url, landing_url, attribution, created_at)` (FR-217, SEC-142: the credit line of a picture imported from a research answer) |
 | 34 | s3_chat_documents | `chat_documents(id, project_id → projects ON DELETE CASCADE, name, kind pdf/docx/text, bytes, chars, truncated, pages, text, created_at)` (FR-221, SEC-143: the extracted text of a document attached in the chat; the file is not kept) |
+| 35 | s3_internet_assets | `assets.credit TEXT`, `assets.licence TEXT` (the author / site / URL and the licence label of a picture or clip imported from the internet — Openverse / Wikimedia / Pexels / a web page / a screenshot; listed in CREDITS.txt), `research_keys(provider PK 'pexels', sealed_key, hint, created_at)` (the Creator's own stock-library key, sealed like the voice keys) (ADR-041, FR-300 … FR-307, SEC-144) |
 
 Later migrations append rows here (ADR-024).
 
@@ -481,6 +484,7 @@ Later migrations append rows here (ADR-024).
 |---|---|---|
 | 1 | initial (§4 as baselined 2026-10-24) | — |
 | 2 | ADR-027 (2026-10-26): `layer` on TextLayer / OverlayImage / OverlayShape, `lane` on AudioLayer; looping audio honours `durationMs` | `MIGRATIONS[1]` = `assignLanesV1`: visual items are taken in the v1 render order (overlays in array order, then texts in array order) and each gets the lowest layer above every earlier item it overlaps in time, so every overlapping pair keeps its v1 front/back order and lanes are dense; audio layers get the first free lane in array order; `durationMs` is removed from v1 looping layers (v1 looped them to the end regardless). Golden fixture: `test/fixtures/model-v1.json` → `model-v2.expected.json`. Stored versions migrate lazily on load; opening a project commits the migrated head as a `cause = 'system'` version (R-016); checkpoints written before the migration still verify against the hash of their stored JSON |
+| 2 (unchanged) | ADR-041 (2026-10-31): optional OverlayImage `radius`, `shadow`, `border` (picture look of viral explainers) | none: optional fields, absent = the flat picture before (same policy as ADR-028); an older build drops them silently |
 | 2 (unchanged) | ADR-039 (2026-10-31): optional Clip `zoom`, optional AudioLayer `gain`, new overlay kind `video` (OverlayVideo) | none: the fields are optional and absent means the picture before; a stored model never holds a `video` overlay unless an ADR-039 build wrote it. Same caveat as ADR-028: an older build drops `zoom` / `gain` silently and refuses a model with a `video` overlay (unknown discriminator → EM-2001) |
 | 2 (unchanged) | ADR-028 (2026-10-26): optional Clip `transform`, optional `scale` / `rotation` on OverlayImage / OverlayShape | none: the fields are optional and absent means the identity, so every stored v2 model parses unchanged with the same hash (checkpoints keep verifying). Policy used (§4.5): an optional field whose absence reproduces the old picture needs no version bump; a field that must be defaulted into stored JSON does. Provisional caveat (ADR-028): a build from before ADR-028 drops the fields silently instead of refusing the project |
 

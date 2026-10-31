@@ -3,7 +3,7 @@ import React, { useMemo } from 'react';
 import { AbsoluteFill, Img, Sequence, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { Audio, Video } from '@remotion/media';
 import { TransitionSeries, linearTiming, springTiming } from '@remotion/transitions';
-import { deriveFrameTiming, framesOf, visualStack, type AudioLayerT, type ClipT, type CompositionModelT, type OverlayVideoT } from '@expertmotion/composition-model';
+import { deriveFrameTiming, deriveTiming, framesOf, visualStack, type AudioLayerT, type ClipT, type CompositionModelT, type OverlayImageT, type OverlayVideoT } from '@expertmotion/composition-model';
 import type { EngineInputProps, AssetUrls } from '../inputs.js';
 import { ThemeProvider, useTheme } from '../theme.js';
 import { useLayout, type Layout } from '../layout.js';
@@ -11,8 +11,8 @@ import { ensureFontsLoaded } from '../fonts.js';
 import { motionCss, motionFrame, motionStyle } from '../motion.js';
 import { easingFn } from '../easing.js';
 import { TRANSITIONS } from '../presets/transitions.js';
-import { effectsFor } from '../presets/effects.js';
-import { BackgroundLayer, VideoDim } from '../presets/backgrounds.js';
+import { cssFilterFallback, effectsFor, htmlInCanvasSupported } from '../presets/effects.js';
+import { BackgroundLayer, VideoDim, blurredImageAssetId } from '../presets/backgrounds.js';
 import { SHAPES } from '../presets/shapes.js';
 import { TextElement } from '../presets/text.js';
 import { CaptionPageView } from '../presets/captions.js';
@@ -35,15 +35,23 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
   const stack = useMemo(() => visualStack(model), [model]);       // ADR-027: texts, images and shapes back → front by layer
   const premountFor = 2 * fps;                                 // Player default is 0; render default 2 s (REMOTION_CAPABILITY_MAP §A)
   const t = useTheme();
+  // ADR-041: the picture a blurred-image background copies — per scene clip the first image overlay inside the clip's window
+  // (else params.assetId), for the project background the first image overlay of the composition; resolved to a URL here.
+  const bgImage = useMemo(() => {
+    const src = (id: string | undefined) => { const a = id === undefined ? undefined : assets[id]; return a && a.kind === 'image' ? (quality === 'draft' && a.proxy ? a.proxy : a.playable) : undefined; };
+    const tm = deriveTiming(model);
+    return { project: src(blurredImageAssetId(model.background, model.tracks.overlay)),
+      clips: model.tracks.video.map((c, i) => (c.scene ? src(blurredImageAssetId(c.scene, model.tracks.overlay, { fromMs: tm.clipStartMs[i]!, toMs: tm.clipStartMs[i]! + c.durationMs })) : undefined)) };
+  }, [model, assets, quality]);
   return (
     <AbsoluteFill style={{ backgroundColor: t.bg, overflow: 'hidden' }}>
-      <BackgroundLayer background={model.background} />
+      <BackgroundLayer background={model.background} imageSrc={bgImage.project} />
       {model.tracks.video.length > 0 && (
         <TransitionSeries>
           {model.tracks.video.flatMap((clip, i) => {
             const nodes: React.ReactNode[] = [
               <TransitionSeries.Sequence key={clip.id} durationInFrames={ft.clipFrames[i]!} premountFor={premountFor}>
-                <ClipView clip={clip} urls={clip.assetId === undefined ? undefined : assets[clip.assetId]} quality={quality} layout={layout} durationInFrames={ft.clipFrames[i]!} />
+                <ClipView clip={clip} urls={clip.assetId === undefined ? undefined : assets[clip.assetId]} quality={quality} layout={layout} durationInFrames={ft.clipFrames[i]!} sceneImageSrc={bgImage.clips[i]} />
               </TransitionSeries.Sequence>,
             ];
             const tr = model.transitions.find((x) => x.cutIndex === i);
@@ -84,20 +92,23 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
   );
 };
 
-const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'draft' | 'full'; layout: Layout; durationInFrames: number }> = ({ clip, urls, quality, layout, durationInFrames }) => {
+const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'draft' | 'full'; layout: Layout; durationInFrames: number; sceneImageSrc?: string | undefined }> = ({ clip, urls, quality, layout, durationInFrames, sceneImageSrc }) => {
   const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const t = useTheme();
   const zoomScale = clipZoomScale(clip.zoom, frame, durationInFrames, fps);     // ADR-039: punch-in keyframes multiply the canvas scale
   // ADR-030: a scene clip (no media) paints its own background preset; motion, transform and transitions apply as for media.
   if (clip.scene) return (
     <AbsoluteFill style={{ ...motionStyle(clip.motion, frame, durationInFrames, fps, layout.u, t.defaultEasingId), overflow: 'hidden', backgroundColor: t.bg }} data-em-scene={clip.scene.presetId}>
-      <AbsoluteFill style={clipTransformStyle(clip.transform, layout.width, layout.height, zoomScale)}><BackgroundLayer background={clip.scene} /></AbsoluteFill>
+      <AbsoluteFill style={clipTransformStyle(clip.transform, layout.width, layout.height, zoomScale)}><BackgroundLayer background={clip.scene} imageSrc={sceneImageSrc} /></AbsoluteFill>
     </AbsoluteFill>
   );
   if (!urls) return <AbsoluteFill style={{ backgroundColor: '#000' }} />;
   const src = quality === 'draft' && urls.proxy ? urls.proxy : urls.playable;
-  const effects = effectsFor(clip.effects, frame, durationInFrames, fps);
+  // QA 2026-10-31: a browser without HTML-in-canvas (black Player with effects) gets a CSS filter stand-in instead of the effects
+  const canPaintEffects = htmlInCanvasSupported();
+  const effects = canPaintEffects ? effectsFor(clip.effects, frame, durationInFrames, fps) : [];
+  const fallbackFilter = canPaintEffects ? undefined : cssFilterFallback(clip.effects);
   const crop = clip.crop ? { clipPath: `inset(${clip.crop.top * 100}% ${clip.crop.right * 100}% ${clip.crop.bottom * 100}% ${clip.crop.left * 100}%)` } : {};
-  const style: React.CSSProperties = { width: '100%', height: '100%', ...crop };   // objectFit goes through the prop (Remotion warns on style.objectFit for <Video>)
+  const style: React.CSSProperties = { width: '100%', height: '100%', ...crop, ...(fallbackFilter ? { filter: fallbackFilter } : {}) };   // objectFit goes through the prop (Remotion warns on style.objectFit for <Video>)
   const fadeIn = clip.fadeInMs ? interpolate(frame, [0, framesOf(clip.fadeInMs, fps)], [0, 1], clampOpts) : 1;
   const fadeOut = clip.fadeOutMs ? interpolate(frame, [durationInFrames - framesOf(clip.fadeOutMs, fps), durationInFrames], [1, 0], clampOpts) : 1;
   // ADR-028: the media is moved / zoomed / rotated inside the clip's frame, which clips it (also during a transition).
@@ -126,8 +137,23 @@ const OverlayView: React.FC<{ element: CompositionModelT['tracks']['overlay'][nu
   }
   if (!urls) return null;
   if (element.kind === 'video') return <div data-em-video={element.id} style={{ ...box, ...(element.opacity === undefined ? {} : { opacity: element.opacity }) }}><div style={inner}><OverlayVideoView element={element} urls={urls} w={w} h={h} u={layout.u} quality={quality} /></div></div>;
-  return <div style={{ ...box, opacity: element.opacity }}><div style={inner}><Img src={quality === 'draft' && urls.proxy ? urls.proxy : urls.playable} style={{ width: '100%', height: '100%', objectFit: element.objectFit }} effects={effectsFor(element.effects, frame, durationInFrames, fps)} /></div></div>;
+  return <div data-em-image={element.id} style={{ ...box, opacity: element.opacity }}><div style={inner}><div style={{ width: '100%', height: '100%', ...imageLookStyle(element, layout.u) }}><Img src={quality === 'draft' && urls.proxy ? urls.proxy : urls.playable} style={{ width: '100%', height: '100%', objectFit: element.objectFit, display: 'block' }} effects={effectsFor(element.effects, frame, durationInFrames, fps)} /></div></div></div>;
 };
+
+export const IMAGE_SHADOW_DEFAULT = Object.freeze({ blurU: 24, opacity: 0.45 });
+/**
+ * ADR-041 picture look (pure): rounded corners `radius` u with `overflow: hidden`, a drop shadow (`true` = 24 u blur at 0.45,
+ * offset a third of the blur downwards) and a solid border of `widthU` u drawn inside the rounded box (box-sizing border-box, so
+ * the picture shrinks inside it and the corner follows the border). Empty for a plain picture.
+ */
+export function imageLookStyle(el: Pick<OverlayImageT, 'radius' | 'shadow' | 'border'>, u: number): React.CSSProperties {
+  const css: React.CSSProperties = {};
+  const px = (v: number) => Math.round(v * u * 100) / 100;
+  if (el.radius !== undefined && el.radius > 0) { css.borderRadius = `${px(el.radius)}px`; css.overflow = 'hidden'; }
+  if (el.shadow) { const s = el.shadow === true ? IMAGE_SHADOW_DEFAULT : el.shadow; css.boxShadow = `0 ${px(s.blurU / 3)}px ${px(s.blurU)}px rgba(0,0,0,${Math.round(s.opacity * 1000) / 1000})`; }
+  if (el.border && el.border.widthU > 0) { css.border = `${px(el.border.widthU)}px solid ${el.border.colour}`; css.boxSizing = 'border-box'; css.overflow = 'hidden'; }
+  return css;
+}
 
 /**
  * ADR-039 face bubble: the video is cover-fitted inside a box masked to a circle (50 %) or rounded rectangle (`radius` u), with

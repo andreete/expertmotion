@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | Local Service lead |
-| Last updated | 2026-10-30 |
+| Last updated | 2026-10-31 |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-002, 005, 006, 010, 013, 014, 015), ARCHITECTURE.md §4–§7, BLUEPRINT.md §3–§4, SECURITY.md (SEC-002, SEC-008, SEC-010), DATABASE_SCHEMA.md (tables, Composition Model), AI_WORKFLOW.md §3, §5, §6, §8, §12, AGENT_DESIGN.md, DESIGN_CATALOGUE.md, PERFORMANCE.md §2, §3, §7, ERROR_CATALOGUE.md, SECURITY.md (SEC-), TRD.md §3.2 |
 | Used by | apps/ui (client), apps/service (routes), apps/desktop (lifecycle calls), TEST_PLAN.md (contract tests), FRD.md (FR- acceptance), MCP_AND_TOOLING.md |
 | Owner of | route table, request/response DTOs named here, HTTP status ↔ `EM-` mapping, pagination, idempotency, media grant lifecycle (API side; control in SEC-010), SSE event names and payloads, reconnection semantics |
@@ -144,6 +144,7 @@ export const AssetDto = z.object({ id: Id, projectId: Id, kind: z.enum(['video',
   sequenceBadge: z.number().int().nullable(),
   codec: z.string().nullable(),                                                         // FR-043 label of the first video (else audio) stream, e.g. "H.264"
   missing: z.boolean(),                                                                  // FR-048 the stored original is not on disk (Locate via R-036, or Remove)
+  credit: z.string().optional(), licence: z.string().optional(),                        // FR-303 (ADR-041, migration 35): credit (author / site / URL) and licence text of a picture, clip or screenshot imported from the internet; present only when set
   media: z.object({ original: z.literal(true), playable: z.boolean(), proxy: z.boolean(), thumb: z.boolean(),
   filmstrip: z.boolean(), waveform: z.boolean() }),                                     // which variants exist; URL = /media/<grant>/<assetId>/<variant> (§2.2)
   probe: z.record(z.unknown()).optional(), createdAt: Iso, updatedAt: Iso });
@@ -268,7 +269,10 @@ Auth column: **T** = Service Token, **T+S** = token + Shell caller header, **gra
 | R-083 | DELETE | `/projects/:id/conversations/:agent` | T | clear thread | 6.9 |
 | R-083b | POST | `/projects/:id/conversations/brainstorm/messages/:messageId/send-to-editor` | T | "Kirim ke Editor": the Diskusi draft becomes an Editor request (FR-219) | 6.9 |
 | R-088 | POST | `/projects/:id/chat-documents` | T(+S) | attach a document: text extracted locally (FR-221) | 6.9 |
-| R-089 | POST | `/projects/:id/research/images/import` | T | import an openly licensed picture from a research answer (FR-217) | 6.9 |
+| R-089 | POST | `/projects/:id/research/images/import` | T | import a picture / clip candidate of a research answer: open catalogues, Pexels, page pictures (FR-217, FR-300 … FR-304) | 6.9 |
+| R-089a | GET | `/research-keys` | T | hints of the research keys (Pexels) (FR-301) | 6.9 |
+| R-089b | PUT | `/research-keys/pexels` | T | store / replace the Creator's Pexels API key after a check (FR-301) | 6.9 |
+| R-089c | DELETE | `/research-keys/pexels` | T | remove the Pexels key (FR-301) | 6.9 |
 | R-084 | GET | `/agent-runs/:runId` | T | run status | 6.9 |
 | R-085 | POST | `/agent-runs/:runId/cancel` | T | cancel run | 6.9 |
 | R-086 | GET | `/projects/:id/usage` | T | usage summary | 6.9 |
@@ -627,7 +631,11 @@ POST /api/v1/projects/01JAZK…/conversations/editor/messages
 
 **R-088 `POST /projects/:id/chat-documents`** (FR-221) — Shell: JSON `{ paths: [one path] }` with `X-Expertmotion-Caller: shell` (same import roots as R-030); development builds: a raw `application/octet-stream` body with `X-Expertmotion-Filename`. PDF, DOCX, TXT, MD, SRT, VTT, CSV, JSON, RTF, Fountain, FDX and script files ≤ 20 MB; the text is extracted locally (doc-extract) and stored (`chat_documents`, ≤ 60 000 characters); the file is not kept. Response `201 { document: { id, name, kind: 'pdf'|'docx'|'text', chars, truncated, pages?, warnings } }`. Errors `422 EM-1001` (not a document), `422 EM-1002` (> 20 MB), `422 EM-4309` (no text layer), `403 EM-1007` (path outside the roots), `403 EM-8005`.
 
-**R-089 `POST /projects/:id/research/images/import`** (FR-217, SEC-142) — body `{ messageId, source: 'openverse'|'wikimedia', id }`: a candidate of an `image_candidates` block on that message. The record is looked up again by id, the licence re-checked, the picture downloaded through egress `research` (image/*, ≤ 15 MB) and imported like R-030; the attribution is stored (`asset_attributions`) and the candidate gets `importedAssetId`. Response `202 { assetId, attribution, duplicate }`. Errors `404 EM-9003`, `409 EM-4405` (research off), `423 EM-8202`, `422 EM-4408`, `502 EM-4407`. Events `ingest.*`.
+**R-089 `POST /projects/:id/research/images/import`** (FR-217, FR-300 … FR-304, SEC-142, SEC-144) — body `{ messageId, source: 'openverse'|'wikimedia'|'pexels'|'pexels-video'|'page', id }`: a candidate of an `image_candidates` block on that message (`ImageCandidate`: `source, id, kind: 'image'|'video', title, creator, license: 'cc0'|'pdm'|'by'|'by-sa'|'pexels'|'owner', licence? (text), licenseVersion, licenseUrl, landingUrl, width, height, provider, thumbUrl?, url? (page pictures), durationS?`). Open catalogues: the record is looked up again by id and the licence re-checked (EM-4408); Pexels: looked up again by id with the Creator's key (`GET /v1/photos/:id`, `GET /videos/videos/:id`; no key → `409 EM-4410`), photo = `src.large2x`, video = the largest HD / SD mp4 with short side ≤ 1080 on a Pexels host (≤ 60 MB, else EM-4407); page: the stored candidate's own address re-validated (public https, id = hash of the address), never an address from the body. The file is downloaded through egress `research` (pictures, image/*, ≤ 15 MB) or `research-api` (Pexels hosts) and imported like R-030 (a clip becomes a video asset with the usual `ingest.*` progress); the asset gets `credit` (author / site / URL) and `licence` (text), the open catalogues additionally the structured attribution (`asset_attributions`), and the candidate gets `importedAssetId`. Response `202 { assetId, attribution, duplicate }`. Errors `404 EM-9003`, `409 EM-4405` (research off), `409 EM-4410` (no Pexels key), `423 EM-8202`, `422 EM-4408`, `502 EM-4407`. Events `ingest.*`.
+
+**R-089a `GET /research-keys`** (FR-301) → `{ pexels: { hint: string | null } }` (hints only). **R-089b `PUT /research-keys/pexels`** `{ key }` → checked with `GET https://api.pexels.com/v1/search?query=nature&per_page=1` (`Authorization: <key>`) → `{ provider: 'pexels', secretHint, status: 'valid' }`; stored sealed (`research_keys`, SEC-144). Errors `400 EM-9002` (bad shape), `422 EM-4410` (401 / 403 from Pexels), `502 EM-4407` (other status), `423 EM-8202`. **R-089c `DELETE /research-keys/pexels`** → `204`.
+
+**Agent tools behind these routes** (names in AI_WORKFLOW / packages/agents tools.ts): `web.images {query, source?: 'open'|'stock'|'page', url?}` — `open` (default) Openverse + Wikimedia, `stock` Pexels photos (≤ 8) + videos (≤ 4) with the key (no key → tool result EM-4410), `page` the pictures of a page the FR-216 allow-list admits (og:image / twitter:image / link[rel=image_src] + `<img>` ≥ 400 px, ≤ 12; EM-4411 when none); the model receives metadata only, the Creator imports with R-089. `web.screenshot {url, viewport?: 'phone'|'desktop'}` (FR-305) → PNG of the page top (phone 1080×1920 at 1×, desktop 1440×900 at 1.5×) through the bundled Chrome, imported at once as an image asset "Tangkapan layar · <host>" (`credit` = URL, `licence` "Hak cipta pemilik — kutipan"); returns `{ assetId, title, host, width, height }`, failures EM-4409; same allow-list as web.fetch (EM-4406).
 
 **R-084 `GET /agent-runs/:runId`** — response `AgentRunDto`. Errors: `404 EM-9003`.
 
@@ -876,7 +884,7 @@ data: {"seq":419,"at":"2026-10-24T03:05:12.410Z","projectId":"01JAZK…","jobId"
 | `agent.run.started` | `{ run: AgentRunDto, agent, modelId, planId? }` | R-070 (agent mode), R-081 |
 | `agent.run.delta` | `{ runId, agent, delta: string, toolCall?: { name, input } }` | streamed assistant text or a tool call (for "Asking <model>…" and transparency, UX-016) |
 | `agent.run.done` | `{ run: AgentRunDto, message?: MessageDto, usage, contextUsage: { usedTokens, contextLength }, planId? }` | provider stream finished and output validated; `message` is absent for a re-plan run of a stale plan (no chat message; Entry 35) |
-| `agent.run.progress` | `{ runId, agent, phase: 'reading'\|'planning'\|'checking'\|'correcting'\|'tool'\|'waiting'\|'thinking'\|'writing', attempt?, of?, waitMs?, tool?, query?, url? }` | FR-190, FR-214: what the run is doing (chat status line); `thinking` / `writing` / `tool` also come from the provider stream (FR-210); FR-216: `tool` `web.search` / `web.fetch` / `web.images` with the `query` / `url` (also for the Anthropic server-side search) |
+| `agent.run.progress` | `{ runId, agent, phase: 'reading'\|'planning'\|'checking'\|'correcting'\|'tool'\|'waiting'\|'thinking'\|'writing', attempt?, of?, waitMs?, tool?, query?, url?, at? }` | FR-190, FR-214: what the run is doing (chat status line); `thinking` / `writing` / `tool` also come from the provider stream (FR-210); FR-216: `tool` `web.search` / `web.fetch` / `web.images` with the `query` / `url` (also for the Anthropic server-side search); FR-312: `tool` `composition.frames` with `at` = the first asked time as m:ss ("Melihat pratinjau: 0:12…"; absent = the scene middles) |
 | `agent.message.updated` | `{ agent, message: MessageDto }` | FR-219: a stored message changed (a Diskusi draft's `handoff` block) |
 | `plan.progress` | `{ planId, phase: 'voice'\|'measure'\|'compose'\|'apply'\|'failed', done?, total?, totalMs? }` | FR-223 / FR-224: the phases of a voice-first Execute |
 | `agent.run.failed` | `{ runId, agent, code: 'EM-4002'|'EM-4101'|'EM-4102'|'EM-4103'|'EM-4104'|'EM-4105'|'EM-4301'|'EM-4303'|'EM-4304'|'EM-4201'|'EM-8202', message?, details?: { providerStatus?, reason?, recentKey?, lastIssues? }, retryable: boolean }` | run failed, cancelled or interrupted; FR-190 `message` = reason shown in the error bubble; FR-191 `recentKey` (EM-4002 for a key added / replaced < 5 min ago → hint + automatic retry) |

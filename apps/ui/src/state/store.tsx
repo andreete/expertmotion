@@ -5,7 +5,7 @@ import { EmError } from '@expertmotion/shared';
 import type { ElementRefT, ProjectSettingsT } from '@expertmotion/composition-model';
 import { getPreset } from '@expertmotion/catalogue';
 import { createEventStream, type EventStream } from '../api/events.js';
-import type {
+import type { ImageCandidateDto,
   AgentKind, AssetDto, ChatTarget, IntentCreateResponse, DesignPickInput, EditIntent, ElementEdit, ItemsEdit, SplitEdit, TransformEdit, IntentCategory, MessageDto, OutputProfile, PerformanceProfile, PlanDto, ProjectCreateInput, ProjectUiState, ProviderKind, Ratio, RenderCreateInput,
   Resolution, ServiceEvent, SettingsDto,
   FootageAnalysisDto,
@@ -89,7 +89,7 @@ export interface Actions {
   /** FR-219: "Kirim ke Editor" — hand a Brainstorm draft to the Editor (its own run with progress; the Plan Card previews it). */
   sendDraftToEditor(message: MessageDto): Promise<boolean>;
   /** FR-217: import an openly licensed picture from a research answer into the Library. */
-  importResearchImage(message: MessageDto, source: 'openverse' | 'wikimedia', id: string): Promise<string | null>;
+  importResearchImage(message: MessageDto, source: ImageCandidateDto['source'], id: string): Promise<string | null>;
   /** QA 2026-10-26 #6: point the assistant at an asset or Timeline element (chip in the composer, composer focused). */
   pointAt(target: ChatTarget, mode?: AgentKind): void;
   setChatTargets(targets: ChatTarget[]): void;

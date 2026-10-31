@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline |
 | Owner | UI/UX lead |
-| Last updated | 2026-10-26 |
+| Last updated | 2026-10-31 |
 | Depends on | GLOSSARY.md, ELEMENT_IDS.md, UXRD.md, PRD.md, AI_WORKFLOW.md, ARCHITECTURE.md (§5, §6), PERFORMANCE.md, DECISIONS.md (ADR-002, 008, 011, 014) |
 | Used by | EDITOR_INTERACTION_MODEL.md, UI_UX_SPECIFICATION.md, ONBOARDING_TOUR.md, FRD.md, GOLDEN_SCENARIOS.md, TEST_PLAN.md |
 | Owner of | flow numbering F1 … F15 and their step numbering |
@@ -430,6 +430,7 @@ Verifies ADR-006 consequences (DPAPI ties data to the Windows account).
 | Step | Creator action | System response | Creator sees |
 |---|---|---|---|
 | F14.1 | Clicks `hdr.action.backup`, enters a passphrase in `scr.backup.backup.passphrase` (default; or ticks `scr.backup.backup.plain` and reads its warning), optionally includes Outputs, clicks `scr.backup.backup.start` | Save dialog (Shell); Service writes a zip: project JSON export (last 50 versions), intents, plans, media originals, outputs optional, **no provider credentials, no Database Key, no licence**; encrypted with an Argon2id-derived key from the passphrase (SECURITY.md SEC-052), or plain when the Creator chose so; manifest records which form | Plain choice shows the warning "Anyone with this file can read your clips, text and chats." / "Siapa pun yang punya berkas ini bisa membaca klip, teks, dan percakapan kamu."; `scr.backup.progress` "Backing up… 3 of 12 files" / "Mencadangkan… 3 dari 12 berkas"; then "Backup saved: promo-kafe-2026-10-24.zip (812 MB)" / "Cadangan tersimpan: …" |
+| F14.1a | Backup finished (FR-314) — or, from Save As (FR-313), reads the note "The copy is kept inside Expertmotion (the app's database), not as a file…" and clicks `scr.project.saveas.backup`; or picks File ▸ `hdr.menu.file.backup` (FR-315) | Result row `scr.backup.result` with the full path the Service wrote; `scr.backup.result.open` reveals the zip in its folder (Shell `openFolder`), `scr.backup.result.copy` copies the path | "Backup saved" / "Cadangan tersimpan", the path, "Open folder" / "Buka folder", "Copy path" / "Salin jalur"; hint under the folder field "Usually in {path}" / "Biasanya di {path}" |
 | F14.2 | Clicks `hdr.action.restore`, picks the zip in `scr.backup.restore.file`, enters the passphrase in `scr.backup.restore.passphrase` when the manifest says the zip is encrypted | Validates manifest version and hashes (DATABASE_SCHEMA.md §6) | Preview: project name, versions, assets, size; note "Restored as a new project. Nothing is overwritten." / "Dipulihkan sebagai proyek baru. Tidak ada yang ditimpa."; `scr.backup.restore.start` |
 | F14.3 | Clicks `scr.backup.restore.start` | Imports as a **new** project (never overwrites; a same-identity project becomes "<name> (restored)" with EM-6303), re-ingests missing derived files, creates versions; opens the project | `scr.backup.progress`; toast "Restored promo-kafe (v12)" / "promo-kafe dipulihkan (v12)" |
 

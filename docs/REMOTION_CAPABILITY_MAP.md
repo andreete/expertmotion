@@ -4,7 +4,7 @@
 |---|---|
 | Status | baseline (API names verified against remotion.dev on 2026-10-24 unless marked **[UNVERIFIED]**) |
 | Owner | Engine lead |
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-31 (ADR-041: paper, blurred-image, emphasis captions, boxed words, x-mark, highlight-box, variable fonts, picture look) |
 | Depends on | GLOSSARY.md, DECISIONS.md (ADR-001, 004, 008, 011, 016, 017), ARCHITECTURE.md §7, DESIGN_CATALOGUE.md, PERFORMANCE.md, AI_WORKFLOW.md §8, ASSESSMENT.md §3–4, MASTER_PROJECT_PROMPT.md §10 |
 | Used by | DESIGN_CATALOGUE.md (mapping column), BLUEPRINT.md, TRD.md, POC_PLAN.md, TEST_PLAN.md, DEPLOYMENT_AND_PACKAGING.md, ERROR_CATALOGUE.md, RISKS_AND_ASSUMPTIONS.md |
 | Owner of | the mapping of every menu item and every `preset:` id to a Remotion package/API; the Remotion Adapter contract; the render-option policy per Performance Profile; the Engine version policy; the "deliberately not used" list |
@@ -150,7 +150,7 @@ Ported from Experthinker Studio (ADR-013): `u = min(width, height) / 1080` from 
 | Home ▸ Insert video | `lib.text.insert.video` | `@remotion/media` `<Video>` | `op:clip.insert` | trim, rate, volume, fit | live Player | — | §C.1 |
 | Design ▸ Transitions | `lib.catalogue.tab` (Transitions) | `@remotion/transitions` | `op:transition.set` on a Cut | `durationMs`, `timing`, `direction` | prerendered loop on card; hovered preset applied to the selected Cut in the live Player | GPU-flagged ones use WebGL | §B.2 |
 | Design ▸ Captions | Captions tab | `@remotion/captions` + `CaptionPage` components | `op:caption.setStyle`; pages from `op:caption.importSrt` / `captions.generate` | position, fontSize, combine window, maxLines, highlight colour | loop + live | fonts bundled | §B.3, §D.5 |
-| Design ▸ Backgrounds | Backgrounds tab | CSS backgrounds on `AbsoluteFill`, `@remotion/noise`, `@remotion/effects/paper` | `op:background.set` | colours, intensity, animate | loop + live | paper = WebGL | §B.4 |
+| Design ▸ Backgrounds | Backgrounds tab | CSS backgrounds on `AbsoluteFill`, `@remotion/noise` (clouds, paper grain), `<Img>` + CSS blur (blurred-image) | `op:background.set` | colours, intensity, animate, grain / warm, blurPx / dim / zoom | loop + live | CPU (ADR-041: paper is CSS + noise, no WebGL) | §B.4 |
 | Design ▸ Motion presets | Motion tab | `interpolate`, `spring`, `Easing` on `translate`/`scale`/`rotate`/`opacity` | `op:motion.set` | `durationMs`, `delayMs`, `easingId`, `exit` | loop + live | CPU-cheap | §B.5 |
 | Design ▸ Shapes | Shapes tab | `@remotion/shapes` | `op:shape.add` | size, fill, stroke, position, motionId | loop + live | SVG, cheap | §B.6 |
 | Design ▸ Easing | Easing tab | `Easing`, `spring` | `op:easing.setDefault` or per motion | — | loop (ball curve) + live | — | §B.7 |
@@ -216,6 +216,7 @@ Pages are data (`op:caption.setPages`), computed once by the Caption sub-agent w
 | `preset:caption.box` | `CaptionPageBox` | dark rounded box (`backgroundColor` rgba, `borderRadius` in u) behind the page | same + box colour | loop + live | CPU | book §7.7 style 3 |
 | `preset:caption.pop` | `CaptionPagePop` | active token `scale = spring({frame: frame - tokenStartFrame, fps, config:{damping: 12}})` | same | loop + live | CPU | book §7.7 style 4 |
 | `preset:caption.moving-pill` | `CaptionPageMovingPill` | pill `translate`/`width` interpolated between token boxes measured with `measureText` | same | loop + live | CPU | Remotion Elements "Moving Pill Captions" (reimplemented, §J) |
+| `preset:caption.emphasis` | `EmphasisPage` (`presets/captions.tsx`) | the page's tokens as flex lines with `alignItems: baseline`: keyword tokens (`captionKeywordColour` ≠ undefined) in `"<emphasisFont>", Georgia, serif` italic 700 at 92/34 × the small size in `emphasisColour`; the rest upper-case in the theme body font, 0.08 em `letterSpacing`; `emphasisLayout` (pure, composition-model `textWidthEm`) wraps greedily and shrinks both sizes in 5 % steps (floor 45 %) until the widest line fits the safe width and the block ≤ 50 % of the frame height; page rise + fade = `interpolate(frame, [0, 0.3 s], [0, 1], out-cubic)` on `opacity` / `translate` (ADR-041) | keywords, emphasisFont, emphasisColour, fontSizeU, position / yU, maxWordsPerPage | loop + live | CPU | Sampel 4 reference |
 | `preset:caption.none` | no `CaptionTrack` output | — | — | — | — | — |
 
 Caption data import: `parseSrt({input, strict?})` (≥ 4.0.216) and `parseVtt({input})` return `{captions: Caption[]}`; `serializeSrt` writes SRT for export (https://www.remotion.dev/docs/captions/parse-srt). `Caption = {text, startMs, endMs, timestampMs, confidence: number | null}` with a leading space on each word token (ASSESSMENT.md §4; book §7.7).
@@ -234,7 +235,8 @@ All render in `BackgroundLayer`, an `AbsoluteFill` below the video track, except
 | `preset:background.moving-gradient` | `angle = interpolate(frame, [0, durationInFrames], [a0, a0 + 360 × intensity])` | A, B, intensity | loop + live | CPU | book §4.6 no. 8, §5.2 |
 | `preset:background.noise-clouds` | `@remotion/noise` `noise3D(seed, x, y, frame × speed)` sampled on a coarse grid of divs (e.g. 24×24) with `opacity`/`scale` per cell; seeded, never `Math.random()` | A, B, intensity | loop + live | CPU (grid ≤ 600 cells) | https://www.remotion.dev/docs/noise, book §5.7 |
 | `preset:background.video-dim` | `AbsoluteFill` with `linear-gradient(0deg, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.15) 70%)`; `intensity` scales the alphas | intensity | live | CPU | book §6.3 |
-| `preset:background.paper` | `<Solid color={A} effects={[paper({amount: intensity, colorFront, colorBack})]} />` from `@remotion/effects/paper` | A, B, intensity | loop + live | **WebGL** (`gpu`) | https://www.remotion.dev/docs/effects/paper |
+| `preset:background.paper` | ADR-041 (replaces the WebGL plan; no `gpu` flag): `AbsoluteFill` with a light base `color-mix(#F4F2EE, #EBDCC0 by warm)` (or `colourA`), three diagonal fold `linear-gradient`s + a faint radial vignette, and `PAPER_SPECKLES` (260) static speckles placed / sized / shaded by seeded `@remotion/noise` `noise2D` drawn as one inline `<svg>` of circles at `grain` opacity; nothing depends on the frame | grain, warm, colourA | loop + live | CPU | ADR-041 |
+| `preset:background.blurred-image` | `BlurredImage`: `<Img objectFit="cover">` of the scene's picture with CSS `scale(zoom)` and `filter: blur(blurPx × u)` under a `rgba(0,0,0,dim)` layer, `overflow: hidden`; the picture = `blurredImageAssetId(background, overlays, clipWindow)` (pure: `params.assetId`, else the first image overlay on screen inside the scene clip's window; the project background takes the first image overlay of the composition), resolved to a URL from `assets` by the timeline and passed to `BackgroundLayer` as `imageSrc`; solid `colourA` (black) without a picture (ADR-041) | assetId, blurPx, dim, zoom, colourA | loop + live | CPU (CSS filter) | ADR-041 |
 | `preset:background.none` | no background element; composition is transparent → enables alpha export (§E.3) | — | live (checkerboard in Stage) | needs `imageFormat: 'png'` + VP8/VP9 for alpha | https://www.remotion.dev/docs/transparent-videos |
 
 ### B.5 Motion presets (`preset:motion.*`)
@@ -282,6 +284,8 @@ All components accept `fill`, `stroke`, `strokeWidth`, `style`, `pathStyle`, `de
 | `preset:shape.pill` | `makeRect({width, height, cornerRadius: min(w, h) / 2})` | w × h | — | sibling list |
 | `preset:shape.check` | stroked path `M .1 .52 L .38 .8 L .9 .2` (× size) | strokeWidth | — | sibling list |
 | `preset:shape.chevron` | stroked path `M .3 .12 L .72 .5 L .3 .88` (× size) | strokeWidth | — | sibling list |
+| `preset:shape.x-mark` | one stroked path `M i i L w−i h−i M w−i i L i h−i` (`xMarkPath`, inset i = stroke / 2) over the w × h box in the stroke (else fill) colour, `strokeU × u` wide, round caps; `evolvePath` draws both diagonals on with `preset:motion.draw-on` (ADR-041) | strokeU | — | ADR-041 |
+| `preset:shape.highlight-box` | `HighlightBox`: `makeRect` (w − stroke) × (h − stroke), `cornerRadius: radiusU × u`, stroke only, butt caps, in the stroke (else fill) colour; `pulse` = `pulseScale(frame, fps)` = `1.02 − 0.02 cos(2π frame / 2 s)` (1 → 1.04 → 1 every 2 s) as CSS `scale` on a wrapper (ADR-041) | strokeU, radiusU, pulse | — | ADR-041 |
 | `preset:shape.icon` | inline `<svg viewBox="0 0 100 100">` pictogram from the `ICONS` table (`packages/engine/src/presets/infographics.tsx`), two colours `fill` + `accent` (ADR-039) | `icon`, `accent` | icon | — |
 | `preset:shape.rows` | HTML flex rows (badge square, title / sub, right value / sub) with `spring` stagger per row (`useCurrentFrame`), theme fonts (ADR-039) | `rows`, `staggerMs`, `radiusU` | rows | — |
 | `preset:shape.day-strip` | HTML: 24 h axis (ticks at `hours`), bars positioned by `fromH` / `toH` as fractions of the width, `spring` grow, optional inline icon (ADR-039) | `hours`, `bars`, `note` | — | — |
@@ -371,7 +375,7 @@ Each variant is a component in an overlay/text `<Sequence>`; font size in `u` is
 | `preset:text.callout` | 56 u in a rounded box (`borderRadius 24 u`) | same | book §4.1 |
 | `preset:text.quote` | 72 u, `fontStyle: 'italic'`, typographic quotes added | same | — |
 
-Fonts: `preset:font.inter`, `preset:font.plus-jakarta-sans`, `preset:font.archivo`, `preset:font.jetbrains-mono`, `preset:font.poppins` (ADR-039: OFL TTF 500–900 upright, loaded through FontFace `format('truetype')`; math symbols fall back to Inter per glyph) (slugs proposed; DESIGN_CATALOGUE.md writes `preset:font.<name>` without pinning them, see Inconsistencies). Each is `loadFont({family, url: staticFile('fonts/<file>.woff2'), weight, style})` from `@remotion/fonts`, called once at module load of the bundle; it returns a promise and handles render delay itself (https://www.remotion.dev/docs/fonts).
+Fonts: `preset:font.inter`, `preset:font.plus-jakarta-sans`, `preset:font.archivo`, `preset:font.jetbrains-mono`, `preset:font.poppins` (ADR-039: OFL TTF 500–900 upright, loaded through FontFace `format('truetype')`; math symbols fall back to Inter per glyph), `preset:font.playfair-display` (ADR-041: the two upstream variable TTFs, `fonts/playfair-display-var-<style>.ttf`; `bundledFontFiles` reads `variable: true` and declares one FontFace per style with the weight descriptor `"400 900"` from `weightRange`) (slugs proposed; DESIGN_CATALOGUE.md writes `preset:font.<name>` without pinning them, see Inconsistencies). Each is `loadFont({family, url: staticFile('fonts/<file>.woff2'), weight, style})` from `@remotion/fonts`, called once at module load of the bundle; it returns a promise and handles render delay itself (https://www.remotion.dev/docs/fonts).
 
 ### B.11 Text effects (`preset:texteffect.*`)
 
@@ -383,6 +387,7 @@ Fonts: `preset:font.inter`, `preset:font.plus-jakarta-sans`, `preset:font.archiv
 | `preset:texteffect.kinetic` | ported `KineticText`: per-word `spring({frame, fps, delay: i × 8, config: {damping: 14}})` | durationMs | loop + live | book §5.5; ADR-013 port list |
 | `preset:texteffect.counter` | ported `AnimatedNumber`: `interpolate(f, [d, d + n], [from, to], {easing, clamp})` formatted per locale | from, to, durationMs | loop + live | ADR-013 |
 | `preset:texteffect.keyword` | per word: listed `words` coloured with the accent + `spring({damping: 10})` scale pop | words, colour | live | ADR-034 |
+| `preset:texteffect.boxed` | per word (`isKeywordWord` match): listed `words` as `inline-block` spans with `background: boxColour` (theme accent), `color: textColour` (theme bg), padding `0.3 padU × u` / `padU × u`, `borderRadius: radiusU × u`; each box pops in with `spring({damping: 12})` 0.12 s after the previous one (`boxedWordStyle`, pure). The shared estimator does not model the padding, so a boxed headline is laid out as if plain (the box adds ~2 padU per word) (ADR-041) | words, boxColour, textColour, padU, radiusU | live | ADR-041 |
 
 ### B.12 Themes (`preset:palette.*`, `preset:fontpair.*`)
 
@@ -449,6 +454,8 @@ Installed and used: `@remotion/transitions` (fade, slide, wipe, push-cut, iris, 
 | `audioStreamIndex`, `toneFrequency`, `onVideoFrame`, `headless`, `requestInit` | not used | — |
 
 Codecs that reach `<Video>` are always H.264 yuv420p + AAC in MP4 because ingestion transcodes everything else (ASSET_INGESTION.md §3). This is what keeps `@remotion/media`'s WebCodecs path on the fast lane in both Electron and Chrome Headless Shell.
+
+ADR-041 picture look (`imageLookStyle`, pure, `ExpertmotionTimeline.tsx`): an image overlay's `radius` → `borderRadius` + `overflow: hidden` on a wrapper around the `<Img>`; `shadow` → `box-shadow: 0 blur/3 blur rgba(0,0,0,opacity)` (default 24 u / 0.45; a shadow is not clipped by its own overflow); `border` → `border: widthU × u solid colour` with `box-sizing: border-box`, so the frame sits inside the rounded box and the picture shrinks inside it. The quality gate's painted box is unchanged (border inside, shadow soft).
 
 ADR-039 additions to the Clip and overlay rendering (`ExpertmotionTimeline.tsx`): (1) `Clip.zoom` punch-ins — `clipZoomScale(zoom, frame, totalFrames, fps)` (`transform.ts`, pure) is linear `from → to` across the clip plus every pop as an instant `+amount` that settles back with `spring({damping: 200})` over `durationMs` (default 450); the factor multiplies `transform.scale` inside `clipTransformStyle`, so a punch-in and a canvas zoom compose. (2) `OverlayVideo` (face bubble, kind `video` on the overlay Track) — `<Video muted trimBefore objectFit="cover">` inside a box with `borderRadius` (50 % for `circle`, `radius` u for `rect`) and `overflow: hidden`; the ring is a `box-shadow: 0 0 0 <widthU × u>px <colour>` spread on the masked box (a shadow is not clipped by its own overflow); `focus` → `focusTransform(focus, boxW, boxH, srcW, srcH)` = `scale(zoom) translate(tx, ty)` so the source point lands at the box centre (exact with the asset size, box-aspect approximation without). (3) `AudioLayer.gain` — `gainMultiplier(segments, compositionMs)` (`audio-gain.ts`) multiplies the layer volume with linear ramps (`rampMs`, default 300) after ducking and fades.
 

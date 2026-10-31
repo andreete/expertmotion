@@ -48,6 +48,8 @@ export interface Hooks {
     runId?: string; intentIds?: string[];
     /** FR-080 / FR-072 / FR-084: selection, playhead, attachment names and image parts for the envelope; plan-goal deltas. */
     selection?: ElementRefT[]; playheadMs?: number; attachments?: string[]; images?: ChatImage[]; onDelta?: (delta: string) => void;
+    /** FR-311: the model can see pictures → the composition.frames contact sheet is attached to its tool result (default true). */
+    toolImages?: boolean;
     /** FR-080 / FR-067: enqueue the message as a chat Edit Intent (propertyKey chat:<messageId>) with the inspector target. */
     chat?: { messageId: string; target?: ElementRefT };
     /** FR-189: what the Creator pointed at (chat chips); FR-190: run phases for the chat. */

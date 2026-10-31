@@ -1170,6 +1170,11 @@ function boot(): void {
   // No LAN discovery: Chromium's Cast / DIAL media router opens UDP sockets (mDNS / SSDP) on every interface, and Windows
   // Firewall then asks the Creator to allow "public and private networks" for an app that only talks to 127.0.0.1 and HTTPS.
   app.commandLine.appendSwitch('disable-features', 'MediaRouter,DialMediaRouteProvider,CastMediaRouteProvider,GlobalMediaControlsCastStartStop');
+  // QA 2026-10-31 (shell log: "Error: HTML in Canvas is unavailable. Enable Canvas Draw Element at chrome://flags/"): Remotion draws
+  // an element with `effects` through <HtmlInCanvas>, which needs Chromium's CanvasDrawElement feature; it is off by default in
+  // Electron, so the Player showed a black preview whenever an effect was applied. The render side (Chrome Headless Shell) is
+  // launched by Remotion with its own flags and was never affected.
+  app.commandLine.appendSwitch('enable-features', 'CanvasDrawElement');
   // FR-199: the Start-menu "Diagnostik" shortcut. Before the single-instance lock: it must work while a black copy runs.
   if (process.argv.includes(DIAGNOSTICS_SWITCH)) { runDiagnosticsMode(); return; }
 

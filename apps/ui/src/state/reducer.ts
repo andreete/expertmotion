@@ -2,7 +2,7 @@
 // The Editor never computes or mutates the Composition Model itself (ARCHITECTURE.md §3); it only stores what the
 // Local Service returns. Kept React-free so it can be unit-tested directly.
 import type { ElementRefT } from '@expertmotion/composition-model';
-import type {
+import type { ImageCandidateDto,
   AgentKind, AgentPhase, AssetDto, AssignmentsDto, ChatTarget, UsageNumbers, CapabilityRow, ConnectionDto, EditIntent, ElementDiff, HardwareProfileDto, HardwareTickDto, HealthDto, IntentQueueDto,
   LicenseDto, MediaGrantDto, MessageDto, ModelStateDto, OpenProjectResponse, OutputDto, PerformanceProfile, PlanDto, ProjectDto, RenderJobDto, ServiceEvent,
   SettingsDto, VersionDto, FootageAnalysisDto, GeneratorJobDto,
@@ -13,7 +13,32 @@ import { normalizeMessageDto } from '@expertmotion/shared';
 /** FR-214: run id of the working state shown from Send until the Service answers with the real run id. */
 export const PENDING_RUN = 'pending';
 /** FR-212: a message from the Service with blocks every reader can rely on (stored by any build). */
-export const safeMessage = (m: MessageDto): MessageDto => normalizeMessageDto(m ?? ({} as MessageDto)) as unknown as MessageDto;
+const IMAGE_SOURCES: readonly ImageCandidateDto['source'][] = ['openverse', 'wikimedia', 'pexels', 'pexels-video', 'page'];
+/**
+ * ADR-041 (FR-306): the shared normaliser knows only the open catalogues and drops `kind`, `licence`, `durationS` … of a picture
+ * candidate, so picture blocks are re-read from the raw message (same rule as the Service's `candidateItems`).
+ */
+export function candidateItems(raw: unknown): ImageCandidateDto[] {
+  const sn = (v: unknown): string | null => (typeof v === 'string' ? v.slice(0, 2000) : null); const n = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return (Array.isArray(raw) ? raw : []).flatMap((x): ImageCandidateDto[] => {
+    if (!x || typeof x !== 'object') return [];
+    const o = x as Record<string, unknown>;
+    if (!IMAGE_SOURCES.includes(o['source'] as ImageCandidateDto['source']) || typeof o['id'] !== 'string') return [];
+    return [{ source: o['source'] as ImageCandidateDto['source'], id: o['id'], kind: o['kind'] === 'video' ? 'video' : 'image', title: sn(o['title']) ?? 'Untitled', creator: sn(o['creator']), license: sn(o['license']) ?? 'owner', licenseVersion: sn(o['licenseVersion']), licenseUrl: sn(o['licenseUrl']), landingUrl: sn(o['landingUrl']), width: n(o['width']), height: n(o['height']), provider: sn(o['provider']),
+      ...(typeof o['licence'] === 'string' ? { licence: o['licence'].slice(0, 300) } : {}), ...(typeof o['thumbUrl'] === 'string' ? { thumbUrl: o['thumbUrl'].slice(0, 2000) } : {}), ...(n(o['durationS']) !== null ? { durationS: n(o['durationS']) } : {}), ...(typeof o['importedAssetId'] === 'string' ? { importedAssetId: o['importedAssetId'] } : {}) }];
+  }).slice(0, 24);
+}
+export const safeMessage = (m: MessageDto): MessageDto => {
+  const norm = normalizeMessageDto(m ?? ({} as MessageDto)) as unknown as MessageDto;
+  const rawBlocks = Array.isArray(m?.blocks) ? (m.blocks as unknown[]) : [];
+  const rawImages = rawBlocks.filter((b): b is { type: 'image_candidates'; items?: unknown } => !!b && typeof b === 'object' && (b as { type?: unknown }).type === 'image_candidates');
+  if (!rawImages.length) return norm;
+  const mine = rawImages.map((b) => ({ type: 'image_candidates' as const, items: candidateItems(b.items) })).filter((b) => b.items.length);
+  const blocks = norm.blocks ?? [];
+  const at = blocks.findIndex((b) => b.type === 'image_candidates');
+  const rest = blocks.filter((b) => b.type !== 'image_candidates');
+  return { ...norm, blocks: at < 0 ? [...rest, ...mine] : [...rest.slice(0, at), ...mine, ...rest.slice(at)] };
+};
 /** FR-212: queue intents always carry `params` (an object) and `resolvedTargets` (an array). */
 export function safeQueue(q: IntentQueueDto): IntentQueueDto {
   if (!q || typeof q !== 'object') return q;

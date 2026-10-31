@@ -1,4 +1,4 @@
-export { ExpertmotionTimeline } from './timeline/ExpertmotionTimeline.js';
+export { ExpertmotionTimeline, imageLookStyle, IMAGE_SHADOW_DEFAULT } from './timeline/ExpertmotionTimeline.js';
 export { ThemeProvider, useTheme, tokensFor, type ThemeTokens } from './theme.js';
 export { useLayout, layoutFor, type Layout } from './layout.js';
 export { textLayerFit, MIN_FIT_U, type TextLayerFit } from './text-fit.js';
@@ -7,7 +7,10 @@ export { EMPTY_INPUT, type EngineInputProps, type AssetUrls } from './inputs.js'
 export { resolveDimensions, safeAreaFor, detectRatio, isRatio, SHORT_SIDE } from './formats.js';
 export { clipTransformStyle, overlayTransform, clipZoomScale, focusTransform, DEFAULT_POP_MS } from './transform.js';
 export { gainMultiplier, DEFAULT_GAIN_RAMP_MS } from './audio-gain.js';
-export { captionKeywordColour, captionChunk } from './presets/captions.js';
+export { captionKeywordColour, captionChunk, emphasisLayout, emphasisWordWidth, EMPHASIS_SMALL_U, EMPHASIS_BIG_RATIO, EMPHASIS_MIN_SCALE, type EmphasisWord, type EmphasisLayout } from './presets/captions.js';
+export { blurredImageAssetId, paperBaseColour, PAPER_SPECKLES, PAPER_FOLDS } from './presets/backgrounds.js';   // ADR-041
+export { xMarkPath, pulseScale } from './presets/shapes.js';
+export { boxedWordStyle } from './presets/text.js';
 export { ICONS, ICON_IDS, toneColours, typedChars, fitOneLine, fitRun, TEXT_FLOORS_U, type FittedRun } from './presets/infographics.js';
 export { fontStack, symbolRuns, hasSymbols } from './font-stack.js';
 export { isImplemented, missingImplementations, NOT_IMPLEMENTED } from './presets/index.js';

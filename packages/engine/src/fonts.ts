@@ -15,6 +15,9 @@ export interface FontFile { family: string; url: string; weight: string; style: 
 /**
  * Every bundled font file of the catalogue's font presets (`fonts/<stem>-<weight>-<style>.<ext>`). A preset's data may narrow
  * `styles` (default normal + italic) and name `ext` / `format` (default woff2); ADR-039 ships Poppins 500–900 upright as TTF.
+ * ADR-041 `variable: true`: ONE variable file per style (`fonts/<stem>-var-<style>.<ext>`) declared as one FontFace whose
+ * weight descriptor is the range `weightRange` ("400 900"; default min…max of `weights`), so every weight in between renders
+ * from the same file (Playfair Display).
  */
 export function bundledFontFiles(resolve: (p: string) => string = staticFile): FontFile[] {
   const out: FontFile[] = [];
@@ -22,7 +25,13 @@ export function bundledFontFiles(resolve: (p: string) => string = staticFile): F
     const family = String(p.data?.['family']), stem = String(p.data?.['fileStem']);
     const styles = ((p.data?.['styles'] as string[] | undefined) ?? ['normal', 'italic']).filter((x): x is 'normal' | 'italic' => x === 'normal' || x === 'italic');
     const ext = String(p.data?.['ext'] ?? 'woff2'), format = p.data?.['format'] === 'truetype' ? 'truetype' : 'woff2';
-    for (const w of (p.data?.['weights'] as number[] | undefined) ?? []) for (const style of styles) out.push({ family, url: resolve(`${stem}-${w}-${style}.${ext}`), weight: String(w), style, format });
+    const weights = (p.data?.['weights'] as number[] | undefined) ?? [];
+    if (p.data?.['variable'] === true) {
+      const range = (p.data?.['weightRange'] as number[] | undefined) ?? [Math.min(...weights), Math.max(...weights)];
+      for (const style of styles) out.push({ family, url: resolve(`${stem}-var-${style}.${ext}`), weight: `${range[0]} ${range[1]}`, style, format });
+      continue;
+    }
+    for (const w of weights) for (const style of styles) out.push({ family, url: resolve(`${stem}-${w}-${style}.${ext}`), weight: String(w), style, format });
   }
   return out;
 }

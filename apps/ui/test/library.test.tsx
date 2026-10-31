@@ -41,7 +41,7 @@ describe('Text Panel', () => {
     const { runtime } = await renderEditor('sample');
     const spy = vi.spyOn(runtime.api, 'createIntent');
     home();
-    expect(els('lib.text.font.sample').map((b) => b.dataset['font'])).toEqual(['Inter', 'Plus Jakarta Sans', 'Archivo', 'JetBrains Mono', 'Poppins']);
+    expect(els('lib.text.font.sample').map((b) => b.dataset['font'])).toEqual(['Inter', 'Plus Jakarta Sans', 'Archivo', 'JetBrains Mono', 'Poppins', 'Playfair Display']);
     expect(els('lib.text.font.sample')[2]!.querySelector('span')!.getAttribute('style')).toContain('Archivo');
     await act(async () => { fireEvent.click(els('lib.text.font.sample')[2]!); });
     expect(spy.mock.calls.at(-1)![1]).toMatchObject({ field: 'fontFamily', value: 'Archivo' });
