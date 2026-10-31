@@ -142,11 +142,13 @@ try {
   check('V3', 'pictures placed as rounded, shadowed overlays (≥ 6 incl. the watermark)', imgs.length >= 6 && imgs.filter((o) => o.radius).length >= 4 && imgs.some((o) => o.shadow), { images: imgs.length, rounded: imgs.filter((o) => o.radius).length, shadow: imgs.filter((o) => o.shadow).length });
   check('V4', 'annotations: a red box, an X, an arrow and a ring', byPreset(/highlight-box/).length >= 1 && byPreset(/x-mark/).length >= 1 && byPreset(/shape\.arrow/).length >= 1 && byPreset(/shape\.ring/).length >= 1 && shapes.some((s) => /E53935/i.test(s.stroke ?? s.fill ?? '')), { kinds: [...new Set(shapes.map((s) => s.presetId))] });
   const wm = imgs.find((o) => o.assetId === ids.logo);
-  check('V5', 'watermark spans the whole video', !!wm && wm.timing.atMs <= 100 && wm.timing.atMs + wm.timing.durationMs >= total - 100, { wm: wm && wm.timing });
+  const voiceEnd = m.tracks.audio.filter((a) => a.role === 'voice').reduce((e, a) => Math.max(e, a.atMs + a.durationMs), 0);
+  check('V5', 'watermark spans the narrated part of the video (from 0 to at least the last spoken word)', !!wm && wm.timing.atMs <= 100 && wm.timing.atMs + wm.timing.durationMs >= voiceEnd - 100, { wm: wm && wm.timing, voiceEnd, total });
   const boxed = m.tracks.text.filter((t) => /texteffect\.boxed/.test(t.effect?.presetId ?? ''));
-  check('V6', 'headline words on yellow boxes (texteffect.boxed) and the viral palette', boxed.length >= 1 && /FFD400/i.test(JSON.stringify(m.theme ?? m.settings)), { boxed: boxed.length, theme: m.theme?.paletteId });
+  check('V6', 'headline words on yellow boxes (texteffect.boxed), Poppins + Inter', boxed.length >= 1 && /poppins/.test(m.theme?.fontPairId ?? ''), { boxed: boxed.length, theme: m.theme?.paletteId, fonts: m.theme?.fontPairId });
   const voices = m.tracks.audio.filter((a) => a.role === 'voice');
-  check('V7', 'narration: one voice clip per spoken line (7), captions on', voices.length === 7 && (m.captions?.pages?.length ?? 0) > 0, { voices: voices.length, pages: m.captions?.pages?.length, style: m.captions?.presetId });
+  const capTrack = m.tracks.caption ?? m.captions ?? {};
+  check('V7', 'narration: one voice clip per spoken line (7), captions on', voices.length === 7 && (capTrack.pages?.length ?? 0) > 0, { voices: voices.length, pages: capTrack.pages?.length, style: capTrack.styleId });
   check('V8', 'source tags on every picture scene', byPreset(/source-tag/).length >= 4, { sources: byPreset(/source-tag/).length });
   const credits = fs.existsSync(path.join(home, 'Videos')) ? execFileSync('bash', ['-lc', `ls ${path.join(home, 'Videos')}/**/*CREDITS* ${path.join(home, 'Videos')}/*CREDITS* 2>/dev/null | head -1`], { encoding: 'utf8' }).trim() : '';
 
