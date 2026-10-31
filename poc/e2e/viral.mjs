@@ -73,7 +73,7 @@ try {
   await fetch(`${stub.origin}/__stub/script`, { method: 'POST', body: JSON.stringify({ provider: 'anthropic', replies: [
     { text: 'Saya potret halamannya dulu.', toolUse: { name: 'web_screenshot', input: { url: pageUrl, viewport: 'phone' } } },
     { text: 'Lalu saya ambil gambar-gambar di halaman itu.', toolUse: { name: 'web_images', input: { query: 'jakarta', source: 'page', url: pageUrl } } },
-    { json: { reply: 'Tangkapan layar dan gambar dari halaman sudah ada. Naskah 7 kalimat siap, durasi di bawah 60 detik.\n\nPRD siap.', suggestedNextStep: 'send-to-editor' } },
+    { json: { reply: 'Tangkapan layar dan gambar dari halaman sudah ada. Naskah 7 kalimat siap, durasi di bawah 60 detik.\n\nPRD siap.', suggestedNextStep: 'none' } },   // 'none': the driver approves explicitly (an automatic hand-off would race the scripted plan)
   ] }) });
   const baseVersion = async () => (await api(`/projects/${pid}/composition`)).body.head?.hash ?? (await api(`/projects/${pid}/composition`)).body.head?.id;
   const brief = `Buat video berita viral 9:16 di bawah 60 detik tentang boikot sebuah acara. Pakai gambar dari internet, potret halaman ini: ${pageUrl} dan ambil fotonya. Judul kuning berkotak, panah merah, narasi suara, caption, watermark logo.`;
@@ -93,10 +93,18 @@ try {
   check('I2', 'web.images source=page: picture candidates of the page were offered to the Creator', candidates > 0 || /pageUrl|candidates/.test(toolText), { candidates, sample: toolText.slice(0, 200) });
   // import one page picture through R-089 (what the Creator's click does)
   let pageAsset = null;
-  const candMsg = thread.find((m) => /"source":"page"/.test(JSON.stringify(m)));
-  const candId = candMsg && (JSON.stringify(candMsg).match(/"source":"page","id":"([^"]+)"/)?.[1] ?? JSON.stringify(candMsg).match(/"id":"(https?:[^"]+)"/)?.[1]);
+  fs.writeFileSync(path.join(out, 'thread.json'), JSON.stringify(thread, null, 1));
+  // the candidate block as the UI card reads it: any block whose items carry an id and a source / provider (prefer page pictures)
+  let candMsg = null, candId = null, candSource = 'page';
+  for (const m of thread) {
+    const walk = (v) => { if (candId) return; if (Array.isArray(v)) { for (const x of v) walk(x); return; } if (!v || typeof v !== 'object') return;
+      if (Array.isArray(v.items) && v.items.some((it) => it && typeof it === 'object' && it.id && (it.source || it.provider))) {
+        const it = v.items.find((x) => (x.source ?? x.provider) === 'page') ?? v.items[0]; candMsg = m; candId = String(it.id); candSource = String(it.source ?? it.provider); return; }
+      for (const k of Object.keys(v)) walk(v[k]); };
+    walk(m);
+  }
   if (candMsg && candId) {
-    const imp = await api(`/projects/${pid}/research/images/import`, { method: 'POST', body: JSON.stringify({ messageId: candMsg.id, source: 'page', id: candId }) });
+    const imp = await api(`/projects/${pid}/research/images/import`, { method: 'POST', body: JSON.stringify({ messageId: candMsg.id, source: candSource, id: candId }) });
     for (let i = 0; i < 60 && imp.status < 300; i++) { assets = (await api(`/projects/${pid}/assets`)).body.items ?? []; pageAsset = assets.find((a) => a.credit && a.credit.includes(new URL(pageUrl).host) && !/Tangkapan layar/.test(a.name ?? '') && a.status === 'ready'); if (pageAsset) break; await sleep(1000); }
     check('I3', 'R-089 import of a page picture → ready asset with credit + licence label', !!pageAsset, { status: imp.status, code: imp.body?.error?.code, asset: pageAsset && { name: pageAsset.name, credit: pageAsset.credit, licence: pageAsset.licence } });
   } else check('I3', 'R-089 import of a page picture', false, { reason: 'no page candidate in the thread' });
@@ -126,11 +134,11 @@ try {
   for (let i = 0; i < 300; i++) { gjobs = (await api(`/projects/${pid}/generator-jobs`)).body.items ?? []; if (!gjobs.some((g) => ['queued', 'running'].includes(g.status))) break; await sleep(1000); }
   const head = (await api(`/projects/${pid}/composition?model=true`)).body.head; const m = head.model;
   fs.writeFileSync(path.join(out, 'model.json'), JSON.stringify(m, null, 1));
-  const total = m.tracks.video.reduce((s, c) => Math.max(s, c.timing.atMs + c.timing.durationMs), 0);
+  const total = m.tracks.video.reduce((s, c) => s + (c.durationMs ?? c.timing?.durationMs ?? 0), 0) - (m.tracks.transition ?? []).reduce((s, t) => s + (t.durationMs ?? 0), 0);
   const overlays = m.tracks.overlay; const imgs = overlays.filter((o) => o.kind === 'image'); const shapes = overlays.filter((o) => o.kind === 'shape');
   const byPreset = (re) => shapes.filter((s) => re.test(s.presetId));
   check('V1', 'ratio 9:16, under 60 s', m.settings.ratio === '9:16' && total > 20_000 && total <= 60_000, { ratio: m.settings.ratio, totalMs: total });
-  check('V2', 'picture scenes use the blurred-image / paper backgrounds', m.tracks.video.some((c) => /blurred-image/.test(JSON.stringify(c.background ?? c))) && JSON.stringify(m).includes('background.paper'), { bgs: [...new Set((m.tracks.video.map((c) => c.background?.presetId ?? c.scene?.background?.presetId).filter(Boolean)))] });
+  check('V2', 'picture scenes use the blurred-image / paper backgrounds', m.tracks.video.some((c) => /blurred-image/.test(JSON.stringify(c.scene ?? c))) && JSON.stringify(m).includes('background.paper'), { bgs: [...new Set(m.tracks.video.map((c) => c.scene?.background?.presetId ?? c.scene?.presetId).filter(Boolean))] });
   check('V3', 'pictures placed as rounded, shadowed overlays (≥ 6 incl. the watermark)', imgs.length >= 6 && imgs.filter((o) => o.radius).length >= 4 && imgs.some((o) => o.shadow), { images: imgs.length, rounded: imgs.filter((o) => o.radius).length, shadow: imgs.filter((o) => o.shadow).length });
   check('V4', 'annotations: a red box, an X, an arrow and a ring', byPreset(/highlight-box/).length >= 1 && byPreset(/x-mark/).length >= 1 && byPreset(/shape\.arrow/).length >= 1 && byPreset(/shape\.ring/).length >= 1 && shapes.some((s) => /E53935/i.test(s.stroke ?? s.fill ?? '')), { kinds: [...new Set(shapes.map((s) => s.presetId))] });
   const wm = imgs.find((o) => o.assetId === ids.logo);

@@ -27,7 +27,7 @@ export const ExpertmotionTimeline: React.FC<EngineInputProps> = (props) => {
   return <ThemeProvider theme={props.model.theme}><TimelineInner {...props} /></ThemeProvider>;
 };
 
-const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) => {
+const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality, safePreview }) => {
   const layout = useLayout(model.settings.ratio);
   const { fps, durationInFrames } = useVideoConfig();
   const ft = useMemo(() => deriveFrameTiming(model), [model]);
@@ -51,7 +51,7 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
           {model.tracks.video.flatMap((clip, i) => {
             const nodes: React.ReactNode[] = [
               <TransitionSeries.Sequence key={clip.id} durationInFrames={ft.clipFrames[i]!} premountFor={premountFor}>
-                <ClipView clip={clip} urls={clip.assetId === undefined ? undefined : assets[clip.assetId]} quality={quality} layout={layout} durationInFrames={ft.clipFrames[i]!} sceneImageSrc={bgImage.clips[i]} />
+                <ClipView clip={clip} urls={clip.assetId === undefined ? undefined : assets[clip.assetId]} quality={quality} layout={layout} durationInFrames={ft.clipFrames[i]!} sceneImageSrc={bgImage.clips[i]} safePreview={!!safePreview} />
               </TransitionSeries.Sequence>,
             ];
             const tr = model.transitions.find((x) => x.cutIndex === i);
@@ -92,7 +92,7 @@ const TimelineInner: React.FC<EngineInputProps> = ({ model, assets, quality }) =
   );
 };
 
-const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'draft' | 'full'; layout: Layout; durationInFrames: number; sceneImageSrc?: string | undefined }> = ({ clip, urls, quality, layout, durationInFrames, sceneImageSrc }) => {
+const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'draft' | 'full'; layout: Layout; durationInFrames: number; sceneImageSrc?: string | undefined; safePreview?: boolean }> = ({ clip, urls, quality, layout, durationInFrames, sceneImageSrc, safePreview }) => {
   const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const t = useTheme();
   const zoomScale = clipZoomScale(clip.zoom, frame, durationInFrames, fps);     // ADR-039: punch-in keyframes multiply the canvas scale
   // ADR-030: a scene clip (no media) paints its own background preset; motion, transform and transitions apply as for media.
@@ -104,7 +104,7 @@ const ClipView: React.FC<{ clip: ClipT; urls: AssetUrls | undefined; quality: 'd
   if (!urls) return <AbsoluteFill style={{ backgroundColor: '#000' }} />;
   const src = quality === 'draft' && urls.proxy ? urls.proxy : urls.playable;
   // QA 2026-10-31: a browser without HTML-in-canvas (black Player with effects) gets a CSS filter stand-in instead of the effects
-  const canPaintEffects = htmlInCanvasSupported();
+  const canPaintEffects = htmlInCanvasSupported() && !safePreview;
   const effects = canPaintEffects ? effectsFor(clip.effects, frame, durationInFrames, fps) : [];
   const fallbackFilter = canPaintEffects ? undefined : cssFilterFallback(clip.effects);
   const crop = clip.crop ? { clipPath: `inset(${clip.crop.top * 100}% ${clip.crop.right * 100}% ${clip.crop.bottom * 100}% ${clip.crop.left * 100}%)` } : {};

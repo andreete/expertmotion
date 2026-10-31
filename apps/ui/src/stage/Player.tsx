@@ -100,6 +100,24 @@ export function previewWaitCause(state: Pick<AppState, 'project' | 'head' | 'hea
 }
 export const SLOW_PREVIEW_MS = 8000;
 
+/** The preview error card (EM-3301): Expertmotion's words, never the library's message; reports once so the Player can rebuild. */
+function PreviewErrorView({ error, onError, retrying, reload, openRecovery }: { error: Error; onError: (e: Error) => void; retrying: boolean; reload: () => void; openRecovery: () => void }) {
+  const { t, actions } = useStore();
+  useEffect(() => { onError(error); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div data-el="stage.player.state.error" role="alert" className="flex h-full w-full flex-col items-center justify-center gap-2 bg-em-panel p-4 text-center">
+      <span className="font-semibold">{t('ui.stage.player.error')}</span><span className="t-mono text-em-muted">EM-3301</span>
+      <span className="max-w-[340px] text-[12px] text-em-text-2">{retrying ? t('ui.stage.player.error.retrying') : t('ui.stage.player.error.body')}</span>
+      {retrying && <RefreshCw size={16} className="em-spin text-em-muted" aria-hidden />}
+      <span className="flex flex-wrap justify-center gap-2">
+        <Button el="stage.player.state.error.reload" size={28} onClick={reload}>{t('ui.stage.player.rebuild')}</Button>
+        <Button el="stage.player.state.error.copy" size={28} variant="ghost" onClick={() => { void navigator.clipboard?.writeText(`EM-3301 ${error.message}`).then(() => actions.toast('success', 'ui.common.copied')).catch(() => undefined); }}>{t('ui.stage.player.error.copy')}</Button>
+        <Button el="stage.player.state.error.recovery" size={28} variant="ghost" onClick={openRecovery}>{t('ui.stage.player.openrecovery')}</Button>
+      </span>
+    </div>
+  );
+}
+
 export function StagePlayer() {
   const { state, actions, runtime, t, lang, prefs, setPrefs, dispatch } = useStore();
   const stateRef = useRef(state);
@@ -115,6 +133,20 @@ export function StagePlayer() {
   const [ms, setMs] = useState(state.playheadMs);
   const [menu, setMenu] = useState(false);
   const [remountKey, setRemountKey] = useState(0);
+  // QA 2026-10-31 (Operator): a preview error is Expertmotion's to recover from — never Remotion's overlay or its message. The first
+  // error rebuilds the preview once; the second rebuilds it in safe mode (effects not painted, CSS stand-in); the technical message
+  // goes to the console (captured in the Shell log) and to the clipboard on request only. Renders are never affected.
+  const [safePreview, setSafePreview] = useState(false);
+  const [autoRetrying, setAutoRetrying] = useState(false);
+  const previewErrors = useRef(0);
+  const onPreviewError = (error: Error) => {
+    previewErrors.current += 1;
+    console.error('[preview] EM-3301', error.message);
+    if (previewErrors.current <= 2) {
+      setAutoRetrying(true);
+      setTimeout(() => { if (previewErrors.current >= 2) setSafePreview(true); setAutoRetrying(false); reload(); }, 900);
+    }
+  };
   const [slow, setSlow] = useState(false);
   const [buffering, setBuffering] = useState(false);
   const pid = state.project?.id;
@@ -251,6 +283,7 @@ export function StagePlayer() {
   const quality = t(draft ? 'ui.stage.player.quality.draft' : 'ui.stage.player.quality.full');   // FR-058
   const loading = state.headLoading || buffering;
   const reload = () => { void runtime.api.issueMediaGrant(state.project?.id ?? '').then((g) => dispatch({ type: 'grant', grant: g })).catch(() => undefined); setRemountKey((k) => k + 1); };
+  useEffect(() => { previewErrors.current = 0; setSafePreview(false); }, [pid]);
   const toggleDraft = () => {
     const next = !pp.draft;
     setPlayer({ draft: next });
@@ -323,19 +356,16 @@ export function StagePlayer() {
           </div>
         ) : (
           <div ref={rasterRef} className="relative em-raster" style={{ width: w, height: h }}>
-            <RemotionPlayer key={remountKey} ref={ref} component={Timeline} inputProps={inputProps as unknown as Record<string, unknown>}
+            <RemotionPlayer key={remountKey} ref={ref} component={Timeline} inputProps={{ ...(inputProps as unknown as Record<string, unknown>), safePreview }}
               durationInFrames={meta.durationInFrames} compositionWidth={meta.width} compositionHeight={meta.height} fps={meta.fps}
               style={{ width: w, height: h, ...(state.headLoading ? { visibility: 'hidden' as const } : {}) }} controls={false} loop={pp.loop} clickToPlay spaceKeyToPlayOrPause={false} acknowledgeRemotionLicense initialFrame={Math.min(meta.durationInFrames - 1, Math.round((state.playheadMs / 1000) * meta.fps))}
-              errorFallback={({ error }) => (
-                <div data-el="stage.player.state.error" role="alert" className="flex h-full w-full flex-col items-center justify-center gap-2 bg-em-panel p-4 text-center">
-                  <span className="font-semibold">{t('ui.stage.player.error')}</span><span className="t-mono text-em-muted">EM-3301</span>
-                  <span className="max-w-[320px] truncate text-[11px] text-em-muted">{error.message}</span>
-                  <span className="flex gap-2">
-                    <Button el="stage.player.state.error.reload" size={28} onClick={reload}>{t('ui.stage.player.rebuild')}</Button>
-                    <Button el="stage.player.state.error.recovery" size={28} variant="ghost" onClick={() => actions.setScreen({ kind: 'project.recover' })}>{t('ui.stage.player.openrecovery')}</Button>
-                  </span>
-                </div>
-              )} />
+              errorFallback={({ error }) => <PreviewErrorView error={error} onError={onPreviewError} retrying={autoRetrying} reload={reload} openRecovery={() => actions.setScreen({ kind: 'project.recover' })} />} />
+            {safePreview && !loading && (
+              <div data-el="stage.player.state.safe" role="status" className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2 rounded-[6px] bg-em-panel/90 px-2 py-1 text-[11px] text-em-warn">
+                <span>{t('ui.stage.player.error.safe')}</span>
+                <Button el="stage.player.state.safe.retry" size={28} variant="ghost" onClick={() => { previewErrors.current = 0; setSafePreview(false); reload(); }}>{t('ui.sys.toast.tryagain')}</Button>
+              </div>
+            )}
             {loading && (
               <div data-el="stage.player.state.loading" role="status" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-em-bg/80 text-em-muted">
                 <RefreshCw size={20} className="em-spin" aria-hidden />{state.headLoading ? t('ui.stage.player.loading.version') : t('ui.stage.player.loading.media')}
