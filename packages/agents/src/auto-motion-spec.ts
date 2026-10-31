@@ -129,7 +129,7 @@ export type SpecCutT = z.infer<typeof SpecCut>;
 /** ADR-039: the cover still (POST /projects/:id/cover via plan step `cover.render`): hook word, kicker, line, pills, icons, source, handle. */
 export const SpecCover = z.object({
   cutId: short(40).optional(), atMs: ms.optional(),
-  /** Which frame of the cut: 'end-of-line' (default; right after the last word — mouth closed, eyes on the camera), 'start' (600 ms in), or a master time in ms. */
+  /** Which frame of the cut: 'end-of-line' (default; the middle of the last word — the speaker still faces the camera), 'start' (600 ms in), or a master time in ms. */
   frame: z.union([z.enum(['end-of-line', 'start']), ms]).optional(), hookWord: short(40), kicker: short(60).optional(), line: short(120), subline: short(160).optional(),
   pills: z.array(z.object({ text: short(40), tone: z.enum([...SpecTone.options, ...TAG_TONES]).optional() }).strict()).max(5).optional(),
   icons: z.array(z.enum(ICON_NAMES)).max(5).optional(), source: short(160).optional(), handle: short(60),
@@ -278,7 +278,7 @@ export const TALKING_HEAD_SIGNATURE =
   'explain {cut, heading, blocks: Block[], source?, bubble?: {sizeU, ringColour, ringWidthU, topU, focus}} (full-page graphics, the speaker in a round bubble at the bottom), ' +
   'card {durationMs: 3000, heading?, blocks, tag?: "ilustrasi · bukan cuplikan asli", musicLift?} (silent drawn card for a source clip you do not have), hold {durationMs: 1200} (silent continuation of the previous graphics), ' +
   'poster {imageAssetId, scale?: 0.78, handle, durationMs: 3500} (last). Block = {kind: heading|chip|tag|source|icon|rows|bars|day-strip|browser-card|typing-box|note|stat|text, text?, icon?, tone?, rows?: [{badge?, title, sub?, right?, rightSub?, tone?}], bars?: [{label, value, display?, unit?}], strip?: [{label, fromH, toH}], hours?, urlText?, title?, progress?, caption?, prefixBadge?, sendAt?, value?, label?, unit?, at?: {say: "words of the cut"} | {ms}, sfx?: whoosh|pop|click|tick|ding|rise}. ' +
-  'Also: cover {cutId, frame?: "end-of-line" (default: the frame right after the last word) | "start" | ms, hookWord, kicker?, line, subline?, pills?: [{text, tone}], icons?, source?, handle}, captions: {from: "analysis", keywords: [{words, colour}], yU?: 1455, fontSizeU?: 68, maxWords?: 3}, music: {trackId?, volume?: 0.3, liftOverSilent?: 1.5, fadeInMs?: 500, fadeOutMs?: 2500}, sfx: {enabled: true, level: 0.55}, sourceTagYU?: 1285, credits?: ["source lines for CREDITS.txt"]. ' +
+  'Also: cover {cutId, frame?: "end-of-line" (default: inside the last word, eyes still on the camera) | "start" | ms, hookWord, kicker?, line, subline?, pills?: [{text, tone}], icons?, source?, handle}, captions: {from: "analysis", keywords: [{words, colour}], yU?: 1455, fontSizeU?: 68, maxWords?: 3}, music: {trackId?, volume?: 0.3, liftOverSilent?: 1.5, fadeInMs?: 500, fadeOutMs?: 2500}, sfx: {enabled: true, level: 0.55}, sourceTagYU?: 1285, credits?: ["source lines for CREDITS.txt"]. ' +
   'Facts, figures and sources only from the approved PRD; every number carries a source block or scene.source.';
 
 /**

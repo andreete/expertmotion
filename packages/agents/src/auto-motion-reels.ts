@@ -567,8 +567,10 @@ export function coverAtMs(cover: Pick<SpecCoverT, 'cutId' | 'atMs' | 'frame'>, c
   const cut = cover.cutId ? cuts.find((x) => x.id === cover.cutId) : cuts[0];
   if (!cut) return null;
   if (cover.frame === 'start') return Math.min(cut.endMs, cut.startMs + 600);
+  // 'end-of-line': the MIDDLE of the line's last word — the speaker still faces the camera while finishing the sentence and
+  // drops the gaze right after it (the kit's chosen cover frame sits inside the hook's last word, not after it)
   const last = cut.words[cut.words.length - 1];
-  return Math.max(cut.startMs, Math.min(cut.endMs, last ? last.toMs + 150 : cut.endMs - 100));
+  return Math.max(cut.startMs, Math.min(cut.endMs, last ? Math.round((last.fromMs + last.toMs) / 2) : cut.endMs - 100));
 }
 
 /** Quality-gate fixes applied to the composed ops: `createdBy` (element id → op index, from the dry run) names the add op to rewrite. */

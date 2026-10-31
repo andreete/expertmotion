@@ -248,7 +248,7 @@ describe('talking-head composer on the generic "harga kopi" fixture (6 cuts, 9 s
     expect(hb.y0).toBeGreaterThanOrEqual(posterBottom + 30 - 0.5);                      // fully under the poster, a small gap
     expect(hb.y1).toBeLessThanOrEqual(1850);
     expect(hb.x0).toBeGreaterThanOrEqual(0); expect(f.h / 2 + img.position.y - img.size.h / 2).toBeGreaterThanOrEqual(60);
-    expect(r.reels?.cover).toMatchObject({ hookWord: 'NAIK', atMs: CUTS[0]!.words[CUTS[0]!.words.length - 1]!.toMs + 150 });
+    expect(r.reels?.cover).toMatchObject({ hookWord: 'NAIK', atMs: Math.round((CUTS[0]!.words[CUTS[0]!.words.length - 1]!.fromMs + CUTS[0]!.words[CUTS[0]!.words.length - 1]!.toMs) / 2) });
   });
   it('validation: the ops apply and validate without errors, the quality gate leaves no warning, risks carry no warn', () => {
     expect(validate(m, { assets: ASSETS, tier: 'T1' }).filter((i) => i.severity === 'block')).toEqual([]);
@@ -298,7 +298,7 @@ describe('plan expansion: scene.compose (talking-head) → applyOps + music.gene
     const mu = v.plan.steps[1]!, cv = v.plan.steps[2]!;
     expect(mu.args).toMatchObject({ trackId: 'cc0-other-07', volume: 0.25, fadeInMs: 500, fadeOutMs: 2500, prompt: 'tenang' });
     expect((mu.args as { gain: unknown[] }).gain.length).toBe(3);
-    expect((cv.args as { spec: { hookWord: string; atMs: number } }).spec).toMatchObject({ hookWord: 'MAHAL', atMs: CUTS[0]!.words[CUTS[0]!.words.length - 1]!.toMs + 150 });
+    expect((cv.args as { spec: { hookWord: string; atMs: number } }).spec).toMatchObject({ hookWord: 'MAHAL', atMs: Math.round((CUTS[0]!.words[CUTS[0]!.words.length - 1]!.fromMs + CUTS[0]!.words[CUTS[0]!.words.length - 1]!.toMs) / 2) });
     expect(v.plan.steps[3]!.dependsOn.sort()).toEqual([mu.n, cv.n].sort());
     expect(v.plan.risks.filter((x) => x.code === 'step-merged').length).toBe(2);
     expect(v.plan.status).toBe('valid');
@@ -314,7 +314,7 @@ describe('plan expansion: scene.compose (talking-head) → applyOps + music.gene
 describe('cover still', () => {
   it('every text of the cover lies inside y 285 … 1635; the model applies (one muted master clip at the cut)', () => {
     const b = coverOps(SPEC.cover!, { cuts: CUTS, masterAssetId: 'MASTER' });
-    expect(b.atMs).toBe(CUTS[0]!.words[CUTS[0]!.words.length - 1]!.toMs + 150);                                                        // default 'end-of-line': right after the hook's last word
+    expect(b.atMs).toBe(Math.round((CUTS[0]!.words[CUTS[0]!.words.length - 1]!.fromMs + CUTS[0]!.words[CUTS[0]!.words.length - 1]!.toMs) / 2));   // default 'end-of-line': inside the hook's last word
     expect(b.texts.map((t) => t.key)).toEqual(expect.arrayContaining(['kicker', 'line', 'hook', 'subline', 'pill:cuaca', 'handle']));
     for (const t of b.texts) { expect(t.box.y0).toBeGreaterThanOrEqual(COVER_BAND.top); expect(t.box.y1).toBeLessThanOrEqual(COVER_BAND.bottom); expect(t.box.x0).toBeGreaterThanOrEqual(0); expect(t.box.x1).toBeLessThanOrEqual(f.w); }
     // the face band (y 700 … 1300) is free: kicker / line / hook above it, subline / pills / handle below it
@@ -325,7 +325,7 @@ describe('cover still', () => {
     expect(hook.box.y1 - hook.box.y0).toBeGreaterThanOrEqual(96);
     const model = composeCover(SPEC.cover!, ANALYSIS, 'MASTER');
     expect(model.tracks.video.length).toBe(1);
-    expect(model.tracks.video[0]).toMatchObject({ assetId: 'MASTER', trimBeforeMs: CUTS[0]!.words[CUTS[0]!.words.length - 1]!.toMs + 150, muted: true, transform: { x: 0, scale: COVER_FACE.scale } });
+    expect(model.tracks.video[0]).toMatchObject({ assetId: 'MASTER', trimBeforeMs: Math.round((CUTS[0]!.words[CUTS[0]!.words.length - 1]!.fromMs + CUTS[0]!.words[CUTS[0]!.words.length - 1]!.toMs) / 2), muted: true, transform: { x: 0, scale: COVER_FACE.scale } });
     // the face (source y 0.33) lands at the band centre: centre + (0.33 − 0.5) × h × scale + shift = 1000
     expect(f.h / 2 + (COVER_FACE.y - 0.5) * f.h * COVER_FACE.scale + model.tracks.video[0]!.transform!.y * f.h).toBeCloseTo(COVER_FACE.bandCentre, 0);
     const bands = model.tracks.overlay.filter((o) => o.kind === 'shape' && o.presetId === 'preset:shape.rect');
@@ -341,17 +341,17 @@ describe('cover still', () => {
 });
 
 describe('cover frame choice (QA A22: never mid-word)', () => {
-  it("default 'end-of-line' = last word + 150 ms inside the cut; 'start' = 600 ms in; a number or atMs wins; no words → cut end − 100; unknown cut → null", () => {
-    const c1 = CUTS[0]!, lastEnd = c1.words[c1.words.length - 1]!.toMs;
-    expect(coverAtMs({ cutId: 'c1' }, CUTS)).toBe(lastEnd + 150);
-    expect(coverAtMs({ cutId: 'c1', frame: 'end-of-line' }, CUTS)).toBe(lastEnd + 150);
+  it("default 'end-of-line' = the middle of the last word; 'start' = 600 ms in; a number or atMs wins; no words → cut end − 100; unknown cut → null", () => {
+    const c1 = CUTS[0]!, lastW = c1.words[c1.words.length - 1]!, lastMid = Math.round((lastW.fromMs + lastW.toMs) / 2);
+    expect(coverAtMs({ cutId: 'c1' }, CUTS)).toBe(lastMid);
+    expect(coverAtMs({ cutId: 'c1', frame: 'end-of-line' }, CUTS)).toBe(lastMid);
     expect(coverAtMs({ cutId: 'c1', frame: 'start' }, CUTS)).toBe(c1.startMs + 600);
     expect(coverAtMs({ cutId: 'c1', frame: 9000 }, CUTS)).toBe(9000);
     expect(coverAtMs({ cutId: 'c1', atMs: 8800, frame: 'start' }, CUTS)).toBe(8800);
     expect(coverAtMs({ cutId: 'c1' }, [{ ...c1, words: [] }])).toBe(c1.endMs - 100);
-    expect(coverAtMs({ cutId: 'c1' }, [{ ...c1, endMs: lastEnd + 40 }])).toBe(lastEnd + 40);   // clamped inside the cut
+    expect(coverAtMs({ cutId: 'c1' }, [{ ...c1, endMs: lastMid - 40 }])).toBe(lastMid - 40);   // clamped inside the cut
     expect(coverAtMs({ cutId: 'zz' }, CUTS)).toBeNull();
-    expect(coverAtMs({}, CUTS)).toBe(lastEnd + 150);                                        // no cutId: the first cut
+    expect(coverAtMs({}, CUTS)).toBe(lastMid);                                              // no cutId: the first cut
     const { r: r2 } = composed({ ...SPEC, cover: { ...SPEC.cover!, frame: 'start' } } as VideoSpecT);
     expect(r2.reels?.cover?.atMs).toBe(c1.startMs + 600);
   });
