@@ -306,6 +306,16 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
 
   // ───── layouts ─────
   const elements: ComposedElement[] = [];
+  // ADR-041 (E2E run 6 frames): a top watermark must not sit on the pictures / headlines — layouts start below it (+24 u);
+  // the quality gate keeps the real safe area.
+  const wmBottomU = (() => {
+    const wm = spec.watermark; if (!wm) return 0;
+    const pos = wm.position ?? 'top-center'; if (pos === 'bottom-right') return 0;
+    const img = ctx.assets.find((a) => a.id === wm.assetId && a.kind === 'image' && a.status === 'ready'); if (!img) return 0;
+    const w = wm.widthU ?? VIRAL.watermarkWidthU, h = w / aspectOf(img), pad = 24;
+    return Math.max(pad + h / 2, safe.top * 0.6) + h / 2;
+  })();
+  const layoutStyle: Style = wmBottomU ? { ...style, safe: { ...style.safe, top: Math.max(style.safe.top, wmBottomU + 24) } } : style;
   const captionsOn = spec.captions === true || (typeof spec.captions === 'object' && spec.captions !== null);
   spec.scenes.forEach((s, i) => {
     const sc = scenes[i]!, t = sceneTiming[i]!;
@@ -313,7 +323,7 @@ function compose(spec: VideoSpecT, ctx: ComposeContext, fixes: string[]): Compos
     const exitMs = style.transition.type === 'crossfade-rise' ? tOut : Math.min(350, tOut || 350);
     const end = i < last ? sc.startMs + sc.durationMs + (style.transition.type === 'crossfade-rise' ? tOut : Math.round(tOut * 0.5)) : sc.startMs + sc.durationMs;
     const enterDelay = style.transition.type === 'crossfade-rise' || i === 0 ? 0 : Math.round(T * 0.5);
-    const L = new SceneLayout({ i, scene: s, start: sc.startMs + enterDelay, end, exitMs: i < last ? exitMs : 0, style, frame: f, W, X0, toMs, offsets: t.offsets, risks, id, ops, elements, mutedOpacity, portrait, seed, footage: footageWins[i] ?? null, clipStart: sc.startMs, captions: captionsOn, assets: ctx.assets, sfx });
+    const L = new SceneLayout({ i, scene: s, start: sc.startMs + enterDelay, end, exitMs: i < last ? exitMs : 0, style: layoutStyle, frame: f, W, X0, toMs, offsets: t.offsets, risks, id, ops, elements, mutedOpacity, portrait, seed, footage: footageWins[i] ?? null, clipStart: sc.startMs, captions: captionsOn, assets: ctx.assets, sfx });
     // lay the scene out; when the content runs into the source line / safe bottom, lay it out again smaller (max 5 tries)
     const ops0 = ops.length, els0 = elements.length, risks0 = risks.length;
     for (let attempt = 0; ; attempt++) {

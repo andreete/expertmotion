@@ -430,24 +430,42 @@ export class GeneratorsService {
               ...(typeof st.args['modelKey'] === 'string' ? { modelKey: st.args['modelKey'] } : {}) });   // the installed model the plan checked (prepareToolSteps)
             notice(st.n, st.tool, 'started', { jobId: job['id'] });
           } else if (st.tool === 'captions.generate') {
-            const dep = st.dependsOn.map((n) => voices.get(n)).find(Boolean) ?? [...voices.values()][0];
-            const row = dep ? await dep : undefined;
-            const model = ctx.hooks.composition(projectId).model;
-            const same = row?.status === 'done' && row.result_asset_id ? model.tracks.audio.filter((a) => a.assetId === row.result_asset_id && a.role === 'voice') : [];
-            const layer = same.find((a) => a.atMs === (dep ? voiceAt.get(dep) : undefined)) ?? same.at(-1);
-            const from = layer?.atMs ?? 0, to = layer?.durationMs !== undefined ? from + layer.durationMs : deriveTiming(model).durationMs;
-            // FR-248: the voice's own timed transcript (script words, engine / whisper times) — the caption text is the script, never recognition
-            const stored = row?.result_asset_id ? this.transcriptOf(row.result_asset_id) : null;
-            const captionText = String(st.args['text'] ?? '').trim();
-            const tx = stored && captionText && captionText !== stored.spoken && captionText !== stored.written
-              ? buildTranscript({ spoken: stored.spoken, written: captionText, language: stored.language, durationMs: stored.durationMs, tokens: stored.words, method: 'engine' })
-              : stored;
-            const pages = tx && layer ? cuesToCaptionPages(tx.cues, from, { trimBeforeMs: layer.trimBeforeMs, untilMs: Math.min(to, deriveTiming(model).durationMs) })
-              : scriptPages(captionText, from, Math.min(to, deriveTiming(model).durationMs));
+            // ADR-041 (E2E run 6, 2026-11-01): caption pages for EVERY narration voice of this plan, each from its own voice's timed
+            // transcript / script text. Before, one voice job was picked (the first) and its few words were spread over the video.
+            const depNs = st.dependsOn.filter((n) => voices.has(n));
+            const jobNs = (depNs.length ? depNs : [...voices.keys()]).sort((a, b) => a - b);
+            const pages: ReturnType<typeof scriptPages> = []; let timedTo: 'voice' | 'video' = 'video'; let method: string | undefined;
+            if (!jobNs.length) {
+              // voice-first Execute (ADR-035): the voices were made before this runner started, so no job is in `voices` — read every
+              // voice layer of the model with its stored timed transcript instead; the old fallback spread the first line over the video
+              const model = ctx.hooks.composition(projectId).model; const totalMs = deriveTiming(model).durationMs;
+              for (const layer of [...model.tracks.audio.filter((a) => a.role === 'voice')].sort((a, b) => a.atMs - b.atMs)) {
+                const tx = this.transcriptOf(layer.assetId, projectId); if (!tx) continue;
+                const to = Math.min(layer.durationMs !== undefined ? layer.atMs + layer.durationMs : totalMs, totalMs);
+                pages.push(...cuesToCaptionPages(tx.cues, layer.atMs, { trimBeforeMs: layer.trimBeforeMs, untilMs: to })); timedTo = 'voice'; method = tx.method ?? method;
+              }
+              if (!pages.length) pages.push(...scriptPages(String(st.args['text'] ?? '').trim(), 0, totalMs));
+            }
+            for (const n of jobNs) {
+              const wait = voices.get(n)!; const row = await wait;
+              const model = ctx.hooks.composition(projectId).model;
+              const same = row?.status === 'done' && row.result_asset_id ? model.tracks.audio.filter((a) => a.assetId === row.result_asset_id && a.role === 'voice') : [];
+              const layer = same.find((a) => a.atMs === voiceAt.get(wait)) ?? same.at(-1);
+              if (!layer) continue;
+              const from = layer.atMs, to = Math.min(layer.durationMs !== undefined ? from + layer.durationMs : Number.POSITIVE_INFINITY, deriveTiming(model).durationMs);
+              // FR-248: the caption text is the script (this voice step's text), never recognition; the voice's timed transcript gives the times
+              const stepText = String(steps.find((x) => x.n === n)?.args['text'] ?? (jobNs.length === 1 ? st.args['text'] ?? '' : '')).trim();
+              const stored = row?.result_asset_id ? this.transcriptOf(row.result_asset_id) : null;
+              const tx = stored && stepText && stepText !== stored.spoken && stepText !== stored.written
+                ? buildTranscript({ spoken: stored.spoken, written: stepText, language: stored.language, durationMs: stored.durationMs, tokens: stored.words, method: 'engine' })
+                : stored;
+              const pg = tx ? cuesToCaptionPages(tx.cues, from, { trimBeforeMs: layer.trimBeforeMs, untilMs: to }) : scriptPages(stepText, from, to);
+              pages.push(...pg); timedTo = 'voice'; method = tx?.method ?? method;
+            }
             if (!pages.length) { notice(st.n, st.tool, 'skipped', { code: 'EM-7103' }); continue; }
             const ops = this.withCaptionStyle(projectId, [{ op: 'op:caption.setPages', target: { kind: 'project' }, args: { pages } } as OperationT, ...(typeof st.args['presetId'] === 'string' ? [{ op: 'op:caption.setStyle', target: { kind: 'project' }, args: { presetId: st.args['presetId'] } } as OperationT] : [])]);
             ctx.hooks.applyOps(projectId, ops, { kind: 'generator', ref: planId, summary: 'Captions from the script' });
-            notice(st.n, st.tool, 'done', { pages: pages.length, timedTo: layer ? 'voice' : 'video', timing: tx?.method ?? 'proportional' });
+            notice(st.n, st.tool, 'done', { pages: pages.length, voices: jobNs.length, timedTo, timing: method ?? 'proportional' });
           }
         } catch (e) {
           const code = e instanceof EmError ? e.code : 'EM-7101';
