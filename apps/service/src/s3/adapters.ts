@@ -3,7 +3,7 @@
 // streaming (FR-210) and native tool calling for the read-only agent tools (AI_WORKFLOW §8.1, FR-211; JSON mode stays the fallback).
 // Every request goes through the injected `fetch`, which is the egress module (Private Mode → EM-8202, allow-list → EM-8203).
 import { EmError } from '@expertmotion/shared';
-import { mapProviderError, mergeSources, openRouterProvider, STREAM_TOTAL_FACTOR, withRateLimitRetry, type ChatMessage, type ChatProvider, type ChatRequest, type ChatResult, type RateLimitRetry, type ToolCall, type WebSource } from '@expertmotion/agents';
+import { joinSystem, mapProviderError, mergeSources, openRouterProvider, splitSystem, STREAM_TOTAL_FACTOR, withRateLimitRetry, type ChatMessage, type ChatProvider, type ChatRequest, type ChatResult, type ChatUsage, type RateLimitRetry, type ToolCall, type WebSource } from '@expertmotion/agents';
 import type { CapabilityRowT, ProviderKindT } from './dto.js';
 
 const OPENROUTER = 'https://openrouter.ai/api/v1';
@@ -141,7 +141,37 @@ export async function listModels(p: ProviderKindT, key: string, fetchFn: typeof 
   }
 }
 
-const usageOf = (model: string, inputTokens: unknown, outputTokens: unknown) => ({ model, inputTokens: Math.max(0, Math.trunc(num(inputTokens) ?? 0)), outputTokens: Math.max(0, Math.trunc(num(outputTokens) ?? 0)), costUsd: null, approximate: true });
+const usageOf = (model: string, inputTokens: unknown, outputTokens: unknown, cache?: { read?: unknown; write?: unknown }): ChatUsage => {
+  const read = Math.max(0, Math.trunc(num(cache?.read) ?? 0)), write = Math.max(0, Math.trunc(num(cache?.write) ?? 0));
+  return { model, inputTokens: Math.max(0, Math.trunc(num(inputTokens) ?? 0)), outputTokens: Math.max(0, Math.trunc(num(outputTokens) ?? 0)), costUsd: null, approximate: true,
+    ...(read ? { cacheReadTokens: read } : {}), ...(write ? { cacheWriteTokens: write } : {}) };
+};
+
+// ── Prompt caching (ADR-040; platform.claude.com/docs/en/build-with-claude/prompt-caching, checked 2026-10-31) ──
+/** The system prompt as Messages API blocks: the stable prefix carries the cache breakpoint (tools + system are cached together, the
+ *  cache is reused for 5 minutes and refreshed on every hit), the per-call tail and the web-research note follow uncached. */
+export function anthropicSystem(system: string, note = ''): Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> {
+  const { stable, dynamic } = splitSystem(system);
+  const tail = [dynamic, note].filter((s): s is string => !!s && !!s.trim()).join('\n\n');
+  return [{ type: 'text', text: stable, cache_control: { type: 'ephemeral' } }, ...(tail ? [{ type: 'text' as const, text: tail }] : [])];
+}
+/** A cache breakpoint on the last block of the last message of a multi-turn thread: the API looks back from it for the longest cached
+ *  prefix, so each tool round and each later chat turn reuses the thread so far instead of paying for it again. */
+export function anthropicCacheLastMessage(messages: Array<{ role: 'user' | 'assistant'; content: unknown }>): Array<{ role: 'user' | 'assistant'; content: unknown }> {
+  if (messages.length < 2) return messages;
+  const last = messages[messages.length - 1]!;
+  const mark = { cache_control: { type: 'ephemeral' } };
+  let content: unknown;
+  if (typeof last.content === 'string') content = [{ type: 'text', text: last.content, ...mark }];
+  else if (Array.isArray(last.content) && last.content.length) {
+    const blocks = [...(last.content as Array<Record<string, unknown>>)];
+    const tail = blocks[blocks.length - 1]!;
+    if (tail['type'] === 'thinking' || tail['type'] === 'redacted_thinking') return messages;       // thinking blocks take no cache_control
+    blocks[blocks.length - 1] = { ...tail, ...mark };
+    content = blocks;
+  } else return messages;
+  return [...messages.slice(0, -1), { role: last.role, content }];
+}
 
 /** OpenAI reasoning models (o1/o3/o4…, GPT-5 family and later): no temperature, reasoning counts toward max_completion_tokens. */
 export const OPENAI_REASONING = /^(o\d|gpt-(5|6|7|8|9)|gpt-oss)/i;
@@ -292,7 +322,7 @@ function anthropicResult(model: string, blocks: AnthropicBlock[], stop: unknown,
   const calls: ToolCall[] = blocks.filter((b) => b.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string').map((b) => ({ id: b.id!, name: b.name!, input: b.input ?? {} }));
   const input = (num(usage?.input_tokens) ?? 0) + (num(usage?.cache_read_input_tokens) ?? 0) + (num(usage?.cache_creation_input_tokens) ?? 0);
   const web = blocks.some((b) => b.type === 'server_tool_use' || b.type === 'web_search_tool_result' || b.type === 'web_fetch_tool_result') ? anthropicWeb(blocks) : null;
-  return { text, usage: usageOf(model, input, usage?.output_tokens), finishReason: stop === 'max_tokens' ? 'length' : stop === 'tool_use' ? 'tool-calls' : String(stop ?? 'stop'),
+  return { text, usage: usageOf(model, input, usage?.output_tokens, { read: usage?.cache_read_input_tokens, write: usage?.cache_creation_input_tokens }), finishReason: stop === 'max_tokens' ? 'length' : stop === 'tool_use' ? 'tool-calls' : String(stop ?? 'stop'),
     ...(calls.length ? { toolCalls: calls, providerRaw: blocks } : {}),
     ...(web?.sources.length ? { citations: web.sources } : {}), ...(web?.queries.length ? { webQueries: web.queries } : {}), ...(web?.fetches.length ? { webFetches: web.fetches.length } : {}), ...(webNotice ? { webNotice } : {}) };
 }
@@ -460,7 +490,7 @@ function rawChatProviderFor(p: ProviderKindT, key: string, model: string, fetchF
       // Chat Completions: reasoning models (o-series, GPT-5 family) take max_completion_tokens, which also counts reasoning tokens,
       // and reject temperature/top_p; other models keep the caller's temperature (retry-without on refusal).
       const reasoning = OPENAI_REASONING.test(model);
-      const body = (req: ChatRequest, streamed: boolean) => (w: boolean, tools: boolean, floor: boolean) => ({ model, messages: openAiMessages(req.system, req.messages),
+      const body = (req: ChatRequest, streamed: boolean) => (w: boolean, tools: boolean, floor: boolean) => ({ model, messages: openAiMessages(joinSystem(req.system), req.messages),
         max_completion_tokens: Math.max(req.maxTokens, reasoning ? REASONING_MIN_MAX_TOKENS : 0, streamed && floor && reasoning ? STREAM_MIN_MAX_TOKENS : 0), ...(w && !reasoning ? temp(req.temperature, 2) : {}),
         ...(tools ? { tools: req.tools!.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } })), tool_choice: req.toolChoice ?? 'auto' } : {}),
         ...(streamed ? { stream: true, stream_options: { include_usage: true } } : {}) });
@@ -515,7 +545,7 @@ function rawChatProviderFor(p: ProviderKindT, key: string, model: string, fetchF
         const server = req.webResearch ? anthropicWebTools(level, req.webResearch) : [];
         const client = tools ? req.tools!.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })) : [];
         const all = [...client, ...server];
-        return { model, system: note ? `${req.system}\n\n${note}` : req.system, messages: [...anthropicMessages(req.messages), ...cont],
+        return { model, system: anthropicSystem(req.system, note), messages: [...anthropicCacheLastMessage(anthropicMessages(req.messages)), ...cont],
           max_tokens: Math.max(req.maxTokens, ANTHROPIC_MIN_MAX_TOKENS, streamed && floor ? STREAM_MIN_MAX_TOKENS : 0),
           ...(all.length ? { tools: all, tool_choice: { type: req.toolChoice === 'none' ? 'none' : 'auto' } } : {}),
           ...(streamed ? { stream: true } : {}) };
@@ -575,7 +605,7 @@ function rawChatProviderFor(p: ProviderKindT, key: string, model: string, fetchF
       // Gemini: maxOutputTokens includes thinking tokens and many models think by default (some cannot turn it off), so the budget has
       // a floor; temperature is left at the model default (newer models are tuned for it); thought parts are never shown. Function
       // calls come back with thought signatures on their parts, so the model's parts are replayed unchanged.
-      const body = (req: ChatRequest, streamed: boolean) => (_w: boolean, tools: boolean, floor: boolean) => ({ systemInstruction: { parts: [{ text: req.system }] }, contents: geminiContents(req.messages),
+      const body = (req: ChatRequest, streamed: boolean) => (_w: boolean, tools: boolean, floor: boolean) => ({ systemInstruction: { parts: [{ text: joinSystem(req.system) }] }, contents: geminiContents(req.messages),
         generationConfig: { maxOutputTokens: Math.max(req.maxTokens, GEMINI_MIN_MAX_TOKENS, streamed && floor ? STREAM_MIN_MAX_TOKENS : 0) },
         ...(tools ? { tools: [{ functionDeclarations: req.tools!.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.inputSchema })) }], toolConfig: { functionCallingConfig: { mode: req.toolChoice === 'none' ? 'NONE' : 'AUTO' } } } : {}) });
       type Resp = { candidates?: Array<{ content?: { parts?: GeminiPart[] }; finishReason?: unknown }>; promptFeedback?: { blockReason?: unknown }; usageMetadata?: Parameters<typeof geminiResult>[4] };

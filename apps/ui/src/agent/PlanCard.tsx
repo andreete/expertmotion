@@ -276,6 +276,7 @@ export function PlanCard({ plan }: { plan: PlanDto }) {
       {plan.usage && (
         <div className="t-mono text-[11px] text-em-muted" title={plan.usage.approximate ? t('ui.agent.common.cost.approx') : plan.usage.costUsd === null ? t('ui.agent.common.cost.na') : undefined}>
           <span data-el="agent.editor.plancard.model" title={plan.usage.model}>{names.llm(plan.usage.model, 'editor')}</span> · {t('ui.agent.plan.usage', { input: formatTokens(plan.usage.inputTokens, lang), output: formatTokens(plan.usage.outputTokens, lang), cost: formatMoney(plan.usage.costUsd, plan.usage.approximate, lang) })}
+          {!!plan.usage.cacheReadTokens && plan.usage.inputTokens > 0 && <span data-el="agent.editor.plancard.cache" title={t('ui.agent.plan.usage.cache.tip')}> · {t('ui.agent.plan.usage.cache', { pct: Math.round((100 * plan.usage.cacheReadTokens) / plan.usage.inputTokens) })}</span>}
         </div>
       )}
       {status === 'executing' && (

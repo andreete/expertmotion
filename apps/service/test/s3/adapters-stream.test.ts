@@ -62,7 +62,7 @@ describe('Anthropic Messages streaming + tools (FR-210, FR-211)', () => {
     expect(act).toEqual([{ type: 'thinking' }, { type: 'text' }, { type: 'tool', name: 'catalogue_search' }]);
     const b = seen[0]!.body;
     expect(seen[0]!.url).toMatch(/\/v1\/messages$/);
-    expect(b).toMatchObject({ model: 'claude-sonnet-5-5', system: 'sys', stream: true, tool_choice: { type: 'auto' }, tools: [{ name: 'catalogue_search', description: 'Search the catalogue', input_schema: TOOLS[0]!.inputSchema }] });
+    expect(b).toMatchObject({ model: 'claude-sonnet-5-5', system: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }], stream: true, tool_choice: { type: 'auto' }, tools: [{ name: 'catalogue_search', description: 'Search the catalogue', input_schema: TOOLS[0]!.inputSchema }] });
     expect(b['max_tokens']).toBeGreaterThanOrEqual(STREAM_MIN_MAX_TOKENS);
     expect(b).not.toHaveProperty('temperature');
   });

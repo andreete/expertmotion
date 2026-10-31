@@ -40,7 +40,10 @@ export interface ChatRequest { system: string; messages: ChatMessage[]; maxToken
   /** FR-216: provider-native web research (only for providers with `nativeWebResearch`). */
   webResearch?: WebResearchRequest;
   onActivity?: (a: ChatActivity) => void }
-export interface ChatUsage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean }
+/** `inputTokens` counts every prompt token (cached reads and cache writes included); the two cache counters say how many of them
+ *  were served from / written to the provider's prompt cache (ADR-040; Anthropic `cache_read_input_tokens` / `cache_creation_input_tokens`,
+ *  OpenRouter `cached_tokens`). Absent when the provider reports nothing. */
+export interface ChatUsage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; cacheReadTokens?: number | undefined; cacheWriteTokens?: number | undefined }
 /**
  * `finishReason` / `reasoningTokens` are reported when the provider gives them ('length' = the reply hit maxTokens, so a JSON
  * reply is truncated); diagnostics only, never shown to the Creator. `toolCalls` / `providerRaw`: native tool calling.
@@ -62,10 +65,33 @@ export interface ChatProvider {
 
 /** Price per million tokens (USD) for providers that do not report cost; values come from the Capability Table, labelled approximate. */
 export type PriceTable = Record<string, { input: number; output: number }>;
-export function estimateCost(model: string, inputTokens: number, outputTokens: number, prices?: PriceTable): { costUsd: number | null; approximate: boolean } {
+/** Prompt-cache price factors (platform.claude.com/docs pricing, checked 2026-10-31): a cache read costs 0.1 × the input price, a
+ *  5-minute cache write 1.25 ×. OpenRouter applies the same factors for Anthropic models; other providers' discounts are ignored
+ *  (the estimate stays conservative and is labelled approximate anyway). */
+export const CACHE_READ_FACTOR = 0.1, CACHE_WRITE_FACTOR = 1.25;
+export function estimateCost(model: string, inputTokens: number, outputTokens: number, prices?: PriceTable, cache?: { read?: number | undefined; write?: number | undefined }): { costUsd: number | null; approximate: boolean } {
   const p = prices?.[model];
-  return p ? { costUsd: (inputTokens * p.input + outputTokens * p.output) / 1e6, approximate: true } : { costUsd: null, approximate: true };
+  if (!p) return { costUsd: null, approximate: true };
+  const read = Math.max(0, cache?.read ?? 0), write = Math.max(0, cache?.write ?? 0);
+  const plain = Math.max(0, inputTokens - read - write);
+  return { costUsd: ((plain + read * CACHE_READ_FACTOR + write * CACHE_WRITE_FACTOR) * p.input + outputTokens * p.output) / 1e6, approximate: true };
 }
+
+// ── Prompt caching (ADR-040) ──
+/** Separates the stable prefix of a system prompt (prompt text, channel profile, tool and research blocks — identical from one call to
+ *  the next) from its per-call tail (project context, base version). Adapters put the provider's cache breakpoint after the prefix and
+ *  send the tail uncached; providers without explicit caching get the two joined by a blank line. The marker never reaches a model. */
+export const SYSTEM_DYNAMIC_MARK = '\n\n<<EM:DYNAMIC>>\n';
+export function splitSystem(system: string): { stable: string; dynamic: string | null } {
+  const i = system.indexOf(SYSTEM_DYNAMIC_MARK);
+  if (i < 0) return { stable: system, dynamic: null };
+  const dynamic = system.slice(i + SYSTEM_DYNAMIC_MARK.length);
+  return { stable: system.slice(0, i), dynamic: dynamic.trim() ? dynamic : null };
+}
+/** The system prompt as one string (marker replaced by a blank line) for providers that cache automatically or not at all. */
+export const joinSystem = (system: string): string => system.split(SYSTEM_DYNAMIC_MARK).filter((s) => s.trim()).join('\n\n');
+/** OpenRouter honours Anthropic-style `cache_control` for these model families and strips it for the rest (openrouter.ai/docs/prompt-caching). */
+export const openRouterCaches = (model: string): boolean => /^(anthropic|google)\//.test(model);
 
 /** A 400 whose reason is about the key itself (Gemini: "API key not valid", "API key expired"). */
 const KEY_INVALID_400 = /api[ _-]?key (is )?(not valid|invalid|expired)|invalid api[ _-]?key|api key not found/i;
@@ -189,6 +215,17 @@ export function toSdkMessages(messages: readonly ChatMessage[]): ModelMessage[] 
     return out;
   });
 }
+const OR_CACHE = { openrouter: { cacheControl: { type: 'ephemeral' } } } as const;
+/** System prompt + thread as AI SDK messages for OpenRouter. With a caching model family the stable system prefix and the last
+ *  message carry a cache breakpoint (the thread prefix up to the newest turn is reused from one round to the next); the per-call
+ *  tail is a second, uncached system message. */
+export function toSdkMessagesWithSystem(req: Pick<ChatRequest, 'system' | 'messages'>, model: string): ModelMessage[] {
+  const { stable, dynamic } = splitSystem(req.system);
+  const caches = openRouterCaches(model);
+  const thread = toSdkMessages(req.messages);
+  if (caches && thread.length >= 2) { const last = thread[thread.length - 1]!; thread[thread.length - 1] = { ...last, providerOptions: OR_CACHE } as ModelMessage; }
+  return [{ role: 'system', content: stable, ...(caches ? { providerOptions: OR_CACHE } : {}) }, ...(dynamic ? [{ role: 'system' as const, content: dynamic }] : []), ...thread];
+}
 /** AI SDK tool set for native tool calling (no `execute`: the runner runs the read-only tools itself). */
 export function toSdkTools(tools: readonly ToolSpec[] | undefined) {
   if (!tools?.length) return undefined;
@@ -204,16 +241,18 @@ export function openRouterProvider(opts: { apiKey: string; model: string; fetch:
     const tools = opts.nativeTools ? toSdkTools(req.tools) : undefined;
     return tools ? { tools, toolChoice: req.toolChoice ?? 'auto' } : {};
   };
-  const usageOf = (u: { inputTokens?: number | undefined; outputTokens?: number | undefined }, meta: unknown) => {
+  const usageOf = (u: { inputTokens?: number | undefined; outputTokens?: number | undefined; cachedInputTokens?: number | undefined; inputTokenDetails?: { cacheReadTokens?: number | undefined; cacheWriteTokens?: number | undefined } | undefined }, meta: unknown): ChatUsage => {
     const m = ((meta as Record<string, unknown> | undefined)?.['openrouter'] ?? {}) as { usage?: { cost?: number } };
     const cost = typeof m.usage?.cost === 'number' ? m.usage.cost : null;
-    return { model: opts.model, inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0, costUsd: cost, approximate: cost === null };
+    const read = u.inputTokenDetails?.cacheReadTokens ?? u.cachedInputTokens, write = u.inputTokenDetails?.cacheWriteTokens;
+    return { model: opts.model, inputTokens: u.inputTokens ?? 0, outputTokens: u.outputTokens ?? 0, costUsd: cost, approximate: cost === null,
+      ...(typeof read === 'number' && read > 0 ? { cacheReadTokens: read } : {}), ...(typeof write === 'number' && write > 0 ? { cacheWriteTokens: write } : {}) };
   };
   return {
     id: 'openrouter', model: opts.model, ...(opts.nativeTools ? { nativeTools: true } : {}),
     async complete(req) {
       try {
-        const r = await generateText({ model: or.chat(opts.model), system: req.system, messages: toSdkMessages(req.messages), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0, ...toolOpts(req),
+        const r = await generateText({ model: or.chat(opts.model), messages: toSdkMessagesWithSystem(req, opts.model), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0, ...toolOpts(req),
           ...(req.signal ? { abortSignal: req.signal } : {}), ...(req.timeoutMs ? { timeout: req.timeoutMs } : {}) });
         const rt = r.usage.outputTokenDetails?.reasoningTokens ?? r.usage.reasoningTokens;
         const calls = r.toolCalls.map((c) => ({ id: c.toolCallId, name: c.toolName, input: c.input }));
@@ -225,7 +264,7 @@ export function openRouterProvider(opts: { apiKey: string; model: string; fetch:
       try {
         // Streaming: reasoning models think for minutes before the first text; the stream stays alive (reasoning chunks), so
         // the limit is a silence of chunkMs, and the whole answer may take STREAM_TOTAL_FACTOR × the call timeout.
-        const r = streamText({ model: or.chat(opts.model), system: req.system, messages: toSdkMessages(req.messages), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0, ...toolOpts(req),
+        const r = streamText({ model: or.chat(opts.model), messages: toSdkMessagesWithSystem(req, opts.model), maxOutputTokens: req.maxTokens, temperature: req.temperature, maxRetries: 0, ...toolOpts(req),
           ...(req.signal ? { abortSignal: req.signal } : {}), ...(req.timeoutMs ? { timeout: { totalMs: req.timeoutMs * STREAM_TOTAL_FACTOR, chunkMs: Math.min(req.timeoutMs, STREAM_CHUNK_MS) } } : {}) });
         let text = ''; const calls: ToolCall[] = [];
         for await (const part of r.fullStream) {

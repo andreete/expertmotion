@@ -875,7 +875,9 @@ export class Workflow {
 function aggregate(usage: ChatUsage[]): EditPlanT['usage'] | undefined {
   if (!usage.length) return undefined;
   const cost = usage.every((u) => u.costUsd !== null) ? usage.reduce((s, u) => s + (u.costUsd ?? 0), 0) : null;
-  return { model: usage[usage.length - 1]!.model, inputTokens: usage.reduce((s, u) => s + u.inputTokens, 0), outputTokens: usage.reduce((s, u) => s + u.outputTokens, 0), costUsd: cost, approximate: usage.some((u) => u.approximate) };
+  const read = usage.reduce((s, u) => s + (u.cacheReadTokens ?? 0), 0), write = usage.reduce((s, u) => s + (u.cacheWriteTokens ?? 0), 0);
+  return { model: usage[usage.length - 1]!.model, inputTokens: usage.reduce((s, u) => s + u.inputTokens, 0), outputTokens: usage.reduce((s, u) => s + u.outputTokens, 0), costUsd: cost, approximate: usage.some((u) => u.approximate),
+    ...(read ? { cacheReadTokens: read } : {}), ...(write ? { cacheWriteTokens: write } : {}) };
 }
 
 export function targetExists(m: CompositionModelT, ref: ElementRefT): boolean {

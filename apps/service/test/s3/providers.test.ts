@@ -214,31 +214,31 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
   it('OpenAI: models filtered to chat models, chat completions mapped', async () => {
     const { f, seen } = mk((c) => (c.url.endsWith('/models') ? json(200, { data: [{ id: 'gpt-4o-mini' }, { id: 'text-embedding-3-small' }, { id: 'o3' }] })
       : json(200, { choices: [{ message: { content: '{"reply":"ok"}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 3 } })));
-    expect((await listModels('openai', 'sk-test-openai-key-123456789', f)).map((m) => m.modelId)).toEqual(['gpt-4o-mini', 'o3']);
-    const r = await chatProviderFor('openai', 'sk-test-openai-key-123456789', 'gpt-4o-mini', f).complete(req);
+    expect((await listModels('openai', 'sk-openai-fake-1', f)).map((m) => m.modelId)).toEqual(['gpt-4o-mini', 'o3']);
+    const r = await chatProviderFor('openai', 'sk-openai-fake-1', 'gpt-4o-mini', f).complete(req);
     expect(r).toMatchObject({ text: '{"reply":"ok"}', usage: { inputTokens: 12, outputTokens: 3, costUsd: null, approximate: true } });
     const b = JSON.parse(String(seen.at(-1)!.init.body)) as { messages: Array<{ role: string }> };
     expect(b.messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
-    expect((seen.at(-1)!.init.headers as Record<string, string>)['Authorization']).toBe('Bearer sk-test-openai-key-123456789');
+    expect((seen.at(-1)!.init.headers as Record<string, string>)['Authorization']).toBe('Bearer sk-openai-fake-1');
   });
   it('Anthropic: x-api-key header, system separate, temperature clamped to 1', async () => {
     const { f, seen } = mk((c) => (c.url.includes('/models') ? json(200, { data: [{ id: 'claude-x', display_name: 'Claude X' }] })
       : json(200, { content: [{ type: 'text', text: 'halo' }], usage: { input_tokens: 9, output_tokens: 2 } })));
-    await validateKey('anthropic', 'sk-ant-test-key-1234567890', f);
-    expect((await listModels('anthropic', 'sk-ant-test-key-1234567890', f))[0]).toMatchObject({ modelId: 'claude-x', label: 'Claude X' });
-    const r = await chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-x', f).complete(req);
+    await validateKey('anthropic', 'sk-ant-fake-key-1', f);
+    expect((await listModels('anthropic', 'sk-ant-fake-key-1', f))[0]).toMatchObject({ modelId: 'claude-x', label: 'Claude X' });
+    const r = await chatProviderFor('anthropic', 'sk-ant-fake-key-1', 'claude-x', f).complete(req);
     expect(r.text).toBe('halo');
     const last = seen.at(-1)!; const b = JSON.parse(String(last.init.body)) as { system: string; temperature: number; max_tokens: number };
-    expect(b).toMatchObject({ system: 'sys', max_tokens: 1024 });                       // floor for model-default thinking
+    expect(b).toMatchObject({ system: [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }], max_tokens: 1024 });   // ADR-040 cached prefix; floor for model-default thinking
     expect(b).not.toHaveProperty('temperature');                                        // not a Messages API parameter for current models
-    expect((last.init.headers as Record<string, string>)['x-api-key']).toBe('sk-ant-test-key-1234567890');
+    expect((last.init.headers as Record<string, string>)['x-api-key']).toBe('sk-ant-fake-key-1');
     // the connection Test sends no temperature: it must be omitted, never "temperature": null (Anthropic → HTTP 400)
     const { temperature: _t, ...noTemp } = req;
-    await chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-x', f).complete(noTemp as typeof req);
+    await chatProviderFor('anthropic', 'sk-ant-fake-key-1', 'claude-x', f).complete(noTemp as typeof req);
     expect(JSON.parse(String(seen.at(-1)!.init.body))).not.toHaveProperty('temperature');
     // a refused request (HTTP 400) is EM-4105 with the provider's own reason, not "cannot be reached"
     const bad = mk(() => json(400, { type: 'error', error: { type: 'invalid_request_error', message: 'temperature: Input should be a valid number' } }));
-    await expect(chatProviderFor('anthropic', 'sk-ant-test-key-1234567890', 'claude-x', bad.f).complete(req))
+    await expect(chatProviderFor('anthropic', 'sk-ant-fake-key-1', 'claude-x', bad.f).complete(req))
       .rejects.toMatchObject({ code: 'EM-4105', details: { status: 400, reason: 'temperature: Input should be a valid number' } });
   });
   it('a model that refuses temperature is retried once without it and remembered (OpenAI reasoning models, Gemini)', async () => {
@@ -248,7 +248,7 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
       return 'temperature' in b ? json(400, { error: { message: "Unsupported value: 'temperature' does not support 0 with this model.", type: 'invalid_request_error' } })
         : json(200, { choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 3, completion_tokens: 1 } });
     });
-    const prov = chatProviderFor('openai', 'sk-test-openai-key-123456789', 'o-reasoning', f);
+    const prov = chatProviderFor('openai', 'sk-openai-fake-1', 'o-reasoning', f);
     expect((await prov.complete({ ...req, temperature: 0 })).text).toBe('ok');
     expect(bodies.map((b) => 'temperature' in b)).toEqual([true, false]);
     await prov.complete({ ...req, temperature: 0.2 });
@@ -258,9 +258,9 @@ describe('fetch adapters (OpenAI, Anthropic, Gemini) and error mapping', () => {
   it('OpenAI reasoning models get no temperature and a max_completion_tokens floor; Gemini skips thought parts and keeps the default temperature', async () => {
     const seenBodies: Array<Record<string, unknown>> = [];
     const oa = mk((c) => { seenBodies.push(JSON.parse(String(c.init.body)) as Record<string, unknown>); return json(200, { choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }); });
-    await chatProviderFor('openai', 'sk-test-openai-key-123456789', 'gpt-5.1', oa.f).complete({ ...req, temperature: 0.2, maxTokens: 20 });
+    await chatProviderFor('openai', 'sk-openai-fake-1', 'gpt-5.1', oa.f).complete({ ...req, temperature: 0.2, maxTokens: 20 });
     expect(seenBodies[0]).toMatchObject({ max_completion_tokens: 2048 }); expect(seenBodies[0]).not.toHaveProperty('temperature');
-    await chatProviderFor('openai', 'sk-test-openai-key-123456789', 'gpt-4.1-mini', oa.f).complete({ ...req, temperature: 0.2, maxTokens: 20 });
+    await chatProviderFor('openai', 'sk-openai-fake-1', 'gpt-4.1-mini', oa.f).complete({ ...req, temperature: 0.2, maxTokens: 20 });
     expect(seenBodies[1]).toMatchObject({ max_completion_tokens: 20, temperature: 0.2 });
     const gBodies: Array<Record<string, unknown>> = [];
     const ge = mk((c) => { gBodies.push(JSON.parse(String(c.init.body)) as Record<string, unknown>);

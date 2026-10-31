@@ -7,7 +7,7 @@ import { normalizeModelReply, presetParamShape } from './plan-normalize.js';
 import { listPresets } from '@expertmotion/catalogue';
 import { BrainstormTurn, normalizeProposedIntents, type EditPlanT } from './schemas.js';
 import type { RewriteEnvelope } from './envelope.js';
-import type { ChatActivity, ChatImage, ChatMessage, ChatProvider, ChatRequest, ChatUsage, ToolCall, ToolResultPart, WebSource } from './providers.js';
+import { SYSTEM_DYNAMIC_MARK, type ChatActivity, type ChatImage, type ChatMessage, type ChatProvider, type ChatRequest, type ChatUsage, type ToolCall, type ToolResultPart, type WebSource } from './providers.js';
 import { mergeSources, researchPromptBlock, sourcesOfToolCalls, type ResearchConfig } from './research.js';
 import { compileIntents, createIntents, pickFromIntent } from './intents.js';
 import { describeSchema, opSignature } from './op-args.js';
@@ -56,7 +56,9 @@ export function dryRunOps(input: Record<string, unknown>, ctx: PlanContext & { p
 }
 
 const langName = (l: 'id' | 'en') => (l === 'id' ? 'Bahasa Indonesia' : 'English');
-export const editorSystemPrompt = (env: RewriteEnvelope) => prompts().EDITOR_SYSTEM.replaceAll('{{language_name}}', langName(env.project.language)).replaceAll('{{base_version}}', env.baseVersion);
+/** P-2 with the language filled in; the base version (different for every plan) is the per-call tail after the cache marker (ADR-040). */
+export const editorSystemPrompt = (env: RewriteEnvelope) => prompts().EDITOR_SYSTEM.replaceAll('{{language_name}}', langName(env.project.language)).replaceAll('{{base_version}}', 'the BASE VERSION at the end of this prompt');
+export const editorSystemTail = (env: RewriteEnvelope) => `${SYSTEM_DYNAMIC_MARK}BASE VERSION: ${env.baseVersion}\nSet "baseVersion" in the EditPlan to exactly this value.`;
 /** ADR-039: the `{{channel_profile}}` block of P-1 — the Creator's standing channel rules (Settings ▸ Profil kanal), or nothing. */
 export function channelProfileBlock(profile: string | undefined | null): string {
   const t = (profile ?? '').trim().slice(0, 6000);
@@ -213,7 +215,7 @@ export async function runEditorAgent(env: RewriteEnvelope, provider: ChatProvide
   // AI_WORKFLOW §8.1: providers with a tools API get the tools natively; others keep the JSON-mode protocol (§12).
   const native = !!provider.nativeTools && names.length > 0;
   const specs = native ? toolSpecs(names) : undefined;
-  const system = editorSystemPrompt(env) + toolsPromptBlock(names, 'reply with the EditPlan JSON only', native ? 'native' : 'json') + researchPromptBlock(o.research, 'editor');
+  const system = editorSystemPrompt(env) + toolsPromptBlock(names, 'reply with the EditPlan JSON only', native ? 'native' : 'json') + researchPromptBlock(o.research, 'editor') + editorSystemTail(env);
   const web = nativeWeb(o.research, true); const cited: WebSource[][] = [];
   const messages: ChatMessage[] = [{ role: 'user', content: JSON.stringify(env), ...(o.images?.length ? { images: o.images } : {}) }];
   const maxCorrections = o.maxCorrections ?? 2;
@@ -346,8 +348,10 @@ export async function runBrainstorm(history: ChatMessage[], contextBlock: unknow
   // markup, QA 2026-10-27); the JSON-mode protocol otherwise, where markup the model writes is read as tool calls too.
   const native = !!provider.nativeTools && names.length > 0;
   const specs = native ? toolSpecs(names) : undefined;
-  const system = prompts().BRAINSTORM_SYSTEM.replaceAll('{{language_name}}', langName(language)).replaceAll('{{language_code}}', language).replaceAll('{{channel_profile}}', channelProfileBlock(o.channelProfile)).replaceAll('{{context_block}}', JSON.stringify(contextBlock)) + toolsPromptBlock(names, 'reply normally', native ? 'native' : 'json')
-    + researchPromptBlock(o.research, 'brainstorm');
+  // ADR-040: the stable prefix (prompt, channel profile, tool and research blocks) is cached by the provider; the project CONTEXT
+  // changes every turn and goes after the cache marker, at the very end of the system prompt.
+  const system = prompts().BRAINSTORM_SYSTEM.replaceAll('{{language_name}}', langName(language)).replaceAll('{{language_code}}', language).replaceAll('{{channel_profile}}', channelProfileBlock(o.channelProfile)) + toolsPromptBlock(names, 'reply normally', native ? 'native' : 'json')
+    + researchPromptBlock(o.research, 'brainstorm') + SYSTEM_DYNAMIC_MARK + `CONTEXT\n${JSON.stringify(contextBlock)}`;
   const web = nativeWeb(o.research); const cited: WebSource[][] = []; const queries: string[] = []; let notice: { code: string; reason: string } | undefined;
   const w = windowThread(history, threadBudgetChars(o.contextLength, system.length, o.maxTokens ?? 4000));
   const messages = [...w.messages];

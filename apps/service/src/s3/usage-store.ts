@@ -100,7 +100,7 @@ export function recordUsage(ctx: ServiceContext, projectId: string, agent: 'brai
   const ins = ctx.db.prepare('INSERT INTO usage_records(agent_run_id, project_id, provider, model_id, input_tokens, output_tokens, cost_usd, approximate, created_at) VALUES (?,?,?,?,?,?,?,?,?)');
   ctx.db.transaction(() => {
     for (const u of usage) {
-      const est = u.costUsd === null ? estimateCost(u.model, u.inputTokens, u.outputTokens, prices) : { costUsd: u.costUsd, approximate: u.approximate };
+      const est = u.costUsd === null ? estimateCost(u.model, u.inputTokens, u.outputTokens, prices, { read: u.cacheReadTokens, write: u.cacheWriteTokens }) : { costUsd: u.costUsd, approximate: u.approximate };
       ins.run(runId, projectId, conn?.provider ?? 'unknown', u.model, Math.trunc(u.inputTokens), Math.trunc(u.outputTokens), est.costUsd, est.costUsd === null || est.approximate ? 1 : 0, ctx.now());
     }
   })();

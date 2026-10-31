@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | baseline, **prompt set v1.8.1** |
+| Status | baseline, **prompt set v1.8.2** |
 | Owner | AI agent architect |
 | Last updated | 2026-10-31 |
 | Depends on | docs/AI_WORKFLOW.md (schemas, ops, tools), docs/AGENT_DESIGN.md (roles, permissions), docs/DESIGN_CATALOGUE.md (preset ids), docs/GLOSSARY.md |
@@ -48,11 +48,9 @@ Return JSON matching BrainstormTurn:
 EditIntent fields you fill: category, presetId (if any), params (if any), target {kind, id?} using asset/clip ids from CONTEXT, needsInterpretation (true when you give text instead of a preset), instruction (plain text for the Editor Agent), source = "brainstorm". Leave propertyKey, propertyClass, resolvedTargets, status, baseVersion empty; the app fills them.
 
 {{channel_profile}}
-CONTEXT
-{{context_block}}
 ```
 
-The runtime replaces `{{channel_profile}}` with "## Profil kanal (aturan tetap)" + the Creator's channel profile text (Settings ▸ Profil kanal, `channelProfile`) when it is set, else with nothing (`channelProfileBlock`, runner.ts).
+The runtime replaces `{{channel_profile}}` with "## Profil kanal (aturan tetap)" + the Creator's channel profile text (Settings ▸ Profil kanal, `channelProfile`) when it is set, else with nothing (`channelProfileBlock`, runner.ts). The project context ("CONTEXT" + the context block JSON) is appended by the runtime at the very **end** of the system prompt, after the tool and research blocks and after the prompt-cache marker, so that everything before it is byte-identical from one turn to the next and the provider's prompt cache can serve it (ADR-040, `SYSTEM_DYNAMIC_MARK`, runner.ts).
 
 ### P-1 few-shot (Indonesian)
 
@@ -105,7 +103,7 @@ AVAILABLE TOOLS (read-only)
 composition.get, composition.validateOps, catalogue.search, assets.list, assets.probe, render.estimate, hardware.profile, project.settings.get, media.analysis.get (the stored footage analysis: cut ids and spoken words)
 
 OUTPUT SCHEMA (EditPlan)
-{"goal": string, "steps": [{"n": int, "tool": "composition.applyOps"|"scene.compose"|"tts.generate"|"captions.generate"|"music.generate"|"cover.render", "ops": [{"op": string, "target"?: {"kind": string, "id"?: string, "index"?: int}, "args": object, "intentId"?: string}], "args"?: object (generator steps only), "expectedDiff": string (≤ 200 characters), "dependsOn": int[]}], "risks": [{"code": string, "message": string, "severity": "info"|"warn"|"block"}], "baseVersion": "{{base_version}}"}
+{"goal": string, "steps": [{"n": int, "tool": "composition.applyOps"|"scene.compose"|"tts.generate"|"captions.generate"|"music.generate"|"cover.render", "ops": [{"op": string, "target"?: {"kind": string, "id"?: string, "index"?: int}, "args": object, "intentId"?: string}], "args"?: object (generator steps only), "expectedDiff": string (≤ 200 characters), "dependsOn": int[]}], "risks": [{"code": string, "message": string, "severity": "info"|"warn"|"block"}], "baseVersion": string ({{base_version}})}
 ```
 
 ### P-2 worked example (abridged)
@@ -197,6 +195,7 @@ Write a social media caption and hashtags for a short video. Language: {{languag
 
 | Version | Date | Change |
 |---|---|---|
+| 1.8.2 | 2026-10-31 | Prompt caching (ADR-040): the per-call parts move to the end of both system prompts — P-1's CONTEXT block is appended by the runtime after the tool / research blocks; P-2's `{{base_version}}` becomes "the BASE VERSION at the end of this prompt" and the runtime appends `BASE VERSION: <id>` as the tail. No rule or wording a model acts on changed otherwise |
 | 1.8.1 | 2026-10-31 | P-2 rule FOOTAGE WITHOUT AN ANALYSIS (QA 2026-10-30 screenshots: the Editor answered "I cannot hear the audio" to a sync request and changed only the ratio for a sideways file): media.analyze is offered to the Editor too; it starts the preparation and reports it instead of guessing |
 | 1.8.0 | 2026-10-31 | QA PRD "rebuild Reels" (ADR-039, FR-280 … FR-299): P-1 PRD-first flow for talking-head footage (media.analyze → fact check → 7-section PRD → "PRD siap." → send-to-editor only after approval), the media tools, the `{{channel_profile}}` block ("## Profil kanal (aturan tetap)"); P-2 TALKING-HEAD MODE (one talk / explain scene per cut id, blocks on spoken words, silent cards with the honesty tag, hold, poster, captions from the analysis, music lift, sfx, cover, credits), `channelProfile` / `footageAnalysis` in the envelope, `media.analysis.get`, output schema with `cover.render`, worked example 5 (generic coffee-price Reel); P-3 rows for the media tools |
 | 1.0.0 | 2026-10-24 | initial prompt set |

@@ -980,6 +980,8 @@
  "ui.agent.plan.tool.captions.short": "caption",
  "ui.agent.plan.tool.tts.short": "suara narasi",
  "ui.agent.plan.usage": "{input} masuk · {output} keluar · {cost}",
+ "ui.agent.plan.usage.cache": "cache {pct}%",
+ "ui.agent.plan.usage.cache.tip": "Bagian prompt yang dilayani dari cache penyedia (ditagih sekitar sepersepuluh harga)",
  "ui.agent.progress.tool.web.fetch": "Membaca halaman web…",
  "ui.agent.progress.tool.web.fetch.q": "Membaca halaman: {host}…",
  "ui.agent.progress.tool.web.images": "Mencari gambar berlisensi terbuka…",

@@ -980,6 +980,8 @@
  "ui.agent.plan.tool.captions.short": "captions",
  "ui.agent.plan.tool.tts.short": "voice-over",
  "ui.agent.plan.usage": "{input} in · {output} out · {cost}",
+ "ui.agent.plan.usage.cache": "cache {pct}%",
+ "ui.agent.plan.usage.cache.tip": "Share of the prompt served from the provider's prompt cache (billed at about a tenth of the price)",
  "ui.agent.progress.tool.web.fetch": "Reading a web page…",
  "ui.agent.progress.tool.web.fetch.q": "Reading page: {host}…",
  "ui.agent.progress.tool.web.images": "Looking for openly licensed pictures…",

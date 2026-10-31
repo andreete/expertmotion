@@ -384,8 +384,8 @@ describe('media tools, envelope block and prompt set', () => {
     const plain = buildRewriteEnvelope({ model, baseVersion: 'v', assets: ASSETS, intents: [], lockedKeys: [], tier: 'T1' });
     expect(plain.footageAnalysis).toBeUndefined(); expect(plain.capabilities.sceneCompose).not.toContain('TALKING-HEAD MODE');
   });
-  it('prompt set v1.8.1: P-1 has the channel profile block and the PRD-first flow, P-2 the talking-head mode and cover.render', () => {
-    expect(PROMPT_SET_VERSION).toBe('1.8.1');
+  it('prompt set v1.8.2: P-1 has the channel profile block and the PRD-first flow, P-2 the talking-head mode and cover.render', () => {
+    expect(PROMPT_SET_VERSION).toBe('1.8.2');
     expect(BRAINSTORM_SYSTEM).toContain('{{channel_profile}}');
     expect(BRAINSTORM_SYSTEM).toContain('media.analyze');
     expect(BRAINSTORM_SYSTEM).toContain('PRD siap');

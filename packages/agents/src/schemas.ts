@@ -37,7 +37,7 @@ export const PlanStep = z.object({
   expectedDiff: z.string().max(200), dependsOn: z.array(z.number().int()).default([]),
 });
 export const Risk = z.object({ code: z.string(), message: z.string(), severity: z.enum(['info', 'warn', 'block']) });
-export const Usage = z.object({ model: z.string(), inputTokens: z.number(), outputTokens: z.number(), costUsd: z.number().nullable(), approximate: z.boolean() });
+export const Usage = z.object({ model: z.string(), inputTokens: z.number(), outputTokens: z.number(), costUsd: z.number().nullable(), approximate: z.boolean(), cacheReadTokens: z.number().optional(), cacheWriteTokens: z.number().optional() });
 export const EditPlan = z.object({
   id: z.string(), projectId: z.string(), baseVersion: z.string(),
   origin: z.enum(['compile', 'editor-agent']),

@@ -82,7 +82,7 @@ export interface IntentQueueDto { projectId: Id; headHash: string; items: EditIn
 
 export interface PlanStep { n: number; tool: string; ops: OperationT[]; args: Record<string, unknown>; expectedDiff: string; dependsOn: number[]; /** ops omitted (withOps=false) */ opCount?: number }
 export interface Risk { code: string; message: string; severity: 'info' | 'warn' | 'block' }
-export interface Usage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean }
+export interface Usage { model: string; inputTokens: number; outputTokens: number; costUsd: number | null; approximate: boolean; /** ADR-040: prompt tokens served from the provider's cache */ cacheReadTokens?: number; cacheWriteTokens?: number }
 export type PlanStatus = 'draft' | 'valid' | 'invalid' | 'stale' | 'executing' | 'executed' | 'failed' | 'cancelled';
 export interface PlanDto {
   id: Id; projectId: Id; baseVersion: string; origin: 'compile' | 'editor-agent'; goal: string; steps: PlanStep[]; touchesLockedKeys: string[]; risks: Risk[];
