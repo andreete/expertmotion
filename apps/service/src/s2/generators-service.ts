@@ -444,7 +444,15 @@ export class GeneratorsService {
                 const to = Math.min(layer.durationMs !== undefined ? layer.atMs + layer.durationMs : totalMs, totalMs);
                 pages.push(...cuesToCaptionPages(tx.cues, layer.atMs, { trimBeforeMs: layer.trimBeforeMs, untilMs: to })); timedTo = 'voice'; method = tx.method ?? method;
               }
-              if (!pages.length) pages.push(...scriptPages(String(st.args['text'] ?? '').trim(), 0, totalMs));
+              const voiceLayers = model.tracks.audio.filter((a) => a.role === 'voice');
+              ctx.log.info({ projectId, planId, step: st.n, voiceLayers: voiceLayers.length, withTranscript: voiceLayers.filter((a) => !!this.transcriptOf(a.assetId, projectId)).length, pages: pages.length }, 'captions from the model voices');
+              if (!pages.length) {
+                // no stored transcript: one line of the step's text per voice layer, proportionally inside that layer's window
+                const lines = String(st.args['text'] ?? '').split(/\n+/).map((x) => x.trim()).filter(Boolean);
+                voiceLayers.sort((a, b) => a.atMs - b.atMs).forEach((layer, i) => { const line = lines[i] ?? (lines.length === 1 && i === 0 ? lines[0] : undefined); if (!line) return;
+                  const to = Math.min(layer.durationMs !== undefined ? layer.atMs + layer.durationMs : totalMs, totalMs); pages.push(...scriptPages(line, layer.atMs, to)); });
+                if (!pages.length) pages.push(...scriptPages(String(st.args['text'] ?? '').trim(), 0, totalMs));
+              }
             }
             for (const n of jobNs) {
               const wait = voices.get(n)!; const row = await wait;

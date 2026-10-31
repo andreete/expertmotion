@@ -235,7 +235,7 @@ export function createEgress(opts: {
     for (let hop = 0; ; hop++) {
       const u = check(purpose, url);
       if (purpose === 'research') await checkDns(u);
-      try { res = await researchImpl(u.href, { method: 'GET', headers: { 'User-Agent': 'Expertmotion/1.0 (+local video editor; research)', ...headers }, redirect: 'manual', signal }); }
+      try { res = await researchImpl(u.href, { method: 'GET', headers: { 'User-Agent': 'Expertmotion/1.0 (https://expertmotion.id; local-first desktop video editor; research fetch)', ...headers }, redirect: 'manual', signal }); }
       catch (e) {
         if ((e as { code?: unknown })?.code === 'EM_PRIVATE_ADDRESS' || (e as { cause?: { code?: unknown } })?.cause?.code === 'EM_PRIVATE_ADDRESS') throw new EmError('EM-8203', 'This address cannot be read (it points into a private network).', { details: { purpose, host: u.hostname } });
         throw e;

@@ -67,6 +67,11 @@ function prepareToolSteps(plan: EditPlanT, ctx: PlanContext): { plan: EditPlanT;
       return { ...s, args: { ...a, status: !m || m.installed ? 'ready' : 'needs-model', ...(m ? { modelKey: m.modelKey, modelLabel: m.label } : {}) } };
     }
     const voice = [...s.dependsOn, ...(a.source === 'voice' ? [...tts.keys()] : [])].map((n) => tts.get(n)).find(Boolean);
+    // ADR-035 voice-first re-validation (ADR-041 E2E run 9): the tts steps were already made and removed from the plan, so no
+    // voice step is left to attach to — a {source: 'voice'} step stays a generator step and the Service times its pages over
+    // the voice layers of the committed model (one page group per voice). Baking script pages over the whole video here spread the
+    // first narration line across 37 s.
+    if (a.source === 'voice' && !voice && !tts.size) return { ...s, args: { ...a, source: 'voice', status: 'ready' } };
     // No script and no voice-over: the on-screen texts this plan adds (scene titles / texts, in order) are the script —
     // what the model meant by "captions from the scene texts" (live QA 2026-10-26). Nothing to caption → the step is left out
     // with a warning instead of blocking the whole plan.
