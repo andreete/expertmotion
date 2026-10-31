@@ -51,7 +51,7 @@ Also (ADR-030, QA 2026-10-26): builds videos **without media** from scene clips 
 
 Does not: write code; reference files; add unrequested elements; change Output Settings unless asked; call `render.start`.
 
-Tools: the Brainstorming set (`composition.get`, `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate`, the web tools) + `composition.validateOps`, `assets.probe`, `media.analysis.get` (ADR-039; not `media.analyze` / `media.frames`: the prep is the Brainstorming PRD step).
+Tools: the Brainstorming set (`composition.get`, `assets.list`, `catalogue.search`, `hardware.profile`, `project.settings.get`, `render.estimate`, the web tools) + `composition.validateOps`, `assets.probe`, `media.analysis.get`, `media.analyze` (ADR-039; `media.analyze` so a sync / rotation / take request typed into the Editor starts the preparation and is reported, never guessed — QA 2026-10-30; not `media.frames`).
 
 Output contract: `EditPlan` (AI_WORKFLOW §3) only. Any prose must go in `goal`/`expectedDiff`/`risks[].message`.
 
@@ -81,7 +81,8 @@ The Providers screen never refuses a model for its capabilities (Operator decisi
 | render.estimate | yes | yes | — | yes |
 | render.start | — | — | — | **Creator only** |
 | hardware.profile, project.settings.get | yes | yes | yes | yes |
-| media.analyze, media.frames (ADR-039) | yes (starts the prep job; a progress card) | — | — | "Siapkan rekaman" action |
+| media.analyze (ADR-039) | yes (starts the prep job; a progress card) | yes (same; reports "being prepared" with a needs-input risk) | — | "Siapkan rekaman" action |
+| media.frames (ADR-039) | yes (contact sheet for the vision model) | — | — | cover picker |
 | media.analysis.get | yes | yes | yes | yes |
 | cover.render | — | as an Edit Plan step only (added by the composer from the VideoSpec `cover`) | after Execute, by the Local Service (POST /projects/:id/cover) | cover picker |
 

@@ -156,6 +156,8 @@ describe('heartbeat watchdog (FR-198)', () => {
     expect(drive(occluded, 2000, 300_000, { beat: false, facts: { ...shown, focused: false } }).decisions).toEqual([]);
     // hidden page frames are not evidence of a black window
     expect(drive(p, 1000, 120_000, { framed: false, visible: false }).decisions).toEqual([]);
+    // QA 2026-10-30: the page says visible but the window sits behind another app (no focus) and stops painting — not a hang
+    expect(drive(p, 1000, 300_000, { framed: false, facts: { ...shown, focused: false } }).decisions).toEqual([]);
     // after a long minimised period, the window gets the full 10 s again before any ask
     const min = drive(p, 1000, 600_000, { beat: false, facts: { ...shown, minimized: true } });
     occluded = min.s;

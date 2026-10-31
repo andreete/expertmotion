@@ -358,17 +358,18 @@ describe('cover frame choice (QA A22: never mid-word)', () => {
 });
 
 describe('media tools, envelope block and prompt set', () => {
-  it('media.analyze / media.frames belong to the Brainstorming Agent, media.analysis.get to both; a picture in a tool result becomes an image part', async () => {
+  it('media.frames belongs to the Brainstorming Agent, media.analyze and media.analysis.get to both; a picture in a tool result becomes an image part', async () => {
     expect(BRAINSTORM_TOOL_NAMES).toEqual(expect.arrayContaining(['media.analyze', 'media.frames', 'media.analysis.get']));
     expect(EDITOR_TOOL_NAMES).toContain('media.analysis.get');
-    expect(EDITOR_TOOL_NAMES).not.toContain('media.analyze');
+    expect(EDITOR_TOOL_NAMES).toContain('media.analyze');   // QA 2026-10-30: a sync / rotation request to the Editor starts the prep instead of guessing
+    expect(EDITOR_TOOL_NAMES).not.toContain('media.frames');
     const rec = await runTool('media.frames', { cutIds: ['c1', 'c2'] }, { 'media.frames': () => ({ imageBase64: 'QUJD', cells: [{ atMs: 8740, x: 0, y: 0 }] }) }, BRAINSTORM_TOOL_NAMES);
     expect(rec.ok).toBe(true);
     expect(rec.image).toEqual({ mediaType: 'image/jpeg', data: 'QUJD', name: 'contact-sheet.jpg' });
     expect(JSON.stringify(rec.output)).not.toContain('QUJD');
     const bad = await runTool('media.frames', {}, { 'media.frames': () => ({}) }, BRAINSTORM_TOOL_NAMES);
     expect(bad.ok).toBe(false);
-    const denied = await runTool('media.analyze', { voiceAssetId: 'VOICE' }, { 'media.analyze': () => ({}) }, EDITOR_TOOL_NAMES);
+    const denied = await runTool('media.frames', { cutIds: ['c1'] }, { 'media.frames': () => ({}) }, EDITOR_TOOL_NAMES);
     expect(denied.ok).toBe(false);
   });
   it('the envelope carries the compact analysis, the talking-head constraint + signature and the channel profile', () => {
@@ -383,8 +384,8 @@ describe('media tools, envelope block and prompt set', () => {
     const plain = buildRewriteEnvelope({ model, baseVersion: 'v', assets: ASSETS, intents: [], lockedKeys: [], tier: 'T1' });
     expect(plain.footageAnalysis).toBeUndefined(); expect(plain.capabilities.sceneCompose).not.toContain('TALKING-HEAD MODE');
   });
-  it('prompt set v1.8.0: P-1 has the channel profile block and the PRD-first flow, P-2 the talking-head mode and cover.render', () => {
-    expect(PROMPT_SET_VERSION).toBe('1.8.0');
+  it('prompt set v1.8.1: P-1 has the channel profile block and the PRD-first flow, P-2 the talking-head mode and cover.render', () => {
+    expect(PROMPT_SET_VERSION).toBe('1.8.1');
     expect(BRAINSTORM_SYSTEM).toContain('{{channel_profile}}');
     expect(BRAINSTORM_SYSTEM).toContain('media.analyze');
     expect(BRAINSTORM_SYSTEM).toContain('PRD siap');

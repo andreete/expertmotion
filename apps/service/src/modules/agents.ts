@@ -686,9 +686,20 @@ export const agentsModule: ServiceModule = {
       const item = block.items.find((x) => x.source === body.source && x.id === body.id)!;
       if ((item as { importedAssetId?: string }).importedAssetId) return { assetId: (item as { importedAssetId?: string }).importedAssetId, attribution: null, duplicate: true };
       const { candidate, downloadUrl } = await resolveImage(ctx.egress.for('research-api'), body.source, body.id);
-      const res = await ctx.egress.for('research')(downloadUrl, { headers: { Accept: 'image/*', 'x-em-max-bytes': String(RESEARCH_IMAGE_MAX_BYTES) } });
-      const type = (res.headers.get('content-type') ?? '').toLowerCase();
-      if (!res.ok || !/^image\/(png|jpe?g|webp|gif)/.test(type)) { void res.body?.cancel().catch(() => undefined); throw new EmError('EM-4407', `The picture could not be downloaded (${res.ok ? type || 'unknown type' : `HTTP ${res.status}`}).`); }
+      const imageHeaders = { Accept: 'image/*', 'x-em-max-bytes': String(RESEARCH_IMAGE_MAX_BYTES) };
+      let res = await ctx.egress.for('research')(downloadUrl, { headers: imageHeaders });
+      let type = (res.headers.get('content-type') ?? '').toLowerCase();
+      const isImage = (t: string) => /^image\/(png|jpe?g|webp|gif)/.test(t);
+      // QA 2026-10-30 (EM-4407 "HTTP 400"): the provider's original file (Flickr & co. behind Openverse) refuses hotlinks or
+      // moved; Openverse serves a thumbnail of every row itself, so fall back to it before giving up (Wikimedia already uses thumburl).
+      if ((!res.ok || !isImage(type)) && body.source === 'openverse') {
+        void res.body?.cancel().catch(() => undefined);
+        const failed = `${new URL(downloadUrl).hostname} → ${res.ok ? type || 'unknown type' : `HTTP ${res.status}`}`;
+        res = await ctx.egress.for('research-api')(`https://api.openverse.org/v1/images/${encodeURIComponent(body.id)}/thumbnail/`, { headers: imageHeaders });
+        type = (res.headers.get('content-type') ?? '').toLowerCase();
+        ctx.log.info({ projectId: project.id, source: body.source, failed, fallbackOk: res.ok && isImage(type) }, 'research picture: original refused, Openverse thumbnail used');
+      }
+      if (!res.ok || !isImage(type)) { void res.body?.cancel().catch(() => undefined); throw new EmError('EM-4407', `The picture could not be downloaded (${res.ok ? type || 'unknown type' : `HTTP ${res.status}`}).`, { details: { source: body.source, host: new URL(res.url || downloadUrl).hostname, status: res.status, type } }); }
       const ext = type.includes('png') ? '.png' : type.includes('webp') ? '.webp' : type.includes('gif') ? '.gif' : '.jpg';
       const dir = path.join(ctx.paths.tmp, 'research'); fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${ctx.newId()}${ext}`);

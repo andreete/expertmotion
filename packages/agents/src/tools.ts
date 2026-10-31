@@ -13,7 +13,7 @@ export const MEDIA_TOOL_NAMES = ['media.analyze', 'media.frames', 'media.analysi
 export const BRAINSTORM_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate', ...WEB_TOOL_NAMES, ...MEDIA_TOOL_NAMES] as const;
 export type BrainstormToolName = (typeof BRAINSTORM_TOOL_NAMES)[number];
 /** FR-080 / AI_WORKFLOW §8: the Editor Agent's read-only set = the Brainstorm set (without the prep tools) + the dry run `composition.validateOps` + `assets.probe`. */
-export const EDITOR_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate', ...WEB_TOOL_NAMES, 'media.analysis.get', 'composition.validateOps', 'assets.probe'] as const;
+export const EDITOR_TOOL_NAMES = ['composition.get', 'assets.list', 'catalogue.search', 'hardware.profile', 'project.settings.get', 'render.estimate', ...WEB_TOOL_NAMES, 'media.analysis.get', 'media.analyze', 'composition.validateOps', 'assets.probe'] as const;
 export type ToolName = (typeof EDITOR_TOOL_NAMES)[number] | BrainstormToolName;
 export const ALL_TOOL_NAMES: readonly ToolName[] = [...new Set<ToolName>([...BRAINSTORM_TOOL_NAMES, ...EDITOR_TOOL_NAMES])];
 

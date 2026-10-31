@@ -95,7 +95,9 @@ export function onTick(s: WatchState, w: WindowFacts, now: number): { state: Wat
     const sinceBeat = now - Math.max(s.lastBeatAt ?? s.firstPaintAt, s.graceUntil - HEARTBEAT_STALL_MS);
     const sinceFrame = now - Math.max(s.lastFramedAt ?? s.firstPaintAt, s.graceUntil - HEARTBEAT_STALL_MS);
     if (sinceBeat > HEARTBEAT_STALL_MS) kind = 'no-heartbeat';
-    else if (s.lastVisible && sinceFrame > HEARTBEAT_STALL_MS) kind = 'no-frames';
+    // QA 2026-10-30 (EM-8012 after 169 s, recovered 17 s later): a window behind another app stops painting without the page
+    // reporting hidden; frames are only demanded while the window has focus (a black focused window is still caught).
+    else if (s.lastVisible && w.focused && sinceFrame > HEARTBEAT_STALL_MS) kind = 'no-frames';
   }
   if (kind === null) {
     if (s.stalled === null) return { state: s, decision: none };
